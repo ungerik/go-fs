@@ -126,6 +126,11 @@ func (file *File) ListDir(done <-chan struct{}) (<-chan fs.File, <-chan error) {
 	return files, errs
 }
 
+func (file *File) ListDirMatch(pattern string, done <-chan struct{}) (<-chan fs.File, <-chan error) {
+	files, errs := file.ListDir(done)
+	return fs.Match(pattern, done, files, errs)
+}
+
 func (file *File) Readable() (user, group, all bool) {
 	info, err := os.Stat(file.path)
 	if err != nil {
