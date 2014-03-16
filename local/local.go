@@ -4,37 +4,65 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ungerik/go-fs"
 )
 
-var FileSystem fileSystem
+const Prefix = "file://"
+
+var FS FileSystem
 
 func init() {
-	fs.All = append(fs.All, FileSystem)
-	fs.Default = FileSystem
+	fs.Registry = append(fs.Registry, FS)
+	fs.Default = FS
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// fileSystem
+// FileSystem
 
-type fileSystem struct{}
+type FileSystem struct{}
 
-func (fileSystem) Prefix() string {
-	return "file://"
+func (FileSystem) Prefix() string {
+	return Prefix
 }
 
-func (fileSystem) Info(url string) fs.File {
-	panic("")
+func (FileSystem) Get(url string) fs.File {
+	return &File{strings.TrimPrefix(url, Prefix)}
 }
 
-func (fileSystem) Create(url string) (fs.File, error) {
-	panic("")
+func (FileSystem) Create(url string) (fs.File, error) {
+	file := FS.Get(url)
+	osFile, err := os.OpenFile(file.Path(), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return nil, err
+	}
+	err = osFile.Close()
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
 }
 
-func (fileSystem) CreateDir(url string) (fs.File, error) {
-	panic("")
+func (FileSystem) CreateDir(url string) (fs.File, error) {
+	file := FS.Get(url)
+	err := os.MkdirAll(file.Path(), 0700)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+func (FileSystem) Touch(url string) error {
+	if file := FS.Get(url); file.Exists() {
+		now := time.Now()
+		return os.Chtimes(file.Path(), now, now)
+	} else {
+		_, err := FS.Create(url)
+		return err
+	}
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -45,7 +73,7 @@ type File struct {
 }
 
 func (file *File) URL() string {
-	return "filt://" + file.path
+	return Prefix + file.path
 }
 
 func (file *File) Path() string {
@@ -86,49 +114,52 @@ func (file *File) ModTime() time.Time {
 	return info.ModTime()
 }
 
-func (file *File) ListDir(done <-chan struct{}) (<-chan fs.File, <-chan error) {
-	errs := make(chan error, 1)
-
+func (file *File) ListDir(callback func(fs.File) error, patterns ...string) error {
 	if !file.IsDir() {
-		errs <- fs.ErrIsNotDirectory{file}
-		return nil, errs
+		return fs.ErrIsNotDirectory{file}
 	}
+
 	osFile, err := os.Open(file.path)
 	if err != nil {
-		errs <- err
-		return nil, errs
+		return err
 	}
+	defer osFile.Close()
 
-	files := make(chan fs.File, 64)
+	for {
+		names, err := osFile.Readdirnames(64)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
 
-	go func() {
-		defer close(files)
-		defer osFile.Close()
-
-		for names, err := osFile.Readdirnames(64); ; {
-			if err != nil {
-				if err != io.EOF {
-					errs <- err
+		for _, name := range names {
+			if len(patterns) > 0 {
+				anyMatch := false
+				for _, pattern := range patterns {
+					match, err := filepaths.Match(pattern, name)
+					if err != nil {
+						return err
+					}
+					if match {
+						anyMatch = true
+						break
+					}
 				}
-				return
+				if !anyMatch {
+					continue
+				}
 			}
 
-			for i := range names {
-				select {
-				case files <- &File{path.Join(file.path, names[i])}:
-				case <-done:
-					return
-				}
+			err = callback(&File{path.Join(file.path, name)})
+			if err != nil {
+				return err
 			}
 		}
-	}()
+	}
 
-	return files, errs
-}
-
-func (file *File) ListDirMatch(pattern string, done <-chan struct{}) (<-chan fs.File, <-chan error) {
-	files, errs := file.ListDir(done)
-	return fs.Match(pattern, done, files, errs)
+	return nil
 }
 
 func (file *File) Readable() (user, group, all bool) {
@@ -229,13 +260,17 @@ func (file *File) SetGroup(user string) error {
 }
 
 func (file *File) OpenReader() (io.ReadCloser, error) {
-	panic("not implemented")
+	return os.OpenFile(file.Path(), os.O_RDONLY, 0600)
 }
 
 func (file *File) OpenWriter() (io.WriteCloser, error) {
-	panic("not implemented")
+	return os.OpenFile(file.Path(), os.O_WRONLY|os.O_CREATE, 0600)
+}
+
+func (file *File) OpenAppendWriter() (io.WriteCloser, error) {
+	return os.OpenFile(file.Path(), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
 }
 
 func (file *File) OpenReadWriter() (io.ReadWriteCloser, error) {
-	panic("not implemented")
+	return os.OpenFile(file.Path(), os.O_RDWR|os.O_CREATE, 0600)
 }
