@@ -1,6 +1,7 @@
 package local
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path"
@@ -273,4 +274,10 @@ func (file *File) OpenAppendWriter() (io.WriteCloser, error) {
 
 func (file *File) OpenReadWriter() (io.ReadWriteCloser, error) {
 	return os.OpenFile(file.Path(), os.O_RDWR|os.O_CREATE, 0600)
+}
+
+func (file *File) Watch() <-chan fs.WatchEvent {
+	events := make(chan fs.WatchEvent, 1)
+	events <- fs.WatchEvent{Err: errors.New("not implemented")}
+	return events
 }

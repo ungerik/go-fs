@@ -14,6 +14,11 @@ var (
 	Default  FileSystem
 )
 
+type WatchEvent struct {
+	//todo
+	Err error
+}
+
 func Choose(url string) FileSystem {
 	for _, fs := range Registry {
 		if strings.HasPrefix(url, fs.Prefix()) {
@@ -51,6 +56,8 @@ type File interface {
 	Exists() bool
 	IsDir() bool
 	Size() int64
+
+	Watch() <-chan WatchEvent
 
 	ListDir(callback func(File) error, patterns ...string) error
 
