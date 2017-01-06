@@ -20,16 +20,16 @@ type HTTPFileSystem struct {
 	prefix string
 }
 
-func (HTTPFileSystem) IsLocal() bool {
-	return false
-}
-
 func (HTTPFileSystem) IsReadOnly() bool {
 	return true
 }
 
 func (f HTTPFileSystem) Prefix() string {
 	return f.prefix
+}
+
+func (HTTPFileSystem) Name() string {
+	return "HTTP read-only file system"
 }
 
 func (HTTPFileSystem) File(uri string) fs.File {

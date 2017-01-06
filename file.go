@@ -31,6 +31,8 @@ type ReadWriteSeekCloser interface {
 type File interface {
 	FileSystem() FileSystem
 
+	String() string
+
 	URN() string
 	URL() string
 	Path() string

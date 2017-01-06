@@ -2,13 +2,6 @@ package fs
 
 import "errors"
 
-func filePathOrURL(file File) string {
-	if file.FileSystem().IsLocal() {
-		return file.Path()
-	}
-	return file.URL()
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // ErrFileWatchNotAvailable
 
@@ -27,7 +20,7 @@ type ErrFileDoesNotExist struct {
 }
 
 func (err ErrFileDoesNotExist) Error() string {
-	return "file does not exist: " + filePathOrURL(err.File)
+	return "file does not exist: " + err.File.String()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -38,7 +31,7 @@ type ErrIsDirectory struct {
 }
 
 func (err ErrIsDirectory) Error() string {
-	return "file is a directory: " + filePathOrURL(err.File)
+	return "file is a directory: " + err.File.String()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -49,5 +42,5 @@ type ErrIsNotDirectory struct {
 }
 
 func (err ErrIsNotDirectory) Error() string {
-	return "file is not a directory: " + filePathOrURL(err.File)
+	return "file is not a directory: " + err.File.String()
 }

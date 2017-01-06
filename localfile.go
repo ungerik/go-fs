@@ -2,6 +2,7 @@ package fs
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -21,6 +22,10 @@ type LocalFile struct {
 
 func (*LocalFile) FileSystem() FileSystem {
 	return Local
+}
+
+func (file *LocalFile) String() string {
+	return fmt.Sprintf("%s (%s)", file.Path(), file.FileSystem().Name())
 }
 
 func (file *LocalFile) URN() string {

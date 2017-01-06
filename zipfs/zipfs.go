@@ -13,16 +13,16 @@ var FileSystem ZipFileSystem
 type ZipFileSystem struct {
 }
 
-func (ZipFileSystem) IsLocal() bool {
-	return true
-}
-
 func (ZipFileSystem) IsReadOnly() bool {
 	return false
 }
 
 func (ZipFileSystem) Prefix() string {
 	return Prefix
+}
+
+func (ZipFileSystem) Name() string {
+	return "ZIP file system"
 }
 
 func (ZipFileSystem) File(uri string) fs.File {

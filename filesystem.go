@@ -1,8 +1,8 @@
 package fs
 
 type FileSystem interface {
-	IsLocal() bool
 	IsReadOnly() bool
 	Prefix() string
+	Name() string
 	File(uri string) File
 }
