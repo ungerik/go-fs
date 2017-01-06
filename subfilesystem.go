@@ -10,6 +10,10 @@ type SubFileSystem struct {
 	BasePath string
 }
 
+func NewSubFileSystem(parent FileSystem, basePath string) *SubFileSystem {
+	return &SubFileSystem{parent, basePath}
+}
+
 func (fs *SubFileSystem) IsReadOnly() bool {
 	return fs.Parent.IsReadOnly()
 }
