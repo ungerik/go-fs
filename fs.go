@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	Local    = LocalFileSystem{DefaultCreatePermissions: UserGroupReadWrite}
+	Local    = LocalFileSystem{DefaultCreatePermissions: UserAndGroupReadWrite}
 	Registry = []FileSystem{Local}
 )
 
