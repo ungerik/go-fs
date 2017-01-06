@@ -5,6 +5,29 @@ import (
 	"time"
 )
 
+type ReadSeekCloser interface {
+	io.Reader
+	io.ReaderAt
+	io.Seeker
+	io.Closer
+}
+
+type WriteSeekCloser interface {
+	io.Writer
+	io.WriterAt
+	io.Seeker
+	io.Closer
+}
+
+type ReadWriteSeekCloser interface {
+	io.Reader
+	io.ReaderAt
+	io.Writer
+	io.WriterAt
+	io.Seeker
+	io.Closer
+}
+
 type File interface {
 	FileSystem() FileSystem
 
@@ -33,8 +56,18 @@ type File interface {
 	Group() string
 	SetGroup(user string) error
 
-	OpenReader() (io.ReadCloser, error)
-	OpenWriter() (io.WriteCloser, error)
-	OpenAppendWriter() (io.WriteCloser, error)
-	OpenReadWriter() (io.ReadWriteCloser, error)
+	Touch(perm ...Permissions) error
+	MakeDir(perm ...Permissions) error
+
+	ReadAll() ([]byte, error)
+	WriteAll(data []byte, perm ...Permissions) error
+	Append(data []byte, perm ...Permissions) error
+
+	OpenReader() (ReadSeekCloser, error)
+	OpenWriter(perm ...Permissions) (WriteSeekCloser, error)
+	OpenAppendWriter(perm ...Permissions) (io.WriteCloser, error)
+	OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error)
+
+	Truncate(size int64) error
+	Remove() error
 }

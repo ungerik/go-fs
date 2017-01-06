@@ -15,6 +15,11 @@ func filePathOrURL(file File) string {
 var ErrFileWatchNotAvailable = errors.New("File.Watch() not available")
 
 ///////////////////////////////////////////////////////////////////////////////
+// ErrReadOnlyFileSystem
+
+var ErrReadOnlyFileSystem = errors.New("file system is read-only")
+
+///////////////////////////////////////////////////////////////////////////////
 // ErrFileDoesNotExist
 
 type ErrFileDoesNotExist struct {

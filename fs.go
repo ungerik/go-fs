@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	Local    LocalFileSystem
+	Local    = LocalFileSystem{DefaultCreatePermissions: UserGroupReadWrite}
 	Registry = []FileSystem{Local}
 )
 
@@ -20,15 +20,25 @@ func Select(uri string) FileSystem {
 }
 
 func SelectFile(uri string) File {
-	return Select(uri).SelectFile(uri)
+	return Select(uri).File(uri)
 }
 
-func CreateFile(uri string, perm ...Permissions) (File, error) {
-	return Select(uri).CreateFile(uri, perm...)
+func Touch(uri string, perm ...Permissions) (File, error) {
+	file := SelectFile(uri)
+	err := file.Touch(perm...)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
 }
 
-func MakeDir(uri string) (File, error) {
-	return Select(uri).MakeDir(uri)
+func MakeDir(uri string, perm ...Permissions) (File, error) {
+	file := SelectFile(uri)
+	err := file.MakeDir(perm...)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
 }
 
 func Read(uri string) ([]byte, error) {
@@ -41,7 +51,7 @@ func Read(uri string) ([]byte, error) {
 }
 
 func Write(uri string, data []byte, perm ...Permissions) error {
-	writer, err := SelectFile(uri).OpenWriter()
+	writer, err := SelectFile(uri).OpenWriter(perm...)
 	if err != nil {
 		return err
 	}
@@ -51,7 +61,7 @@ func Write(uri string, data []byte, perm ...Permissions) error {
 }
 
 func Append(uri string, data []byte, perm ...Permissions) error {
-	writer, err := SelectFile(uri).OpenAppendWriter()
+	writer, err := SelectFile(uri).OpenAppendWriter(perm...)
 	if err != nil {
 		return err
 	}
@@ -74,4 +84,12 @@ func WriteString(uri string, data string, perm ...Permissions) error {
 
 func AppendString(uri string, data string, perm ...Permissions) error {
 	return Append(uri, []byte(data), perm...)
+}
+
+func Truncate(uri string, size int64) error {
+	return SelectFile(uri).Truncate(size)
+}
+
+func Remove(uri string) error {
+	return SelectFile(uri).Remove()
 }
