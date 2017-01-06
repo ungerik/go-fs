@@ -74,50 +74,98 @@ func (file *LocalFile) ModTime() time.Time {
 	return info.ModTime()
 }
 
+func matchPatterns(name string, patterns []string) (bool, error) {
+	if len(patterns) == 0 {
+		return true, nil
+	}
+	for _, pattern := range patterns {
+		match, err := filepath.Match(pattern, name)
+		if match || err != nil {
+			return match, err
+		}
+	}
+	return false, nil
+}
+
 func (file *LocalFile) ListDir(callback func(File) error, patterns ...string) error {
 	if !file.IsDir() {
 		return ErrIsNotDirectory{file}
 	}
 
-	osFile, err := os.Open(file.path)
+	f, err := os.Open(file.path)
 	if err != nil {
 		return err
 	}
-	defer osFile.Close()
+	defer f.Close()
 
-	for {
-		names, err := osFile.Readdirnames(64)
+	for eof := false; !eof; {
+		names, err := f.Readdirnames(64)
 		if err != nil {
-			if err == io.EOF {
-				return nil
+			eof = (err == io.EOF)
+			if !eof {
+				return err
 			}
-			return err
 		}
 
 		for _, name := range names {
-			if len(patterns) > 0 {
-				anyMatch := false
-				for _, pattern := range patterns {
-					match, err := filepath.Match(pattern, name)
-					if err != nil {
-						return err
-					}
-					if match {
-						anyMatch = true
-						break
-					}
-				}
-				if !anyMatch {
-					continue
-				}
+			match, err := matchPatterns(name, patterns)
+			if match {
+				file := newLocalFile(filepath.Join(file.path, name))
+				err = callback(file)
 			}
-
-			err = callback(newLocalFile(filepath.Join(file.path, name)))
 			if err != nil {
 				return err
 			}
 		}
 	}
+	return nil
+}
+
+func (file *LocalFile) ListDirMax(n int, patterns ...string) (files []File, err error) {
+	if !file.IsDir() {
+		return nil, ErrIsNotDirectory{file}
+	}
+
+	f, err := os.Open(file.path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var numFilesToDo int
+	if n > 0 {
+		files = make([]File, 0, n)
+		numFilesToDo = n
+	} else {
+		numFilesToDo = 64
+	}
+
+	for eof := false; !eof && numFilesToDo > 0; {
+		names, err := f.Readdirnames(numFilesToDo)
+		if err != nil {
+			eof = (err == io.EOF)
+			if !eof {
+				return nil, err
+			}
+		}
+
+		for _, name := range names {
+			match, err := matchPatterns(name, patterns)
+			if match {
+				file := newLocalFile(filepath.Join(file.path, name))
+				files = append(files, file)
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if n > 0 {
+			numFilesToDo = n - len(files)
+		}
+	}
+
+	return files, nil
 }
 
 func (file *LocalFile) Permissions() Permissions {
