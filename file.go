@@ -46,6 +46,8 @@ type File interface {
 	Watch() (<-chan WatchEvent, error)
 
 	ListDir(callback func(File) error, patterns ...string) error
+
+	// ListDirMax: n == -1 lists all
 	ListDirMax(n int, patterns ...string) ([]File, error)
 
 	ModTime() time.Time

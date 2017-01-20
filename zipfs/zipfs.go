@@ -25,6 +25,6 @@ func (ZipFileSystem) Name() string {
 	return "ZIP file system"
 }
 
-func (ZipFileSystem) File(uri string) fs.File {
+func (ZipFileSystem) File(uri ...string) fs.File {
 	return nil
 }

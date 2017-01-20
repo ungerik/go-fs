@@ -32,6 +32,6 @@ func (HTTPFileSystem) Name() string {
 	return "HTTP read-only file system"
 }
 
-func (HTTPFileSystem) File(uri string) fs.File {
+func (HTTPFileSystem) File(uri ...string) fs.File {
 	return nil
 }

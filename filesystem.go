@@ -4,5 +4,5 @@ type FileSystem interface {
 	IsReadOnly() bool
 	Prefix() string
 	Name() string
-	File(uri string) File
+	File(uri ...string) File
 }

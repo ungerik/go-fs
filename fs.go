@@ -3,30 +3,48 @@ package fs
 import (
 	"encoding/json"
 	"encoding/xml"
+	"path"
 	"sort"
 	"strings"
 )
 
 var (
-	Local    = LocalFileSystem{DefaultCreatePermissions: UserAndGroupReadWrite}
+	// Local is the local file system
+	Local = LocalFileSystem{DefaultCreatePermissions: UserAndGroupReadWrite}
+
+	// Registry contains all registerred file systems
 	Registry = []FileSystem{Local}
 )
 
-func GetFileSystem(uri string) FileSystem {
+func GetFileSystem(uriParts ...string) FileSystem {
+	joinedURI := path.Join(uriParts...)
 	for _, fs := range Registry {
-		if strings.HasPrefix(uri, fs.Prefix()) {
+		if strings.HasPrefix(joinedURI, fs.Prefix()) {
 			return fs
 		}
 	}
 	return Local
 }
 
-func GetFile(uri string) File {
-	return GetFileSystem(uri).File(uri)
+func GetFile(uriParts ...string) File {
+	return GetFileSystem(uriParts...).File(uriParts...)
+}
+
+func Exists(uriParts ...string) bool {
+	return GetFile(uriParts...).Exists()
+}
+
+func IsDir(uriParts ...string) bool {
+	return GetFile(uriParts...).IsDir()
 }
 
 func ListDir(uri string, callback func(File) error, patterns ...string) error {
 	return GetFile(uri).ListDir(callback, patterns...)
+}
+
+// ListDirMax: n == -1 lists all
+func ListDirMax(uri string, n int, patterns ...string) ([]File, error) {
+	return GetFile(uri).ListDirMax(n, patterns...)
 }
 
 func Touch(uri string, perm ...Permissions) (File, error) {
