@@ -40,6 +40,10 @@ func (file *LocalFile) Path() string {
 	return file.path
 }
 
+func (file *LocalFile) Dir() string {
+	return filepath.Dir(file.path)
+}
+
 func (file *LocalFile) Name() string {
 	return filepath.Base(file.path)
 }
@@ -259,6 +263,32 @@ func (file *LocalFile) Watch() (<-chan WatchEvent, error) {
 
 func (file *LocalFile) Truncate(size int64) error {
 	return os.Truncate(file.path, size)
+}
+
+func (file *LocalFile) Rename(newName string) error {
+	if strings.ContainsAny(newName, "/\\") {
+		return errors.New("newName for Rename() contains a path separatos: " + newName)
+	}
+	newPath := filepath.Join(file.Dir(), newName)
+	err := os.Rename(file.path, newPath)
+	if err != nil {
+		return err
+	}
+	file.path = newPath
+	return nil
+}
+
+func (file *LocalFile) Move(destination File) error {
+	destPath := destination.Path()
+	if destination.IsDir() {
+		destPath = filepath.Join(destPath, file.Name())
+	}
+	err := os.Rename(file.path, destPath)
+	if err != nil {
+		return err
+	}
+	file.path = destPath
+	return nil
 }
 
 func (file *LocalFile) Remove() error {

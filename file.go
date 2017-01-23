@@ -74,5 +74,17 @@ type File interface {
 	OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error)
 
 	Truncate(size int64) error
+
+	// Rename only renames the file in its base directory
+	// but does not move it into another directory.
+	// If successful, this also changes the path of this File's implementation.
+	Rename(newName string) error
+
+	// Move moves and/or renames the file to destination.
+	// destination can be a directory or file-path.
+	// If successful, this also changes the path of this File's implementation.
+	Move(destination File) error
+
+	// Remove deletes the file.
 	Remove() error
 }
