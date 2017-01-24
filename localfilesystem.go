@@ -1,7 +1,5 @@
 package fs
 
-import "path/filepath"
-
 const LocalPrefix = "file://"
 
 type LocalFileSystem struct {
@@ -21,5 +19,5 @@ func (LocalFileSystem) Name() string {
 }
 
 func (LocalFileSystem) File(uri ...string) File {
-	return newLocalFile(filepath.Join(uri...))
+	return newLocalFile(uri)
 }

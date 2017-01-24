@@ -36,9 +36,10 @@ type File interface {
 	URN() string
 	URL() string
 	Path() string
-	Dir() string
 	Name() string
 	Ext() string
+	Dir() File
+	Relative(pathParts ...string) File
 
 	Exists() bool
 	IsDir() bool

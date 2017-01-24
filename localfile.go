@@ -11,13 +11,14 @@ import (
 	"time"
 )
 
-func newLocalFile(uri string) *LocalFile {
-	path := filepath.Clean(strings.TrimPrefix(uri, LocalPrefix))
-	return &LocalFile{path: path}
-}
-
 type LocalFile struct {
 	path string
+}
+
+func newLocalFile(uriParts []string) *LocalFile {
+	uri := filepath.Join(uriParts...)
+	path := filepath.Clean(strings.TrimPrefix(uri, LocalPrefix))
+	return &LocalFile{path: path}
 }
 
 func (*LocalFile) FileSystem() FileSystem {
@@ -40,16 +41,20 @@ func (file *LocalFile) Path() string {
 	return file.path
 }
 
-func (file *LocalFile) Dir() string {
-	return filepath.Dir(file.path)
-}
-
 func (file *LocalFile) Name() string {
 	return filepath.Base(file.path)
 }
 
 func (file *LocalFile) Ext() string {
 	return strings.ToLower(filepath.Ext(file.path))
+}
+
+func (file *LocalFile) Dir() File {
+	return &LocalFile{path: filepath.Dir(file.path)}
+}
+
+func (file *LocalFile) Relative(pathParts ...string) File {
+	return newLocalFile(append([]string{file.path}, pathParts...))
 }
 
 func (file *LocalFile) Exists() bool {
@@ -78,7 +83,7 @@ func (file *LocalFile) ModTime() time.Time {
 	return info.ModTime()
 }
 
-func matchPatterns(name string, patterns []string) (bool, error) {
+func matchAnyPattern(name string, patterns []string) (bool, error) {
 	if len(patterns) == 0 {
 		return true, nil
 	}
@@ -112,10 +117,9 @@ func (file *LocalFile) ListDir(callback func(File) error, patterns ...string) er
 		}
 
 		for _, name := range names {
-			match, err := matchPatterns(name, patterns)
+			match, err := matchAnyPattern(name, patterns)
 			if match {
-				file := newLocalFile(filepath.Join(file.path, name))
-				err = callback(file)
+				err = callback(file.Relative(name))
 			}
 			if err != nil {
 				return err
@@ -154,10 +158,9 @@ func (file *LocalFile) ListDirMax(n int, patterns ...string) (files []File, err 
 		}
 
 		for _, name := range names {
-			match, err := matchPatterns(name, patterns)
+			match, err := matchAnyPattern(name, patterns)
 			if match {
-				file := newLocalFile(filepath.Join(file.path, name))
-				files = append(files, file)
+				files = append(files, file.Relative(name))
 			}
 			if err != nil {
 				return nil, err
@@ -269,7 +272,7 @@ func (file *LocalFile) Rename(newName string) error {
 	if strings.ContainsAny(newName, "/\\") {
 		return errors.New("newName for Rename() contains a path separatos: " + newName)
 	}
-	newPath := filepath.Join(file.Dir(), newName)
+	newPath := filepath.Join(file.Dir().Path(), newName)
 	err := os.Rename(file.path, newPath)
 	if err != nil {
 		return err
