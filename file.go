@@ -36,6 +36,7 @@ type File interface {
 	URN() string
 	URL() string
 	Path() string
+	Dir() string
 	Name() string
 	Ext() string
 
