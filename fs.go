@@ -7,7 +7,10 @@ import (
 
 var (
 	// Local is the local file system
-	Local = LocalFileSystem{DefaultCreatePermissions: UserAndGroupReadWrite}
+	Local = LocalFileSystem{
+		DefaultCreatePermissions:    UserAndGroupReadWrite,
+		DefaultCreateDirPermissions: UserAndGroupReadWrite + AllExecute,
+	}
 
 	// Registry contains all registerred file systems
 	Registry = []FileSystem{Local}

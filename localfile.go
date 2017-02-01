@@ -213,7 +213,7 @@ func (file *LocalFile) Touch(perm ...Permissions) error {
 }
 
 func (file *LocalFile) MakeDir(perm ...Permissions) error {
-	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
+	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions)
 	return os.MkdirAll(file.path, os.FileMode(p))
 }
 

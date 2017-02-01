@@ -3,7 +3,8 @@ package fs
 const LocalPrefix = "file://"
 
 type LocalFileSystem struct {
-	DefaultCreatePermissions Permissions
+	DefaultCreatePermissions    Permissions
+	DefaultCreateDirPermissions Permissions
 }
 
 func (LocalFileSystem) IsReadOnly() bool {
