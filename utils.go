@@ -63,6 +63,12 @@ func Copy(src, dest File, patterns ...string) error {
 	return copy(src, dest, patterns, &buf)
 }
 
+// CopyPath copies even between files of different file systems
+func CopyPath(src, dest string, patterns ...string) error {
+	var buf []byte
+	return copy(GetFile(src), GetFile(dest), patterns, &buf)
+}
+
 func ReadString(uri string) (string, error) {
 	data, err := Read(uri)
 	if data == nil || err != nil {

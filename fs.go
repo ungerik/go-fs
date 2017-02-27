@@ -7,7 +7,7 @@ import (
 
 var (
 	// Local is the local file system
-	Local = LocalFileSystem{
+	Local = &LocalFileSystem{
 		DefaultCreatePermissions:    UserAndGroupReadWrite,
 		DefaultCreateDirPermissions: UserAndGroupReadWrite + AllExecute,
 	}
@@ -17,9 +17,12 @@ var (
 )
 
 func GetFileSystem(uriParts ...string) FileSystem {
-	joinedURI := path.Join(uriParts...)
+	return getFileSystem(path.Join(uriParts...))
+}
+
+func getFileSystem(uri string) FileSystem {
 	for _, fs := range Registry {
-		if strings.HasPrefix(joinedURI, fs.Prefix()) {
+		if strings.HasPrefix(uri, fs.Prefix()) {
 			return fs
 		}
 	}
@@ -27,7 +30,8 @@ func GetFileSystem(uriParts ...string) FileSystem {
 }
 
 func GetFile(uriParts ...string) File {
-	return GetFileSystem(uriParts...).File(uriParts...)
+	uri := path.Join(uriParts...)
+	return getFileSystem(uri).File(uri)
 }
 
 func Exists(uriParts ...string) bool {
@@ -51,7 +55,7 @@ func Touch(uri string, perm ...Permissions) (File, error) {
 	file := GetFile(uri)
 	err := file.Touch(perm...)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	return file, nil
 }
@@ -60,7 +64,7 @@ func MakeDir(uri string, perm ...Permissions) (File, error) {
 	file := GetFile(uri)
 	err := file.MakeDir(perm...)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	return file, nil
 }
