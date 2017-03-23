@@ -59,6 +59,14 @@ func (file File) Ext() string {
 	return file.FileSystem().Ext(file.Path())
 }
 
+func (file File) RemoveExt() File {
+	return file[:len(file)-len(file.Ext())]
+}
+
+func (file File) ReplaceExt(newExt string) File {
+	return file.RemoveExt() + File(newExt)
+}
+
 func (file File) Dir() File {
 	return File(file.FileSystem().Dir(file.Path()))
 }
