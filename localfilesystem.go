@@ -26,7 +26,7 @@ func (fs *LocalFileSystem) Prefix() string {
 }
 
 func (fs *LocalFileSystem) Name() string {
-	return "Local file system"
+	return "local file system"
 }
 
 func (fs *LocalFileSystem) File(uri ...string) File {

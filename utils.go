@@ -93,12 +93,17 @@ func ReadJSON(file File, output interface{}) error {
 	return json.Unmarshal(data, output)
 }
 
-func WriteJSON(file File, input interface{}, indent ...string) error {
-	b, err := json.MarshalIndent(input, "", strings.Join(indent, ""))
+func WriteJSON(file File, input interface{}, indent ...string) (err error) {
+	var data []byte
+	if len(indent) == 0 {
+		data, err = json.Marshal(input)
+	} else {
+		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
+	}
 	if err != nil {
 		return err
 	}
-	return file.WriteAll(b)
+	return file.WriteAll(data)
 }
 
 func ReadXML(file File, output interface{}) error {
@@ -109,11 +114,16 @@ func ReadXML(file File, output interface{}) error {
 	return xml.Unmarshal(data, output)
 }
 
-func WriteXML(file File, input interface{}, indent ...string) error {
-	b, err := xml.MarshalIndent(input, "", strings.Join(indent, ""))
+func WriteXML(file File, input interface{}, indent ...string) (err error) {
+	var data []byte
+	if len(indent) == 0 {
+		data, err = xml.Marshal(input)
+	} else {
+		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
+	}
 	if err != nil {
 		return err
 	}
-	b = append([]byte(xml.Header), b...)
-	return file.WriteAll(b)
+	data = append([]byte(xml.Header), data...)
+	return file.WriteAll(data)
 }
