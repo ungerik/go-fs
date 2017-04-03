@@ -135,6 +135,15 @@ func (file File) ReadAll() ([]byte, error) {
 	return file.FileSystem().ReadAll(file.Path())
 }
 
+func (file File) WriteTo(writer io.Writer) (n int64, err error) {
+	reader, err := file.OpenReader()
+	if err != nil {
+		return 0, err
+	}
+	defer reader.Close()
+	return io.Copy(writer, reader)
+}
+
 func (file File) WriteAll(data []byte, perm ...Permissions) error {
 	return file.FileSystem().WriteAll(file.Path(), data, perm...)
 }
