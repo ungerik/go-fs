@@ -178,7 +178,7 @@ func (fs *LocalFileSystem) ListDirMax(filePath string, n int, patterns ...string
 func (fs *LocalFileSystem) Permissions(filePath string) Permissions {
 	info, err := os.Stat(filePath)
 	if err != nil {
-		return 0
+		return NoPermissions
 	}
 	return Permissions(info.Mode().Perm())
 }

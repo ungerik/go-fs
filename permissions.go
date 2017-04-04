@@ -1,6 +1,8 @@
 package fs
 
 var (
+	NoPermissions Permissions = 0
+
 	UserExecute          Permissions = 0100
 	UserWrite            Permissions = 0200
 	UserRead             Permissions = 0400

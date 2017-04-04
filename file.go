@@ -135,12 +135,31 @@ func (file File) ReadAll() ([]byte, error) {
 	return file.FileSystem().ReadAll(file.Path())
 }
 
+// WriteTo implements the io.WriterTo interface
 func (file File) WriteTo(writer io.Writer) (n int64, err error) {
 	reader, err := file.OpenReader()
 	if err != nil {
 		return 0, err
 	}
 	defer reader.Close()
+	return io.Copy(writer, reader)
+}
+
+// ReadFrom implements the io.ReaderFrom interface,
+// the file is writter with the existing permissions if it exists,
+// or with the default write permissions if it does not exist yet.
+func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
+	var writer io.WriteCloser
+	existingPerm := file.Permissions()
+	if existingPerm != NoPermissions {
+		writer, err = file.OpenWriter(existingPerm)
+	} else {
+		writer, err = file.OpenWriter()
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer writer.Close()
 	return io.Copy(writer, reader)
 }
 
