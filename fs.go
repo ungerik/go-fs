@@ -16,6 +16,21 @@ var (
 	Registry = []FileSystem{Local}
 )
 
+func DeregisterFileSystem(fs FileSystem) bool {
+	prefix := fs.Prefix()
+	for i, regfs := range Registry {
+		if regfs.Prefix() == prefix {
+			if i < len(Registry)-1 {
+				Registry = append(Registry[:i], Registry[i+1:]...)
+			} else {
+				Registry = Registry[:i]
+			}
+			return true
+		}
+	}
+	return false
+}
+
 func GetFileSystem(uriParts ...string) FileSystem {
 	return getFileSystem(path.Join(uriParts...))
 }

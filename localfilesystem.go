@@ -41,8 +41,8 @@ func (fs *LocalFileSystem) URL(filePath string) string {
 	return LocalPrefix + fs.URN(filePath)
 }
 
-func (fs *LocalFileSystem) CleanPath(filePath string) string {
-	return filepath.Clean(strings.TrimPrefix(filePath, LocalPrefix))
+func (fs *LocalFileSystem) CleanPath(uri ...string) string {
+	return filepath.Clean(strings.TrimPrefix(filepath.Join(uri...), LocalPrefix))
 }
 
 func (fs *LocalFileSystem) FileName(filePath string) string {

@@ -13,7 +13,11 @@ type FileSystem interface {
 
 	URN(filePath string) string
 	URL(filePath string) string
-	CleanPath(filePath string) string
+
+	// CleanPath joins the uri parts into a cleaned path
+	// of the file system style without the file system prefix
+	CleanPath(uri ...string) string
+
 	FileName(filePath string) string
 
 	Ext(filePath string) string
