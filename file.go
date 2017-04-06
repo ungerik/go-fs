@@ -61,7 +61,7 @@ func (file File) Ext() string {
 }
 
 func (file File) ExtLower() string {
-	return strings.ToLower(file.Ex())
+	return strings.ToLower(file.Ext())
 }
 
 func (file File) RemoveExt() File {
