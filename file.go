@@ -3,6 +3,7 @@ package fs
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -57,6 +58,10 @@ func (file File) Name() string {
 
 func (file File) Ext() string {
 	return file.FileSystem().Ext(file.Path())
+}
+
+func (file File) ExtLower() string {
+	return strings.ToLower(file.Ex())
 }
 
 func (file File) RemoveExt() File {
