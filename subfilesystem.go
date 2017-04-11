@@ -75,6 +75,14 @@ func (fs *SubFileSystem) CleanPath(uri ...string) string {
 	return fs.prefix + fs.Parent.CleanPath(uri...)
 }
 
+func (fs *SubFileSystem) SplitPath(filePath string) []string {
+	return fs.Parent.SplitPath(filePath)
+}
+
+func (fs *SubFileSystem) Seperator() string {
+	return fs.Parent.Seperator()
+}
+
 func (fs *SubFileSystem) FileName(filePath string) string {
 	return filepath.Base(filePath)
 }

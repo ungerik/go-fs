@@ -45,6 +45,14 @@ func (fs *LocalFileSystem) CleanPath(uri ...string) string {
 	return filepath.Clean(strings.TrimPrefix(filepath.Join(uri...), LocalPrefix))
 }
 
+func (fs *LocalFileSystem) SplitPath(filePath string) []string {
+	return strings.Split(filePath, string(filepath.Separator))
+}
+
+func (fs *LocalFileSystem) Seperator() string {
+	return string(filepath.Separator)
+}
+
 func (fs *LocalFileSystem) FileName(filePath string) string {
 	return filepath.Base(filePath)
 }

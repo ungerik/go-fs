@@ -1,9 +1,6 @@
 package fs
 
-import (
-	"path"
-	"strings"
-)
+import "strings"
 
 var (
 	// Local is the local file system
@@ -32,10 +29,16 @@ func DeregisterFileSystem(fs FileSystem) bool {
 }
 
 func GetFileSystem(uriParts ...string) FileSystem {
-	return getFileSystem(path.Join(uriParts...))
+	if len(uriParts) == 0 {
+		return Local
+	}
+	return getFileSystem(uriParts[0])
 }
 
 func getFileSystem(uri string) FileSystem {
+	if uri == "" {
+		return Local
+	}
 	for _, fs := range Registry {
 		if strings.HasPrefix(uri, fs.Prefix()) {
 			return fs
@@ -45,8 +48,7 @@ func getFileSystem(uri string) FileSystem {
 }
 
 func GetFile(uriParts ...string) File {
-	uri := path.Join(uriParts...)
-	return getFileSystem(uri).File(uri)
+	return GetFileSystem(uriParts[0]).File(uriParts...)
 }
 
 func Exists(uriParts ...string) bool {
@@ -84,6 +86,15 @@ func MakeDir(uri string, perm ...Permissions) (File, error) {
 	return file, nil
 }
 
+func MakeAllDirs(uri string, perm ...Permissions) (File, error) {
+	file := GetFile(uri)
+	err := file.MakeAllDirs(perm...)
+	if err != nil {
+		return "", err
+	}
+	return file, nil
+}
+
 func Truncate(uri string, size int64) error {
 	return GetFile(uri).Truncate(size)
 }
@@ -92,11 +103,11 @@ func Remove(uri string) error {
 	return GetFile(uri).Remove()
 }
 
-func Read(uri string) ([]byte, error) {
+func ReadFile(uri string) ([]byte, error) {
 	return GetFile(uri).ReadAll()
 }
 
-func Write(uri string, data []byte, perm ...Permissions) error {
+func WriteFile(uri string, data []byte, perm ...Permissions) error {
 	return GetFile(uri).WriteAll(data, perm...)
 }
 

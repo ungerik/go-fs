@@ -18,6 +18,11 @@ type FileSystem interface {
 	// of the file system style without the file system prefix
 	CleanPath(uri ...string) string
 
+	// SplitPath returns all Seperator() delimited components of filePath
+	SplitPath(filePath string) []string
+
+	Seperator() string
+
 	FileName(filePath string) string
 
 	Ext(filePath string) string

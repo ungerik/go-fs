@@ -1,6 +1,9 @@
 package fs
 
 import (
+	"encoding/json"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -77,7 +80,10 @@ func (file File) Dir() File {
 }
 
 func (file File) Relative(pathParts ...string) File {
-	return file.FileSystem().File(append([]string{file.Path()}, pathParts...)...)
+	if file != "" {
+		pathParts = append([]string{file.Path()}, pathParts...)
+	}
+	return file.FileSystem().File(pathParts...)
 }
 
 func (file File) Exists() bool {
@@ -136,8 +142,34 @@ func (file File) MakeDir(perm ...Permissions) error {
 	return file.FileSystem().MakeDir(file.Path(), perm...)
 }
 
+// MakeAllDirs creates all directories up to this one
+func (file File) MakeAllDirs(perm ...Permissions) (err error) {
+	parts := file.FileSystem().SplitPath(file.Path())
+	var dir File
+	for _, part := range parts {
+		dir = dir.Relative(part)
+		if !dir.Exists() {
+			err = dir.MakeDir(perm...)
+			if err != nil {
+				return err
+			}
+		} else if !dir.IsDir() {
+			return errors.New("MakeAllDirs: file instead of directory in path: " + file.Path())
+		}
+	}
+	return nil
+}
+
 func (file File) ReadAll() ([]byte, error) {
 	return file.FileSystem().ReadAll(file.Path())
+}
+
+func (file File) ReadAllString() (string, error) {
+	data, err := file.ReadAll()
+	if data == nil || err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // WriteTo implements the io.WriterTo interface
@@ -210,4 +242,47 @@ func (file File) Move(destination File) error {
 
 func (file File) Remove() error {
 	return file.FileSystem().Remove(file.Path())
+}
+
+func (file File) ReadJSON(output interface{}) error {
+	data, err := file.ReadAll()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, output)
+}
+
+func (file File) WriteJSON(input interface{}, indent ...string) (err error) {
+	var data []byte
+	if len(indent) == 0 {
+		data, err = json.Marshal(input)
+	} else {
+		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
+	}
+	if err != nil {
+		return err
+	}
+	return file.WriteAll(data)
+}
+
+func (file File) ReadXML(output interface{}) error {
+	data, err := file.ReadAll()
+	if err != nil {
+		return err
+	}
+	return xml.Unmarshal(data, output)
+}
+
+func (file File) WriteXML(input interface{}, indent ...string) (err error) {
+	var data []byte
+	if len(indent) == 0 {
+		data, err = xml.Marshal(input)
+	} else {
+		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
+	}
+	if err != nil {
+		return err
+	}
+	data = append([]byte(xml.Header), data...)
+	return file.WriteAll(data)
 }

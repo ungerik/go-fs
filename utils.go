@@ -1,11 +1,8 @@
 package fs
 
 import (
-	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
-	"strings"
 )
 
 const copyBufferSize = 1024 * 1024
@@ -67,63 +64,4 @@ func Copy(src, dest File, patterns ...string) error {
 func CopyPath(src, dest string, patterns ...string) error {
 	var buf []byte
 	return copy(GetFile(src), GetFile(dest), patterns, &buf)
-}
-
-func ReadString(uri string) (string, error) {
-	data, err := Read(uri)
-	if data == nil || err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func WriteString(uri string, data string, perm ...Permissions) error {
-	return Write(uri, []byte(data), perm...)
-}
-
-func AppendString(uri string, data string, perm ...Permissions) error {
-	return Append(uri, []byte(data), perm...)
-}
-
-func ReadJSON(file File, output interface{}) error {
-	data, err := file.ReadAll()
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, output)
-}
-
-func WriteJSON(file File, input interface{}, indent ...string) (err error) {
-	var data []byte
-	if len(indent) == 0 {
-		data, err = json.Marshal(input)
-	} else {
-		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
-	}
-	if err != nil {
-		return err
-	}
-	return file.WriteAll(data)
-}
-
-func ReadXML(file File, output interface{}) error {
-	data, err := file.ReadAll()
-	if err != nil {
-		return err
-	}
-	return xml.Unmarshal(data, output)
-}
-
-func WriteXML(file File, input interface{}, indent ...string) (err error) {
-	var data []byte
-	if len(indent) == 0 {
-		data, err = xml.Marshal(input)
-	} else {
-		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
-	}
-	if err != nil {
-		return err
-	}
-	data = append([]byte(xml.Header), data...)
-	return file.WriteAll(data)
 }
