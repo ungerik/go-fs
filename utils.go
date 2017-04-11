@@ -3,6 +3,8 @@ package fs
 import (
 	"fmt"
 	"io"
+	"path"
+	"path/filepath"
 )
 
 const copyBufferSize = 1024 * 1024
@@ -64,4 +66,61 @@ func Copy(src, dest File, patterns ...string) error {
 func CopyPath(src, dest string, patterns ...string) error {
 	var buf []byte
 	return copy(GetFile(src), GetFile(dest), patterns, &buf)
+}
+
+// MatchAnyPattern returns true if name matches any of patterns,
+// or if len(patterns) == 0.
+// The match per pattern is checked via path.Match
+func MatchAnyPattern(name string, patterns []string) (bool, error) {
+	if len(patterns) == 0 {
+		return true, nil
+	}
+	for _, pattern := range patterns {
+		match, err := path.Match(pattern, name)
+		if match || err != nil {
+			return match, err
+		}
+	}
+	return false, nil
+}
+
+// MatchAnyPatternLocal returns true if name matches any of patterns,
+// or if len(patterns) == 0.
+// The match per pattern is checked via filepath.Match
+func MatchAnyPatternLocal(name string, patterns []string) (bool, error) {
+	if len(patterns) == 0 {
+		return true, nil
+	}
+	for _, pattern := range patterns {
+		match, err := filepath.Match(pattern, name)
+		if match || err != nil {
+			return match, err
+		}
+	}
+	return false, nil
+}
+
+// ListDirMaxImpl implements the ListDirMax method functionality
+// by calling fs.ListDir.
+// FileSystem implementations can use this function to implement ListDirMax,
+// if a own, specialized implementation doesn't make sense.
+func ListDirMaxImpl(fs FileSystem, filePath string, n int, patterns ...string) (files []File, err error) {
+	if !fs.IsDir(filePath) {
+		return nil, ErrIsNotDirectory{File(filePath)}
+	}
+	if n == -1 {
+		files = make([]File, 0)
+	} else {
+		files = make([]File, 0, n)
+	}
+	err = fs.ListDir(filePath, func(file File) error {
+		if n == -1 || len(files) < n {
+			files = append(files, file)
+		}
+		return nil
+	}, patterns...)
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }

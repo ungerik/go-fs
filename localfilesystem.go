@@ -46,6 +46,8 @@ func (fs *LocalFileSystem) CleanPath(uri ...string) string {
 }
 
 func (fs *LocalFileSystem) SplitPath(filePath string) []string {
+	filePath = strings.TrimPrefix(filePath, LocalPrefix)
+	filePath = strings.TrimPrefix(filePath, "/")
 	return strings.Split(filePath, string(filepath.Separator))
 }
 
@@ -58,7 +60,7 @@ func (fs *LocalFileSystem) FileName(filePath string) string {
 }
 
 func (fs *LocalFileSystem) Ext(filePath string) string {
-	return strings.ToLower(filepath.Ext(filePath))
+	return filepath.Ext(filePath)
 }
 
 func (fs *LocalFileSystem) Dir(filePath string) string {
@@ -91,19 +93,6 @@ func (fs *LocalFileSystem) ModTime(filePath string) time.Time {
 	return info.ModTime()
 }
 
-func matchAnyPattern(name string, patterns []string) (bool, error) {
-	if len(patterns) == 0 {
-		return true, nil
-	}
-	for _, pattern := range patterns {
-		match, err := filepath.Match(pattern, name)
-		if match || err != nil {
-			return match, err
-		}
-	}
-	return false, nil
-}
-
 func (fs *LocalFileSystem) ListDir(filePath string, callback func(File) error, patterns ...string) error {
 	if !fs.IsDir(filePath) {
 		return ErrIsNotDirectory{File(filePath)}
@@ -125,7 +114,7 @@ func (fs *LocalFileSystem) ListDir(filePath string, callback func(File) error, p
 		}
 
 		for _, name := range names {
-			match, err := matchAnyPattern(name, patterns)
+			match, err := MatchAnyPatternLocal(name, patterns)
 			if match {
 				err = callback(fs.File(filePath, name))
 			}
@@ -166,7 +155,7 @@ func (fs *LocalFileSystem) ListDirMax(filePath string, n int, patterns ...string
 		}
 
 		for _, name := range names {
-			match, err := matchAnyPattern(name, patterns)
+			match, err := MatchAnyPatternLocal(name, patterns)
 			if match {
 				files = append(files, fs.File(filePath, name))
 			}
