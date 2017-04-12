@@ -204,6 +204,10 @@ func (file File) WriteAll(data []byte, perm ...Permissions) error {
 	return file.FileSystem().WriteAll(file.Path(), data, perm...)
 }
 
+func (file File) WriteAllString(data string, perm ...Permissions) error {
+	return file.WriteAll([]byte(data), perm...)
+}
+
 func (file File) Append(data []byte, perm ...Permissions) error {
 	return file.FileSystem().Append(file.Path(), data, perm...)
 }
