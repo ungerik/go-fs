@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+// ReadSeekCloser combines the interfaces
+// io.Reader
+// io.ReaderAt
+// io.Seeker
+// io.Closer
 type ReadSeekCloser interface {
 	io.Reader
 	io.ReaderAt
@@ -17,6 +22,11 @@ type ReadSeekCloser interface {
 	io.Closer
 }
 
+// WriteSeekCloser combines the interfaces
+// io.Writer
+// io.WriterAt
+// io.Seeker
+// io.Closer
 type WriteSeekCloser interface {
 	io.Writer
 	io.WriterAt
@@ -24,6 +34,13 @@ type WriteSeekCloser interface {
 	io.Closer
 }
 
+// ReadWriteSeekCloser combines the interfaces
+// io.Reader
+// io.ReaderAt
+// io.Writer
+// io.WriterAt
+// io.Seeker
+// io.Closer
 type ReadWriteSeekCloser interface {
 	io.Reader
 	io.ReaderAt
@@ -33,8 +50,12 @@ type ReadWriteSeekCloser interface {
 	io.Closer
 }
 
+// File is a local file system path or URI
+// describing the location of a file.
 type File string
 
+// FileSystem returns the FileSystem of the File.
+// Defaults to Local if not a complete URI.
 func (file File) FileSystem() FileSystem {
 	return getFileSystem(string(file))
 }
@@ -43,42 +64,62 @@ func (file File) String() string {
 	return fmt.Sprintf("%s (%s)", file.Path(), file.FileSystem().Name())
 }
 
+// URN of the file
 func (file File) URN() string {
 	return file.FileSystem().URN(file.Path())
 }
 
+// URL of the file
 func (file File) URL() string {
 	return file.FileSystem().URL(file.Path())
 }
 
+// Path returns the cleaned path of the file.
+// It may differ from the string value of File
+// because it will be cleaned depending on the FileSystem
 func (file File) Path() string {
 	return file.FileSystem().CleanPath(string(file))
 }
 
+// Name returns the name part of the file path,
+// which is usually the string after the last path Separator.
 func (file File) Name() string {
 	return file.FileSystem().FileName(file.Path())
 }
 
+// Ext returns the extension of file name including the extension separator.
+// Example: File("image.png").Ext() == ".png"
 func (file File) Ext() string {
 	return file.FileSystem().Ext(file.Path())
 }
 
+// ExtLower returns the lower case extension of file name including the extension separator.
+// Example: File("Image.PNG").ExtLower() == ".png"
 func (file File) ExtLower() string {
 	return strings.ToLower(file.Ext())
 }
 
+// RemoveExt returns a File with a path where the extension is removed.
 func (file File) RemoveExt() File {
 	return file[:len(file)-len(file.Ext())]
 }
 
+// ReplaceExt returns a File with a path where the file name extension is replaced with newExt.
 func (file File) ReplaceExt(newExt string) File {
+	if len(newExt) == 0 || newExt[0] != '.' {
+		newExt = "." + newExt
+	}
 	return file.RemoveExt() + File(newExt)
 }
 
+// Dir returns the parent directory of the File.
 func (file File) Dir() File {
 	return File(file.FileSystem().Dir(file.Path()))
 }
 
+// Relative returns a File with a path relative to this file.
+// Every part of pathParts is a subsequent directory of file
+// concaternated with a path Separator.
 func (file File) Relative(pathParts ...string) File {
 	if file != "" {
 		pathParts = append([]string{file.Path()}, pathParts...)
@@ -86,14 +127,17 @@ func (file File) Relative(pathParts ...string) File {
 	return file.FileSystem().File(pathParts...)
 }
 
+// Exists returns a file or directory with the path of File exists.
 func (file File) Exists() bool {
 	return file.FileSystem().Exists(file.Path())
 }
 
+// IsDir returns a directory with the path of File exists.
 func (file File) IsDir() bool {
 	return file.FileSystem().IsDir(file.Path())
 }
 
+// Size returns the size of the file or 0 if it does not exist or is a directory.
 func (file File) Size() int64 {
 	return file.FileSystem().Size(file.Path())
 }

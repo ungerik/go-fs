@@ -31,6 +31,8 @@ type FileSystem interface {
 
 	Exists(filePath string) bool
 	IsDir(filePath string) bool
+
+	// Size returns the size of the file with filePath or 0 if it does not exist or is a directory.
 	Size(filePath string) int64
 
 	Watch(filePath string) (<-chan WatchEvent, error)
