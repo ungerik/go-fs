@@ -1,6 +1,9 @@
 package fs
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 var (
 	// Local is the local file system
@@ -113,4 +116,8 @@ func WriteFile(uri string, data []byte, perm ...Permissions) error {
 
 func Append(uri string, data []byte, perm ...Permissions) error {
 	return GetFile(uri).Append(data, perm...)
+}
+
+func TempDir() File {
+	return File(os.TempDir())
 }
