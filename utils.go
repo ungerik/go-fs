@@ -106,7 +106,7 @@ func MatchAnyPatternLocal(name string, patterns []string) (bool, error) {
 // if a own, specialized implementation doesn't make sense.
 func ListDirMaxImpl(fs FileSystem, filePath string, n int, patterns ...string) (files []File, err error) {
 	if !fs.IsDir(filePath) {
-		return nil, ErrIsNotDirectory{File(filePath)}
+		return nil, NewErrIsNotDirectory(File(filePath))
 	}
 	if n == -1 {
 		files = make([]File, 0)

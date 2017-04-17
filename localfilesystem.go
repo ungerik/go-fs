@@ -95,7 +95,7 @@ func (fs *LocalFileSystem) ModTime(filePath string) time.Time {
 
 func (fs *LocalFileSystem) ListDir(filePath string, callback func(File) error, patterns ...string) error {
 	if !fs.IsDir(filePath) {
-		return ErrIsNotDirectory{File(filePath)}
+		return NewErrIsNotDirectory(File(filePath))
 	}
 
 	f, err := os.Open(filePath)
@@ -128,7 +128,7 @@ func (fs *LocalFileSystem) ListDir(filePath string, callback func(File) error, p
 
 func (fs *LocalFileSystem) ListDirMax(filePath string, n int, patterns ...string) (files []File, err error) {
 	if !fs.IsDir(filePath) {
-		return nil, ErrIsNotDirectory{File(filePath)}
+		return nil, NewErrIsNotDirectory(File(filePath))
 	}
 
 	f, err := os.Open(filePath)
