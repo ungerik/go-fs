@@ -136,12 +136,12 @@ func (mfs *MultipartFileSystem) ListDir(filePath string, callback func(fs.File) 
 		if len(f) > 0 {
 			err = callback(fs.File(mfs.prefix + name + "/" + f[0].Filename))
 		} else {
-			err = fs.ErrFileDoesNotExist{File: fs.File(filePath)}
+			err = fs.NewErrFileDoesNotExist(fs.File(filePath))
 		}
 	case 2:
-		err = fs.ErrIsNotDirectory{File: fs.File(filePath)}
+		err = fs.NewErrIsNotDirectory(fs.File(filePath))
 	default:
-		err = fs.ErrFileDoesNotExist{File: fs.File(filePath)}
+		err = fs.NewErrFileDoesNotExist(fs.File(filePath))
 	}
 	return err
 }
@@ -179,11 +179,11 @@ func (mfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
 func (mfs *MultipartFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, error) {
 	parts := mfs.SplitPath(filePath)
 	if len(parts) != 2 {
-		return nil, fs.ErrFileDoesNotExist{File: fs.File(filePath)}
+		return nil, fs.NewErrFileDoesNotExist(fs.File(filePath))
 	}
 	f, _ := mfs.Form.File[parts[0]]
 	if len(f) == 0 || f[0].Filename != parts[1] {
-		return nil, fs.ErrFileDoesNotExist{File: fs.File(filePath)}
+		return nil, fs.NewErrFileDoesNotExist(fs.File(filePath))
 	}
 	return f[0].Open()
 }
