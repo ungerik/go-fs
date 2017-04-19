@@ -5,18 +5,21 @@ import (
 	"time"
 )
 
+// FileSystem is an interface that has to be implemented for
+// a file system to be accessable via this package.
 type FileSystem interface {
 	IsReadOnly() bool
 	Prefix() string
 	Name() string
-	File(uri ...string) File
 
-	URN(filePath string) string
-	URL(filePath string) string
+	File(uriParts ...string) File
 
-	// CleanPath joins the uri parts into a cleaned path
+	// URL returns a full URL wich is Prefix() + cleanPath
+	URL(cleanPath string) string
+
+	// CleanPath joins the uriParts into a cleaned path
 	// of the file system style without the file system prefix
-	CleanPath(uri ...string) string
+	CleanPath(uriParts ...string) string
 
 	// SplitPath returns all Seperator() delimited components of filePath
 	// without the file system prefix.
@@ -37,10 +40,10 @@ type FileSystem interface {
 
 	Watch(filePath string) (<-chan WatchEvent, error)
 
-	ListDir(filePath string, callback func(File) error, patterns ...string) error
+	ListDir(dirPath string, callback func(File) error, patterns []string) error
 
 	// ListDirMax: n == -1 lists all
-	ListDirMax(filePath string, n int, patterns ...string) ([]File, error)
+	ListDirMax(dirPath string, n int, patterns []string) ([]File, error)
 
 	ModTime(filePath string) time.Time
 
@@ -53,17 +56,17 @@ type FileSystem interface {
 	Group(filePath string) string
 	SetGroup(filePath string, group string) error
 
-	Touch(filePath string, perm ...Permissions) error
-	MakeDir(filePath string, perm ...Permissions) error
+	Touch(filePath string, perm []Permissions) error
+	MakeDir(filePath string, perm []Permissions) error
 
 	ReadAll(filePath string) ([]byte, error)
-	WriteAll(filePath string, data []byte, perm ...Permissions) error
-	Append(filePath string, data []byte, perm ...Permissions) error
+	WriteAll(filePath string, data []byte, perm []Permissions) error
+	Append(filePath string, data []byte, perm []Permissions) error
 
 	OpenReader(filePath string) (ReadSeekCloser, error)
-	OpenWriter(filePath string, perm ...Permissions) (WriteSeekCloser, error)
-	OpenAppendWriter(filePath string, perm ...Permissions) (io.WriteCloser, error)
-	OpenReadWriter(filePath string, perm ...Permissions) (ReadWriteSeekCloser, error)
+	OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error)
+	OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
+	OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error)
 
 	Truncate(filePath string, size int64) error
 

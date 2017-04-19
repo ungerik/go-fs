@@ -17,67 +17,63 @@ type LocalFileSystem struct {
 	DefaultCreateDirPermissions Permissions
 }
 
-func (fs *LocalFileSystem) IsReadOnly() bool {
+func (local *LocalFileSystem) IsReadOnly() bool {
 	return false
 }
 
-func (fs *LocalFileSystem) Prefix() string {
+func (local *LocalFileSystem) Prefix() string {
 	return LocalPrefix
 }
 
-func (fs *LocalFileSystem) Name() string {
+func (local *LocalFileSystem) Name() string {
 	return "local file system"
 }
 
-func (fs *LocalFileSystem) File(uri ...string) File {
+func (local *LocalFileSystem) File(uri ...string) File {
 	return File(filepath.Clean(filepath.Join(uri...)))
 }
 
-func (fs *LocalFileSystem) URN(filePath string) string {
-	return filepath.ToSlash(filePath)
+func (local *LocalFileSystem) URL(cleanPath string) string {
+	return LocalPrefix + filepath.ToSlash(cleanPath)
 }
 
-func (fs *LocalFileSystem) URL(filePath string) string {
-	return LocalPrefix + fs.URN(filePath)
-}
-
-func (fs *LocalFileSystem) CleanPath(uri ...string) string {
+func (local *LocalFileSystem) CleanPath(uri ...string) string {
 	return filepath.Clean(strings.TrimPrefix(filepath.Join(uri...), LocalPrefix))
 }
 
-func (fs *LocalFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, LocalPrefix)
-	filePath = strings.TrimPrefix(filePath, "/")
-	return strings.Split(filePath, string(filepath.Separator))
+func (local *LocalFileSystem) SplitPath(filePath string) []string {
+	filePath = strings.TrimPrefix(filePath, local.Prefix())
+	filePath = strings.TrimPrefix(filePath, local.Seperator())
+	return strings.Split(filePath, local.Seperator())
 }
 
-func (fs *LocalFileSystem) Seperator() string {
+func (local *LocalFileSystem) Seperator() string {
 	return string(filepath.Separator)
 }
 
-func (fs *LocalFileSystem) FileName(filePath string) string {
+func (local *LocalFileSystem) FileName(filePath string) string {
 	return filepath.Base(filePath)
 }
 
-func (fs *LocalFileSystem) Ext(filePath string) string {
+func (local *LocalFileSystem) Ext(filePath string) string {
 	return filepath.Ext(filePath)
 }
 
-func (fs *LocalFileSystem) Dir(filePath string) string {
+func (local *LocalFileSystem) Dir(filePath string) string {
 	return filepath.Dir(filePath)
 }
 
-func (fs *LocalFileSystem) Exists(filePath string) bool {
+func (local *LocalFileSystem) Exists(filePath string) bool {
 	_, err := os.Stat(filePath)
 	return err == nil
 }
 
-func (fs *LocalFileSystem) IsDir(filePath string) bool {
+func (local *LocalFileSystem) IsDir(filePath string) bool {
 	info, err := os.Stat(filePath)
 	return err == nil && info.IsDir()
 }
 
-func (fs *LocalFileSystem) Size(filePath string) int64 {
+func (local *LocalFileSystem) Size(filePath string) int64 {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return 0
@@ -85,7 +81,7 @@ func (fs *LocalFileSystem) Size(filePath string) int64 {
 	return info.Size()
 }
 
-func (fs *LocalFileSystem) ModTime(filePath string) time.Time {
+func (local *LocalFileSystem) ModTime(filePath string) time.Time {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return time.Time{}
@@ -93,12 +89,12 @@ func (fs *LocalFileSystem) ModTime(filePath string) time.Time {
 	return info.ModTime()
 }
 
-func (fs *LocalFileSystem) ListDir(filePath string, callback func(File) error, patterns ...string) error {
-	if !fs.IsDir(filePath) {
-		return NewErrIsNotDirectory(File(filePath))
+func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
+	if !local.IsDir(dirPath) {
+		return NewErrIsNotDirectory(File(dirPath))
 	}
 
-	f, err := os.Open(filePath)
+	f, err := os.Open(dirPath)
 	if err != nil {
 		return err
 	}
@@ -116,7 +112,7 @@ func (fs *LocalFileSystem) ListDir(filePath string, callback func(File) error, p
 		for _, name := range names {
 			match, err := MatchAnyPatternLocal(name, patterns)
 			if match {
-				err = callback(fs.File(filePath, name))
+				err = callback(local.File(dirPath, name))
 			}
 			if err != nil {
 				return err
@@ -126,12 +122,12 @@ func (fs *LocalFileSystem) ListDir(filePath string, callback func(File) error, p
 	return nil
 }
 
-func (fs *LocalFileSystem) ListDirMax(filePath string, n int, patterns ...string) (files []File, err error) {
-	if !fs.IsDir(filePath) {
-		return nil, NewErrIsNotDirectory(File(filePath))
+func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {
+	if !local.IsDir(dirPath) {
+		return nil, NewErrIsNotDirectory(File(dirPath))
 	}
 
-	f, err := os.Open(filePath)
+	f, err := os.Open(dirPath)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +153,7 @@ func (fs *LocalFileSystem) ListDirMax(filePath string, n int, patterns ...string
 		for _, name := range names {
 			match, err := MatchAnyPatternLocal(name, patterns)
 			if match {
-				files = append(files, fs.File(filePath, name))
+				files = append(files, local.File(dirPath, name))
 			}
 			if err != nil {
 				return nil, err
@@ -172,7 +168,7 @@ func (fs *LocalFileSystem) ListDirMax(filePath string, n int, patterns ...string
 	return files, nil
 }
 
-func (fs *LocalFileSystem) Permissions(filePath string) Permissions {
+func (local *LocalFileSystem) Permissions(filePath string) Permissions {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return NoPermissions
@@ -180,51 +176,51 @@ func (fs *LocalFileSystem) Permissions(filePath string) Permissions {
 	return Permissions(info.Mode().Perm())
 }
 
-func (fs *LocalFileSystem) SetPermissions(filePath string, perm Permissions) error {
+func (local *LocalFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	return os.Chmod(filePath, os.FileMode(perm))
 }
 
-func (fs *LocalFileSystem) User(filePath string) string {
+func (local *LocalFileSystem) User(filePath string) string {
 	panic("not implemented")
 }
 
-func (fs *LocalFileSystem) SetUser(filePath string, user string) error {
+func (local *LocalFileSystem) SetUser(filePath string, user string) error {
 	panic("not implemented")
 }
 
-func (fs *LocalFileSystem) Group(filePath string) string {
+func (local *LocalFileSystem) Group(filePath string) string {
 	panic("not implemented")
 }
 
-func (fs *LocalFileSystem) SetGroup(filePath string, group string) error {
+func (local *LocalFileSystem) SetGroup(filePath string, group string) error {
 	panic("not implemented")
 }
 
-func (fs *LocalFileSystem) Touch(filePath string, perm ...Permissions) error {
-	if fs.Exists(filePath) {
+func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
+	if local.Exists(filePath) {
 		now := time.Now()
 		return os.Chtimes(filePath, now, now)
 	} else {
-		return fs.WriteAll(filePath, nil, perm...)
+		return local.WriteAll(filePath, nil, perm)
 	}
 }
 
-func (fs *LocalFileSystem) MakeDir(filePath string, perm ...Permissions) error {
+func (local *LocalFileSystem) MakeDir(filePath string, perm []Permissions) error {
 	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions)
 	return os.MkdirAll(filePath, os.FileMode(p))
 }
 
-func (fs *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {
+func (local *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {
 	return ioutil.ReadFile(filePath)
 }
 
-func (fs *LocalFileSystem) WriteAll(filePath string, data []byte, perm ...Permissions) error {
+func (local *LocalFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	return ioutil.WriteFile(filePath, data, os.FileMode(p))
 }
 
-func (fs *LocalFileSystem) Append(filePath string, data []byte, perm ...Permissions) error {
-	writer, err := fs.OpenAppendWriter(filePath, perm...)
+func (local *LocalFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
+	writer, err := local.OpenAppendWriter(filePath, perm)
 	if err != nil {
 		return err
 	}
@@ -236,38 +232,38 @@ func (fs *LocalFileSystem) Append(filePath string, data []byte, perm ...Permissi
 	return err
 }
 
-func (fs *LocalFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
+func (local *LocalFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
 	return os.OpenFile(filePath, os.O_RDONLY, 0400)
 }
 
-func (fs *LocalFileSystem) OpenWriter(filePath string, perm ...Permissions) (WriteSeekCloser, error) {
+func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	return os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(p))
 }
 
-func (fs *LocalFileSystem) OpenAppendWriter(filePath string, perm ...Permissions) (io.WriteCloser, error) {
+func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	return os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, os.FileMode(p))
 }
 
-func (fs *LocalFileSystem) OpenReadWriter(filePath string, perm ...Permissions) (ReadWriteSeekCloser, error) {
+func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	return os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, os.FileMode(p))
 }
 
-func (fs *LocalFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
+func (local *LocalFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
 	return nil, errors.New("not implemented")
 	// events := make(chan WatchEvent, 1)
 	// return events
 }
 
-func (fs *LocalFileSystem) Truncate(filePath string, size int64) error {
+func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
 	return os.Truncate(filePath, size)
 }
 
-func (fs *LocalFileSystem) Rename(filePath string, newName string) error {
+func (local *LocalFileSystem) Rename(filePath string, newName string) error {
 	if strings.ContainsAny(newName, "/\\") {
-		return errors.New("newName for Rename() contains a path separatos: " + newName)
+		return errors.New("newName for Rename() contains a path separators: " + newName)
 	}
 	newPath := filepath.Join(filepath.Dir(filePath), newName)
 	err := os.Rename(filePath, newPath)
@@ -278,9 +274,9 @@ func (fs *LocalFileSystem) Rename(filePath string, newName string) error {
 	return nil
 }
 
-func (fs *LocalFileSystem) Move(filePath string, destPath string) error {
-	if fs.IsDir(destPath) {
-		destPath = filepath.Join(destPath, fs.FileName(filePath))
+func (local *LocalFileSystem) Move(filePath string, destPath string) error {
+	if local.IsDir(destPath) {
+		destPath = filepath.Join(destPath, local.FileName(filePath))
 	}
 	err := os.Rename(filePath, destPath)
 	if err != nil {
@@ -290,6 +286,6 @@ func (fs *LocalFileSystem) Move(filePath string, destPath string) error {
 	return nil
 }
 
-func (fs *LocalFileSystem) Remove(filePath string) error {
+func (local *LocalFileSystem) Remove(filePath string) error {
 	return os.Remove(filePath)
 }

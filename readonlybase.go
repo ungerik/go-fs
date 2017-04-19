@@ -1,9 +1,6 @@
 package fs
 
-import (
-	"errors"
-	"io"
-)
+import "io"
 
 // ReadOnlyBase implements the writing methods of the FileSystem interface
 // to do nothing and return ErrReadOnlyFileSystem.
@@ -57,7 +54,7 @@ func (*ReadOnlyBase) OpenReadWriter(filePath string, perm ...Permissions) (ReadW
 }
 
 func (*ReadOnlyBase) Watch(filePath string) (<-chan WatchEvent, error) {
-	return nil, errors.New("not implemented")
+	return nil, ErrFileWatchNotAvailable
 }
 
 func (*ReadOnlyBase) Truncate(filePath string, size int64) error {

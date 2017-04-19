@@ -2,15 +2,17 @@ package zipfs
 
 import fs "github.com/ungerik/go-fs"
 
-func init() {
-	fs.Registry = append(fs.Registry, FileSystem)
-}
-
 const Prefix = "zip://"
 
-var FileSystem ZipFileSystem
-
 type ZipFileSystem struct {
+}
+
+func FromFile(zipFile fs.File) (*ZipFileSystem, error) {
+	return nil, nil
+}
+
+func FromPath(zipPath string) (*ZipFileSystem, error) {
+	return FromFile(fs.CleanPath(zipPath))
 }
 
 func (ZipFileSystem) IsReadOnly() bool {
@@ -25,6 +27,6 @@ func (ZipFileSystem) Name() string {
 	return "ZIP file system"
 }
 
-func (ZipFileSystem) File(uri ...string) fs.File {
-	return nil
+func (ZipFileSystem) File(uriParts ...string) fs.File {
+	return ""
 }

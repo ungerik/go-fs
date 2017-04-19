@@ -52,8 +52,8 @@ func (mfs *MultipartFileSystem) Name() string {
 	return "multipart file system " + path.Base(mfs.prefix)
 }
 
-func (mfs *MultipartFileSystem) File(uri ...string) fs.File {
-	return fs.File(path.Join(uri...))
+func (mfs *MultipartFileSystem) File(uriParts ...string) fs.File {
+	return fs.File(mfs.prefix + mfs.CleanPath(uriParts...))
 }
 
 func (mfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
@@ -64,12 +64,8 @@ func (mfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
 	return fs.File(path.Join(mfs.prefix, name, f[0].Filename)), nil
 }
 
-func (mfs *MultipartFileSystem) URN(filePath string) string {
-	return filePath
-}
-
-func (mfs *MultipartFileSystem) URL(filePath string) string {
-	return path.Join(mfs.prefix, filePath)
+func (mfs *MultipartFileSystem) URL(cleanPath string) string {
+	return mfs.prefix + cleanPath
 }
 
 func (mfs *MultipartFileSystem) CleanPath(uri ...string) string {
@@ -77,9 +73,9 @@ func (mfs *MultipartFileSystem) CleanPath(uri ...string) string {
 }
 
 func (mfs *MultipartFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, mfs.prefix)
-	filePath = strings.TrimPrefix(filePath, "/")
-	return strings.Split(filePath, "/")
+	filePath = strings.TrimPrefix(filePath, mfs.Prefix())
+	filePath = strings.TrimPrefix(filePath, mfs.Seperator())
+	return strings.Split(filePath, mfs.Seperator())
 }
 
 func (*MultipartFileSystem) Seperator() string {
@@ -124,7 +120,7 @@ func (mfs *MultipartFileSystem) ModTime(filePath string) time.Time {
 	return time.Now()
 }
 
-func (mfs *MultipartFileSystem) ListDir(filePath string, callback func(fs.File) error, patterns ...string) (err error) {
+func (mfs *MultipartFileSystem) ListDir(filePath string, callback func(fs.File) error, patterns []string) (err error) {
 	parts := mfs.SplitPath(filePath)
 	switch len(parts) {
 	case 0:
@@ -150,8 +146,8 @@ func (mfs *MultipartFileSystem) ListDir(filePath string, callback func(fs.File) 
 	return err
 }
 
-func (mfs *MultipartFileSystem) ListDirMax(filePath string, n int, patterns ...string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(mfs, filePath, n, patterns...)
+func (mfs *MultipartFileSystem) ListDirMax(filePath string, n int, patterns []string) (files []fs.File, err error) {
+	return fs.ListDirMaxImpl(mfs, filePath, n, patterns)
 }
 
 func (*MultipartFileSystem) Permissions(filePath string) fs.Permissions {

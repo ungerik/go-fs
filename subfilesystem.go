@@ -107,11 +107,11 @@ func (fs *SubFileSystem) ModTime(filePath string) time.Time {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) ListDir(filePath string, callback func(File) error, patterns ...string) error {
+func (fs *SubFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) ListDirMax(filePath string, n int, patterns ...string) (files []File, err error) {
+func (fs *SubFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {
 	panic("not implemented")
 }
 
@@ -139,11 +139,11 @@ func (fs *SubFileSystem) SetGroup(filePath string, group string) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Touch(filePath string, perm ...Permissions) error {
+func (fs *SubFileSystem) Touch(filePath string, perm []Permissions) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) MakeDir(filePath string, perm ...Permissions) error {
+func (fs *SubFileSystem) MakeDir(filePath string, perm []Permissions) error {
 	panic("not implemented")
 }
 
@@ -151,12 +151,12 @@ func (fs *SubFileSystem) ReadAll(filePath string) ([]byte, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) WriteAll(filePath string, data []byte, perm ...Permissions) error {
+func (fs *SubFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Append(filePath string, data []byte, perm ...Permissions) error {
-	writer, err := fs.OpenAppendWriter(filePath, perm...)
+func (fs *SubFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
+	writer, err := fs.OpenAppendWriter(filePath, perm)
 	if err != nil {
 		return err
 	}
@@ -172,15 +172,15 @@ func (fs *SubFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) OpenWriter(filePath string, perm ...Permissions) (WriteSeekCloser, error) {
+func (fs *SubFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) OpenAppendWriter(filePath string, perm ...Permissions) (io.WriteCloser, error) {
+func (fs *SubFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) OpenReadWriter(filePath string, perm ...Permissions) (ReadWriteSeekCloser, error) {
+func (fs *SubFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	panic("not implemented")
 }
 

@@ -64,11 +64,6 @@ func (file File) String() string {
 	return fmt.Sprintf("%s (%s)", file.Path(), file.FileSystem().Name())
 }
 
-// URN of the file
-func (file File) URN() string {
-	return file.FileSystem().URN(file.Path())
-}
-
 // URL of the file
 func (file File) URL() string {
 	return file.FileSystem().URL(file.Path())
@@ -147,11 +142,11 @@ func (file File) ModTime() time.Time {
 }
 
 func (file File) ListDir(callback func(File) error, patterns ...string) error {
-	return file.FileSystem().ListDir(file.Path(), callback, patterns...)
+	return file.FileSystem().ListDir(file.Path(), callback, patterns)
 }
 
 func (file File) ListDirMax(n int, patterns ...string) (files []File, err error) {
-	return file.FileSystem().ListDirMax(file.Path(), n, patterns...)
+	return file.FileSystem().ListDirMax(file.Path(), n, patterns)
 }
 
 func (file File) Permissions() Permissions {
@@ -179,11 +174,11 @@ func (file File) SetGroup(group string) error {
 }
 
 func (file File) Touch(perm ...Permissions) error {
-	return file.FileSystem().Touch(file.Path(), perm...)
+	return file.FileSystem().Touch(file.Path(), perm)
 }
 
 func (file File) MakeDir(perm ...Permissions) error {
-	return file.FileSystem().MakeDir(file.Path(), perm...)
+	return file.FileSystem().MakeDir(file.Path(), perm)
 }
 
 // MakeAllDirs creates all directories up to this one
@@ -245,7 +240,7 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 }
 
 func (file File) WriteAll(data []byte, perm ...Permissions) error {
-	return file.FileSystem().WriteAll(file.Path(), data, perm...)
+	return file.FileSystem().WriteAll(file.Path(), data, perm)
 }
 
 func (file File) WriteAllString(data string, perm ...Permissions) error {
@@ -253,7 +248,7 @@ func (file File) WriteAllString(data string, perm ...Permissions) error {
 }
 
 func (file File) Append(data []byte, perm ...Permissions) error {
-	return file.FileSystem().Append(file.Path(), data, perm...)
+	return file.FileSystem().Append(file.Path(), data, perm)
 }
 
 func (file File) OpenReader() (ReadSeekCloser, error) {
@@ -261,15 +256,15 @@ func (file File) OpenReader() (ReadSeekCloser, error) {
 }
 
 func (file File) OpenWriter(perm ...Permissions) (WriteSeekCloser, error) {
-	return file.FileSystem().OpenWriter(file.Path(), perm...)
+	return file.FileSystem().OpenWriter(file.Path(), perm)
 }
 
 func (file File) OpenAppendWriter(perm ...Permissions) (io.WriteCloser, error) {
-	return file.FileSystem().OpenAppendWriter(file.Path(), perm...)
+	return file.FileSystem().OpenAppendWriter(file.Path(), perm)
 }
 
 func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error) {
-	return file.FileSystem().OpenReadWriter(file.Path(), perm...)
+	return file.FileSystem().OpenReadWriter(file.Path(), perm)
 }
 
 func (file File) Watch() (<-chan WatchEvent, error) {
