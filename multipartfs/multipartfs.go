@@ -14,14 +14,17 @@ import (
 	"github.com/ungerik/go-fs"
 )
 
+// Prefix for the MultipartFileSystem
 const Prefix = "multipart://"
 
+// MultipartFileSystem wraps the files in a MIME multipart message as fs.FileSystem
 type MultipartFileSystem struct {
 	fs.ReadOnlyBase
 	prefix string
 	Form   *multipart.Form
 }
 
+// FromRequestForm returns a MultipartFileSystem from a http.Request
 func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSystem, error) {
 	err := request.ParseMultipartForm(maxMemory)
 	if err != nil {
@@ -40,6 +43,7 @@ func (mfs *MultipartFileSystem) Destroy() error {
 	return mfs.Form.RemoveAll()
 }
 
+// Prefix for the MultipartFileSystem
 func (mfs *MultipartFileSystem) Prefix() string {
 	return mfs.prefix
 }

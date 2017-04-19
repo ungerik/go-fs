@@ -108,18 +108,19 @@ func ListDirMaxImpl(fs FileSystem, filePath string, n int, patterns ...string) (
 	if !fs.IsDir(filePath) {
 		return nil, NewErrIsNotDirectory(File(filePath))
 	}
-	if n == -1 {
+	if n <= 0 {
 		files = make([]File, 0)
 	} else {
 		files = make([]File, 0, n)
 	}
 	err = fs.ListDir(filePath, func(file File) error {
-		if n == -1 || len(files) < n {
-			files = append(files, file)
+		if len(files) >= n {
+			return ErrAbortListDir
 		}
+		files = append(files, file)
 		return nil
 	}, patterns...)
-	if err != nil {
+	if err != nil && err != ErrAbortListDir {
 		return nil, err
 	}
 	return files, nil

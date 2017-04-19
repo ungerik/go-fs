@@ -12,6 +12,10 @@ var ErrFileWatchNotAvailable = errors.New("File.Watch() not available")
 
 var ErrReadOnlyFileSystem = errors.New("file system is read-only")
 
+// ErrAbortListDir can be used as error returned by the callback function
+// of File.ListDir to abort the listing of files. It has no other side effect.
+var ErrAbortListDir = errors.New("abort ListDir")
+
 ///////////////////////////////////////////////////////////////////////////////
 // FileError
 
