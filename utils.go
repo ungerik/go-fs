@@ -65,7 +65,7 @@ func Copy(src, dest File, patterns ...string) error {
 // CopyPath copies even between files of different file systems
 func CopyPath(src, dest string, patterns ...string) error {
 	var buf []byte
-	return copy(GetFile(src), GetFile(dest), patterns, &buf)
+	return copy(CleanPath(src), CleanPath(dest), patterns, &buf)
 }
 
 // MatchAnyPattern returns true if name matches any of patterns,

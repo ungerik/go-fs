@@ -31,6 +31,9 @@ func DeregisterFileSystem(fs FileSystem) bool {
 	return false
 }
 
+// GetFileSystem returns a FileSystem for the passed URI.
+// Returns the local file system if no different file system could be identified.
+// The URI can be passed as parts that will be joined according to the file system.
 func GetFileSystem(uriParts ...string) FileSystem {
 	if len(uriParts) == 0 {
 		return Local
@@ -50,29 +53,29 @@ func getFileSystem(uri string) FileSystem {
 	return Local
 }
 
-func GetFile(uriParts ...string) File {
-	return GetFileSystem(uriParts[0]).File(uriParts...)
+func CleanPath(uriParts ...string) File {
+	return GetFileSystem(uriParts...).File(uriParts...)
 }
 
 func Exists(uriParts ...string) bool {
-	return GetFile(uriParts...).Exists()
+	return CleanPath(uriParts...).Exists()
 }
 
 func IsDir(uriParts ...string) bool {
-	return GetFile(uriParts...).IsDir()
+	return CleanPath(uriParts...).IsDir()
 }
 
 func ListDir(uri string, callback func(File) error, patterns ...string) error {
-	return GetFile(uri).ListDir(callback, patterns...)
+	return CleanPath(uri).ListDir(callback, patterns...)
 }
 
 // ListDirMax: n == -1 lists all
 func ListDirMax(uri string, n int, patterns ...string) ([]File, error) {
-	return GetFile(uri).ListDirMax(n, patterns...)
+	return CleanPath(uri).ListDirMax(n, patterns...)
 }
 
 func Touch(uri string, perm ...Permissions) (File, error) {
-	file := GetFile(uri)
+	file := CleanPath(uri)
 	err := file.Touch(perm...)
 	if err != nil {
 		return "", err
@@ -81,7 +84,7 @@ func Touch(uri string, perm ...Permissions) (File, error) {
 }
 
 func MakeDir(uri string, perm ...Permissions) (File, error) {
-	file := GetFile(uri)
+	file := CleanPath(uri)
 	err := file.MakeDir(perm...)
 	if err != nil {
 		return "", err
@@ -90,7 +93,7 @@ func MakeDir(uri string, perm ...Permissions) (File, error) {
 }
 
 func MakeAllDirs(uri string, perm ...Permissions) (File, error) {
-	file := GetFile(uri)
+	file := CleanPath(uri)
 	err := file.MakeAllDirs(perm...)
 	if err != nil {
 		return "", err
@@ -99,23 +102,23 @@ func MakeAllDirs(uri string, perm ...Permissions) (File, error) {
 }
 
 func Truncate(uri string, size int64) error {
-	return GetFile(uri).Truncate(size)
+	return CleanPath(uri).Truncate(size)
 }
 
 func Remove(uri string) error {
-	return GetFile(uri).Remove()
+	return CleanPath(uri).Remove()
 }
 
 func ReadFile(uri string) ([]byte, error) {
-	return GetFile(uri).ReadAll()
+	return CleanPath(uri).ReadAll()
 }
 
 func WriteFile(uri string, data []byte, perm ...Permissions) error {
-	return GetFile(uri).WriteAll(data, perm...)
+	return CleanPath(uri).WriteAll(data, perm...)
 }
 
 func Append(uri string, data []byte, perm ...Permissions) error {
-	return GetFile(uri).Append(data, perm...)
+	return CleanPath(uri).Append(data, perm...)
 }
 
 func TempDir() File {
