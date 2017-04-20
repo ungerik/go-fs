@@ -25,31 +25,31 @@ func (*ReadOnlyBase) SetGroup(filePath string, group string) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) Touch(filePath string, perm ...Permissions) error {
+func (*ReadOnlyBase) Touch(filePath string, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) MakeDir(filePath string, perm ...Permissions) error {
+func (*ReadOnlyBase) MakeDir(filePath string, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) WriteAll(filePath string, data []byte, perm ...Permissions) error {
+func (*ReadOnlyBase) WriteAll(filePath string, data []byte, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) Append(filePath string, data []byte, perm ...Permissions) error {
+func (*ReadOnlyBase) Append(filePath string, data []byte, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) OpenWriter(filePath string, perm ...Permissions) (WriteSeekCloser, error) {
+func (*ReadOnlyBase) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
 	return nil, ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) OpenAppendWriter(filePath string, perm ...Permissions) (io.WriteCloser, error) {
+func (*ReadOnlyBase) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) OpenReadWriter(filePath string, perm ...Permissions) (ReadWriteSeekCloser, error) {
+func (*ReadOnlyBase) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	return nil, ErrReadOnlyFileSystem
 }
 

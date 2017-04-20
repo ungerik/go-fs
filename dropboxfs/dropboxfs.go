@@ -17,8 +17,10 @@ import (
 const Prefix = "dropbox://"
 
 var (
-	DefaultPermissions    fs.Permissions = fs.UserAndGroupReadWrite
-	DefaultDirPermissions fs.Permissions = fs.UserAndGroupReadWrite + fs.AllExecute
+	// DefaultPermissions used for Dropbox files
+	DefaultPermissions = fs.UserAndGroupReadWrite
+	// DefaultDirPermissions used for Dropbox directories
+	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllExecute
 )
 
 // DropboxFileSystem implements fs.FileSystem for a Dropbox app.
@@ -40,7 +42,7 @@ func (dbfs *DropboxFileSystem) IsReadOnly() bool {
 }
 
 func (dbfs *DropboxFileSystem) Prefix() string {
-	return Prefix
+	return dbfs.prefix
 }
 
 func (dbfs *DropboxFileSystem) Name() string {
@@ -60,9 +62,9 @@ func (dbfs *DropboxFileSystem) CleanPath(uriParts ...string) string {
 }
 
 func (dbfs *DropboxFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, dbfs.Prefix())
-	filePath = strings.TrimPrefix(filePath, dbfs.Seperator())
-	return strings.Split(filePath, dbfs.Seperator())
+	filePath = strings.TrimPrefix(filePath, dbfs.prefix)
+	filePath = strings.TrimPrefix(filePath, "/")
+	return strings.Split(filePath, "/")
 }
 
 func (dbfs *DropboxFileSystem) Seperator() string {
