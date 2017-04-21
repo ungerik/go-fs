@@ -3,7 +3,6 @@ package fs
 import (
 	"io"
 	"path/filepath"
-	"time"
 
 	"github.com/satori/go.uuid"
 )
@@ -20,38 +19,38 @@ type SubFileSystem struct {
 }
 
 func NewSubFileSystem(parent FileSystem, basePath string) *SubFileSystem {
-	fs := &SubFileSystem{
+	subfs := &SubFileSystem{
 		prefix:   SubFileSystemPrefix + uuid.NewV4().String(),
 		Parent:   parent,
 		BasePath: basePath,
 	}
-	subFileSystems[fs.prefix] = fs
-	Registry = append(Registry, fs)
-	return fs
+	subFileSystems[subfs.prefix] = subfs
+	Registry = append(Registry, subfs)
+	return subfs
 }
 
-func (fs *SubFileSystem) Destroy() {
-	delete(subFileSystems, fs.prefix)
-	DeregisterFileSystem(fs)
+func (subfs *SubFileSystem) Destroy() {
+	delete(subFileSystems, subfs.prefix)
+	DeregisterFileSystem(subfs)
 }
 
-func (fs *SubFileSystem) IsReadOnly() bool {
-	return fs.Parent.IsReadOnly()
+func (subfs *SubFileSystem) IsReadOnly() bool {
+	return subfs.Parent.IsReadOnly()
 }
 
-func (fs *SubFileSystem) Prefix() string {
-	return fs.prefix
+func (subfs *SubFileSystem) Prefix() string {
+	return subfs.prefix
 }
 
-func (fs *SubFileSystem) Name() string {
-	return "Sub file system of " + fs.Parent.Name()
+func (subfs *SubFileSystem) Name() string {
+	return "Sub file system of " + subfs.Parent.Name()
 }
 
 ///////////////////////////////////////////////////
 // TODO Replace implementation with real SubFileSystem from here on:
 ///////////////////////////////////////////////////
 
-func (fs *SubFileSystem) File(uri ...string) File {
+func (subfs *SubFileSystem) File(uri ...string) File {
 	if len(uri) == 0 {
 		panic("SubFileSystem uri must not be empty")
 	}
@@ -59,104 +58,89 @@ func (fs *SubFileSystem) File(uri ...string) File {
 	return File(filepath.Clean(filepath.Join(uri...)))
 }
 
-func (fs *SubFileSystem) URN(filePath string) string {
+func (subfs *SubFileSystem) URN(filePath string) string {
 	return filepath.ToSlash(filePath)
 }
 
-func (fs *SubFileSystem) URL(filePath string) string {
-	return LocalPrefix + fs.URN(filePath)
+func (subfs *SubFileSystem) URL(filePath string) string {
+	return LocalPrefix + subfs.URN(filePath)
 }
 
-func (fs *SubFileSystem) CleanPath(uri ...string) string {
-	return fs.prefix + fs.Parent.CleanPath(uri...)
+func (subfs *SubFileSystem) CleanPath(uri ...string) string {
+	return subfs.prefix + subfs.Parent.CleanPath(uri...)
 }
 
-func (fs *SubFileSystem) SplitPath(filePath string) []string {
-	return fs.Parent.SplitPath(filePath)
+func (subfs *SubFileSystem) SplitPath(filePath string) []string {
+	return subfs.Parent.SplitPath(filePath)
 }
 
-func (fs *SubFileSystem) Seperator() string {
-	return fs.Parent.Seperator()
+func (subfs *SubFileSystem) Seperator() string {
+	return subfs.Parent.Seperator()
 }
 
-func (fs *SubFileSystem) FileName(filePath string) string {
+func (subfs *SubFileSystem) FileName(filePath string) string {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Ext(filePath string) string {
+func (subfs *SubFileSystem) Ext(filePath string) string {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Dir(filePath string) string {
+func (subfs *SubFileSystem) Dir(filePath string) string {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Exists(filePath string) bool {
+// Stat returns FileInfo
+func (subfs *SubFileSystem) Stat(filePath string) FileInfo {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) IsDir(filePath string) bool {
+func (subfs *SubFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Size(filePath string) int64 {
+func (subfs *SubFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []File, err error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) ModTime(filePath string) time.Time {
+func (subfs *SubFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
+func (subfs *SubFileSystem) User(filePath string) string {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {
+func (subfs *SubFileSystem) SetUser(filePath string, user string) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Permissions(filePath string) Permissions {
+func (subfs *SubFileSystem) Group(filePath string) string {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) SetPermissions(filePath string, perm Permissions) error {
+func (subfs *SubFileSystem) SetGroup(filePath string, group string) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) User(filePath string) string {
+func (subfs *SubFileSystem) Touch(filePath string, perm []Permissions) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) SetUser(filePath string, user string) error {
+func (subfs *SubFileSystem) MakeDir(filePath string, perm []Permissions) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Group(filePath string) string {
+func (subfs *SubFileSystem) ReadAll(filePath string) ([]byte, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) SetGroup(filePath string, group string) error {
+func (subfs *SubFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Touch(filePath string, perm []Permissions) error {
-	panic("not implemented")
-}
-
-func (fs *SubFileSystem) MakeDir(filePath string, perm []Permissions) error {
-	panic("not implemented")
-}
-
-func (fs *SubFileSystem) ReadAll(filePath string) ([]byte, error) {
-	panic("not implemented")
-}
-
-func (fs *SubFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
-	panic("not implemented")
-}
-
-func (fs *SubFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
-	writer, err := fs.OpenAppendWriter(filePath, perm)
+func (subfs *SubFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
+	writer, err := subfs.OpenAppendWriter(filePath, perm)
 	if err != nil {
 		return err
 	}
@@ -168,38 +152,42 @@ func (fs *SubFileSystem) Append(filePath string, data []byte, perm []Permissions
 	return err
 }
 
-func (fs *SubFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
+func (subfs *SubFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
+func (subfs *SubFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (subfs *SubFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
+func (subfs *SubFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
+func (subfs *SubFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Truncate(filePath string, size int64) error {
+func (subfs *SubFileSystem) Truncate(filePath string, size int64) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Rename(filePath string, newName string) error {
+func (subfs *SubFileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Move(filePath string, destPath string) error {
+func (subfs *SubFileSystem) Rename(filePath string, newName string) error {
 	panic("not implemented")
 }
 
-func (fs *SubFileSystem) Remove(filePath string) error {
+func (subfs *SubFileSystem) Move(filePath string, destPath string) error {
+	panic("not implemented")
+}
+
+func (subfs *SubFileSystem) Remove(filePath string) error {
 	panic("not implemented")
 }

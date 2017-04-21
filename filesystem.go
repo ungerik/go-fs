@@ -5,6 +5,15 @@ import (
 	"time"
 )
 
+// FileInfo is returned by FileSystem.Stat()
+type FileInfo struct {
+	Exists      bool
+	IsDir       bool
+	Size        int64
+	ModTime     time.Time
+	Permissions Permissions
+}
+
 // FileSystem is an interface that has to be implemented for
 // a file system to be accessable via this package.
 type FileSystem interface {
@@ -32,22 +41,16 @@ type FileSystem interface {
 	Ext(filePath string) string
 	Dir(filePath string) string
 
-	Exists(filePath string) bool
-	IsDir(filePath string) bool
-
-	// Size returns the size of the file with filePath or 0 if it does not exist or is a directory.
-	Size(filePath string) int64
+	// Stat returns FileInfo
+	Stat(filePath string) FileInfo
 
 	Watch(filePath string) (<-chan WatchEvent, error)
 
 	ListDir(dirPath string, callback func(File) error, patterns []string) error
 
 	// ListDirMax: n == -1 lists all
-	ListDirMax(dirPath string, n int, patterns []string) ([]File, error)
+	ListDirMax(dirPath string, max int, patterns []string) ([]File, error)
 
-	ModTime(filePath string) time.Time
-
-	Permissions(filePath string) Permissions
 	SetPermissions(filePath string, perm Permissions) error
 
 	User(filePath string) string
@@ -57,7 +60,7 @@ type FileSystem interface {
 	SetGroup(filePath string, group string) error
 
 	Touch(filePath string, perm []Permissions) error
-	MakeDir(filePath string, perm []Permissions) error
+	MakeDir(dirPath string, perm []Permissions) error
 
 	ReadAll(filePath string) ([]byte, error)
 	WriteAll(filePath string, data []byte, perm []Permissions) error
@@ -69,6 +72,12 @@ type FileSystem interface {
 	OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error)
 
 	Truncate(filePath string, size int64) error
+
+	// CopyFile copies a single file.
+	// buf must point to a []byte variable.
+	// If that variable is initialized with a byte slice, then this slice will be used as buffer,
+	// else a byte slice will be allocated for the variable.
+	CopyFile(srcFile string, destFile string, buf *[]byte) error
 
 	// Rename only renames the file in its base directory
 	// but does not move it into another directory.

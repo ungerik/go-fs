@@ -3,9 +3,9 @@ package fs
 import "errors"
 
 var (
-	// ErrFileWatchNotAvailable is returned when file watching is
+	// ErrFileWatchNotSupported is returned when file watching is
 	// not available for a file system
-	ErrFileWatchNotAvailable = errors.New("file system does not support watching files")
+	ErrFileWatchNotSupported = errors.New("file system does not support watching files")
 
 	// ErrReadOnlyFileSystem is returned when a file system doesn't support writes
 	ErrReadOnlyFileSystem = errors.New("file system is read-only")
@@ -25,25 +25,34 @@ type FileError interface {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// ErrFileDoesNotExist
+// ErrDoesNotExist
 
-// ErrFileDoesNotExist is returned when a file does not exist
-type ErrFileDoesNotExist struct {
+// ErrDoesNotExist is returned when a file does not exist
+type ErrDoesNotExist struct {
 	file File
 }
 
-// NewErrFileDoesNotExist returns a new ErrFileDoesNotExist
-func NewErrFileDoesNotExist(file File) *ErrFileDoesNotExist {
-	return &ErrFileDoesNotExist{file}
+// NewErrDoesNotExist returns a new ErrDoesNotExist
+func NewErrDoesNotExist(file File) *ErrDoesNotExist {
+	return &ErrDoesNotExist{file}
 }
 
-func (err *ErrFileDoesNotExist) Error() string {
+func (err *ErrDoesNotExist) Error() string {
 	return "file does not exist: " + err.file.String()
 }
 
 // File returns the file that error concerns
-func (err *ErrFileDoesNotExist) File() File {
+func (err *ErrDoesNotExist) File() File {
 	return err.file
+}
+
+// IsErrDoesNotExist returns if err is of type *ErrDoesNotExist
+func IsErrDoesNotExist(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, isIt := err.(*ErrDoesNotExist)
+	return isIt
 }
 
 ///////////////////////////////////////////////////////////////////////////////

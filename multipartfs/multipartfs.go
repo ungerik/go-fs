@@ -30,52 +30,52 @@ func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSyst
 	if err != nil {
 		return nil, err
 	}
-	mfs := &MultipartFileSystem{
+	mpfs := &MultipartFileSystem{
 		prefix: Prefix + uuid.NewV4().String(),
 		Form:   request.MultipartForm,
 	}
-	return mfs, err
+	return mpfs, err
 }
 
-func (mfs *MultipartFileSystem) Destroy() error {
-	// delete(fileSystems, mfs.prefix)
-	fs.DeregisterFileSystem(mfs)
-	return mfs.Form.RemoveAll()
+func (mpfs *MultipartFileSystem) Destroy() error {
+	// delete(fileSystems, mpfs.prefix)
+	fs.DeregisterFileSystem(mpfs)
+	return mpfs.Form.RemoveAll()
 }
 
 // Prefix for the MultipartFileSystem
-func (mfs *MultipartFileSystem) Prefix() string {
-	return mfs.prefix
+func (mpfs *MultipartFileSystem) Prefix() string {
+	return mpfs.prefix
 }
 
-func (mfs *MultipartFileSystem) Name() string {
-	return "multipart file system " + path.Base(mfs.prefix)
+func (mpfs *MultipartFileSystem) Name() string {
+	return "multipart file system " + path.Base(mpfs.prefix)
 }
 
-func (mfs *MultipartFileSystem) File(uriParts ...string) fs.File {
-	return fs.File(mfs.prefix + mfs.CleanPath(uriParts...))
+func (mpfs *MultipartFileSystem) File(uriParts ...string) fs.File {
+	return fs.File(mpfs.prefix + mpfs.CleanPath(uriParts...))
 }
 
-func (mfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
-	f, _ := mfs.Form.File[name]
+func (mpfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
+	f, _ := mpfs.Form.File[name]
 	if len(f) == 0 {
 		return "", errors.New("form file not found: " + name)
 	}
-	return fs.File(path.Join(mfs.prefix, name, f[0].Filename)), nil
+	return fs.File(path.Join(mpfs.prefix, name, f[0].Filename)), nil
 }
 
-func (mfs *MultipartFileSystem) URL(cleanPath string) string {
-	return mfs.prefix + cleanPath
+func (mpfs *MultipartFileSystem) URL(cleanPath string) string {
+	return mpfs.prefix + cleanPath
 }
 
-func (mfs *MultipartFileSystem) CleanPath(uri ...string) string {
-	return strings.TrimPrefix(path.Join(uri...), mfs.prefix)
+func (mpfs *MultipartFileSystem) CleanPath(uri ...string) string {
+	return strings.TrimPrefix(path.Join(uri...), mpfs.prefix)
 }
 
-func (mfs *MultipartFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, mfs.Prefix())
-	filePath = strings.TrimPrefix(filePath, mfs.Seperator())
-	return strings.Split(filePath, mfs.Seperator())
+func (mpfs *MultipartFileSystem) SplitPath(filePath string) []string {
+	filePath = strings.TrimPrefix(filePath, mpfs.prefix)
+	filePath = strings.TrimPrefix(filePath, "/")
+	return strings.Split(filePath, "/")
 }
 
 func (*MultipartFileSystem) Seperator() string {
@@ -94,64 +94,56 @@ func (*MultipartFileSystem) Dir(filePath string) string {
 	return path.Dir(filePath)
 }
 
-func (mfs *MultipartFileSystem) Exists(filePath string) bool {
-	parts := mfs.SplitPath(filePath)
+// Stat returns FileInfo
+func (mpfs *MultipartFileSystem) Stat(filePath string) (info fs.FileInfo) {
+	parts := mpfs.SplitPath(filePath)
 	switch len(parts) {
 	case 1:
-		return len(mfs.Form.File[parts[0]]) > 0
+		info.Exists = len(mpfs.Form.File[parts[0]]) > 0
+		info.IsDir = info.Exists
 	case 2:
-		f, _ := mfs.Form.File[parts[0]]
-		return len(f) > 0 && f[0].Filename == parts[1]
+		f, _ := mpfs.Form.File[parts[0]]
+		info.Exists = len(f) > 0 && f[0].Filename == parts[1]
 	}
-	return false
+	if info.Exists {
+		info.Size = -1
+		// TODO get time from header if exists
+		info.ModTime = time.Now()
+		info.Permissions = fs.AllRead
+	}
+	return info
 }
 
-func (mfs *MultipartFileSystem) IsDir(filePath string) bool {
-	parts := mfs.SplitPath(filePath)
-	return len(parts) == 1 && len(mfs.Form.File[parts[0]]) > 0
-}
-
-func (mfs *MultipartFileSystem) Size(filePath string) int64 {
-	return -1
-}
-
-func (mfs *MultipartFileSystem) ModTime(filePath string) time.Time {
-	// TODO get time from header if exists
-	return time.Now()
-}
-
-func (mfs *MultipartFileSystem) ListDir(filePath string, callback func(fs.File) error, patterns []string) (err error) {
-	parts := mfs.SplitPath(filePath)
+func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
+	parts := mpfs.SplitPath(dirPath)
 	switch len(parts) {
 	case 0:
-		for name, _ := range mfs.Form.File {
-			err = callback(fs.File(mfs.prefix + name))
+		for name, _ := range mpfs.Form.File {
+			err = callback(fs.File(mpfs.prefix + name))
 			if err != nil {
 				return err
 			}
 		}
 	case 1:
 		name := parts[0]
-		f, _ := mfs.Form.File[name]
+		f, _ := mpfs.Form.File[name]
 		if len(f) > 0 {
-			err = callback(fs.File(mfs.prefix + name + "/" + f[0].Filename))
+			err = callback(fs.File(mpfs.prefix + name + "/" + f[0].Filename))
 		} else {
-			err = fs.NewErrFileDoesNotExist(fs.File(filePath))
+			err = fs.NewErrDoesNotExist(fs.File(dirPath))
 		}
 	case 2:
-		err = fs.NewErrIsNotDirectory(fs.File(filePath))
+		err = fs.NewErrIsNotDirectory(fs.File(dirPath))
 	default:
-		err = fs.NewErrFileDoesNotExist(fs.File(filePath))
+		err = fs.NewErrDoesNotExist(fs.File(dirPath))
 	}
 	return err
 }
 
-func (mfs *MultipartFileSystem) ListDirMax(filePath string, n int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(mfs, filePath, n, patterns)
-}
-
-func (*MultipartFileSystem) Permissions(filePath string) fs.Permissions {
-	return fs.AllRead
+func (mpfs *MultipartFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
+	return fs.ListDirMaxImpl(dirPath, max, patterns, func(dirPath string, callback func(fs.File) error, patterns []string) error {
+		return mpfs.ListDir(dirPath, callback, patterns)
+	})
 }
 
 func (*MultipartFileSystem) User(filePath string) string {
@@ -162,8 +154,8 @@ func (*MultipartFileSystem) Group(filePath string) string {
 	return ""
 }
 
-func (mfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
-	file, err := mfs.OpenReader(filePath)
+func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
+	file, err := mpfs.OpenReader(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -176,14 +168,14 @@ func (mfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (mfs *MultipartFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, error) {
-	parts := mfs.SplitPath(filePath)
+func (mpfs *MultipartFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, error) {
+	parts := mpfs.SplitPath(filePath)
 	if len(parts) != 2 {
-		return nil, fs.NewErrFileDoesNotExist(fs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
 	}
-	f, _ := mfs.Form.File[parts[0]]
+	f, _ := mpfs.Form.File[parts[0]]
 	if len(f) == 0 || f[0].Filename != parts[1] {
-		return nil, fs.NewErrFileDoesNotExist(fs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
 	}
 	return f[0].Open()
 }

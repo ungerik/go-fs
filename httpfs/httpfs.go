@@ -2,9 +2,9 @@ package httpfs
 
 import "github.com/ungerik/go-fs"
 
-func init() {
-	fs.Registry = append(fs.Registry, FileSystem, FileSystemTLS)
-}
+// func init() {
+// 	fs.Registry = append(fs.Registry, FileSystem, FileSystemTLS)
+// }
 
 const (
 	Prefix    = "http://"
@@ -33,5 +33,5 @@ func (HTTPFileSystem) Name() string {
 }
 
 func (HTTPFileSystem) File(uri ...string) fs.File {
-	return nil
+	return ""
 }

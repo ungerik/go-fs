@@ -10,35 +10,76 @@ import (
 
 const copyBufferSize = 1024 * 1024
 
-func copyFile(src, dest File, patterns []string, buf *[]byte) error {
+// CopyFile copies a single file between different file systems.
+// If dest has a path that does not exist, then the directories
+// up to that path will be created.
+// If dest is an existing directory, then a file with the base name
+// of src will be created there.
+func CopyFile(src, dest File) error {
+	var buf []byte
+	return CopyFileBuf(src, dest, &buf)
+}
+
+// CopyFileBuf copies a single file between different file systems.
+// If dest has a path that does not exist, then the directories
+// up to that path will be created.
+// If dest is an existing directory, then a file with the base name
+// of src will be created there.
+// buf must point to a []byte variable.
+// If that variable is initialized with a byte slice, then this slice will be used as buffer,
+// else a byte slice will be allocated for the variable.
+// Use this function to re-use buffers between CopyFileBuf calls.
+func CopyFileBuf(src, dest File, buf *[]byte) error {
+	if buf == nil {
+		panic("CopyFileBuf: buf is nil")
+	}
+
+	// Handle directories
+	if dest.IsDir() {
+		dest = dest.Relative(src.Name())
+	} else {
+		err := dest.Dir().MakeDir()
+		if err != nil {
+			return err
+		}
+	}
+
+	// Use inner file system copy if possible
+	fs := src.FileSystem()
+	if fs == dest.FileSystem() {
+		return fs.CopyFile(src.Path(), dest.Path(), buf)
+	}
+
+	r, err := src.OpenReader()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	w, err := dest.OpenWriter(src.Permissions())
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+
+	if *buf == nil {
+		*buf = make([]byte, copyBufferSize)
+	}
+	_, err = io.CopyBuffer(w, r, *buf)
+	return err
+}
+
+// CopyRecursive can copy between files of different file systems.
+// The filter patterns are applied on filename level, not the whole path.
+func CopyRecursive(src, dest File, patterns ...string) error {
+	var buf []byte
+	return copyRecursive(src, dest, patterns, &buf)
+}
+
+func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
 	if !src.IsDir() {
 		// Just copy one file
-		if dest.IsDir() {
-			dest = dest.Relative(src.Name())
-		} else {
-			err := dest.Dir().MakeDir()
-			if err != nil {
-				return err
-			}
-		}
-
-		r, err := src.OpenReader()
-		if err != nil {
-			return err
-		}
-		defer r.Close()
-
-		w, err := dest.OpenWriter(src.Permissions())
-		if err != nil {
-			return err
-		}
-		defer w.Close()
-
-		if *buf == nil {
-			*buf = make([]byte, copyBufferSize)
-		}
-		_, err = io.CopyBuffer(w, r, *buf)
-		return err
+		return CopyFileBuf(src, dest, buf)
 	}
 
 	if dest.Exists() && !dest.IsDir() {
@@ -53,20 +94,8 @@ func copyFile(src, dest File, patterns []string, buf *[]byte) error {
 
 	// Copy directories recursive
 	return src.ListDir(func(file File) error {
-		return copyFile(file, dest.Relative(file.Name()), patterns, buf)
+		return copyRecursive(file, dest.Relative(file.Name()), patterns, buf)
 	}, patterns...)
-}
-
-// Copy copies even between files of different file systems
-func Copy(src, dest File, patterns ...string) error {
-	var buf []byte
-	return copyFile(src, dest, patterns, &buf)
-}
-
-// CopyPath copies even between files of different file systems
-func CopyPath(src, dest string, patterns ...string) error {
-	var buf []byte
-	return copyFile(CleanPath(src), CleanPath(dest), patterns, &buf)
 }
 
 // MatchAnyPattern returns true if name matches any of patterns,
@@ -101,19 +130,24 @@ func MatchAnyPatternLocal(name string, patterns []string) (bool, error) {
 	return false, nil
 }
 
+// ListDirFunc is the ListDir function call pattern used by ListDirMaxImpl
+type ListDirFunc func(dirPath string, callback func(File) error, patterns []string) error
+
 // ListDirMaxImpl implements the ListDirMax method functionality
-// by calling fs.ListDir.
+// by calling listDir.
 // FileSystem implementations can use this function to implement ListDirMax,
 // if a own, specialized implementation doesn't make sense.
-func ListDirMaxImpl(fs FileSystem, filePath string, n int, patterns []string) (files []File, err error) {
-	if n <= 0 {
-		files = make([]File, 0)
-	} else {
-		files = make([]File, 0, n)
-	}
-	err = fs.ListDir(filePath, func(file File) error {
+func ListDirMaxImpl(filePath string, n int, patterns []string, listDir ListDirFunc) (files []File, err error) {
+	err = listDir(filePath, func(file File) error {
 		if len(files) >= n {
 			return ErrAbortListDir
+		}
+		if files == nil {
+			if n > 0 {
+				files = make([]File, 0, n)
+			} else {
+				files = make([]File, 0, 32)
+			}
 		}
 		files = append(files, file)
 		return nil

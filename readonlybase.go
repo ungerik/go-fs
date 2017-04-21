@@ -29,7 +29,7 @@ func (*ReadOnlyBase) Touch(filePath string, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) MakeDir(filePath string, perm []Permissions) error {
+func (*ReadOnlyBase) MakeDir(dirPath string, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
@@ -54,10 +54,14 @@ func (*ReadOnlyBase) OpenReadWriter(filePath string, perm []Permissions) (ReadWr
 }
 
 func (*ReadOnlyBase) Watch(filePath string) (<-chan WatchEvent, error) {
-	return nil, ErrFileWatchNotAvailable
+	return nil, ErrFileWatchNotSupported
 }
 
 func (*ReadOnlyBase) Truncate(filePath string, size int64) error {
+	return ErrReadOnlyFileSystem
+}
+
+func (*ReadOnlyBase) CopyFile(srcFile string, destFile string, buf *[]byte) error {
 	return ErrReadOnlyFileSystem
 }
 

@@ -6,8 +6,8 @@ import (
 	"io"
 	"io/ioutil"
 	"path"
+	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/tj/go-dropbox"
 	"github.com/ungerik/go-fs"
@@ -22,6 +22,13 @@ var (
 	// DefaultDirPermissions used for Dropbox directories
 	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllExecute
 )
+
+func wrapErrNotExist(filePath string, err error) error {
+	if err != nil && strings.HasPrefix(err.Error(), "path/not_found/") {
+		return fs.NewErrDoesNotExist(fs.File(filePath))
+	}
+	return err
+}
 
 // DropboxFileSystem implements fs.FileSystem for a Dropbox app.
 type DropboxFileSystem struct {
@@ -91,34 +98,30 @@ func (dbfs *DropboxFileSystem) GetMetadata(filePath string) (*dropbox.GetMetadat
 	)
 }
 
-func (dbfs *DropboxFileSystem) Exists(filePath string) bool {
-	_, err := dbfs.GetMetadata(filePath)
-	return err == nil
-}
-
-func (dbfs *DropboxFileSystem) IsDir(filePath string) bool {
-	info, err := dbfs.GetMetadata(filePath)
-	return err == nil && info.Tag == "folder"
-}
-
-func (dbfs *DropboxFileSystem) Size(filePath string) int64 {
-	info, err := dbfs.GetMetadata(filePath)
+// Stat returns FileInfo
+func (dbfs *DropboxFileSystem) Stat(filePath string) (info fs.FileInfo) {
+	meta, err := dbfs.GetMetadata(dbfs.CleanPath(filePath))
 	if err != nil {
-		return 0
+		return info
 	}
-	return int64(info.Size)
-}
-
-func (dbfs *DropboxFileSystem) ModTime(filePath string) time.Time {
-	info, err := dbfs.GetMetadata(filePath)
-	if err != nil {
-		return time.Time{}
+	info.Exists = true
+	info.IsDir = meta.Tag == "folder"
+	info.Size = int64(meta.Size)
+	info.ModTime = meta.ServerModified
+	if info.IsDir {
+		info.Permissions = DefaultDirPermissions
+	} else {
+		info.Permissions = DefaultPermissions
 	}
-	return info.ServerModified
+	return info
 }
 
 func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
-	if !dbfs.IsDir(dirPath) {
+	info := dbfs.Stat(dirPath)
+	if !info.Exists {
+		return fs.NewErrDoesNotExist(fs.File(dirPath))
+	}
+	if !info.IsDir {
 		return fs.NewErrIsNotDirectory(fs.File(dirPath))
 	}
 
@@ -134,7 +137,7 @@ func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) er
 			out, err = dbfs.client.Files.ListFolderContinue(&dropbox.ListFolderContinueInput{Cursor: cursor})
 		}
 		if err != nil {
-			return err
+			return wrapErrNotExist(dirPath, err)
 		}
 		cursor = out.Cursor
 
@@ -155,20 +158,10 @@ func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) er
 	return nil
 }
 
-func (dbfs *DropboxFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(dbfs, dirPath, n, patterns)
-}
-
-func (dbfs *DropboxFileSystem) Permissions(filePath string) fs.Permissions {
-	info, err := dbfs.GetMetadata(filePath)
-	if err != nil {
-		return fs.NoPermissions
-	}
-	perm := DefaultPermissions
-	if info.Tag == "folder" {
-		perm += fs.AllExecute
-	}
-	return perm
+func (dbfs *DropboxFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
+	return fs.ListDirMaxImpl(dirPath, max, patterns, func(dirPath string, callback func(fs.File) error, patterns []string) error {
+		return dbfs.ListDir(dirPath, callback, patterns)
+	})
 }
 
 func (dbfs *DropboxFileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
@@ -192,25 +185,22 @@ func (dbfs *DropboxFileSystem) SetGroup(filePath string, group string) error {
 }
 
 func (dbfs *DropboxFileSystem) Touch(filePath string, perm []fs.Permissions) error {
-	if dbfs.Exists(filePath) {
+	filePath = dbfs.CleanPath(filePath)
+	if dbfs.Stat(filePath).Exists {
 		return errors.New("Touch can't change time on Dropbox")
-	} else {
-		return dbfs.WriteAll(filePath, nil, perm)
 	}
+	return dbfs.WriteAll(filePath, nil, perm)
 }
 
-func (dbfs *DropboxFileSystem) MakeDir(filePath string, perm []fs.Permissions) error {
-	_, err := dbfs.client.Files.CreateFolder(&dropbox.CreateFolderInput{Path: dbfs.CleanPath(filePath)})
-	return err
+func (dbfs *DropboxFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+	_, err := dbfs.client.Files.CreateFolder(&dropbox.CreateFolderInput{Path: dbfs.CleanPath(dirPath)})
+	return wrapErrNotExist(dirPath, err)
 }
 
 func (dbfs *DropboxFileSystem) ReadAll(filePath string) ([]byte, error) {
 	out, err := dbfs.client.Files.Download(&dropbox.DownloadInput{Path: dbfs.CleanPath(filePath)})
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "path/not_found/") {
-			return nil, fs.NewErrFileDoesNotExist(fs.File(filePath))
-		}
-		return nil, err
+		return nil, wrapErrNotExist(filePath, err)
 	}
 	defer out.Body.Close()
 	return ioutil.ReadAll(out.Body)
@@ -225,7 +215,7 @@ func (dbfs *DropboxFileSystem) WriteAll(filePath string, data []byte, perm []fs.
 			Reader: bytes.NewBuffer(data),
 		},
 	)
-	return err
+	return wrapErrNotExist(filePath, err)
 }
 
 func (dbfs *DropboxFileSystem) Append(filePath string, data []byte, perm []fs.Permissions) error {
@@ -250,7 +240,7 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, e
 }
 
 func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteSeekCloser, error) {
-	if !dbfs.IsDir(dbfs.Dir(filePath)) {
+	if !dbfs.Stat(dbfs.Dir(filePath)).IsDir {
 		return nil, fs.NewErrIsNotDirectory(fs.File(dbfs.Dir(filePath)))
 	}
 	var fileBuffer *fs.FileBuffer
@@ -282,38 +272,67 @@ func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permiss
 }
 
 func (dbfs *DropboxFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
-	return nil, fs.ErrFileWatchNotAvailable
+	return nil, fs.ErrFileWatchNotSupported
 }
 
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
-	panic("to do")
+	info := dbfs.Stat(filePath)
+	if !info.Exists {
+		return fs.NewErrDoesNotExist(fs.File(filePath))
+	}
+	if info.IsDir {
+		return fs.NewErrIsDirectory(fs.File(filePath))
+	}
+	if info.Size <= size {
+		return nil
+	}
+	data, err := dbfs.ReadAll(filePath)
+	// File size or existence could have changed in the meantime
+	// because this is a slow network FS, the
+	if err != nil {
+		return wrapErrNotExist(filePath, err)
+	}
+	if int64(len(data)) <= size {
+		return nil
+	}
+	return dbfs.WriteAll(filePath, data[:size], []fs.Permissions{info.Permissions})
+}
+
+func (dbfs *DropboxFileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
+	_, err := dbfs.client.Files.Copy(&dropbox.CopyInput{
+		FromPath: dbfs.CleanPath(srcFile),
+		ToPath:   dbfs.CleanPath(destFile),
+	})
+	return wrapErrNotExist(srcFile, err)
 }
 
 func (dbfs *DropboxFileSystem) Rename(filePath string, newName string) error {
 	if strings.ContainsAny(newName, "/\\") {
 		return errors.New("newName for Rename() contains a path separators: " + newName)
 	}
-	newPath := path.Join(path.Dir(filePath), newName)
-	panic("to do")
-	// if err != nil {
-	// 	return err
-	// }
-	filePath = newPath
-	return nil
+	newPath := filepath.Join(filepath.Dir(filePath), newName)
+	_, err := dbfs.client.Files.Move(&dropbox.MoveInput{
+		FromPath: dbfs.CleanPath(filePath),
+		ToPath:   dbfs.CleanPath(newPath),
+	})
+	return wrapErrNotExist(filePath, err)
 }
 
 func (dbfs *DropboxFileSystem) Move(filePath string, destPath string) error {
-	if dbfs.IsDir(destPath) {
-		destPath = path.Join(destPath, dbfs.FileName(filePath))
-	}
-	panic("to do")
-	// if err != nil {
-	// 	return err
+	// if !dbfs.Stat(filePath).Exists {
+	// 	return NewErrDoesNotExist(File(filePath))
 	// }
-	filePath = destPath
-	return nil
+	// if dbfs.Stat(destPath).IsDir {
+	// 	destPath = filepath.Join(destPath, dbfs.FileName(filePath))
+	// }
+	_, err := dbfs.client.Files.Move(&dropbox.MoveInput{
+		FromPath: dbfs.CleanPath(filePath),
+		ToPath:   dbfs.CleanPath(destPath),
+	})
+	return wrapErrNotExist(filePath, err)
 }
 
 func (dbfs *DropboxFileSystem) Remove(filePath string) error {
-	panic("to do")
+	_, err := dbfs.client.Files.Delete(&dropbox.DeleteInput{Path: dbfs.CleanPath(filePath)})
+	return wrapErrNotExist(filePath, err)
 }

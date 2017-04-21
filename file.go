@@ -122,35 +122,59 @@ func (file File) Relative(pathParts ...string) File {
 	return file.FileSystem().File(pathParts...)
 }
 
+func (file File) Stat(filePath string) FileInfo {
+	return file.FileSystem().Stat(file.Path())
+}
+
 // Exists returns a file or directory with the path of File exists.
 func (file File) Exists() bool {
-	return file.FileSystem().Exists(file.Path())
+	return file.FileSystem().Stat(file.Path()).Exists
 }
 
 // IsDir returns a directory with the path of File exists.
 func (file File) IsDir() bool {
-	return file.FileSystem().IsDir(file.Path())
+	return file.FileSystem().Stat(file.Path()).IsDir
 }
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.
 func (file File) Size() int64 {
-	return file.FileSystem().Size(file.Path())
+	return file.FileSystem().Stat(file.Path()).Size
 }
 
 func (file File) ModTime() time.Time {
-	return file.FileSystem().ModTime(file.Path())
+	return file.FileSystem().Stat(file.Path()).ModTime
 }
 
 func (file File) ListDir(callback func(File) error, patterns ...string) error {
 	return file.FileSystem().ListDir(file.Path(), callback, patterns)
 }
 
-func (file File) ListDirMax(n int, patterns ...string) (files []File, err error) {
-	return file.FileSystem().ListDirMax(file.Path(), n, patterns)
+func (file File) ListDirRecursive(callback func(File) error, patterns ...string) error {
+	return file.ListDir(func(f File) (err error) {
+		if f.IsDir() {
+			err := f.ListDirRecursive(callback)
+			// Don't mind files that have been deleted while iterating
+			if IsErrDoesNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		return callback(f)
+	}, patterns...)
+}
+
+func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {
+	return file.FileSystem().ListDirMax(file.Path(), max, patterns)
+}
+
+func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
+	return ListDirMaxImpl(file.Path(), max, patterns, func(dirPath string, callback func(File) error, patterns []string) error {
+		return file.ListDirRecursive(callback, patterns...)
+	})
 }
 
 func (file File) Permissions() Permissions {
-	return file.FileSystem().Permissions(file.Path())
+	return file.FileSystem().Stat(file.Path()).Permissions
 }
 
 func (file File) SetPermissions(perm Permissions) error {
@@ -283,8 +307,32 @@ func (file File) Move(destination File) error {
 	return file.FileSystem().Move(file.Path(), destination.Path())
 }
 
+// Remove deletes the file.
 func (file File) Remove() error {
 	return file.FileSystem().Remove(file.Path())
+}
+
+// RemoveRecursive deletes the file or if it's a directory
+// the complete recursive directory tree.
+func (file File) RemoveRecursive() error {
+	if file.IsDir() {
+		err := file.ListDir(func(f File) error {
+			err := f.RemoveRecursive()
+			// Ignore files that have been deleted,
+			// after all we wanted to get rid of the in the first place,
+			// so this is not an error for us
+			if err != nil {
+				if _, notExist := err.(*ErrDoesNotExist); notExist {
+					return nil
+				}
+			}
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return file.Remove()
 }
 
 func (file File) ReadJSON(output interface{}) error {
