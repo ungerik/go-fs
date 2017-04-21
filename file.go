@@ -122,6 +122,7 @@ func (file File) Relative(pathParts ...string) File {
 	return file.FileSystem().File(pathParts...)
 }
 
+// Stat returns FileInfo.
 func (file File) Stat(filePath string) FileInfo {
 	return file.FileSystem().Stat(file.Path())
 }
@@ -134,6 +135,11 @@ func (file File) Exists() bool {
 // IsDir returns a directory with the path of File exists.
 func (file File) IsDir() bool {
 	return file.FileSystem().Stat(file.Path()).IsDir
+}
+
+// IsRegular reports if this is a regular file.
+func (file File) IsRegular() bool {
+	return file.FileSystem().Stat(file.Path()).IsRegular
 }
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.

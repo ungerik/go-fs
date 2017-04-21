@@ -2,7 +2,7 @@ package fs
 
 import "sort"
 
-func compareDirsFirst(fi, fj File) (less, doSort bool) {
+func compareDirsFirst(fi, fj File) (isLess, ok bool) {
 	idir := fi.IsDir()
 	jdir := fj.IsDir()
 	if idir == jdir {
@@ -11,38 +11,48 @@ func compareDirsFirst(fi, fj File) (less, doSort bool) {
 	return idir, true
 }
 
-type sortableFileNames struct {
-	files     []File
-	dirsFirst bool
+func SortByName(files []File) {
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Name() < files[j].Name()
+	})
 }
 
-func (s *sortableFileNames) Len() int {
-	return len(s.files)
-}
-
-func (s *sortableFileNames) Less(i, j int) bool {
-	fi := s.files[i]
-	fj := s.files[j]
-	if s.dirsFirst {
-		if less, doSort := compareDirsFirst(fi, fj); doSort {
-			return less
+func SortByNameDirsFirst(files []File) {
+	sort.Slice(files, func(i, j int) bool {
+		fi := files[i]
+		fj := files[j]
+		if isLess, ok := compareDirsFirst(fi, fj); ok {
+			return isLess
 		}
-	}
-	return fi.Path() < fj.Path()
+		return fi.Name() < fj.Name()
+	})
 }
 
-func (s *sortableFileNames) Swap(i, j int) {
-	s.files[i], s.files[j] = s.files[j], s.files[i]
+func SortByPath(files []File) {
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path() < files[j].Path()
+	})
 }
 
-func SortByName(files []File, dirsFirst bool) {
-	sort.Sort(&sortableFileNames{files, dirsFirst})
+func SortBySize(files []File) {
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Size() < files[j].Size()
+	})
 }
 
-func SortBySize(files []File, dirsFirst bool) {
-
+func SortByModTime(files []File) {
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].ModTime().Before(files[j].ModTime())
+	})
 }
 
-func SortByDate(files []File, dirsFirst bool) {
-
+func SortByModTimeDirsFirst(files []File) {
+	sort.Slice(files, func(i, j int) bool {
+		fi := files[i]
+		fj := files[j]
+		if isLess, ok := compareDirsFirst(fi, fj); ok {
+			return isLess
+		}
+		return fi.ModTime().Before(fj.ModTime())
+	})
 }

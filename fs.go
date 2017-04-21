@@ -1,57 +1,6 @@
 package fs
 
-import (
-	"os"
-	"strings"
-)
-
-var (
-	// Local is the local file system
-	Local = &LocalFileSystem{
-		DefaultCreatePermissions:    UserAndGroupReadWrite,
-		DefaultCreateDirPermissions: UserAndGroupReadWrite + AllExecute,
-	}
-
-	// Registry contains all registerred file systems
-	Registry = []FileSystem{Local}
-)
-
-func DeregisterFileSystem(fs FileSystem) bool {
-	prefix := fs.Prefix()
-	for i, regfs := range Registry {
-		if regfs.Prefix() == prefix {
-			if i < len(Registry)-1 {
-				Registry = append(Registry[:i], Registry[i+1:]...)
-			} else {
-				Registry = Registry[:i]
-			}
-			return true
-		}
-	}
-	return false
-}
-
-// GetFileSystem returns a FileSystem for the passed URI.
-// Returns the local file system if no different file system could be identified.
-// The URI can be passed as parts that will be joined according to the file system.
-func GetFileSystem(uriParts ...string) FileSystem {
-	if len(uriParts) == 0 {
-		return Local
-	}
-	return getFileSystem(uriParts[0])
-}
-
-func getFileSystem(uri string) FileSystem {
-	if uri == "" {
-		return Local
-	}
-	for _, fs := range Registry {
-		if strings.HasPrefix(uri, fs.Prefix()) {
-			return fs
-		}
-	}
-	return Local
-}
+import "os"
 
 func CleanPath(uriParts ...string) File {
 	return GetFileSystem(uriParts...).File(uriParts...)

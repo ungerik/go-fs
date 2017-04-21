@@ -9,6 +9,7 @@ import (
 type FileInfo struct {
 	Exists      bool
 	IsDir       bool
+	IsRegular   bool
 	Size        int64
 	ModTime     time.Time
 	Permissions Permissions
@@ -91,4 +92,13 @@ type FileSystem interface {
 
 	// Remove deletes the file.
 	Remove(filePath string) error
+}
+
+// TransientFileSystem is a file system that is created
+// to wrap a transient data source.
+// Calling its Destroy method will remove it from the Registry
+// and undo other initializations.
+type TransientFileSystem interface {
+	FileSystem
+	Destroy() error
 }

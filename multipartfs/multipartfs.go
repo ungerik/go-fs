@@ -34,12 +34,12 @@ func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSyst
 		prefix: Prefix + uuid.NewV4().String(),
 		Form:   request.MultipartForm,
 	}
+	fs.Register(mpfs)
 	return mpfs, err
 }
 
 func (mpfs *MultipartFileSystem) Destroy() error {
-	// delete(fileSystems, mpfs.prefix)
-	fs.DeregisterFileSystem(mpfs)
+	fs.Unregister(mpfs)
 	return mpfs.Form.RemoveAll()
 }
 
@@ -106,6 +106,7 @@ func (mpfs *MultipartFileSystem) Stat(filePath string) (info fs.FileInfo) {
 		info.Exists = len(f) > 0 && f[0].Filename == parts[1]
 	}
 	if info.Exists {
+		info.IsRegular = true
 		info.Size = -1
 		// TODO get time from header if exists
 		info.ModTime = time.Now()

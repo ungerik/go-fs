@@ -10,8 +10,6 @@ import (
 // SubFileSystemPrefix is the URI prefix used to identify SubFileSystem files
 const SubFileSystemPrefix = "sub://"
 
-var subFileSystems map[string]*SubFileSystem
-
 type SubFileSystem struct {
 	prefix   string
 	Parent   FileSystem
@@ -24,14 +22,13 @@ func NewSubFileSystem(parent FileSystem, basePath string) *SubFileSystem {
 		Parent:   parent,
 		BasePath: basePath,
 	}
-	subFileSystems[subfs.prefix] = subfs
-	Registry = append(Registry, subfs)
+	Register(subfs)
 	return subfs
 }
 
-func (subfs *SubFileSystem) Destroy() {
-	delete(subFileSystems, subfs.prefix)
-	DeregisterFileSystem(subfs)
+func (subfs *SubFileSystem) Destroy() error {
+	Unregister(subfs)
+	return nil
 }
 
 func (subfs *SubFileSystem) IsReadOnly() bool {

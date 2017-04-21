@@ -78,7 +78,8 @@ func (local *LocalFileSystem) Stat(filePath string) FileInfo {
 	}
 	return FileInfo{
 		Exists:      true,
-		IsDir:       info.IsDir(),
+		IsDir:       info.Mode().IsDir(),
+		IsRegular:   info.Mode().IsRegular(),
 		Size:        info.Size(),
 		ModTime:     info.ModTime(),
 		Permissions: Permissions(info.Mode().Perm()),

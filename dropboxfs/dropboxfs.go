@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	uuid "github.com/satori/go.uuid"
 	"github.com/tj/go-dropbox"
 	"github.com/ungerik/go-fs"
 )
@@ -38,10 +39,17 @@ type DropboxFileSystem struct {
 
 // New returns a new DropboxFileSystem for accessToken
 func New(accessToken string) *DropboxFileSystem {
-	return &DropboxFileSystem{
-		prefix: "",
+	dbfs := &DropboxFileSystem{
+		prefix: Prefix + uuid.NewV4().String(),
 		client: dropbox.New(dropbox.NewConfig(accessToken)),
 	}
+	fs.Register(dbfs)
+	return dbfs
+}
+
+func (dbfs *DropboxFileSystem) Destroy() error {
+	fs.Unregister(dbfs)
+	return nil
 }
 
 func (dbfs *DropboxFileSystem) IsReadOnly() bool {
@@ -105,6 +113,7 @@ func (dbfs *DropboxFileSystem) Stat(filePath string) (info fs.FileInfo) {
 		return info
 	}
 	info.Exists = true
+	info.IsRegular = true
 	info.IsDir = meta.Tag == "folder"
 	info.Size = int64(meta.Size)
 	info.ModTime = meta.ServerModified
