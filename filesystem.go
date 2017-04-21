@@ -21,6 +21,7 @@ type FileSystem interface {
 	IsReadOnly() bool
 	Prefix() string
 	Name() string
+	String() string
 
 	File(uriParts ...string) File
 

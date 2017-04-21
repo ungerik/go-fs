@@ -57,7 +57,18 @@ type File string
 // FileSystem returns the FileSystem of the File.
 // Defaults to Local if not a complete URI.
 func (file File) FileSystem() FileSystem {
-	return getFileSystem(string(file))
+	return GetFileSystem(string(file))
+}
+
+// ParseRawURI returns a FileSystem for the passed URI and the path component within that file system.
+// Returns the local file system if no other file system could be identified.
+func (file File) ParseRawURI() (fs FileSystem, fsPath string) {
+	return ParseRawURI(string(file))
+}
+
+// RawURI rurns the string value of File.
+func (file File) RawURI() string {
+	return string(file)
 }
 
 func (file File) String() string {
@@ -66,26 +77,30 @@ func (file File) String() string {
 
 // URL of the file
 func (file File) URL() string {
-	return file.FileSystem().URL(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.URL(path)
 }
 
 // Path returns the cleaned path of the file.
 // It may differ from the string value of File
 // because it will be cleaned depending on the FileSystem
 func (file File) Path() string {
-	return file.FileSystem().CleanPath(string(file))
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.CleanPath(path)
 }
 
 // Name returns the name part of the file path,
 // which is usually the string after the last path Separator.
 func (file File) Name() string {
-	return file.FileSystem().FileName(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.FileName(path)
 }
 
 // Ext returns the extension of file name including the extension separator.
 // Example: File("image.png").Ext() == ".png"
 func (file File) Ext() string {
-	return file.FileSystem().Ext(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Ext(path)
 }
 
 // ExtLower returns the lower case extension of file name including the extension separator.
@@ -109,50 +124,66 @@ func (file File) ReplaceExt(newExt string) File {
 
 // Dir returns the parent directory of the File.
 func (file File) Dir() File {
-	return File(file.FileSystem().Dir(file.Path()))
+	fileSystem, path := file.ParseRawURI()
+	return File(fileSystem.Dir(path))
 }
 
 // Relative returns a File with a path relative to this file.
 // Every part of pathParts is a subsequent directory of file
 // concaternated with a path Separator.
 func (file File) Relative(pathParts ...string) File {
-	if file != "" {
-		pathParts = append([]string{file.Path()}, pathParts...)
+	if len(pathParts) == 0 {
+		return file
 	}
-	return file.FileSystem().File(pathParts...)
+	fileSystem, path := file.ParseRawURI()
+	if file != "" {
+		pathParts = append([]string{path}, pathParts...)
+	}
+	return fileSystem.File(pathParts...)
 }
 
 // Stat returns FileInfo.
-func (file File) Stat(filePath string) FileInfo {
-	return file.FileSystem().Stat(file.Path())
+func (file File) Stat() FileInfo {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Stat(path)
 }
 
 // Exists returns a file or directory with the path of File exists.
 func (file File) Exists() bool {
-	return file.FileSystem().Stat(file.Path()).Exists
+	return file.Stat().Exists
 }
 
 // IsDir returns a directory with the path of File exists.
 func (file File) IsDir() bool {
-	return file.FileSystem().Stat(file.Path()).IsDir
+	return file.Stat().IsDir
 }
 
 // IsRegular reports if this is a regular file.
 func (file File) IsRegular() bool {
-	return file.FileSystem().Stat(file.Path()).IsRegular
+	return file.Stat().IsRegular
 }
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.
 func (file File) Size() int64 {
-	return file.FileSystem().Stat(file.Path()).Size
+	return file.Stat().Size
 }
 
 func (file File) ModTime() time.Time {
-	return file.FileSystem().Stat(file.Path()).ModTime
+	return file.Stat().ModTime
+}
+
+func (file File) Permissions() Permissions {
+	return file.Stat().Permissions
+}
+
+func (file File) SetPermissions(perm Permissions) error {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.SetPermissions(path, perm)
 }
 
 func (file File) ListDir(callback func(File) error, patterns ...string) error {
-	return file.FileSystem().ListDir(file.Path(), callback, patterns)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.ListDir(path, callback, patterns)
 }
 
 func (file File) ListDirRecursive(callback func(File) error, patterns ...string) error {
@@ -170,7 +201,8 @@ func (file File) ListDirRecursive(callback func(File) error, patterns ...string)
 }
 
 func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {
-	return file.FileSystem().ListDirMax(file.Path(), max, patterns)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.ListDirMax(path, max, patterns)
 }
 
 func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
@@ -179,36 +211,34 @@ func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File,
 	})
 }
 
-func (file File) Permissions() Permissions {
-	return file.FileSystem().Stat(file.Path()).Permissions
-}
-
-func (file File) SetPermissions(perm Permissions) error {
-	return file.FileSystem().SetPermissions(file.Path(), perm)
-}
-
 func (file File) User() string {
-	return file.FileSystem().User(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.User(path)
 }
 
 func (file File) SetUser(user string) error {
-	return file.FileSystem().SetUser(file.Path(), user)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.SetUser(path, user)
 }
 
 func (file File) Group() string {
-	return file.FileSystem().Group(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Group(path)
 }
 
 func (file File) SetGroup(group string) error {
-	return file.FileSystem().SetGroup(file.Path(), group)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.SetGroup(path, group)
 }
 
 func (file File) Touch(perm ...Permissions) error {
-	return file.FileSystem().Touch(file.Path(), perm)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Touch(path, perm)
 }
 
 func (file File) MakeDir(perm ...Permissions) error {
-	return file.FileSystem().MakeDir(file.Path(), perm)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.MakeDir(path, perm)
 }
 
 // MakeAllDirs creates all directories up to this one
@@ -230,7 +260,8 @@ func (file File) MakeAllDirs(perm ...Permissions) (err error) {
 }
 
 func (file File) ReadAll() ([]byte, error) {
-	return file.FileSystem().ReadAll(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.ReadAll(path)
 }
 
 func (file File) ReadAllString() (string, error) {
@@ -270,7 +301,8 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 }
 
 func (file File) WriteAll(data []byte, perm ...Permissions) error {
-	return file.FileSystem().WriteAll(file.Path(), data, perm)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.WriteAll(path, data, perm)
 }
 
 func (file File) WriteAllString(data string, perm ...Permissions) error {
@@ -278,44 +310,54 @@ func (file File) WriteAllString(data string, perm ...Permissions) error {
 }
 
 func (file File) Append(data []byte, perm ...Permissions) error {
-	return file.FileSystem().Append(file.Path(), data, perm)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Append(path, data, perm)
 }
 
 func (file File) OpenReader() (ReadSeekCloser, error) {
-	return file.FileSystem().OpenReader(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.OpenReader(path)
 }
 
 func (file File) OpenWriter(perm ...Permissions) (WriteSeekCloser, error) {
-	return file.FileSystem().OpenWriter(file.Path(), perm)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.OpenWriter(path, perm)
 }
 
 func (file File) OpenAppendWriter(perm ...Permissions) (io.WriteCloser, error) {
-	return file.FileSystem().OpenAppendWriter(file.Path(), perm)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.OpenAppendWriter(path, perm)
 }
 
 func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error) {
-	return file.FileSystem().OpenReadWriter(file.Path(), perm)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.OpenReadWriter(path, perm)
 }
 
 func (file File) Watch() (<-chan WatchEvent, error) {
-	return file.FileSystem().Watch(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Watch(path)
 }
 
 func (file File) Truncate(size int64) error {
-	return file.FileSystem().Truncate(file.Path(), size)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Truncate(path, size)
 }
 
 func (file File) Rename(newName string) error {
-	return file.FileSystem().Rename(file.Path(), newName)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Rename(path, newName)
 }
 
 func (file File) Move(destination File) error {
-	return file.FileSystem().Move(file.Path(), destination.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Move(path, destination.Path())
 }
 
 // Remove deletes the file.
 func (file File) Remove() error {
-	return file.FileSystem().Remove(file.Path())
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Remove(path)
 }
 
 // RemoveRecursive deletes the file or if it's a directory

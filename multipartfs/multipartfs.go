@@ -52,6 +52,10 @@ func (mpfs *MultipartFileSystem) Name() string {
 	return "multipart file system " + path.Base(mpfs.prefix)
 }
 
+func (mpfs *MultipartFileSystem) String() string {
+	return mpfs.Name() + " with prefix " + mpfs.Prefix()
+}
+
 func (mpfs *MultipartFileSystem) File(uriParts ...string) fs.File {
 	return fs.File(mpfs.prefix + mpfs.CleanPath(uriParts...))
 }
@@ -120,7 +124,7 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 	switch len(parts) {
 	case 0:
 		for name, _ := range mpfs.Form.File {
-			err = callback(fs.File(mpfs.prefix + name))
+			err = callback(mpfs.File(name))
 			if err != nil {
 				return err
 			}
@@ -129,14 +133,14 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 		name := parts[0]
 		f, _ := mpfs.Form.File[name]
 		if len(f) > 0 {
-			err = callback(fs.File(mpfs.prefix + name + "/" + f[0].Filename))
+			err = callback(mpfs.File(name + "/" + f[0].Filename))
 		} else {
-			err = fs.NewErrDoesNotExist(fs.File(dirPath))
+			err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
 		}
 	case 2:
-		err = fs.NewErrIsNotDirectory(fs.File(dirPath))
+		err = fs.NewErrIsNotDirectory(mpfs.File(dirPath))
 	default:
-		err = fs.NewErrDoesNotExist(fs.File(dirPath))
+		err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
 	}
 	return err
 }
@@ -172,11 +176,11 @@ func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
 func (mpfs *MultipartFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, error) {
 	parts := mpfs.SplitPath(filePath)
 	if len(parts) != 2 {
-		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
 	}
 	f, _ := mpfs.Form.File[parts[0]]
 	if len(f) == 0 || f[0].Filename != parts[1] {
-		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
 	}
 	return f[0].Open()
 }

@@ -36,6 +36,10 @@ func (local *LocalFileSystem) Name() string {
 	return "local file system"
 }
 
+func (local *LocalFileSystem) String() string {
+	return local.Name() + " with prefix " + local.Prefix()
+}
+
 func (local *LocalFileSystem) File(uri ...string) File {
 	return File(filepath.Clean(filepath.Join(uri...)))
 }
@@ -49,7 +53,7 @@ func (local *LocalFileSystem) CleanPath(uri ...string) string {
 }
 
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, local.Prefix())
+	filePath = strings.TrimPrefix(filePath, LocalPrefix)
 	filePath = strings.TrimPrefix(filePath, local.Seperator())
 	return strings.Split(filePath, local.Seperator())
 }
@@ -178,6 +182,7 @@ func (local *LocalFileSystem) SetPermissions(filePath string, perm Permissions) 
 }
 
 func (local *LocalFileSystem) User(filePath string) string {
+
 	panic("not implemented")
 }
 
