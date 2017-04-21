@@ -35,18 +35,6 @@ func GetFileSystem(uriParts ...string) FileSystem {
 	return fs
 }
 
-func getFileSystem(uri string) FileSystem {
-	if uri == "" {
-		return Local
-	}
-	for prefix, fs := range Registry {
-		if strings.HasPrefix(uri, prefix) {
-			return fs
-		}
-	}
-	return Local
-}
-
 // ParseRawURI returns a FileSystem for the passed URI and the path component within that file system.
 // Returns the local file system if no other file system could be identified.
 func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
