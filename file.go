@@ -206,9 +206,10 @@ func (file File) ListDirMax(max int, patterns ...string) (files []File, err erro
 }
 
 func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
-	return ListDirMaxImpl(file.Path(), max, patterns, func(dirPath string, callback func(File) error, patterns []string) error {
+	listDirFunc := ListDirFunc(func(callback func(File) error) error {
 		return file.ListDirRecursive(callback, patterns...)
 	})
+	return listDirFunc.ListDirMaxImpl(max)
 }
 
 func (file File) User() string {

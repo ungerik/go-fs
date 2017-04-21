@@ -2,18 +2,7 @@ package fs
 
 import (
 	"io"
-	"time"
 )
-
-// FileInfo is returned by FileSystem.Stat()
-type FileInfo struct {
-	Exists      bool
-	IsDir       bool
-	IsRegular   bool
-	Size        int64
-	ModTime     time.Time
-	Permissions Permissions
-}
 
 // FileSystem is an interface that has to be implemented for
 // a file system to be accessable via this package.

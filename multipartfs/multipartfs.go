@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	uuid "github.com/satori/go.uuid"
+	"github.com/satori/go.uuid"
 	"github.com/ungerik/go-fs"
 )
 
@@ -146,9 +146,10 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 }
 
 func (mpfs *MultipartFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(dirPath, max, patterns, func(dirPath string, callback func(fs.File) error, patterns []string) error {
+	listDirFunc := fs.ListDirFunc(func(callback func(fs.File) error) error {
 		return mpfs.ListDir(dirPath, callback, patterns)
 	})
+	return listDirFunc.ListDirMaxImpl(max)
 }
 
 func (*MultipartFileSystem) User(filePath string) string {

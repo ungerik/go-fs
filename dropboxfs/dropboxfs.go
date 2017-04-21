@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/satori/go.uuid"
 	"github.com/tj/go-dropbox"
@@ -27,15 +28,17 @@ var (
 
 // DropboxFileSystem implements fs.FileSystem for a Dropbox app.
 type DropboxFileSystem struct {
-	prefix string
-	client *dropbox.Client
+	prefix        string
+	client        *dropbox.Client
+	fileInfoCache *fs.FileInfoCache
 }
 
 // New returns a new DropboxFileSystem for accessToken
-func New(accessToken string) *DropboxFileSystem {
+func New(accessToken string, cacheTimeout time.Duration) *DropboxFileSystem {
 	dbfs := &DropboxFileSystem{
-		prefix: Prefix + uuid.NewV4().String(),
-		client: dropbox.New(dropbox.NewConfig(accessToken)),
+		prefix:        Prefix + uuid.NewV4().String(),
+		client:        dropbox.New(dropbox.NewConfig(accessToken)),
+		fileInfoCache: fs.NewFileInfoCache(cacheTimeout),
 	}
 	fs.Register(dbfs)
 	return dbfs
@@ -103,12 +106,18 @@ func (dbfs *DropboxFileSystem) Dir(filePath string) string {
 	return path.Dir(filePath)
 }
 
-func (dbfs *DropboxFileSystem) GetMetadata(filePath string) (*dropbox.GetMetadataOutput, error) {
-	return dbfs.client.Files.GetMetadata(
-		&dropbox.GetMetadataInput{
-			Path: filePath,
-		},
-	)
+func metadataToFileInfo(meta *dropbox.GetMetadataOutput) (info fs.FileInfo) {
+	info.Exists = true
+	info.IsRegular = true
+	info.IsDir = meta.Tag == "folder"
+	info.Size = int64(meta.Size)
+	info.ModTime = meta.ServerModified
+	if info.IsDir {
+		info.Permissions = DefaultDirPermissions
+	} else {
+		info.Permissions = DefaultPermissions
+	}
+	return info
 }
 
 // Stat returns FileInfo
@@ -122,21 +131,22 @@ func (dbfs *DropboxFileSystem) Stat(filePath string) (info fs.FileInfo) {
 		return info
 	}
 
-	meta, err := dbfs.GetMetadata(filePath)
+	if cachedInfo, ok := dbfs.fileInfoCache.Get(filePath); ok {
+		return *cachedInfo
+	}
+
+	meta, err := dbfs.client.Files.GetMetadata(
+		&dropbox.GetMetadataInput{
+			Path: filePath,
+		},
+	)
 	if err != nil {
+		dbfs.fileInfoCache.Delete(filePath)
 		// fmt.Println(meta, err)
-		return info
+		return fs.FileInfo{}
 	}
-	info.Exists = true
-	info.IsRegular = true
-	info.IsDir = meta.Tag == "folder"
-	info.Size = int64(meta.Size)
-	info.ModTime = meta.ServerModified
-	if info.IsDir {
-		info.Permissions = DefaultDirPermissions
-	} else {
-		info.Permissions = DefaultPermissions
-	}
+	info = metadataToFileInfo(meta)
+	dbfs.fileInfoCache.Put(filePath, &info)
 	return info
 }
 
@@ -181,9 +191,10 @@ func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) er
 }
 
 func (dbfs *DropboxFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(dirPath, max, patterns, func(dirPath string, callback func(fs.File) error, patterns []string) error {
+	listDirFunc := fs.ListDirFunc(func(callback func(fs.File) error) error {
 		return dbfs.ListDir(dirPath, callback, patterns)
 	})
+	return listDirFunc.ListDirMaxImpl(max)
 }
 
 func (dbfs *DropboxFileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
@@ -207,7 +218,6 @@ func (dbfs *DropboxFileSystem) SetGroup(filePath string, group string) error {
 }
 
 func (dbfs *DropboxFileSystem) Touch(filePath string, perm []fs.Permissions) error {
-	filePath = filePath
 	if dbfs.Stat(filePath).Exists {
 		return errors.New("Touch can't change time on Dropbox")
 	}

@@ -131,27 +131,27 @@ func MatchAnyPatternLocal(name string, patterns []string) (bool, error) {
 }
 
 // ListDirFunc is the ListDir function call pattern used by ListDirMaxImpl
-type ListDirFunc func(dirPath string, callback func(File) error, patterns []string) error
+type ListDirFunc func(callback func(File) error) error
 
 // ListDirMaxImpl implements the ListDirMax method functionality
 // by calling listDir.
 // FileSystem implementations can use this function to implement ListDirMax,
 // if a own, specialized implementation doesn't make sense.
-func ListDirMaxImpl(filePath string, n int, patterns []string, listDir ListDirFunc) (files []File, err error) {
-	err = listDir(filePath, func(file File) error {
-		if len(files) >= n {
+func (listDir ListDirFunc) ListDirMaxImpl(max int) (files []File, err error) {
+	err = listDir(func(file File) error {
+		if len(files) >= max {
 			return ErrAbortListDir
 		}
 		if files == nil {
-			if n > 0 {
-				files = make([]File, 0, n)
+			if max > 0 {
+				files = make([]File, 0, max)
 			} else {
 				files = make([]File, 0, 32)
 			}
 		}
 		files = append(files, file)
 		return nil
-	}, patterns)
+	})
 	if err != nil && err != ErrAbortListDir {
 		return nil, err
 	}
