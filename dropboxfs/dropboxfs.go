@@ -173,7 +173,10 @@ func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) er
 		}
 		cursor = out.Cursor
 
+		// fmt.Println("out.Entries", len(out.Entries))
+
 		for _, entry := range out.Entries {
+			// fmt.Println(entry)
 			match, err := fs.MatchAnyPattern(entry.Name, patterns)
 			if match {
 				err = callback(dbfs.File(dirPath, entry.Name))
