@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"path/filepath"
 )
 
 const copyBufferSize = 1024 * 1024
@@ -98,31 +97,17 @@ func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
 	}, patterns...)
 }
 
-// MatchAnyPattern returns true if name matches any of patterns,
+// MatchAnyPatternImpl returns true if name matches any of patterns,
 // or if len(patterns) == 0.
-// The match per pattern is checked via path.Match
-func MatchAnyPattern(name string, patterns []string) (bool, error) {
+// The match per pattern is checked via path.Match.
+// FileSystem implementations can use this function to implement
+// FileSystem.MatchAnyPattern they use "/" as path separator.
+func MatchAnyPatternImpl(name string, patterns []string) (bool, error) {
 	if len(patterns) == 0 {
 		return true, nil
 	}
 	for _, pattern := range patterns {
 		match, err := path.Match(pattern, name)
-		if match || err != nil {
-			return match, err
-		}
-	}
-	return false, nil
-}
-
-// MatchAnyPatternLocal returns true if name matches any of patterns,
-// or if len(patterns) == 0.
-// The match per pattern is checked via filepath.Match
-func MatchAnyPatternLocal(name string, patterns []string) (bool, error) {
-	if len(patterns) == 0 {
-		return true, nil
-	}
-	for _, pattern := range patterns {
-		match, err := filepath.Match(pattern, name)
 		if match || err != nil {
 			return match, err
 		}
@@ -156,6 +141,27 @@ func (listDir ListDirFunc) ListDirMaxImpl(max int) (files []File, err error) {
 		return nil, err
 	}
 	return files, nil
+}
+
+// ListDirRecursiveImpl can be used by FileSystem implementations to
+// implement FileSystem.ListDirRecursive if it doesn't have an internal
+// optimzed form of doing that.
+func ListDirRecursiveImpl(fs FileSystem, dirPath string, callback func(File) error, patterns []string) error {
+	return fs.ListDir(dirPath, func(f File) error {
+		if f.IsDir() {
+			err := f.ListDirRecursive(callback, patterns...)
+			// Don't mind files that have been deleted while iterating
+			if IsErrDoesNotExist(err) {
+				err = nil
+			}
+			return err
+		}
+		match, err := fs.MatchAnyPattern(f.Name(), patterns)
+		if match {
+			err = callback(f)
+		}
+		return err
+	}, nil)
 }
 
 // ReadonlyFileBuffer is a memory buffer that implements ReadSeekCloser which combines the interfaces

@@ -47,7 +47,6 @@ func (subfs *SubFileSystem) String() string {
 	return subfs.Name() + " with prefix " + subfs.Prefix()
 }
 
-
 ///////////////////////////////////////////////////
 // TODO Replace implementation with real SubFileSystem from here on:
 ///////////////////////////////////////////////////
@@ -80,6 +79,13 @@ func (subfs *SubFileSystem) Seperator() string {
 	return subfs.Parent.Seperator()
 }
 
+// MatchAnyPattern returns true if name matches any of patterns,
+// or if len(patterns) == 0.
+// The match per pattern works like path.Match or filepath.Match
+func (subfs *SubFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	return subfs.Parent.MatchAnyPattern(name, patterns)
+}
+
 func (subfs *SubFileSystem) FileName(filePath string) string {
 	panic("not implemented")
 }
@@ -98,6 +104,10 @@ func (subfs *SubFileSystem) Stat(filePath string) FileInfo {
 }
 
 func (subfs *SubFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
+	panic("not implemented")
+}
+
+func (subfs *SubFileSystem) ListDirRecursive(dirPath string, callback func(File) error, patterns []string) error {
 	panic("not implemented")
 }
 

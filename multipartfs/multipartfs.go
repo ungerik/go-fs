@@ -86,6 +86,13 @@ func (*MultipartFileSystem) Seperator() string {
 	return "/"
 }
 
+// MatchAnyPattern returns true if name matches any of patterns,
+// or if len(patterns) == 0.
+// The match per pattern works like path.Match or filepath.Match
+func (*MultipartFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	return fs.MatchAnyPatternImpl(name, patterns)
+}
+
 func (*MultipartFileSystem) FileName(filePath string) string {
 	return path.Base(filePath)
 }
@@ -143,6 +150,10 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 		err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
 	}
 	return err
+}
+
+func (mpfs *MultipartFileSystem) ListDirRecursive(dirPath string, callback func(fs.File) error, patterns []string) error {
+	return fs.ListDirRecursiveImpl(mpfs, dirPath, callback, patterns)
 }
 
 func (mpfs *MultipartFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {

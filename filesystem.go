@@ -27,6 +27,11 @@ type FileSystem interface {
 
 	Seperator() string
 
+	// MatchAnyPattern returns true if name matches any of patterns,
+	// or if len(patterns) == 0.
+	// The match per pattern works like path.Match or filepath.Match
+	MatchAnyPattern(name string, patterns []string) (bool, error)
+
 	FileName(filePath string) string
 
 	Ext(filePath string) string
@@ -38,6 +43,10 @@ type FileSystem interface {
 	Watch(filePath string) (<-chan WatchEvent, error)
 
 	ListDir(dirPath string, callback func(File) error, patterns []string) error
+
+	// ListDirRecursive blah.
+	// patterns are only applied to files, not to directories
+	ListDirRecursive(dirPath string, callback func(File) error, patterns []string) error
 
 	// ListDirMax: n == -1 lists all
 	ListDirMax(dirPath string, max int, patterns []string) ([]File, error)

@@ -94,6 +94,13 @@ func (dbfs *DropboxFileSystem) Seperator() string {
 	return "/"
 }
 
+// MatchAnyPattern returns true if name matches any of patterns,
+// or if len(patterns) == 0.
+// The match per pattern works like path.Match or filepath.Match
+func (*DropboxFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	return fs.MatchAnyPatternImpl(name, patterns)
+}
+
 func (dbfs *DropboxFileSystem) FileName(filePath string) string {
 	return path.Base(filePath)
 }
@@ -106,7 +113,7 @@ func (dbfs *DropboxFileSystem) Dir(filePath string) string {
 	return path.Dir(filePath)
 }
 
-func metadataToFileInfo(meta *dropbox.GetMetadataOutput) (info fs.FileInfo) {
+func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
 	info.Exists = true
 	info.IsRegular = true
 	info.IsDir = meta.Tag == "folder"
@@ -145,12 +152,14 @@ func (dbfs *DropboxFileSystem) Stat(filePath string) (info fs.FileInfo) {
 		// fmt.Println(meta, err)
 		return fs.FileInfo{}
 	}
-	info = metadataToFileInfo(meta)
-	dbfs.fileInfoCache.Put(filePath, &info)
+	info = metadataToFileInfo(&meta.Metadata)
+	if dbfs.fileInfoCache != nil {
+		dbfs.fileInfoCache.Put(filePath, &info)
+	}
 	return info
 }
 
-func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
+func (dbfs *DropboxFileSystem) listDir(dirPath string, callback func(fs.File) error, patterns []string, recursive bool) (err error) {
 	info := dbfs.Stat(dirPath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(dbfs.File(dirPath))
@@ -164,9 +173,18 @@ func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) er
 		var out *dropbox.ListFolderOutput
 
 		if cursor == "" {
-			out, err = dbfs.client.Files.ListFolder(&dropbox.ListFolderInput{Path: dirPath})
+			out, err = dbfs.client.Files.ListFolder(
+				&dropbox.ListFolderInput{
+					Path:      dirPath,
+					Recursive: recursive,
+				},
+			)
 		} else {
-			out, err = dbfs.client.Files.ListFolderContinue(&dropbox.ListFolderContinueInput{Cursor: cursor})
+			out, err = dbfs.client.Files.ListFolderContinue(
+				&dropbox.ListFolderContinueInput{
+					Cursor: cursor,
+				},
+			)
 		}
 		if err != nil {
 			return dbfs.wrapErrNotExist(dirPath, err)
@@ -177,9 +195,13 @@ func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) er
 
 		for _, entry := range out.Entries {
 			// fmt.Println(entry)
-			match, err := fs.MatchAnyPattern(entry.Name, patterns)
+			match, err := fs.MatchAnyPatternImpl(entry.Name, patterns)
 			if match {
-				err = callback(dbfs.File(dirPath, entry.Name))
+				if dbfs.fileInfoCache != nil {
+					info := metadataToFileInfo(entry)
+					dbfs.fileInfoCache.Put(entry.PathDisplay, &info)
+				}
+				err = callback(dbfs.File(entry.PathDisplay))
 			}
 			if err != nil {
 				return err
@@ -191,6 +213,14 @@ func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) er
 		}
 	}
 	return nil
+}
+
+func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
+	return dbfs.listDir(dirPath, callback, patterns, true)
+}
+
+func (dbfs *DropboxFileSystem) ListDirRecursive(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
+	return dbfs.listDir(dirPath, callback, patterns, true)
 }
 
 func (dbfs *DropboxFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {

@@ -62,6 +62,22 @@ func (local *LocalFileSystem) Seperator() string {
 	return string(filepath.Separator)
 }
 
+// MatchAnyPattern returns true if name matches any of patterns,
+// or if len(patterns) == 0.
+// The match per pattern works like path.Match or filepath.Match
+func (local *LocalFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	if len(patterns) == 0 {
+		return true, nil
+	}
+	for _, pattern := range patterns {
+		match, err := filepath.Match(pattern, name)
+		if match || err != nil {
+			return match, err
+		}
+	}
+	return false, nil
+}
+
 func (local *LocalFileSystem) FileName(filePath string) string {
 	return filepath.Base(filePath)
 }
@@ -115,7 +131,7 @@ func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error,
 		}
 
 		for _, name := range names {
-			match, err := MatchAnyPatternLocal(name, patterns)
+			match, err := local.MatchAnyPattern(name, patterns)
 			if match {
 				err = callback(local.File(dirPath, name))
 			}
@@ -125,6 +141,10 @@ func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error,
 		}
 	}
 	return nil
+}
+
+func (local *LocalFileSystem) ListDirRecursive(dirPath string, callback func(File) error, patterns []string) error {
+	return ListDirRecursiveImpl(local, dirPath, callback, patterns)
 }
 
 func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {
@@ -160,7 +180,7 @@ func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []strin
 		}
 
 		for _, name := range names {
-			match, err := MatchAnyPatternLocal(name, patterns)
+			match, err := local.MatchAnyPattern(name, patterns)
 			if match {
 				files = append(files, local.File(dirPath, name))
 			}

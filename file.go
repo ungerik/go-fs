@@ -186,18 +186,11 @@ func (file File) ListDir(callback func(File) error, patterns ...string) error {
 	return fileSystem.ListDir(path, callback, patterns)
 }
 
+// ListDirRecursive returns only files.
+// patterns are only applied to files, not to directories
 func (file File) ListDirRecursive(callback func(File) error, patterns ...string) error {
-	return file.ListDir(func(f File) (err error) {
-		if f.IsDir() {
-			err := f.ListDirRecursive(callback)
-			// Don't mind files that have been deleted while iterating
-			if IsErrDoesNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		return callback(f)
-	}, patterns...)
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.ListDirRecursive(path, callback, patterns)
 }
 
 func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {
