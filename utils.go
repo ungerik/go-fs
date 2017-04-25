@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -298,4 +299,32 @@ func (buf *ReadonlyFileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 		buf.data = newData
 	}
 	return copy(buf.data[pos:], p), nil
+}
+
+const hashBlockSize = 4 * 1024 * 1024
+
+// ContentHash returns a Dropbox compatible content hash for an io.Reader.
+// See https://www.dropbox.com/developers/reference/content-hash
+func ContentHash(r io.Reader) (string, error) {
+	buf := make([]byte, hashBlockSize)
+	resultHash := sha256.New()
+	n, err := r.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	if n > 0 {
+		bufHash := sha256.Sum256(buf[:n])
+		resultHash.Write(bufHash[:])
+	}
+	for n == hashBlockSize && err == nil {
+		n, err = r.Read(buf)
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+		if n > 0 {
+			bufHash := sha256.Sum256(buf[:n])
+			resultHash.Write(bufHash[:])
+		}
+	}
+	return fmt.Sprintf("%x", resultHash.Sum(nil)), nil
 }

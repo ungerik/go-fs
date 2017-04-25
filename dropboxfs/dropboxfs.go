@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/satori/go.uuid"
-	"github.com/tj/go-dropbox"
+	"github.com/ungerik/go-dropbox"
 
 	"github.com/ungerik/go-fs"
 )
@@ -124,6 +124,7 @@ func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
 	} else {
 		info.Permissions = DefaultPermissions
 	}
+	info.ContentHash = meta.ContentHash
 	return info
 }
 

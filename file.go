@@ -168,6 +168,24 @@ func (file File) Size() int64 {
 	return file.Stat().Size
 }
 
+// ContentHash returns a Dropbox compatible content hash for the file.
+// If the FileSystem implementation does not have this hash pre-computed,
+// then the whole file is read to compute it.
+// An empty string is returned in case of an error or when the file is a directory.
+// See https://www.dropbox.com/developers/reference/content-hash
+func (file File) ContentHash() string {
+	info := file.Stat()
+	hash := info.ContentHash
+	if !info.IsDir && hash == "" {
+		reader, err := file.OpenReader()
+		if err == nil {
+			defer reader.Close()
+			hash, _ = ContentHash(reader)
+		}
+	}
+	return hash
+}
+
 func (file File) ModTime() time.Time {
 	return file.Stat().ModTime
 }

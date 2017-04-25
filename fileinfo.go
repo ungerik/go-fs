@@ -10,6 +10,7 @@ type FileInfo struct {
 	Size        int64
 	ModTime     time.Time
 	Permissions Permissions
+	ContentHash string
 }
 
 type fileInfoCacheEntry struct {
