@@ -54,8 +54,16 @@ func Truncate(uri string, size int64) error {
 	return CleanPath(uri).Truncate(size)
 }
 
-func Remove(uri string) error {
-	return CleanPath(uri).Remove()
+// Remove removes all files with fileURIs.
+// If a file does not exist, then it is skipped and not reported as error.
+func Remove(fileURIs ...string) error {
+	for _, uri := range fileURIs {
+		err := CleanPath(uri).Remove()
+		if err != nil && !IsErrDoesNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func ReadFile(uri string) ([]byte, error) {
