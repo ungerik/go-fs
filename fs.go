@@ -66,6 +66,18 @@ func Remove(fileURIs ...string) error {
 	return nil
 }
 
+// RemoveFiles removes all files.
+// If a file does not exist, then it is skipped and not reported as error.
+func RemoveFiles(files ...File) error {
+	for _, file := range files {
+		err := file.Remove()
+		if err != nil && !IsErrDoesNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func ReadFile(uri string) ([]byte, error) {
 	return CleanPath(uri).ReadAll()
 }
