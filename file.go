@@ -356,9 +356,13 @@ func (file File) Truncate(size int64) error {
 	return fileSystem.Truncate(path, size)
 }
 
-func (file File) Rename(newName string) error {
+func (file File) Rename(newName string) (renamedFile File, err error) {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Rename(path, newName)
+	err = fileSystem.Rename(path, newName)
+	if err != nil {
+		return "", err
+	}
+	return file.Dir().Relative(newName), nil
 }
 
 func (file File) Move(destination File) error {
