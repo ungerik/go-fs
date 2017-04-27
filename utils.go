@@ -328,3 +328,30 @@ func ContentHash(r io.Reader) (string, error) {
 	}
 	return fmt.Sprintf("%x", resultHash.Sum(nil)), nil
 }
+
+// FilesToURLs returns the URLs of a slice of Files.
+func FilesToURLs(files []File) (fileURLs []string) {
+	fileURLs = make([]string, len(files))
+	for i := range files {
+		fileURLs[i] = files[i].URL()
+	}
+	return fileURLs
+}
+
+// FilesToPaths returns the FileSystem specific paths of a slice of Files.
+func FilesToPaths(files []File) (paths []string) {
+	paths = make([]string, len(files))
+	for i := range files {
+		paths[i] = files[i].Path()
+	}
+	return paths
+}
+
+// URIsToFiles returns Files for the given fileURIs.
+func URIsToFiles(fileURIs []string) (files []File) {
+	files = make([]File, len(fileURIs))
+	for i := range fileURIs {
+		files[i] = CleanPath(fileURIs[i])
+	}
+	return files
+}
