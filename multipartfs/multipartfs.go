@@ -2,7 +2,6 @@ package multipartfs
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -63,9 +62,9 @@ func (mpfs *MultipartFileSystem) File(uriParts ...string) fs.File {
 func (mpfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
 	f, _ := mpfs.Form.File[name]
 	if len(f) == 0 {
-		return "", errors.New("form file not found: " + name)
+		return "", fs.NewErrDoesNotExist(mpfs.File(name))
 	}
-	return fs.File(path.Join(mpfs.prefix, name, f[0].Filename)), nil
+	return mpfs.File(name, f[0].Filename), nil
 }
 
 func (mpfs *MultipartFileSystem) URL(cleanPath string) string {
@@ -130,17 +129,17 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 	parts := mpfs.SplitPath(dirPath)
 	switch len(parts) {
 	case 0:
-		for name, _ := range mpfs.Form.File {
-			err = callback(mpfs.File(name))
+		for fileDir, _ := range mpfs.Form.File {
+			err = callback(mpfs.File(fileDir))
 			if err != nil {
 				return err
 			}
 		}
 	case 1:
-		name := parts[0]
-		f, _ := mpfs.Form.File[name]
+		fileDir := parts[0]
+		f, _ := mpfs.Form.File[fileDir]
 		if len(f) > 0 {
-			err = callback(mpfs.File(name + "/" + f[0].Filename))
+			err = callback(mpfs.File(fileDir, f[0].Filename))
 		} else {
 			err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
 		}

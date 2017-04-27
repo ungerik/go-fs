@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/satori/go.uuid"
-	"github.com/ungerik/go-dropbox"
+	"github.com/tj/go-dropbox"
 
 	"github.com/ungerik/go-fs"
 )
