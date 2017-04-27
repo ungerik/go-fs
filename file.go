@@ -356,6 +356,7 @@ func (file File) Truncate(size int64) error {
 	return fileSystem.Truncate(path, size)
 }
 
+// Rename changes the name of a file where newName is the name part after file.Dir().
 func (file File) Rename(newName string) (renamedFile File, err error) {
 	fileSystem, path := file.ParseRawURI()
 	err = fileSystem.Rename(path, newName)
@@ -365,6 +366,8 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 	return file.Dir().Relative(newName), nil
 }
 
+// Move moves and/or renames the file to destination.
+// destination can be a directory or file-path.
 func (file File) Move(destination File) error {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.Move(path, destination.Path())
