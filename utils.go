@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -327,6 +328,12 @@ func ContentHash(r io.Reader) (string, error) {
 		}
 	}
 	return fmt.Sprintf("%x", resultHash.Sum(nil)), nil
+}
+
+// ContentHashBytes returns a Dropbox compatible content hash for a byte slice.
+// See https://www.dropbox.com/developers/reference/content-hash
+func ContentHashBytes(buf []byte) (string, error) {
+	return ContentHash(bytes.NewBuffer(buf))
 }
 
 // FilesToURLs returns the URLs of a slice of Files.
