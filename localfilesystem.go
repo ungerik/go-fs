@@ -44,8 +44,16 @@ func (local *LocalFileSystem) File(uri ...string) File {
 	return File(filepath.Clean(filepath.Join(uri...)))
 }
 
+func (local *LocalFileSystem) AbsPath(filePath string) string {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		panic(err)
+	}
+	return absPath
+}
+
 func (local *LocalFileSystem) URL(cleanPath string) string {
-	return LocalPrefix + filepath.ToSlash(cleanPath)
+	return LocalPrefix + filepath.ToSlash(local.AbsPath(cleanPath))
 }
 
 func (local *LocalFileSystem) CleanPath(uri ...string) string {
