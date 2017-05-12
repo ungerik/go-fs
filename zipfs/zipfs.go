@@ -1,6 +1,6 @@
 package zipfs
 
-import fs "github.com/ungerik/go-fs"
+import "github.com/ungerik/go-fs"
 
 const Prefix = "zip://"
 
@@ -12,7 +12,7 @@ func FromFile(zipFile fs.File) (*ZipFileSystem, error) {
 }
 
 func FromPath(zipPath string) (*ZipFileSystem, error) {
-	return FromFile(fs.CleanPath(zipPath))
+	return FromFile(fs.FileFrom(zipPath))
 }
 
 func (ZipFileSystem) IsReadOnly() bool {

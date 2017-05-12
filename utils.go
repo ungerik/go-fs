@@ -358,7 +358,7 @@ func FilesToPaths(files []File) (paths []string) {
 func URIsToFiles(fileURIs []string) (files []File) {
 	files = make([]File, len(fileURIs))
 	for i := range fileURIs {
-		files[i] = CleanPath(fileURIs[i])
+		files[i] = FileFrom(fileURIs[i])
 	}
 	return files
 }
