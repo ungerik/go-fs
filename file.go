@@ -388,10 +388,8 @@ func (file File) RemoveRecursive() error {
 			// Ignore files that have been deleted,
 			// after all we wanted to get rid of the in the first place,
 			// so this is not an error for us
-			if err != nil {
-				if _, notExist := err.(*ErrDoesNotExist); notExist {
-					return nil
-				}
+			if IsErrDoesNotExist(err) {
+				return nil
 			}
 			return err
 		})
@@ -400,6 +398,21 @@ func (file File) RemoveRecursive() error {
 		}
 	}
 	return file.Remove()
+}
+
+// RemoveDirContents removes all files in this directory,
+// or if given all files with patterns from the this directory.
+func (file File) RemoveDirContents(patterns ...string) error {
+	return file.ListDir(func(f File) error {
+		err := f.Remove()
+		// Ignore files that have been deleted,
+		// after all we wanted to get rid of the in the first place,
+		// so this is not an error for us
+		if IsErrDoesNotExist(err) {
+			return nil
+		}
+		return err
+	}, patterns...)
 }
 
 func (file File) ReadJSON(output interface{}) error {
