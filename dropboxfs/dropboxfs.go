@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
+	"net/url"
 	"path"
 	"path/filepath"
 	"strings"
@@ -77,11 +78,20 @@ func (dbfs *DropboxFileSystem) File(uriParts ...string) fs.File {
 }
 
 func (dbfs *DropboxFileSystem) URL(cleanPath string) string {
-	return dbfs.prefix + cleanPath
+	return dbfs.prefix + url.PathEscape(cleanPath)
 }
 
 func (dbfs *DropboxFileSystem) CleanPath(uriParts ...string) string {
-	return path.Clean(strings.TrimPrefix(path.Join(uriParts...), dbfs.prefix))
+	if len(uriParts) > 0 {
+		uriParts[0] = strings.TrimPrefix(uriParts[0], dbfs.prefix)
+	}
+	cleanPath := path.Join(uriParts...)
+	unescPath, err := url.PathUnescape(cleanPath)
+	if err == nil {
+		cleanPath = unescPath
+	}
+	cleanPath = path.Clean(cleanPath)
+	return cleanPath
 }
 
 func (dbfs *DropboxFileSystem) SplitPath(filePath string) []string {

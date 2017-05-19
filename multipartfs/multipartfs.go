@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -68,11 +69,20 @@ func (mpfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
 }
 
 func (mpfs *MultipartFileSystem) URL(cleanPath string) string {
-	return mpfs.prefix + cleanPath
+	return mpfs.prefix + url.PathEscape(cleanPath)
 }
 
-func (mpfs *MultipartFileSystem) CleanPath(uri ...string) string {
-	return strings.TrimPrefix(path.Join(uri...), mpfs.prefix)
+func (mpfs *MultipartFileSystem) CleanPath(uriParts ...string) string {
+	if len(uriParts) > 0 {
+		uriParts[0] = strings.TrimPrefix(uriParts[0], mpfs.prefix)
+	}
+	cleanPath := path.Join(uriParts...)
+	unescPath, err := url.PathUnescape(cleanPath)
+	if err == nil {
+		cleanPath = unescPath
+	}
+	cleanPath = path.Clean(cleanPath)
+	return cleanPath
 }
 
 func (mpfs *MultipartFileSystem) SplitPath(filePath string) []string {

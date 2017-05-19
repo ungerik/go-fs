@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -25,9 +26,8 @@ func wrapLocalErrNotExist(filePath string, err error) error {
 	return err
 }
 
-func cleanAndExpandTilde(path string) string {
-	path = filepath.Clean(path)
-	if path[0] == '~' {
+func expandTilde(path string) string {
+	if len(path) > 0 && path[0] == '~' {
 		currentUser, _ := user.Current()
 		if currentUser != nil && currentUser.HomeDir != "" {
 			return filepath.Join(currentUser.HomeDir, path[1:])
@@ -53,7 +53,7 @@ func (local *LocalFileSystem) String() string {
 }
 
 func (local *LocalFileSystem) File(uri ...string) File {
-	return File(cleanAndExpandTilde(filepath.Join(uri...)))
+	return File(local.CleanPath(uri...))
 }
 
 func (local *LocalFileSystem) AbsPath(filePath string) string {
@@ -65,11 +65,21 @@ func (local *LocalFileSystem) AbsPath(filePath string) string {
 }
 
 func (local *LocalFileSystem) URL(cleanPath string) string {
-	return LocalPrefix + filepath.ToSlash(local.AbsPath(cleanPath))
+	return LocalPrefix + url.PathEscape(filepath.ToSlash(local.AbsPath(cleanPath)))
 }
 
-func (local *LocalFileSystem) CleanPath(uri ...string) string {
-	return cleanAndExpandTilde(strings.TrimPrefix(filepath.Join(uri...), LocalPrefix))
+func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
+	if len(uriParts) > 0 {
+		uriParts[0] = strings.TrimPrefix(uriParts[0], LocalPrefix)
+	}
+	cleanPath := filepath.Join(uriParts...)
+	unescPath, err := url.PathUnescape(cleanPath)
+	if err == nil {
+		cleanPath = unescPath
+	}
+	cleanPath = filepath.Clean(cleanPath)
+	cleanPath = expandTilde(cleanPath)
+	return cleanPath
 }
 
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
