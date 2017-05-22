@@ -65,7 +65,7 @@ func (local *LocalFileSystem) AbsPath(filePath string) string {
 }
 
 func (local *LocalFileSystem) URL(cleanPath string) string {
-	return LocalPrefix + url.PathEscape(filepath.ToSlash(local.AbsPath(cleanPath)))
+	return LocalPrefix + filepath.ToSlash(local.AbsPath(cleanPath))
 }
 
 func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
