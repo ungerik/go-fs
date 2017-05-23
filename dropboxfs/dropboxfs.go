@@ -17,8 +17,12 @@ import (
 	"github.com/ungerik/go-fs"
 )
 
-// Prefix of DropboxFileSystem URLs
-const Prefix = "dropbox://"
+const (
+	// Prefix of DropboxFileSystem URLs
+	Prefix = "dropbox://"
+	// Separator used in DropboxFileSystem paths
+	Separator = "/"
+)
 
 var (
 	// DefaultPermissions used for Dropbox files
@@ -78,7 +82,7 @@ func (dbfs *DropboxFileSystem) File(uriParts ...string) fs.File {
 }
 
 func (dbfs *DropboxFileSystem) URL(cleanPath string) string {
-	return dbfs.prefix + url.PathEscape(cleanPath)
+	return dbfs.prefix + cleanPath
 }
 
 func (dbfs *DropboxFileSystem) CleanPath(uriParts ...string) string {
@@ -96,12 +100,13 @@ func (dbfs *DropboxFileSystem) CleanPath(uriParts ...string) string {
 
 func (dbfs *DropboxFileSystem) SplitPath(filePath string) []string {
 	filePath = strings.TrimPrefix(filePath, dbfs.prefix)
-	filePath = strings.TrimPrefix(filePath, "/")
-	return strings.Split(filePath, "/")
+	filePath = strings.TrimPrefix(filePath, Separator)
+	filePath = strings.TrimSuffix(filePath, Separator)
+	return strings.Split(filePath, Separator)
 }
 
-func (dbfs *DropboxFileSystem) Seperator() string {
-	return "/"
+func (dbfs *DropboxFileSystem) Separator() string {
+	return Separator
 }
 
 // MatchAnyPattern returns true if name matches any of patterns,

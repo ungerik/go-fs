@@ -12,8 +12,15 @@ import (
 	"time"
 )
 
-const LocalPrefix = "file://"
+const (
+	// LocalPrefix is the prefix of the LocalFileSystem
+	LocalPrefix = "file://"
 
+	// Separator used in LocalFileSystem paths
+	Separator = string(filepath.Separator)
+)
+
+// LocalFileSystem implements FileSystem for the local file system.
 type LocalFileSystem struct {
 	DefaultCreatePermissions    Permissions
 	DefaultCreateDirPermissions Permissions
@@ -84,12 +91,13 @@ func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
 	filePath = strings.TrimPrefix(filePath, LocalPrefix)
-	filePath = strings.TrimPrefix(filePath, local.Seperator())
-	return strings.Split(filePath, local.Seperator())
+	filePath = strings.TrimPrefix(filePath, Separator)
+	filePath = strings.TrimSuffix(filePath, Separator)
+	return strings.Split(filePath, Separator)
 }
 
-func (local *LocalFileSystem) Seperator() string {
-	return string(filepath.Separator)
+func (local *LocalFileSystem) Separator() string {
+	return Separator
 }
 
 // MatchAnyPattern returns true if name matches any of patterns,

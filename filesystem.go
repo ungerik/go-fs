@@ -21,11 +21,11 @@ type FileSystem interface {
 	// of the file system style without the file system prefix
 	CleanPath(uriParts ...string) string
 
-	// SplitPath returns all Seperator() delimited components of filePath
+	// SplitPath returns all Separator() delimited components of filePath
 	// without the file system prefix.
 	SplitPath(filePath string) []string
 
-	Seperator() string
+	Separator() string
 
 	// MatchAnyPattern returns true if name matches any of patterns,
 	// or if len(patterns) == 0.

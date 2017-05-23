@@ -75,8 +75,8 @@ func (subfs *SubFileSystem) SplitPath(filePath string) []string {
 	return subfs.Parent.SplitPath(filePath)
 }
 
-func (subfs *SubFileSystem) Seperator() string {
-	return subfs.Parent.Seperator()
+func (subfs *SubFileSystem) Separator() string {
+	return subfs.Parent.Separator()
 }
 
 // MatchAnyPattern returns true if name matches any of patterns,
