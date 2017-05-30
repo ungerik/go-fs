@@ -16,9 +16,9 @@ const copyBufferSize = 1024 * 1024
 // up to that path will be created.
 // If dest is an existing directory, then a file with the base name
 // of src will be created there.
-func CopyFile(src, dest File) error {
+func CopyFile(src, dest File, perm ...Permissions) error {
 	var buf []byte
-	return CopyFileBuf(src, dest, &buf)
+	return CopyFileBuf(src, dest, &buf, perm...)
 }
 
 // CopyFileBuf copies a single file between different file systems.
@@ -30,7 +30,7 @@ func CopyFile(src, dest File) error {
 // If that variable is initialized with a byte slice, then this slice will be used as buffer,
 // else a byte slice will be allocated for the variable.
 // Use this function to re-use buffers between CopyFileBuf calls.
-func CopyFileBuf(src, dest File, buf *[]byte) error {
+func CopyFileBuf(src, dest File, buf *[]byte, perm ...Permissions) error {
 	if buf == nil {
 		panic("CopyFileBuf: buf is nil")
 	}
@@ -57,7 +57,10 @@ func CopyFileBuf(src, dest File, buf *[]byte) error {
 	}
 	defer r.Close()
 
-	w, err := dest.OpenWriter(src.Permissions())
+	if len(perm) == 0 {
+		perm = []Permissions{src.Permissions()}
+	}
+	w, err := dest.OpenWriter(perm...)
 	if err != nil {
 		return err
 	}
