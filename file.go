@@ -142,6 +142,13 @@ func (file File) Relative(pathParts ...string) File {
 	return fileSystem.File(pathParts...)
 }
 
+// Relativef returns a File with a path relative to this file,
+// using the methods arguments with fmt.Sprintf to create the relativ path.
+func (file File) Relativef(format string, args ...interface{}) File {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.File(path, fmt.Sprintf(format, args...))
+}
+
 // Stat returns FileInfo.
 func (file File) Stat() FileInfo {
 	fileSystem, path := file.ParseRawURI()
