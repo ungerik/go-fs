@@ -33,6 +33,7 @@ var (
 
 // DropboxFileSystem implements fs.FileSystem for a Dropbox app.
 type DropboxFileSystem struct {
+	id            string
 	prefix        string
 	client        *dropbox.Client
 	fileInfoCache *fs.FileInfoCache
@@ -65,12 +66,15 @@ func (dbfs *DropboxFileSystem) IsReadOnly() bool {
 	return false
 }
 
-func (dbfs *DropboxFileSystem) ID() string {
-	account, err := dbfs.client.Users.GetCurrentAccount()
-	if err != nil {
-		return err.Error() // OK, this is a little bit sketchy
+func (dbfs *DropboxFileSystem) ID() (string, error) {
+	if dbfs.id == "" {
+		account, err := dbfs.client.Users.GetCurrentAccount()
+		if err != nil {
+			return "", err
+		}
+		dbfs.id = account.AccountID
 	}
-	return account.AccountID
+	return dbfs.id, nil
 }
 
 func (dbfs *DropboxFileSystem) Prefix() string {

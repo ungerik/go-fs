@@ -8,9 +8,16 @@ import (
 // a file system to be accessable via this package.
 type FileSystem interface {
 	IsReadOnly() bool
-	ID() string
+
+	// ID returns a unique identifyer for the FileSystem
+	ID() (string, error)
+
 	Prefix() string
+
+	// Name returns the name of the FileSystem implementation
 	Name() string
+
+	// String returns a descriptive string for the FileSystem implementation
 	String() string
 
 	File(uriParts ...string) File

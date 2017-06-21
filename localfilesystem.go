@@ -47,8 +47,8 @@ func (local *LocalFileSystem) IsReadOnly() bool {
 	return false
 }
 
-func (local *LocalFileSystem) ID() string {
-	return "/" // TODO something more meaningfull like platform dependend the ID of the actual file system
+func (local *LocalFileSystem) ID() (string, error) {
+	return "/", nil // TODO something more meaningfull like platform dependend the ID of the actual file system
 }
 
 func (local *LocalFileSystem) Prefix() string {

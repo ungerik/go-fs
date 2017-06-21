@@ -35,8 +35,12 @@ func (subfs *SubFileSystem) IsReadOnly() bool {
 	return subfs.Parent.IsReadOnly()
 }
 
-func (subfs *SubFileSystem) ID() string {
-	return subfs.Parent.ID() + "/" + subfs.BasePath
+func (subfs *SubFileSystem) ID() (string, error) {
+	parentID, err := subfs.Parent.ID()
+	if err != nil {
+		return "", err
+	}
+	return parentID + "/" + subfs.BasePath, nil
 }
 
 func (subfs *SubFileSystem) Prefix() string {
