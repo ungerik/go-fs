@@ -8,6 +8,7 @@ import (
 // a file system to be accessable via this package.
 type FileSystem interface {
 	IsReadOnly() bool
+	ID() string
 	Prefix() string
 	Name() string
 	String() string

@@ -86,6 +86,10 @@ func (mpfs *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multi
 	return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
 }
 
+func (mpfs *MultipartFileSystem) ID() string {
+	return mpfs.prefix
+}
+
 // Prefix for the MultipartFileSystem
 func (mpfs *MultipartFileSystem) Prefix() string {
 	return mpfs.prefix

@@ -65,6 +65,14 @@ func (dbfs *DropboxFileSystem) IsReadOnly() bool {
 	return false
 }
 
+func (dbfs *DropboxFileSystem) ID() string {
+	account, err := dbfs.client.Users.GetCurrentAccount()
+	if err != nil {
+		return err.Error() // OK, this is a little bit sketchy
+	}
+	return account.AccountID
+}
+
 func (dbfs *DropboxFileSystem) Prefix() string {
 	return dbfs.prefix
 }
