@@ -230,7 +230,8 @@ func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File,
 	return listDirFunc.ListDirMaxImpl(max)
 }
 
-// ListDirChan returns listed files over a channel. An error or nil will returned from the error channel.
+// ListDirChan returns listed files over a channel.
+// An error or nil will returned from the error channel.
 // The file channel will be closed after sending all files.
 // If cancel is not nil and an error is sent to this channel, then the listing will be canceled
 // and the error returned in the error channel returned by the method.
@@ -252,6 +253,34 @@ func (file File) ListDirChan(cancel <-chan error, patterns ...string) (<-chan Fi
 		}
 
 		errs <- file.ListDir(callback, patterns...)
+	}()
+
+	return files, errs
+}
+
+// ListDirRecursiveChan returns listed files over a channel.
+// An error or nil will returned from the error channel.
+// The file channel will be closed after sending all files.
+// If cancel is not nil and an error is sent to this channel, then the listing will be canceled
+// and the error returned in the error channel returned by the method.
+// See pipeline pattern: http://blog.golang.org/pipelines
+func (file File) ListDirRecursiveChan(cancel <-chan error, patterns ...string) (<-chan File, <-chan error) {
+	files := make(chan File)
+	errs := make(chan error, 1)
+
+	go func() {
+		defer close(files)
+
+		callback := func(f File) error {
+			select {
+			case files <- f:
+				return nil
+			case err := <-cancel:
+				return err
+			}
+		}
+
+		errs <- file.ListDirRecursive(callback, patterns...)
 	}()
 
 	return files, errs
