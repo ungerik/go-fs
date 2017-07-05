@@ -89,6 +89,19 @@ func (file File) Path() string {
 	return fileSystem.CleanPath(path)
 }
 
+// PathWithSlashes returns the cleaned path of the file
+// always using the slash '/' as separator.
+// It may differ from the string value of File
+// because it will be cleaned depending on the FileSystem
+func (file File) PathWithSlashes() string {
+	fileSystem, path := file.ParseRawURI()
+	path = fileSystem.CleanPath(path)
+	if sep := fileSystem.Separator(); sep != "/" {
+		path = strings.Replace(path, sep, "/", -1)
+	}
+	return path
+}
+
 // Name returns the name part of the file path,
 // which is usually the string after the last path Separator.
 func (file File) Name() string {
