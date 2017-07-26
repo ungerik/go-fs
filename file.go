@@ -123,16 +123,24 @@ func (file File) ExtLower() string {
 }
 
 // RemoveExt returns a File with a path where the extension is removed.
+// Note that this does not rename an actual existing file.
 func (file File) RemoveExt() File {
 	return file[:len(file)-len(file.Ext())]
 }
 
 // ReplaceExt returns a File with a path where the file name extension is replaced with newExt.
+// Note that this does not rename an actual existing file.
 func (file File) ReplaceExt(newExt string) File {
 	if len(newExt) == 0 || newExt[0] != '.' {
 		newExt = "." + newExt
 	}
 	return file.RemoveExt() + File(newExt)
+}
+
+// ReplaceNameBeforeExt returns a File with a path where the file name part before the extensions is replaced with newNameWithoutExt.
+// Note that this does not rename an actual existing file.
+func (file File) ReplaceNameBeforeExt(newNameWithoutExt string) File {
+	return file.Dir().Relative(newNameWithoutExt, file.Ext())
 }
 
 // Dir returns the parent directory of the File.
