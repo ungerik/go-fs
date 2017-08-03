@@ -183,6 +183,12 @@ func (file File) IsRegular() bool {
 	return file.Stat().IsRegular
 }
 
+// IsEmptyDir returns if file is an empty directory.
+func (file File) IsEmptyDir() bool {
+	l, err := file.ListDirMax(1)
+	return len(l) == 0 && err == nil
+}
+
 // Size returns the size of the file or 0 if it does not exist or is a directory.
 func (file File) Size() int64 {
 	return file.Stat().Size
