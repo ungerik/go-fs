@@ -1,18 +1,22 @@
 package fs
 
-import "errors"
+type ConstError string
 
-var (
+func (e ConstError) Error() string {
+	return string(e)
+}
+
+const (
 	// ErrFileWatchNotSupported is returned when file watching is
 	// not available for a file system
-	ErrFileWatchNotSupported = errors.New("file system does not support watching files")
+	ErrFileWatchNotSupported = ConstError("file system does not support watching files")
 
 	// ErrReadOnlyFileSystem is returned when a file system doesn't support writes
-	ErrReadOnlyFileSystem = errors.New("file system is read-only")
+	ErrReadOnlyFileSystem = ConstError("file system is read-only")
 
 	// ErrAbortListDir can be used as error returned by the callback function
 	// of File.ListDir to abort the listing of files. It has no other side effect.
-	ErrAbortListDir = errors.New("abort ListDir")
+	ErrAbortListDir = ConstError("abort ListDir")
 )
 
 // FileError is an interface that is implemented by all errors

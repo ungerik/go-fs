@@ -7,7 +7,7 @@ import (
 )
 
 
-var endListDir = errors.New("endListDir")
+const endListDir = ConstError("endListDir")
 
 // see pipeline pattern http://blog.golang.org/pipelines
 func ListDir(dir File, done <-chan struct{}, patterns ...string) (<-chan File, <-chan error) {
