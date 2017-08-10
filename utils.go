@@ -128,7 +128,7 @@ type ListDirFunc func(callback func(File) error) error
 // FileSystem implementations can use this function to implement ListDirMax,
 // if a own, specialized implementation doesn't make sense.
 func (listDir ListDirFunc) ListDirMaxImpl(max int) (files []File, err error) {
-	const errAbort = ConstError("")
+	errAbort := errors.New("") // used as an internal flag, won't be returned
 	err = listDir(func(file File) error {
 		if len(files) >= max {
 			return errAbort
