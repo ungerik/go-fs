@@ -13,10 +13,6 @@ const (
 
 	// ErrReadOnlyFileSystem is returned when a file system doesn't support writes
 	ErrReadOnlyFileSystem = ConstError("file system is read-only")
-
-	// ErrAbortListDir can be used as error returned by the callback function
-	// of File.ListDir to abort the listing of files. It has no other side effect.
-	ErrAbortListDir = ConstError("abort ListDir")
 )
 
 // FileError is an interface that is implemented by all errors
