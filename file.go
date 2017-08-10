@@ -55,7 +55,8 @@ type ReadWriteSeekCloser interface {
 type File string
 
 // FileSystem returns the FileSystem of the File.
-// Defaults to Local if not a complete URI.
+// Defaults to Local if not a complete URI,
+// or Invalid for an empty path.
 func (file File) FileSystem() FileSystem {
 	return GetFileSystem(string(file))
 }
@@ -157,7 +158,7 @@ func (file File) Relative(pathParts ...string) File {
 		return file
 	}
 	fileSystem, path := file.ParseRawURI()
-	if file != "" {
+	if path != "" {
 		pathParts = append([]string{path}, pathParts...)
 	}
 	return fileSystem.File(pathParts...)

@@ -9,9 +9,14 @@ var (
 		DefaultCreateDirPermissions: UserAndGroupReadWrite + AllExecute,
 	}
 
+	Invalid InvalidFileSystem
+
 	// Registry contains all registerred file systems.
 	// Contains the local file system by default.
-	Registry = map[string]FileSystem{LocalPrefix: Local}
+	Registry = map[string]FileSystem{
+		Local.Prefix():   Local,
+		Invalid.Prefix(): Invalid,
+	}
 )
 
 // Register adds fs to the Registry of file systems.
@@ -29,7 +34,7 @@ func Unregister(fs FileSystem) {
 // The URI can be passed as parts that will be joined according to the file system.
 func GetFileSystem(uriParts ...string) FileSystem {
 	if len(uriParts) == 0 {
-		return Local
+		return Invalid
 	}
 	fs, _ := ParseRawURI(uriParts[0])
 	return fs
@@ -38,11 +43,12 @@ func GetFileSystem(uriParts ...string) FileSystem {
 // ParseRawURI returns a FileSystem for the passed URI and the path component within that file system.
 // Returns the local file system if no other file system could be identified.
 func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
-	if uri != "" {
-		for prefix, fs := range Registry {
-			if strings.HasPrefix(uri, prefix) {
-				return fs, uri[len(prefix):]
-			}
+	if uri == "" {
+		return Invalid, ""
+	}
+	for prefix, fs := range Registry {
+		if strings.HasPrefix(uri, prefix) {
+			return fs, uri[len(prefix):]
 		}
 	}
 	return Local, uri

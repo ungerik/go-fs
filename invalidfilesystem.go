@@ -1,0 +1,182 @@
+package fs
+
+import (
+	"io"
+	"net/url"
+	"path"
+	"strings"
+)
+
+const ErrInvalidFileSystem = ConstError("invalid file system")
+
+// InvalidFileSystem is a file system where all operations are invalid.
+// A File with an empty path defaults to this FS.
+type InvalidFileSystem struct{}
+
+func (invalid InvalidFileSystem) IsReadOnly() bool {
+	return true
+}
+
+func (invalid InvalidFileSystem) ID() (string, error) {
+	return "invalid file system", nil
+}
+
+func (invalid InvalidFileSystem) Prefix() string {
+	return "invalid://"
+}
+
+func (invalid InvalidFileSystem) Name() string {
+	return "invalid file system"
+}
+
+func (invalid InvalidFileSystem) String() string {
+	return "invalid file system"
+}
+
+func (invalid InvalidFileSystem) File(uri ...string) File {
+	return File(invalid.Prefix() + invalid.CleanPath(uri...))
+}
+
+func (invalid InvalidFileSystem) AbsPath(filePath string) string {
+	return invalid.Prefix() + invalid.CleanPath(filePath)
+}
+
+func (invalid InvalidFileSystem) URL(cleanPath string) string {
+	return invalid.Prefix() + cleanPath
+}
+
+func (invalid InvalidFileSystem) CleanPath(uriParts ...string) string {
+	if len(uriParts) > 0 {
+		uriParts[0] = strings.TrimPrefix(uriParts[0], invalid.Prefix())
+	}
+	cleanPath := path.Join(uriParts...)
+	unescPath, err := url.PathUnescape(cleanPath)
+	if err == nil {
+		cleanPath = unescPath
+	}
+	cleanPath = path.Clean(cleanPath)
+	return cleanPath
+}
+
+func (invalid InvalidFileSystem) SplitPath(filePath string) []string {
+	filePath = strings.TrimPrefix(filePath, invalid.Prefix())
+	filePath = strings.TrimPrefix(filePath, "/")
+	filePath = strings.TrimSuffix(filePath, "/")
+	return strings.Split(filePath, "/")
+}
+
+func (invalid InvalidFileSystem) Separator() string {
+	return "/"
+}
+
+func (invalid InvalidFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	return false, ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) FileName(filePath string) string {
+	return ""
+}
+
+func (invalid InvalidFileSystem) Ext(filePath string) string {
+	return ""
+}
+
+func (invalid InvalidFileSystem) Dir(filePath string) string {
+	return ""
+}
+
+func (invalid InvalidFileSystem) Stat(filePath string) FileInfo {
+	return FileInfo{}
+}
+
+func (invalid InvalidFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) ListDirRecursive(dirPath string, callback func(File) error, patterns []string) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {
+	return nil, ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) SetPermissions(filePath string, perm Permissions) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) User(filePath string) string {
+	return ""
+}
+
+func (invalid InvalidFileSystem) SetUser(filePath string, user string) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) Group(filePath string) string {
+	return ""
+}
+
+func (invalid InvalidFileSystem) SetGroup(filePath string, group string) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) Touch(filePath string, perm []Permissions) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) MakeDir(dirPath string, perm []Permissions) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) ReadAll(filePath string) ([]byte, error) {
+	return nil, ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
+	return nil, ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
+	return nil, ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+	return nil, ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
+	return nil, ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
+	return nil, ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) Truncate(filePath string, size int64) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) Rename(filePath string, newName string) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) Move(filePath string, destPath string) error {
+	return ErrInvalidFileSystem
+}
+
+func (invalid InvalidFileSystem) Remove(filePath string) error {
+	return ErrInvalidFileSystem
+}
