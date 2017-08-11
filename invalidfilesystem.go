@@ -37,6 +37,10 @@ func (invalid InvalidFileSystem) File(uri ...string) File {
 	return File(invalid.Prefix() + invalid.CleanPath(uri...))
 }
 
+func (invalid InvalidFileSystem) IsAbsPath(filePath string) bool {
+	return path.IsAbs(filePath)
+}
+
 func (invalid InvalidFileSystem) AbsPath(filePath string) string {
 	return invalid.Prefix() + invalid.CleanPath(filePath)
 }
@@ -73,15 +77,11 @@ func (invalid InvalidFileSystem) MatchAnyPattern(name string, patterns []string)
 	return false, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) FileName(filePath string) string {
-	return ""
+func (invalid InvalidFileSystem) DirAndName(filePath string) (dir, name string) {
+	return "", ""
 }
 
 func (invalid InvalidFileSystem) Ext(filePath string) string {
-	return ""
-}
-
-func (invalid InvalidFileSystem) Dir(filePath string) string {
 	return ""
 }
 

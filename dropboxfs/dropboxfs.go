@@ -128,16 +128,23 @@ func (*DropboxFileSystem) MatchAnyPattern(name string, patterns []string) (bool,
 	return fs.MatchAnyPatternImpl(name, patterns)
 }
 
-func (dbfs *DropboxFileSystem) FileName(filePath string) string {
-	return path.Base(filePath)
+func (dbfs *DropboxFileSystem) DirAndName(filePath string) (dir, name string) {
+	return fs.DirAndNameImpl(filePath, 0, '/')
 }
 
 func (dbfs *DropboxFileSystem) Ext(filePath string) string {
 	return path.Ext(filePath)
 }
 
-func (dbfs *DropboxFileSystem) Dir(filePath string) string {
-	return path.Dir(filePath)
+func (dbfs *DropboxFileSystem) IsAbsPath(filePath string) bool {
+	return path.IsAbs(filePath)
+}
+
+func (dbfs *DropboxFileSystem) AbsPath(filePath string) string {
+	if dbfs.IsAbsPath(filePath) {
+		return filePath
+	}
+	return Separator + filePath
 }
 
 func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
@@ -333,8 +340,8 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, e
 }
 
 func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteSeekCloser, error) {
-	if !dbfs.Stat(dbfs.Dir(filePath)).IsDir {
-		return nil, fs.NewErrIsNotDirectory(dbfs.File(dbfs.Dir(filePath)))
+	if !dbfs.Stat(path.Dir(filePath)).IsDir {
+		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
 	}
 	var fileBuffer *fs.FileBuffer
 	fileBuffer = fs.NewFileBufferWithClose(nil, func() error {

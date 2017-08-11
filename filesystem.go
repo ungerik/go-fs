@@ -35,15 +35,16 @@ type FileSystem interface {
 
 	Separator() string
 
+	IsAbsPath(filePath string) bool
+	AbsPath(filePath string) string
+
 	// MatchAnyPattern returns true if name matches any of patterns,
 	// or if len(patterns) == 0.
 	// The match per pattern works like path.Match or filepath.Match
 	MatchAnyPattern(name string, patterns []string) (bool, error)
 
-	FileName(filePath string) string
-
+	DirAndName(filePath string) (dir, name string)
 	Ext(filePath string) string
-	Dir(filePath string) string
 
 	// Stat returns FileInfo
 	Stat(filePath string) FileInfo

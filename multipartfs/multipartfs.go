@@ -25,6 +25,7 @@ const (
 // MultipartFileSystem wraps the files in a MIME multipart message as fs.FileSystem
 type MultipartFileSystem struct {
 	fs.ReadOnlyBase
+
 	prefix string
 	Form   *multipart.Form
 }
@@ -141,16 +142,23 @@ func (*MultipartFileSystem) MatchAnyPattern(name string, patterns []string) (boo
 	return fs.MatchAnyPatternImpl(name, patterns)
 }
 
-func (*MultipartFileSystem) FileName(filePath string) string {
-	return path.Base(filePath)
+func (*MultipartFileSystem) DirAndName(filePath string) (dir, name string) {
+	return fs.DirAndNameImpl(filePath, 0, '/')
 }
 
 func (*MultipartFileSystem) Ext(filePath string) string {
 	return path.Ext(filePath)
 }
 
-func (*MultipartFileSystem) Dir(filePath string) string {
-	return path.Dir(filePath)
+func (mpfs *MultipartFileSystem) IsAbsPath(filePath string) bool {
+	return path.IsAbs(filePath)
+}
+
+func (mpfs *MultipartFileSystem) AbsPath(filePath string) string {
+	if mpfs.IsAbsPath(filePath) {
+		return filePath
+	}
+	return Separator + filePath
 }
 
 // Stat returns FileInfo

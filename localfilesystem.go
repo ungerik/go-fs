@@ -67,6 +67,10 @@ func (local *LocalFileSystem) File(uri ...string) File {
 	return File(local.CleanPath(uri...))
 }
 
+func (local *LocalFileSystem) IsAbsPath(filePath string) bool {
+	return filepath.IsAbs(filePath)
+}
+
 func (local *LocalFileSystem) AbsPath(filePath string) string {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
@@ -120,16 +124,12 @@ func (local *LocalFileSystem) MatchAnyPattern(name string, patterns []string) (b
 	return false, nil
 }
 
-func (local *LocalFileSystem) FileName(filePath string) string {
-	return filepath.Base(filePath)
+func (local *LocalFileSystem) DirAndName(filePath string) (dir, name string) {
+	return DirAndNameImpl(filePath, len(filepath.VolumeName(filePath)), os.PathSeparator)
 }
 
 func (local *LocalFileSystem) Ext(filePath string) string {
 	return filepath.Ext(filePath)
-}
-
-func (local *LocalFileSystem) Dir(filePath string) string {
-	return filepath.Dir(filePath)
 }
 
 // Stat returns FileInfo
@@ -384,7 +384,7 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 		return NewErrDoesNotExist(File(filePath))
 	}
 	if local.Stat(destPath).IsDir {
-		destPath = filepath.Join(destPath, local.FileName(filePath))
+		destPath = filepath.Join(destPath, filepath.Base(filePath))
 	}
 	return os.Rename(filePath, destPath)
 }

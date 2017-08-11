@@ -366,3 +366,25 @@ func URIsToFiles(fileURIs []string) (files []File) {
 	}
 	return files
 }
+
+// DirAndNameImpl is a generic helper for FileSystem.DirAndName implementations.
+// path.Split or filepath.Split don't have the wanted behaviour when given a path ending in a separator.
+func DirAndNameImpl(filePath string, volumeLen int, pathSeparator byte) (dir, name string) {
+	if filePath == "" {
+		return "", ""
+	}
+	// Ignore trailing separator
+	last := len(filePath) - 1
+	if filePath[last] == pathSeparator {
+		last--
+	}
+
+	sep := last
+	for sep >= volumeLen && filePath[sep] != pathSeparator {
+		sep--
+	}
+	dir = filePath[:sep]
+	name = filePath[sep+1 : last+1]
+	// fmt.Printf("'%s' -> '%s', '%s'\n", filePath, dir, name)
+	return dir, name
+}

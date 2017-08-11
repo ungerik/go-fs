@@ -94,7 +94,7 @@ func (subfs *SubFileSystem) MatchAnyPattern(name string, patterns []string) (boo
 	return subfs.Parent.MatchAnyPattern(name, patterns)
 }
 
-func (subfs *SubFileSystem) FileName(filePath string) string {
+func (subfs *SubFileSystem) DirAndName(filePath string) (dir, name string) {
 	panic("not implemented")
 }
 
@@ -102,8 +102,12 @@ func (subfs *SubFileSystem) Ext(filePath string) string {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) Dir(filePath string) string {
-	panic("not implemented")
+func (subfs *SubFileSystem) IsAbsPath(filePath string) bool {
+	return subfs.Parent.IsAbsPath(filePath)
+}
+
+func (subfs *SubFileSystem) AbsPath(filePath string) string {
+	return subfs.Parent.AbsPath(filePath)
 }
 
 // Stat returns FileInfo

@@ -3,7 +3,6 @@ package fs
 import (
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -106,8 +105,20 @@ func (file File) PathWithSlashes() string {
 // Name returns the name part of the file path,
 // which is usually the string after the last path Separator.
 func (file File) Name() string {
+	_, name := file.DirAndName()
+	return name
+}
+
+// Dir returns the parent directory of the File.
+func (file File) Dir() File {
+	dir, _ := file.DirAndName()
+	return dir
+}
+
+func (file File) DirAndName() (dir File, name string) {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.FileName(path)
+	dirPath, name := fileSystem.DirAndName(path)
+	return File(dirPath), name
 }
 
 // Ext returns the extension of file name including the extension separator.
@@ -142,12 +153,6 @@ func (file File) ReplaceExt(newExt string) File {
 // Note that this does not rename an actual existing file.
 func (file File) ReplaceNameBeforeExt(newNameWithoutExt string) File {
 	return file.Dir().Relative(newNameWithoutExt, file.Ext())
-}
-
-// Dir returns the parent directory of the File.
-func (file File) Dir() File {
-	fileSystem, path := file.ParseRawURI()
-	return File(fileSystem.Dir(path))
 }
 
 // Relative returns a File with a path relative to this file.
@@ -185,6 +190,16 @@ func (file File) Exists() bool {
 // IsDir returns a directory with the path of File exists.
 func (file File) IsDir() bool {
 	return file.Stat().IsDir
+}
+
+func (file File) IsAbsolute() bool {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.IsAbsPath(path)
+}
+
+func (file File) MakeAbsolute() File {
+	fileSystem, path := file.ParseRawURI()
+	return File(fileSystem.AbsPath(path))
 }
 
 // IsRegular reports if this is a regular file.
@@ -346,20 +361,18 @@ func (file File) MakeDir(perm ...Permissions) error {
 
 // MakeAllDirs creates all directories up to this one
 func (file File) MakeAllDirs(perm ...Permissions) (err error) {
-	parts := file.FileSystem().SplitPath(file.Path())
-	var dir File
-	for _, part := range parts {
-		dir = dir.Relative(part)
-		if !dir.Exists() {
-			err = dir.MakeDir(perm...)
-			if err != nil {
-				return err
-			}
-		} else if !dir.IsDir() {
-			return errors.New("MakeAllDirs: file instead of directory in path: " + file.Path())
-		}
+	if file == "" || file.IsDir() {
+		return nil
 	}
-	return nil
+	if file.Exists() {
+		return NewErrIsDirectory(file)
+	}
+
+	err = file.Dir().MakeAllDirs(perm...)
+	if err != nil {
+		return err
+	}
+	return file.MakeDir(perm...)
 }
 
 func (file File) ReadAll() ([]byte, error) {
@@ -476,16 +489,7 @@ func (file File) Remove() error {
 // the complete recursive directory tree.
 func (file File) RemoveRecursive() error {
 	if file.IsDir() {
-		err := file.ListDir(func(f File) error {
-			err := f.RemoveRecursive()
-			// Ignore files that have been deleted,
-			// after all we wanted to get rid of the in the first place,
-			// so this is not an error for us
-			if IsErrDoesNotExist(err) {
-				return nil
-			}
-			return err
-		})
+		err := file.RemoveDirContentsRecursive()
 		if err != nil {
 			return err
 		}
@@ -493,7 +497,21 @@ func (file File) RemoveRecursive() error {
 	return file.Remove()
 }
 
-// RemoveDirContents removes all files in this directory,
+// RemoveDirContentsRecursive deletes all files and directories in this directory recursively.
+func (file File) RemoveDirContentsRecursive() error {
+	return file.ListDir(func(f File) error {
+		err := f.RemoveRecursive()
+		// Ignore files that have been deleted,
+		// after all we wanted to get rid of the in the first place,
+		// so this is not an error for us
+		if IsErrDoesNotExist(err) {
+			return nil
+		}
+		return err
+	})
+}
+
+// RemoveDirContents deletes all files in this directory,
 // or if given all files with patterns from the this directory.
 func (file File) RemoveDirContents(patterns ...string) error {
 	return file.ListDir(func(f File) error {
