@@ -33,8 +33,8 @@ func (invalid InvalidFileSystem) String() string {
 	return "invalid file system"
 }
 
-func (invalid InvalidFileSystem) File(uri ...string) File {
-	return File(invalid.Prefix() + invalid.CleanPath(uri...))
+func (invalid InvalidFileSystem) JoinCleanFile(uri ...string) File {
+	return File(invalid.Prefix() + invalid.JoinCleanPath(uri...))
 }
 
 func (invalid InvalidFileSystem) IsAbsPath(filePath string) bool {
@@ -42,14 +42,14 @@ func (invalid InvalidFileSystem) IsAbsPath(filePath string) bool {
 }
 
 func (invalid InvalidFileSystem) AbsPath(filePath string) string {
-	return invalid.Prefix() + invalid.CleanPath(filePath)
+	return invalid.Prefix() + invalid.JoinCleanPath(filePath)
 }
 
 func (invalid InvalidFileSystem) URL(cleanPath string) string {
 	return invalid.Prefix() + cleanPath
 }
 
-func (invalid InvalidFileSystem) CleanPath(uriParts ...string) string {
+func (invalid InvalidFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], invalid.Prefix())
 	}

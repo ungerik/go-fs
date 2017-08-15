@@ -20,14 +20,16 @@ type FileSystem interface {
 	// String returns a descriptive string for the FileSystem implementation
 	String() string
 
-	File(uriParts ...string) File
-
 	// URL returns a full URL wich is Prefix() + cleanPath
 	URL(cleanPath string) string
 
-	// CleanPath joins the uriParts into a cleaned path
+	// JoinCleanFile joins the file system prefix with uriParts
+	// into a File with clean path and prefix
+	JoinCleanFile(uriParts ...string) File
+
+	// JoinCleanPath joins the uriParts into a cleaned path
 	// of the file system style without the file system prefix
-	CleanPath(uriParts ...string) string
+	JoinCleanPath(uriParts ...string) string
 
 	// SplitPath returns all Separator() delimited components of filePath
 	// without the file system prefix.

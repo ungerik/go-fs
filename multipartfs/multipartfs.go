@@ -54,9 +54,9 @@ func (mpfs *MultipartFileSystem) Destroy() error {
 func (mpfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
 	ff, _ := mpfs.Form.File[name]
 	if len(ff) == 0 {
-		return "", fs.NewErrDoesNotExist(mpfs.File(name))
+		return "", fs.NewErrDoesNotExist(mpfs.JoinCleanFile(name))
 	}
-	return mpfs.File(name, ff[0].Filename), nil
+	return mpfs.JoinCleanFile(name, ff[0].Filename), nil
 }
 
 // FormFiles returns the uploaded files under name.
@@ -67,7 +67,7 @@ func (mpfs *MultipartFileSystem) FormFiles(name string) (files []fs.File) {
 	}
 	files = make([]fs.File, len(ff))
 	for i, f := range ff {
-		files[i] = mpfs.File(name, f.Filename)
+		files[i] = mpfs.JoinCleanFile(name, f.Filename)
 	}
 	return files
 }
@@ -75,7 +75,7 @@ func (mpfs *MultipartFileSystem) FormFiles(name string) (files []fs.File) {
 func (mpfs *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multipart.FileHeader, error) {
 	parts := mpfs.SplitPath(filePath)
 	if len(parts) != 2 {
-		return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(mpfs.JoinCleanFile(filePath))
 	}
 	dir, filename := parts[0], parts[1]
 	ff, _ := mpfs.Form.File[dir]
@@ -84,7 +84,7 @@ func (mpfs *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multi
 			return f, nil
 		}
 	}
-	return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
+	return nil, fs.NewErrDoesNotExist(mpfs.JoinCleanFile(filePath))
 }
 
 func (mpfs *MultipartFileSystem) ID() (string, error) {
@@ -104,15 +104,15 @@ func (mpfs *MultipartFileSystem) String() string {
 	return mpfs.Name() + " with prefix " + mpfs.Prefix()
 }
 
-func (mpfs *MultipartFileSystem) File(uriParts ...string) fs.File {
-	return fs.File(mpfs.prefix + mpfs.CleanPath(uriParts...))
+func (mpfs *MultipartFileSystem) JoinCleanFile(uriParts ...string) fs.File {
+	return fs.File(mpfs.prefix + mpfs.JoinCleanPath(uriParts...))
 }
 
 func (mpfs *MultipartFileSystem) URL(cleanPath string) string {
 	return mpfs.prefix + cleanPath
 }
 
-func (mpfs *MultipartFileSystem) CleanPath(uriParts ...string) string {
+func (mpfs *MultipartFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], mpfs.prefix)
 	}
@@ -194,7 +194,7 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 	switch len(parts) {
 	case 0:
 		for fileDir := range mpfs.Form.File {
-			err = callback(mpfs.File(fileDir))
+			err = callback(mpfs.JoinCleanFile(fileDir))
 			if err != nil {
 				return err
 			}
@@ -204,18 +204,18 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 		ff, _ := mpfs.Form.File[dir]
 		if len(ff) > 0 {
 			for _, f := range ff {
-				err = callback(mpfs.File(dir, f.Filename))
+				err = callback(mpfs.JoinCleanFile(dir, f.Filename))
 				if err != nil {
 					return err
 				}
 			}
 		} else {
-			err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
+			err = fs.NewErrDoesNotExist(mpfs.JoinCleanFile(dirPath))
 		}
 	case 2:
-		err = fs.NewErrIsNotDirectory(mpfs.File(dirPath))
+		err = fs.NewErrIsNotDirectory(mpfs.JoinCleanFile(dirPath))
 	default:
-		err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
+		err = fs.NewErrDoesNotExist(mpfs.JoinCleanFile(dirPath))
 	}
 	return err
 }

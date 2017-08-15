@@ -2,56 +2,12 @@ package fs
 
 import "os"
 
-func FileFrom(uriParts ...string) File {
-	return GetFileSystem(uriParts...).File(uriParts...)
+func JoinCleanFile(uriParts ...string) File {
+	return GetFileSystem(uriParts...).JoinCleanFile(uriParts...)
 }
 
-func Exists(uriParts ...string) bool {
-	return FileFrom(uriParts...).Exists()
-}
-
-func IsDir(uriParts ...string) bool {
-	return FileFrom(uriParts...).IsDir()
-}
-
-func ListDir(uri string, callback func(File) error, patterns ...string) error {
-	return FileFrom(uri).ListDir(callback, patterns...)
-}
-
-// ListDirMax: n == -1 lists all
-func ListDirMax(uri string, n int, patterns ...string) ([]File, error) {
-	return FileFrom(uri).ListDirMax(n, patterns...)
-}
-
-func Touch(uri string, perm ...Permissions) (File, error) {
-	file := FileFrom(uri)
-	err := file.Touch(perm...)
-	if err != nil {
-		return "", err
-	}
-	return file, nil
-}
-
-func MakeDir(uri string, perm ...Permissions) (File, error) {
-	file := FileFrom(uri)
-	err := file.MakeDir(perm...)
-	if err != nil {
-		return "", err
-	}
-	return file, nil
-}
-
-func MakeAllDirs(uri string, perm ...Permissions) (File, error) {
-	file := FileFrom(uri)
-	err := file.MakeAllDirs(perm...)
-	if err != nil {
-		return "", err
-	}
-	return file, nil
-}
-
-func Truncate(uri string, size int64) error {
-	return FileFrom(uri).Truncate(size)
+func TempDir() File {
+	return File(os.TempDir())
 }
 
 // Move moves and/or renames the file to destination.
@@ -74,7 +30,7 @@ func Move(source, destination File) error {
 // If a file does not exist, then it is skipped and not reported as error.
 func Remove(fileURIs ...string) error {
 	for _, uri := range fileURIs {
-		err := FileFrom(uri).Remove()
+		err := JoinCleanFile(uri).Remove()
 		if err != nil && !IsErrDoesNotExist(err) {
 			return err
 		}
@@ -92,20 +48,4 @@ func RemoveFiles(files ...File) error {
 		}
 	}
 	return nil
-}
-
-func ReadFile(uri string) ([]byte, error) {
-	return FileFrom(uri).ReadAll()
-}
-
-func WriteFile(uri string, data []byte, perm ...Permissions) error {
-	return FileFrom(uri).WriteAll(data, perm...)
-}
-
-func Append(uri string, data []byte, perm ...Permissions) error {
-	return FileFrom(uri).Append(data, perm...)
-}
-
-func TempDir() File {
-	return File(os.TempDir())
 }

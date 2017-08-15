@@ -63,8 +63,8 @@ func (local *LocalFileSystem) String() string {
 	return local.Name() + " with prefix " + local.Prefix()
 }
 
-func (local *LocalFileSystem) File(uri ...string) File {
-	return File(local.CleanPath(uri...))
+func (local *LocalFileSystem) JoinCleanFile(uri ...string) File {
+	return File(local.JoinCleanPath(uri...))
 }
 
 func (local *LocalFileSystem) IsAbsPath(filePath string) bool {
@@ -83,7 +83,7 @@ func (local *LocalFileSystem) URL(cleanPath string) string {
 	return LocalPrefix + filepath.ToSlash(local.AbsPath(cleanPath))
 }
 
-func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
+func (local *LocalFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], LocalPrefix)
 	}
@@ -175,7 +175,7 @@ func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error,
 		for _, name := range names {
 			match, err := local.MatchAnyPattern(name, patterns)
 			if match {
-				err = callback(local.File(dirPath, name))
+				err = callback(local.JoinCleanFile(dirPath, name))
 			}
 			if err != nil {
 				return err
@@ -224,7 +224,7 @@ func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []strin
 		for _, name := range names {
 			match, err := local.MatchAnyPattern(name, patterns)
 			if match {
-				files = append(files, local.File(dirPath, name))
+				files = append(files, local.JoinCleanFile(dirPath, name))
 			}
 			if err != nil {
 				return nil, err

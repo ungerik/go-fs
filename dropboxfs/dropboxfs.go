@@ -52,7 +52,7 @@ func New(accessToken string, cacheTimeout time.Duration) *DropboxFileSystem {
 
 func (dbfs *DropboxFileSystem) wrapErrNotExist(filePath string, err error) error {
 	if err != nil && strings.HasPrefix(err.Error(), "path/not_found/") {
-		return fs.NewErrDoesNotExist(dbfs.File(filePath))
+		return fs.NewErrDoesNotExist(dbfs.JoinCleanFile(filePath))
 	}
 	return err
 }
@@ -89,15 +89,15 @@ func (dbfs *DropboxFileSystem) String() string {
 	return dbfs.Name() + " with prefix " + dbfs.Prefix()
 }
 
-func (dbfs *DropboxFileSystem) File(uriParts ...string) fs.File {
-	return fs.File(dbfs.prefix + dbfs.CleanPath(uriParts...))
+func (dbfs *DropboxFileSystem) JoinCleanFile(uriParts ...string) fs.File {
+	return fs.File(dbfs.prefix + dbfs.JoinCleanPath(uriParts...))
 }
 
 func (dbfs *DropboxFileSystem) URL(cleanPath string) string {
 	return dbfs.prefix + cleanPath
 }
 
-func (dbfs *DropboxFileSystem) CleanPath(uriParts ...string) string {
+func (dbfs *DropboxFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], dbfs.prefix)
 	}
@@ -197,10 +197,10 @@ func (dbfs *DropboxFileSystem) Stat(filePath string) (info fs.FileInfo) {
 func (dbfs *DropboxFileSystem) listDir(dirPath string, callback func(fs.File) error, patterns []string, recursive bool) (err error) {
 	info := dbfs.Stat(dirPath)
 	if !info.Exists {
-		return fs.NewErrDoesNotExist(dbfs.File(dirPath))
+		return fs.NewErrDoesNotExist(dbfs.JoinCleanFile(dirPath))
 	}
 	if !info.IsDir {
-		return fs.NewErrIsNotDirectory(dbfs.File(dirPath))
+		return fs.NewErrIsNotDirectory(dbfs.JoinCleanFile(dirPath))
 	}
 
 	var cursor string
@@ -236,7 +236,7 @@ func (dbfs *DropboxFileSystem) listDir(dirPath string, callback func(fs.File) er
 					info := metadataToFileInfo(entry)
 					dbfs.fileInfoCache.Put(entry.PathDisplay, &info)
 				}
-				err = callback(dbfs.File(entry.PathDisplay))
+				err = callback(dbfs.JoinCleanFile(entry.PathDisplay))
 			}
 			if err != nil {
 				return err
@@ -341,7 +341,7 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, e
 
 func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteSeekCloser, error) {
 	if !dbfs.Stat(path.Dir(filePath)).IsDir {
-		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
+		return nil, fs.NewErrIsNotDirectory(dbfs.JoinCleanFile(path.Dir(filePath)))
 	}
 	var fileBuffer *fs.FileBuffer
 	fileBuffer = fs.NewFileBufferWithClose(nil, func() error {
@@ -378,10 +378,10 @@ func (dbfs *DropboxFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, err
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
 	info := dbfs.Stat(filePath)
 	if !info.Exists {
-		return fs.NewErrDoesNotExist(dbfs.File(filePath))
+		return fs.NewErrDoesNotExist(dbfs.JoinCleanFile(filePath))
 	}
 	if info.IsDir {
-		return fs.NewErrIsDirectory(dbfs.File(filePath))
+		return fs.NewErrIsDirectory(dbfs.JoinCleanFile(filePath))
 	}
 	if info.Size <= size {
 		return nil

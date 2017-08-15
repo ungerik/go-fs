@@ -12,7 +12,7 @@ func FromFile(zipFile fs.File) (*ZipFileSystem, error) {
 }
 
 func FromPath(zipPath string) (*ZipFileSystem, error) {
-	return FromFile(fs.FileFrom(zipPath))
+	return FromFile(fs.File(zipPath))
 }
 
 func (ZipFileSystem) IsReadOnly() bool {
