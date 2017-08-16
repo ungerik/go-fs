@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // ReadSeekCloser combines the interfaces
@@ -230,7 +232,7 @@ func (file File) ContentHash() string {
 		reader, err := file.OpenReader()
 		if err == nil {
 			defer reader.Close()
-			hash, _ = ContentHash(reader)
+			hash, _ = fsimpl.ContentHash(reader)
 		}
 	}
 	return hash
@@ -267,10 +269,9 @@ func (file File) ListDirMax(max int, patterns ...string) (files []File, err erro
 }
 
 func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
-	listDirFunc := ListDirFunc(func(callback func(File) error) error {
+	return ListDirMaxImpl(max, func(callback func(File) error) error {
 		return file.ListDirRecursive(callback, patterns...)
 	})
-	return listDirFunc.ListDirMaxImpl(max)
 }
 
 // ListDirChan returns listed files over a channel.

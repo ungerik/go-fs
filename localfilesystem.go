@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 const (
@@ -125,7 +127,7 @@ func (local *LocalFileSystem) MatchAnyPattern(name string, patterns []string) (b
 }
 
 func (local *LocalFileSystem) DirAndName(filePath string) (dir, name string) {
-	return DirAndNameImpl(filePath, len(filepath.VolumeName(filePath)), os.PathSeparator)
+	return fsimpl.DirAndName(filePath, len(filepath.VolumeName(filePath)), Separator)
 }
 
 func (local *LocalFileSystem) Ext(filePath string) string {

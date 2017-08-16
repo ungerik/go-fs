@@ -12,6 +12,7 @@ import (
 
 	"github.com/satori/go.uuid"
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 const (
@@ -139,11 +140,11 @@ func (*MultipartFileSystem) Separator() string {
 // or if len(patterns) == 0.
 // The match per pattern works like path.Match or filepath.Match
 func (*MultipartFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fs.MatchAnyPatternImpl(name, patterns)
+	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
 func (*MultipartFileSystem) DirAndName(filePath string) (dir, name string) {
-	return fs.DirAndNameImpl(filePath, 0, '/')
+	return fsimpl.DirAndName(filePath, 0, Separator)
 }
 
 func (*MultipartFileSystem) Ext(filePath string) string {
@@ -225,10 +226,9 @@ func (mpfs *MultipartFileSystem) ListDirRecursive(dirPath string, callback func(
 }
 
 func (mpfs *MultipartFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	listDirFunc := fs.ListDirFunc(func(callback func(fs.File) error) error {
+	return fs.ListDirMaxImpl(max, func(callback func(fs.File) error) error {
 		return mpfs.ListDir(dirPath, callback, patterns)
 	})
-	return listDirFunc.ListDirMaxImpl(max)
 }
 
 func (*MultipartFileSystem) User(filePath string) string {

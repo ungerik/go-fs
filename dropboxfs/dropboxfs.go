@@ -15,6 +15,7 @@ import (
 	"github.com/tj/go-dropbox"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 const (
@@ -125,11 +126,11 @@ func (dbfs *DropboxFileSystem) Separator() string {
 // or if len(patterns) == 0.
 // The match per pattern works like path.Match or filepath.Match
 func (*DropboxFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fs.MatchAnyPatternImpl(name, patterns)
+	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
 func (dbfs *DropboxFileSystem) DirAndName(filePath string) (dir, name string) {
-	return fs.DirAndNameImpl(filePath, 0, '/')
+	return fsimpl.DirAndName(filePath, 0, Separator)
 }
 
 func (dbfs *DropboxFileSystem) Ext(filePath string) string {
@@ -230,7 +231,7 @@ func (dbfs *DropboxFileSystem) listDir(dirPath string, callback func(fs.File) er
 
 		for _, entry := range out.Entries {
 			// fmt.Println(entry)
-			match, err := fs.MatchAnyPatternImpl(entry.Name, patterns)
+			match, err := fsimpl.MatchAnyPattern(entry.Name, patterns)
 			if match {
 				if dbfs.fileInfoCache != nil {
 					info := metadataToFileInfo(entry)
@@ -259,10 +260,9 @@ func (dbfs *DropboxFileSystem) ListDirRecursive(dirPath string, callback func(fs
 }
 
 func (dbfs *DropboxFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	listDirFunc := fs.ListDirFunc(func(callback func(fs.File) error) error {
+	return fs.ListDirMaxImpl(max, func(callback func(fs.File) error) error {
 		return dbfs.ListDir(dirPath, callback, patterns)
 	})
-	return listDirFunc.ListDirMaxImpl(max)
 }
 
 func (dbfs *DropboxFileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
@@ -336,15 +336,15 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, e
 	if err != nil {
 		return nil, err
 	}
-	return fs.NewReadonlyFileBuffer(data), nil
+	return fsimpl.NewReadonlyFileBuffer(data), nil
 }
 
 func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteSeekCloser, error) {
 	if !dbfs.Stat(path.Dir(filePath)).IsDir {
 		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
 	}
-	var fileBuffer *fs.FileBuffer
-	fileBuffer = fs.NewFileBufferWithClose(nil, func() error {
+	var fileBuffer *fsimpl.FileBuffer
+	fileBuffer = fsimpl.NewFileBufferWithClose(nil, func() error {
 		return dbfs.WriteAll(filePath, fileBuffer.Bytes(), nil)
 	})
 	return fileBuffer, nil
@@ -364,8 +364,8 @@ func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permiss
 	if err != nil {
 		return nil, err
 	}
-	var fileBuffer *fs.FileBuffer
-	fileBuffer = fs.NewFileBufferWithClose(data, func() error {
+	var fileBuffer *fsimpl.FileBuffer
+	fileBuffer = fsimpl.NewFileBufferWithClose(data, func() error {
 		return dbfs.WriteAll(filePath, fileBuffer.Bytes(), nil)
 	})
 	return fileBuffer, nil
