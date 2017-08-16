@@ -30,7 +30,7 @@ func Move(source, destination File) error {
 // If a file does not exist, then it is skipped and not reported as error.
 func Remove(fileURIs ...string) error {
 	for _, uri := range fileURIs {
-		err := JoinCleanFile(uri).Remove()
+		err := File(uri).Remove()
 		if err != nil && !IsErrDoesNotExist(err) {
 			return err
 		}
