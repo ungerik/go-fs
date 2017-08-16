@@ -46,7 +46,6 @@ type FileSystem interface {
 	MatchAnyPattern(name string, patterns []string) (bool, error)
 
 	DirAndName(filePath string) (dir, name string)
-	Ext(filePath string) string
 
 	// Stat returns FileInfo
 	Stat(filePath string) FileInfo

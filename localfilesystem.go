@@ -130,10 +130,6 @@ func (local *LocalFileSystem) DirAndName(filePath string) (dir, name string) {
 	return fsimpl.DirAndName(filePath, len(filepath.VolumeName(filePath)), Separator)
 }
 
-func (local *LocalFileSystem) Ext(filePath string) string {
-	return filepath.Ext(filePath)
-}
-
 // Stat returns FileInfo
 func (local *LocalFileSystem) Stat(filePath string) FileInfo {
 	info, err := os.Stat(filePath)

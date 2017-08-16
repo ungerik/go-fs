@@ -98,10 +98,6 @@ func (subfs *SubFileSystem) DirAndName(filePath string) (dir, name string) {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) Ext(filePath string) string {
-	panic("not implemented")
-}
-
 func (subfs *SubFileSystem) IsAbsPath(filePath string) bool {
 	return subfs.Parent.IsAbsPath(filePath)
 }

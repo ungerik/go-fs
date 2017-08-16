@@ -133,10 +133,6 @@ func (dbfs *DropboxFileSystem) DirAndName(filePath string) (dir, name string) {
 	return fsimpl.DirAndName(filePath, 0, Separator)
 }
 
-func (dbfs *DropboxFileSystem) Ext(filePath string) string {
-	return path.Ext(filePath)
-}
-
 func (dbfs *DropboxFileSystem) IsAbsPath(filePath string) bool {
 	return path.IsAbs(filePath)
 }

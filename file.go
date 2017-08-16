@@ -125,14 +125,17 @@ func (file File) DirAndName() (dir File, name string) {
 	return File(dirPath), name
 }
 
-// Ext returns the extension of file name including the extension separator.
+// Ext returns the extension of file name including the point, or an empty string.
 // Example: File("image.png").Ext() == ".png"
 func (file File) Ext() string {
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Ext(path)
+	p := strings.LastIndexByte(string(file), '.')
+	if p == -1 {
+		return ""
+	}
+	return string(file)[p:]
 }
 
-// ExtLower returns the lower case extension of file name including the extension separator.
+// ExtLower returns the lower case extension of file name including the point, or an empty string.
 // Example: File("Image.PNG").ExtLower() == ".png"
 func (file File) ExtLower() string {
 	return strings.ToLower(file.Ext())

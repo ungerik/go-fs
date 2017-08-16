@@ -147,10 +147,6 @@ func (*MultipartFileSystem) DirAndName(filePath string) (dir, name string) {
 	return fsimpl.DirAndName(filePath, 0, Separator)
 }
 
-func (*MultipartFileSystem) Ext(filePath string) string {
-	return path.Ext(filePath)
-}
-
 func (mpfs *MultipartFileSystem) IsAbsPath(filePath string) bool {
 	return path.IsAbs(filePath)
 }
