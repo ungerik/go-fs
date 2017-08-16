@@ -73,6 +73,8 @@ func (file File) RawURI() string {
 	return string(file)
 }
 
+// String returns the path and meta information for the File.
+// See RawURI to just get the string value of it.
 func (file File) String() string {
 	return fmt.Sprintf("%s (%s)", file.Path(), file.FileSystem().Name())
 }
@@ -88,7 +90,7 @@ func (file File) URL() string {
 // because it will be cleaned depending on the FileSystem
 func (file File) Path() string {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.CleanPath(path)
+	return fileSystem.JoinCleanPath(path)
 }
 
 // PathWithSlashes returns the cleaned path of the file
@@ -97,7 +99,7 @@ func (file File) Path() string {
 // because it will be cleaned depending on the FileSystem
 func (file File) PathWithSlashes() string {
 	fileSystem, path := file.ParseRawURI()
-	path = fileSystem.CleanPath(path)
+	path = fileSystem.JoinCleanPath(path)
 	if sep := fileSystem.Separator(); sep != "/" {
 		path = strings.Replace(path, sep, "/", -1)
 	}
@@ -136,25 +138,10 @@ func (file File) ExtLower() string {
 	return strings.ToLower(file.Ext())
 }
 
-// RemoveExt returns a File with a path where the extension is removed.
+// TrimExt returns a File with a path where the extension is removed.
 // Note that this does not rename an actual existing file.
-func (file File) RemoveExt() File {
+func (file File) TrimExt() File {
 	return file[:len(file)-len(file.Ext())]
-}
-
-// ReplaceExt returns a File with a path where the file name extension is replaced with newExt.
-// Note that this does not rename an actual existing file.
-func (file File) ReplaceExt(newExt string) File {
-	if len(newExt) == 0 || newExt[0] != '.' {
-		newExt = "." + newExt
-	}
-	return file.RemoveExt() + File(newExt)
-}
-
-// ReplaceNameBeforeExt returns a File with a path where the file name part before the extensions is replaced with newNameWithoutExt.
-// Note that this does not rename an actual existing file.
-func (file File) ReplaceNameBeforeExt(newNameWithoutExt string) File {
-	return file.Dir().Relative(newNameWithoutExt, file.Ext())
 }
 
 // Relative returns a File with a path relative to this file.
@@ -168,14 +155,14 @@ func (file File) Relative(pathParts ...string) File {
 	if path != "" {
 		pathParts = append([]string{path}, pathParts...)
 	}
-	return fileSystem.File(pathParts...)
+	return fileSystem.JoinCleanFile(pathParts...)
 }
 
 // Relativef returns a File with a path relative to this file,
 // using the methods arguments with fmt.Sprintf to create the relativ path.
 func (file File) Relativef(format string, args ...interface{}) File {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.File(path, fmt.Sprintf(format, args...))
+	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
 }
 
 // Stat returns FileInfo.

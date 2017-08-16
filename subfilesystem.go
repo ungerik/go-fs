@@ -59,7 +59,7 @@ func (subfs *SubFileSystem) String() string {
 // TODO Replace implementation with real SubFileSystem from here on:
 ///////////////////////////////////////////////////
 
-func (subfs *SubFileSystem) File(uri ...string) File {
+func (subfs *SubFileSystem) JoinCleanFile(uri ...string) File {
 	if len(uri) == 0 {
 		panic("SubFileSystem uri must not be empty")
 	}
@@ -75,8 +75,8 @@ func (subfs *SubFileSystem) URL(filePath string) string {
 	return LocalPrefix + subfs.URN(filePath)
 }
 
-func (subfs *SubFileSystem) CleanPath(uri ...string) string {
-	return subfs.prefix + subfs.Parent.CleanPath(uri...)
+func (subfs *SubFileSystem) JoinCleanPath(uri ...string) string {
+	return subfs.prefix + subfs.Parent.JoinCleanPath(uri...)
 }
 
 func (subfs *SubFileSystem) SplitPath(filePath string) []string {
