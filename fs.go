@@ -2,7 +2,11 @@ package fs
 
 import "os"
 
-func JoinCleanFile(uriParts ...string) File {
+func CleanFilePath(uri string) File {
+	return GetFileSystem(uri).JoinCleanFile(uri)
+}
+
+func JoinCleanFilePath(uriParts ...string) File {
 	return GetFileSystem(uriParts...).JoinCleanFile(uriParts...)
 }
 
