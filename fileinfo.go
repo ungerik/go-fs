@@ -10,7 +10,7 @@ type FileInfo struct {
 	Size        int64
 	ModTime     time.Time
 	Permissions Permissions
-	ContentHash string
+	ContentHash string //ContentHash is otional. For performance reasons, it will only be filled if the FileSystem implementation already has it cached
 }
 
 type fileInfoCacheEntry struct {

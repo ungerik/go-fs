@@ -168,10 +168,24 @@ func (file File) Relativef(format string, args ...interface{}) File {
 	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
 }
 
-// Stat returns FileInfo.
+// Stat returns FileInfo. The FileInfo.ContentHash field is optional.
 func (file File) Stat() FileInfo {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.Stat(path)
+}
+
+// StatContentHash returns a FileInfo, but in contrast to Stat
+// it always fills the ContentHash field.
+func (file File) StatContentHash() FileInfo {
+	info := file.Stat()
+	if !info.IsDir && info.ContentHash == "" {
+		reader, err := file.OpenReader()
+		if err == nil {
+			defer reader.Close()
+			info.ContentHash, _ = fsimpl.ContentHash(reader)
+		}
+	}
+	return info
 }
 
 // Exists returns a file or directory with the path of File exists.
