@@ -148,6 +148,7 @@ func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
 	info.Exists = true
 	info.IsRegular = true
 	info.IsDir = meta.Tag == "folder"
+	info.IsHidden = len(meta.Name) > 0 && meta.Name[0] == '.'
 	info.Size = int64(meta.Size)
 	info.ModTime = meta.ServerModified
 	if info.IsDir {
@@ -189,6 +190,11 @@ func (dbfs *DropboxFileSystem) Stat(filePath string) (info fs.FileInfo) {
 		dbfs.fileInfoCache.Put(filePath, &info)
 	}
 	return info
+}
+
+func (dbfs *DropboxFileSystem) IsHidden(filePath string) bool {
+	name := path.Base(filePath)
+	return len(name) > 0 && name[0] == '.'
 }
 
 func (dbfs *DropboxFileSystem) listDir(dirPath string, callback func(fs.File) error, patterns []string, recursive bool) (err error) {

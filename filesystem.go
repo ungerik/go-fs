@@ -49,6 +49,7 @@ type FileSystem interface {
 
 	// Stat returns FileInfo
 	Stat(filePath string) FileInfo
+	IsHidden(filePath string) bool
 
 	Watch(filePath string) (<-chan WatchEvent, error)
 

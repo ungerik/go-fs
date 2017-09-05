@@ -7,6 +7,7 @@ type FileInfo struct {
 	Exists      bool
 	IsDir       bool
 	IsRegular   bool
+	IsHidden    bool
 	Size        int64
 	ModTime     time.Time
 	Permissions Permissions

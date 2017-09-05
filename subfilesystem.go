@@ -108,7 +108,11 @@ func (subfs *SubFileSystem) AbsPath(filePath string) string {
 
 // Stat returns FileInfo
 func (subfs *SubFileSystem) Stat(filePath string) FileInfo {
-	panic("not implemented")
+	return subfs.Parent.Stat(filePath)
+}
+
+func (subfs *SubFileSystem) IsHidden(filePath string) bool {
+	return subfs.Parent.IsHidden(filePath)
 }
 
 func (subfs *SubFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {

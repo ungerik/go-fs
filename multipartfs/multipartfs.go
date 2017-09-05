@@ -186,6 +186,11 @@ func (mpfs *MultipartFileSystem) Stat(filePath string) (info fs.FileInfo) {
 	return info
 }
 
+func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
+	name := path.Base(filePath)
+	return len(name) > 0 && name[0] == '.'
+}
+
 func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
 	parts := mpfs.SplitPath(dirPath)
 	switch len(parts) {

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/url"
@@ -136,14 +137,35 @@ func (local *LocalFileSystem) Stat(filePath string) FileInfo {
 	if err != nil {
 		return FileInfo{}
 	}
+	hidden, err := hasFileAttributeHidden(filePath)
+	if err != nil {
+		// Should not happen, this is why we are logging the error
+		fmt.Fprintf(os.Stderr, "hasFileAttributeHidden(): %s\n", err)
+		return FileInfo{}
+	}
+	name := info.Name()
 	return FileInfo{
 		Exists:      true,
 		IsDir:       info.Mode().IsDir(),
 		IsRegular:   info.Mode().IsRegular(),
+		IsHidden:    hidden || len(name) > 0 && name[0] == '.',
 		Size:        info.Size(),
 		ModTime:     info.ModTime(),
 		Permissions: Permissions(info.Mode().Perm()),
 	}
+}
+
+func (local *LocalFileSystem) IsHidden(filePath string) bool {
+	name := filepath.Base(filePath)
+	if len(name) > 0 && name[0] == '.' {
+		return true
+	}
+	hidden, err := hasFileAttributeHidden(filePath)
+	if err != nil {
+		// Should not happen, this is why we are logging the error
+		fmt.Fprintf(os.Stderr, "hasFileAttributeHidden(): %s\n", err)
+	}
+	return hidden
 }
 
 func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {

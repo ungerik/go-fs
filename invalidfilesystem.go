@@ -85,6 +85,10 @@ func (invalid InvalidFileSystem) Stat(filePath string) FileInfo {
 	return FileInfo{}
 }
 
+func (invalid InvalidFileSystem) IsHidden(filePath string) bool {
+	return false
+}
+
 func (invalid InvalidFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
