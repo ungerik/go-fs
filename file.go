@@ -219,6 +219,14 @@ func (file File) IsEmptyDir() bool {
 	return len(l) == 0 && err == nil
 }
 
+// Returns true if the filename begins with a dot,
+// or on Windows the hidden flag is set.
+func (file File) IsHidden() bool {
+	// TODO check hidden flag on windows
+	n := file.Name()
+	return len(n) > 0 && n[0] == '.'
+}
+
 // Size returns the size of the file or 0 if it does not exist or is a directory.
 func (file File) Size() int64 {
 	return file.Stat().Size
