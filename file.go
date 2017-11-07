@@ -174,18 +174,22 @@ func (file File) Stat() FileInfo {
 	return fileSystem.Stat(path)
 }
 
-// StatContentHash returns a FileInfo, but in contrast to Stat
+// StatWithContentHash returns a FileInfo, but in contrast to Stat
 // it always fills the ContentHash field.
-func (file File) StatContentHash() FileInfo {
+func (file File) StatWithContentHash() (FileInfo, error) {
 	info := file.Stat()
 	if !info.IsDir && info.ContentHash == "" {
 		reader, err := file.OpenReader()
-		if err == nil {
-			defer reader.Close()
-			info.ContentHash, _ = fsimpl.ContentHash(reader)
+		if err != nil {
+			return FileInfo{}, err
+		}
+		defer reader.Close()
+		info.ContentHash, err = fsimpl.ContentHash(reader)
+		if err != nil {
+			return FileInfo{}, err
 		}
 	}
-	return info
+	return info, nil
 }
 
 // Exists returns a file or directory with the path of File exists.
