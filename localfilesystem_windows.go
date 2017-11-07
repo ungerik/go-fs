@@ -2,8 +2,8 @@ package fs
 
 import "syscall"
 
-func hasFileAttributeHidden(path string) (bool, error) {
-	p, e := syscall.UTF16PtrFromString(path)
+func hasFileAttributeHidden(filePath string) (bool, error) {
+	p, e := syscall.UTF16PtrFromString(filePath)
 	if e != nil {
 		return false, e
 	}

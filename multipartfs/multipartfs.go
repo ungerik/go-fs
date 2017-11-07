@@ -164,13 +164,18 @@ func (mpfs *MultipartFileSystem) Stat(filePath string) (info fs.FileInfo) {
 	switch len(parts) {
 	case 1:
 		dir := parts[0]
-		info.Exists = len(mpfs.Form.File[dir]) > 0
-		info.IsDir = info.Exists
+		exists := len(mpfs.Form.File[dir]) > 0
+		if exists {
+			info.Name = dir
+			info.Exists = true
+			info.IsDir = true
+		}
 	case 2:
 		dir, filename := parts[0], parts[1]
 		ff, _ := mpfs.Form.File[dir]
 		for _, f := range ff {
 			if f.Filename == filename {
+				info.Name = filename
 				info.Exists = true
 				break
 			}
@@ -191,12 +196,14 @@ func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
 	return len(name) > 0 && name[0] == '.'
 }
 
-func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
+func (mpfs *MultipartFileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
 	parts := mpfs.SplitPath(dirPath)
 	switch len(parts) {
 	case 0:
 		for fileDir := range mpfs.Form.File {
-			err = callback(mpfs.JoinCleanFile(fileDir))
+			file := mpfs.JoinCleanFile(fileDir)
+			info := mpfs.Stat(fileDir)
+			err = callback(file, info)
 			if err != nil {
 				return err
 			}
@@ -206,7 +213,9 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 		ff, _ := mpfs.Form.File[dir]
 		if len(ff) > 0 {
 			for _, f := range ff {
-				err = callback(mpfs.JoinCleanFile(dir, f.Filename))
+				file := mpfs.JoinCleanFile(dir, f.Filename)
+				info := mpfs.Stat(file.Path())
+				err = callback(file, info)
 				if err != nil {
 					return err
 				}
@@ -222,13 +231,13 @@ func (mpfs *MultipartFileSystem) ListDir(dirPath string, callback func(fs.File) 
 	return err
 }
 
-func (mpfs *MultipartFileSystem) ListDirRecursive(dirPath string, callback func(fs.File) error, patterns []string) error {
-	return fs.ListDirRecursiveImpl(mpfs, dirPath, callback, patterns)
+func (mpfs *MultipartFileSystem) ListDirInfoRecursive(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
+	return fs.ListDirInfoRecursiveImpl(mpfs, dirPath, callback, patterns)
 }
 
 func (mpfs *MultipartFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
 	return fs.ListDirMaxImpl(max, func(callback func(fs.File) error) error {
-		return mpfs.ListDir(dirPath, callback, patterns)
+		return mpfs.ListDirInfo(dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
 	})
 }
 

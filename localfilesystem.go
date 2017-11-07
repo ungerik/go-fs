@@ -137,21 +137,27 @@ func (local *LocalFileSystem) Stat(filePath string) FileInfo {
 	if err != nil {
 		return FileInfo{}
 	}
+	return convertFileInfo(filePath, info)
+}
+
+func convertFileInfo(filePath string, info os.FileInfo) FileInfo {
 	hidden, err := hasFileAttributeHidden(filePath)
 	if err != nil {
 		// Should not happen, this is why we are logging the error
-		fmt.Fprintf(os.Stderr, "hasFileAttributeHidden(): %s\n", err)
+		fmt.Fprintf(os.Stderr, "hasFileAttributeHidden(%s): %+v\n", filePath, err)
 		return FileInfo{}
 	}
 	name := info.Name()
+	mode := info.Mode()
 	return FileInfo{
+		Name:        name,
 		Exists:      true,
-		IsDir:       info.Mode().IsDir(),
-		IsRegular:   info.Mode().IsRegular(),
+		IsDir:       mode.IsDir(),
+		IsRegular:   mode.IsRegular(),
 		IsHidden:    hidden || len(name) > 0 && name[0] == '.',
 		Size:        info.Size(),
 		ModTime:     info.ModTime(),
-		Permissions: Permissions(info.Mode().Perm()),
+		Permissions: Permissions(mode.Perm()),
 	}
 }
 
@@ -168,7 +174,7 @@ func (local *LocalFileSystem) IsHidden(filePath string) bool {
 	return hidden
 }
 
-func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
+func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	info := local.Stat(dirPath)
 	if !info.Exists {
 		return NewErrDoesNotExist(File(dirPath))
@@ -184,7 +190,7 @@ func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error,
 	defer f.Close()
 
 	for eof := false; !eof; {
-		names, err := f.Readdirnames(64)
+		osInfos, err := f.Readdir(64)
 		if err != nil {
 			eof = (err == io.EOF)
 			if !eof {
@@ -192,10 +198,13 @@ func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error,
 			}
 		}
 
-		for _, name := range names {
+		for _, osInfo := range osInfos {
+			name := osInfo.Name()
 			match, err := local.MatchAnyPattern(name, patterns)
 			if match {
-				err = callback(local.JoinCleanFile(dirPath, name))
+				file := local.JoinCleanFile(dirPath, name)
+				info := convertFileInfo(string(file), osInfo)
+				err = callback(file, info)
 			}
 			if err != nil {
 				return err
@@ -205,8 +214,8 @@ func (local *LocalFileSystem) ListDir(dirPath string, callback func(File) error,
 	return nil
 }
 
-func (local *LocalFileSystem) ListDirRecursive(dirPath string, callback func(File) error, patterns []string) error {
-	return ListDirRecursiveImpl(local, dirPath, callback, patterns)
+func (local *LocalFileSystem) ListDirInfoRecursive(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+	return ListDirInfoRecursiveImpl(local, dirPath, callback, patterns)
 }
 
 func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {

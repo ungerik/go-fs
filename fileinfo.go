@@ -4,6 +4,7 @@ import "time"
 
 // FileInfo is returned by FileSystem.Stat()
 type FileInfo struct {
+	Name        string
 	Exists      bool
 	IsDir       bool
 	IsRegular   bool

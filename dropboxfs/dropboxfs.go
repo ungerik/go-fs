@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/satori/go.uuid"
 	"github.com/tj/go-dropbox"
+	"github.com/ungerik/go-uuid"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
@@ -145,6 +145,7 @@ func (dbfs *DropboxFileSystem) AbsPath(filePath string) string {
 }
 
 func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
+	info.Name = meta.Name
 	info.Exists = true
 	info.IsRegular = true
 	info.IsDir = meta.Tag == "folder"
@@ -164,6 +165,7 @@ func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
 func (dbfs *DropboxFileSystem) Stat(filePath string) (info fs.FileInfo) {
 	// The root folder is unsupported by the API
 	if filePath == "/" {
+		// info.Name = ""
 		info.Exists = true
 		info.IsRegular = true
 		info.IsDir = true
@@ -197,7 +199,7 @@ func (dbfs *DropboxFileSystem) IsHidden(filePath string) bool {
 	return len(name) > 0 && name[0] == '.'
 }
 
-func (dbfs *DropboxFileSystem) listDir(dirPath string, callback func(fs.File) error, patterns []string, recursive bool) (err error) {
+func (dbfs *DropboxFileSystem) listDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
 	info := dbfs.Stat(dirPath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(dbfs.JoinCleanFile(dirPath))
@@ -235,11 +237,12 @@ func (dbfs *DropboxFileSystem) listDir(dirPath string, callback func(fs.File) er
 			// fmt.Println(entry)
 			match, err := fsimpl.MatchAnyPattern(entry.Name, patterns)
 			if match {
+				info := metadataToFileInfo(entry)
 				if dbfs.fileInfoCache != nil {
-					info := metadataToFileInfo(entry)
 					dbfs.fileInfoCache.Put(entry.PathDisplay, &info)
 				}
-				err = callback(dbfs.JoinCleanFile(entry.PathDisplay))
+				file := dbfs.JoinCleanFile(entry.PathDisplay)
+				err = callback(file, info)
 			}
 			if err != nil {
 				return err
@@ -253,17 +256,17 @@ func (dbfs *DropboxFileSystem) listDir(dirPath string, callback func(fs.File) er
 	return nil
 }
 
-func (dbfs *DropboxFileSystem) ListDir(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
-	return dbfs.listDir(dirPath, callback, patterns, true)
+func (dbfs *DropboxFileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	return dbfs.listDirInfo(dirPath, callback, patterns, true)
 }
 
-func (dbfs *DropboxFileSystem) ListDirRecursive(dirPath string, callback func(fs.File) error, patterns []string) (err error) {
-	return dbfs.listDir(dirPath, callback, patterns, true)
+func (dbfs *DropboxFileSystem) ListDirInfoRecursive(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	return dbfs.listDirInfo(dirPath, callback, patterns, true)
 }
 
 func (dbfs *DropboxFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
 	return fs.ListDirMaxImpl(max, func(callback func(fs.File) error) error {
-		return dbfs.ListDir(dirPath, callback, patterns)
+		return dbfs.ListDirInfo(dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
 	})
 }
 

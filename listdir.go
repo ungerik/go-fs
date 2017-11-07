@@ -28,22 +28,43 @@ func ListDirMaxImpl(max int, listDir func(callback func(File) error) error) (fil
 	return files, nil
 }
 
-// ListDirRecursiveImpl can be used by FileSystem implementations to
+// // ListDirRecursiveImpl can be used by FileSystem implementations to
+// // implement FileSystem.ListDirRecursive if it doesn't have an internal
+// // optimzed form of doing that.
+// func ListDirRecursiveImpl(fs FileSystem, dirPath string, callback func(File) error, patterns []string) error {
+// 	return fs.ListDir(dirPath, func(f File) error {
+// 		if f.IsDir() {
+// 			err := f.ListDirRecursive(callback, patterns...)
+// 			// Don't mind files that have been deleted while iterating
+// 			if IsErrDoesNotExist(err) {
+// 				err = nil
+// 			}
+// 			return err
+// 		}
+// 		match, err := fs.MatchAnyPattern(f.Name(), patterns)
+// 		if match {
+// 			err = callback(f)
+// 		}
+// 		return err
+// 	}, nil)
+// }
+
+// ListDirInfoRecursiveImpl can be used by FileSystem implementations to
 // implement FileSystem.ListDirRecursive if it doesn't have an internal
 // optimzed form of doing that.
-func ListDirRecursiveImpl(fs FileSystem, dirPath string, callback func(File) error, patterns []string) error {
-	return fs.ListDir(dirPath, func(f File) error {
-		if f.IsDir() {
-			err := f.ListDirRecursive(callback, patterns...)
+func ListDirInfoRecursiveImpl(fs FileSystem, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+	return fs.ListDirInfo(dirPath, func(file File, info FileInfo) error {
+		if info.IsDir {
+			err := file.ListDirInfoRecursive(callback, patterns...)
 			// Don't mind files that have been deleted while iterating
 			if IsErrDoesNotExist(err) {
 				err = nil
 			}
 			return err
 		}
-		match, err := fs.MatchAnyPattern(f.Name(), patterns)
+		match, err := fs.MatchAnyPattern(info.Name, patterns)
 		if match {
-			err = callback(f)
+			err = callback(file, info)
 		}
 		return err
 	}, nil)

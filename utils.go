@@ -124,3 +124,9 @@ func URIsToFiles(fileURIs []string) (files []File) {
 	}
 	return files
 }
+
+type FileCallback func(File) error
+
+func (f FileCallback) FileInfoCallback(file File, info FileInfo) error {
+	return f(file)
+}

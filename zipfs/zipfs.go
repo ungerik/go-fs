@@ -27,6 +27,7 @@ func (ZipFileSystem) Name() string {
 	return "ZIP file system"
 }
 
+
 func (ZipFileSystem) File(uriParts ...string) fs.File {
 	return ""
 }

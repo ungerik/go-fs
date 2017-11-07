@@ -264,14 +264,26 @@ func (file File) SetPermissions(perm Permissions) error {
 
 func (file File) ListDir(callback func(File) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDir(path, callback, patterns)
+	return fileSystem.ListDirInfo(path, FileCallback(callback).FileInfoCallback, patterns)
+}
+
+func (file File) ListDirInfo(callback func(File, FileInfo) error, patterns ...string) error {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.ListDirInfo(path, callback, patterns)
 }
 
 // ListDirRecursive returns only files.
 // patterns are only applied to files, not to directories
 func (file File) ListDirRecursive(callback func(File) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirRecursive(path, callback, patterns)
+	return fileSystem.ListDirInfoRecursive(path, FileCallback(callback).FileInfoCallback, patterns)
+}
+
+// ListDirInfoRecursive returns only files.
+// patterns are only applied to files, not to directories
+func (file File) ListDirInfoRecursive(callback func(File, FileInfo) error, patterns ...string) error {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.ListDirInfoRecursive(path, callback, patterns)
 }
 
 func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {

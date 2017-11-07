@@ -89,11 +89,11 @@ func (invalid InvalidFileSystem) IsHidden(filePath string) bool {
 	return false
 }
 
-func (invalid InvalidFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
+func (invalid InvalidFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) ListDirRecursive(dirPath string, callback func(File) error, patterns []string) error {
+func (invalid InvalidFileSystem) ListDirInfoRecursive(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
 

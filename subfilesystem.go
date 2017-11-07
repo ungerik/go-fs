@@ -115,11 +115,11 @@ func (subfs *SubFileSystem) IsHidden(filePath string) bool {
 	return subfs.Parent.IsHidden(filePath)
 }
 
-func (subfs *SubFileSystem) ListDir(dirPath string, callback func(File) error, patterns []string) error {
+func (subfs *SubFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) ListDirRecursive(dirPath string, callback func(File) error, patterns []string) error {
+func (subfs *SubFileSystem) ListDirInfoRecursive(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }
 
