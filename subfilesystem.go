@@ -115,6 +115,10 @@ func (subfs *SubFileSystem) IsHidden(filePath string) bool {
 	return subfs.Parent.IsHidden(filePath)
 }
 
+func (subfs *SubFileSystem) IsSymbolicLink(filePath string) bool {
+	return subfs.Parent.IsSymbolicLink(filePath)
+}
+
 func (subfs *SubFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }

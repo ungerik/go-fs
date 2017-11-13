@@ -199,6 +199,10 @@ func (dbfs *DropboxFileSystem) IsHidden(filePath string) bool {
 	return len(name) > 0 && name[0] == '.'
 }
 
+func (dbfs *DropboxFileSystem) IsSymbolicLink(filePath string) bool {
+	return false
+}
+
 func (dbfs *DropboxFileSystem) listDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
 	info := dbfs.Stat(dirPath)
 	if !info.Exists {

@@ -89,6 +89,10 @@ func (invalid InvalidFileSystem) IsHidden(filePath string) bool {
 	return false
 }
 
+func (invalid InvalidFileSystem) IsSymbolicLink(filePath string) bool {
+	return false
+}
+
 func (invalid InvalidFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }

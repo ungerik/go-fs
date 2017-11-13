@@ -223,11 +223,19 @@ func (file File) IsEmptyDir() bool {
 	return len(l) == 0 && err == nil
 }
 
-// Returns true if the filename begins with a dot,
+// IsHidden returns true if the filename begins with a dot,
 // or if on Windows the hidden file attribute is set.
 func (file File) IsHidden() bool {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.IsHidden(path)
+}
+
+// IsSymbolicLink returns if the file is a symbolic link
+// Use LocalFileSystem.CreateSymbolicLink and LocalFileSystem.ReadSymbolicLink
+// to handle symbolic links.
+func (file File) IsSymbolicLink() bool {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.IsSymbolicLink(path)
 }
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.

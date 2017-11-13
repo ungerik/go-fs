@@ -196,6 +196,10 @@ func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
 	return len(name) > 0 && name[0] == '.'
 }
 
+func (mpfs *MultipartFileSystem) IsSymbolicLink(filePath string) bool {
+	return false
+}
+
 func (mpfs *MultipartFileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
 	parts := mpfs.SplitPath(dirPath)
 	switch len(parts) {

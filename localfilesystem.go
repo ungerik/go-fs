@@ -174,6 +174,35 @@ func (local *LocalFileSystem) IsHidden(filePath string) bool {
 	return hidden
 }
 
+func (local *LocalFileSystem) IsSymbolicLink(filePath string) bool {
+	info, err := os.Lstat(filePath)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
+}
+
+func (local *LocalFileSystem) CreateSymbolicLink(oldFile, newFile File) error {
+	oldFs, oldPath := oldFile.ParseRawURI()
+	newFs, newPath := newFile.ParseRawURI()
+	if oldFs != local || newFs != local {
+		return errors.New("LocalFileSystem.CreateSymbolicLink needs LocalFileSystem files")
+	}
+	return os.Symlink(oldPath, newPath)
+}
+
+func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err error) {
+	fileFs, filePath := file.ParseRawURI()
+	if fileFs != local {
+		return "", errors.New("LocalFileSystem.CreateSymbolicLink needs LocalFileSystem files")
+	}
+	linkedPath, err := os.Readlink(filePath)
+	if err != nil {
+		return "", err
+	}
+	return File(linkedPath), nil
+}
+
 func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	info := local.Stat(dirPath)
 	if !info.Exists {
