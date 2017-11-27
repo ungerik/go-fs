@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"errors"
 	"fmt"
 	"io"
 )
@@ -129,4 +130,89 @@ type FileCallback func(File) error
 
 func (f FileCallback) FileInfoCallback(file File, info FileInfo) error {
 	return f(file)
+}
+
+// SameFile returns if a and b describe the same file or directory
+func SameFile(a, b File) bool {
+	aFS, aPath := a.ParseRawURI()
+	bFS, bPath := b.ParseRawURI()
+	return aFS == bFS && aPath == bPath
+}
+
+// IdenticalDirContents returns true if the files in dirA and dirB are identical in size and content.
+// If recursive is true, then directories will be considered too.
+func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err error) {
+	if SameFile(dirA, dirB) {
+		return true, nil
+	}
+
+	fileInfosA := make(map[string]FileInfo)
+	err = dirA.ListDirInfo(func(file File, info FileInfo) error {
+		if !info.IsDir || recursive {
+			fileInfosA[info.Name] = info
+		}
+		return nil
+	})
+	if err != nil {
+		// fmt.Println(1)
+		return false, err
+	}
+
+	fileInfosB := make(map[string]FileInfo, len(fileInfosA))
+	hasDiff := errors.New("hasDiff")
+	err = dirB.ListDirInfo(func(file File, info FileInfo) error {
+		if !info.IsDir || recursive {
+			infoA, found := fileInfosA[info.Name]
+			if !found || info.Size != infoA.Size || info.IsDir != infoA.IsDir {
+				return hasDiff
+			}
+			fileInfosB[info.Name] = info
+		}
+		return nil
+	})
+	if err == hasDiff || len(fileInfosB) != len(fileInfosA) {
+		// fmt.Println(2)
+		return false, nil
+	}
+	if err != nil {
+		// fmt.Println(3)
+		return false, err
+	}
+
+	for filename, infoA := range fileInfosA {
+		infoB := fileInfosB[filename]
+
+		if recursive && infoA.IsDir {
+			identical, err = IdenticalDirContents(dirA.Relative(filename), dirB.Relative(filename), true)
+			if !identical {
+				// fmt.Println(4)
+				return false, err
+			}
+		} else {
+			hashA := infoA.ContentHash
+			if hashA == "" {
+				hashA, err = dirA.Relative(filename).ContentHash()
+				if err != nil {
+					// fmt.Println(5)
+					return false, err
+				}
+			}
+			hashB := infoB.ContentHash
+			if hashB == "" {
+				hashB, err = dirB.Relative(filename).ContentHash()
+				if err != nil {
+					// fmt.Println(6)
+					return false, err
+				}
+			}
+
+			if hashA != hashB {
+				// fmt.Println(7)
+				return false, nil
+			}
+		}
+	}
+
+	// fmt.Println(8)
+	return true, nil
 }
