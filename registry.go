@@ -1,6 +1,11 @@
 package fs
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
+
+const PrefixSeparator = "://"
 
 var (
 	// Local is the local file system
@@ -17,15 +22,23 @@ var (
 		Local.Prefix():   Local,
 		Invalid.Prefix(): Invalid,
 	}
+
+	registryMtx sync.RWMutex
 )
 
 // Register adds fs to the Registry of file systems.
 func Register(fs FileSystem) {
+	registryMtx.Lock()
+	defer registryMtx.Unlock()
+
 	Registry[fs.Prefix()] = fs
 }
 
 // Unregister removes fs from the Registry of file systems.
 func Unregister(fs FileSystem) {
+	registryMtx.Lock()
+	defer registryMtx.Unlock()
+
 	delete(Registry, fs.Prefix())
 }
 
@@ -46,10 +59,21 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	if uri == "" {
 		return Invalid, ""
 	}
-	for prefix, fs := range Registry {
-		if strings.HasPrefix(uri, prefix) {
-			return fs, uri[len(prefix):]
+
+	i := strings.Index(uri, PrefixSeparator)
+	if i > 0 {
+		i += len(PrefixSeparator)
+		prefix := uri[:i]
+
+		registryMtx.RLock()
+		defer registryMtx.RUnlock()
+
+		if fs, ok := Registry[prefix]; ok {
+			return fs, uri[i:]
+		} else {
+			return Invalid, ""
 		}
 	}
+
 	return Local, uri
 }
