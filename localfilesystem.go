@@ -131,6 +131,10 @@ func (local *LocalFileSystem) DirAndName(filePath string) (dir, name string) {
 	return fsimpl.DirAndName(filePath, len(filepath.VolumeName(filePath)), Separator)
 }
 
+func (local *LocalFileSystem) VolumeName(filePath string) string {
+	return filepath.VolumeName(filePath)
+}
+
 // Stat returns FileInfo
 func (local *LocalFileSystem) Stat(filePath string) FileInfo {
 	info, err := os.Stat(filePath)
@@ -328,7 +332,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions)
-	return wrapLocalErrNotExist(dirPath, os.MkdirAll(dirPath, os.FileMode(p)))
+	return wrapLocalErrNotExist(dirPath, os.Mkdir(dirPath, os.FileMode(p)))
 }
 
 func (local *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {

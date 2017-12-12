@@ -81,6 +81,10 @@ func (invalid InvalidFileSystem) DirAndName(filePath string) (dir, name string) 
 	return "", ""
 }
 
+func (InvalidFileSystem) VolumeName(filePath string) string {
+	return ""
+}
+
 func (invalid InvalidFileSystem) Stat(filePath string) FileInfo {
 	return FileInfo{}
 }
