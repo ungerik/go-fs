@@ -18,6 +18,23 @@ func TestFile_MakeAllDirs(t *testing.T) {
 
 	baseDir := TempDir()
 
+	err := baseDir.MakeAllDirs()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	file := baseDir.Relative(uuid.NewV4().String())
+	err = file.Touch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Remove()
+
+	err = file.MakeAllDirs()
+	if !IsErrIsNotDirectory(err) {
+		t.Fatalf("should be ErrIsNotDirectory but is %s", err)
+	}
+
 	pathParts := make([]string, 5)
 	for i := range pathParts {
 		pathParts[i] = uuid.NewV4().String()
@@ -25,7 +42,7 @@ func TestFile_MakeAllDirs(t *testing.T) {
 
 	dir := baseDir.Relative(pathParts...)
 
-	err := dir.MakeAllDirs()
+	err = dir.MakeAllDirs()
 	if err != nil {
 		t.Fatal(err)
 	}

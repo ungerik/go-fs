@@ -78,6 +78,15 @@ func (err *ErrIsDirectory) File() File {
 	return err.file
 }
 
+// IsErrIsDirectory returns if err is of type *ErrIsDirectory
+func IsErrIsDirectory(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, isIt := err.(*ErrIsDirectory)
+	return isIt
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // ErrIsNotDirectory
 
@@ -99,4 +108,13 @@ func (err *ErrIsNotDirectory) Error() string {
 // File returns the file that error concerns
 func (err *ErrIsNotDirectory) File() File {
 	return err.file
+}
+
+// IsErrIsNotDirectory returns if err is of type *ErrIsNotDirectory
+func IsErrIsNotDirectory(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, isIt := err.(*ErrIsNotDirectory)
+	return isIt
 }

@@ -45,7 +45,13 @@ type FileSystem interface {
 	// The match per pattern works like path.Match or filepath.Match
 	MatchAnyPattern(name string, patterns []string) (bool, error)
 
+	// DirAndName returns the parent directory of filePath and the name with that directory of the last filePath element.
+	// If filePath is the root of the file systeme, then an empty string will be returned for name.
 	DirAndName(filePath string) (dir, name string)
+
+	// VolumeName returns the name of the volume at the beginning of the filePath,
+	// or an empty string if the filePath has no volume.
+	// A volume is for example "C:" on Windows
 	VolumeName(filePath string) string
 
 	// Stat returns FileInfo

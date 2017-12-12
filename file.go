@@ -119,10 +119,20 @@ func (file File) Dir() File {
 	return dir
 }
 
+// DirAndName returns the parent directory of filePath and the name with that directory of the last filePath element.
+// If filePath is the root of the file systeme, then an empty string will be returned for name.
 func (file File) DirAndName() (dir File, name string) {
 	fileSystem, path := file.ParseRawURI()
 	dirPath, name := fileSystem.DirAndName(path)
 	return File(dirPath), name
+}
+
+// VolumeName returns the name of the volume at the beginning of the file path,
+// or an empty string if the path has no volume.
+// A volume is for example "C:" on Windows
+func (file File) VolumeName() string {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.VolumeName(path)
 }
 
 // Ext returns the extension of file name including the point, or an empty string.
@@ -395,18 +405,27 @@ func (file File) MakeDir(perm ...Permissions) error {
 	return fileSystem.MakeDir(path, perm)
 }
 
-// MakeAllDirs creates all directories up to this one
+// MakeAllDirs creates all directories up to this one,
+// does not return an error if the directories already exist
 func (file File) MakeAllDirs(perm ...Permissions) (err error) {
-	if file == "" || file.IsDir() {
+	if file == "" {
 		return nil
 	}
-	if file.Exists() {
-		return NewErrIsDirectory(file)
+	info := file.Stat()
+	if info.IsDir {
+		return nil
+	} else if info.Exists {
+		return NewErrIsNotDirectory(file)
 	}
 
-	err = file.Dir().MakeAllDirs(perm...)
-	if err != nil {
-		return err
+	dir, name := file.DirAndName()
+	if name != "" {
+		// if name != "" then dir is not the root
+		// so we can attempt to make the dir
+		err = dir.MakeAllDirs(perm...)
+		if err != nil {
+			return err
+		}
 	}
 	return file.MakeDir(perm...)
 }
