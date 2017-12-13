@@ -401,6 +401,10 @@ func (file File) Touch(perm ...Permissions) error {
 }
 
 func (file File) MakeDir(perm ...Permissions) error {
+	if file.IsDir() {
+		return nil
+	}
+
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.MakeDir(path, perm)
 }

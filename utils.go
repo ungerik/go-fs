@@ -87,10 +87,12 @@ func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
 		return fmt.Errorf("Can't copy a directory (%s) over a file (%s)", src.URL(), dest.URL())
 	}
 
-	// No error if dest is already a dir
-	err := dest.MakeDir()
-	if err != nil {
-		return err
+	// TODO better check
+	if !dest.Exists() {
+		err := dest.MakeDir()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Copy directories recursive
@@ -154,7 +156,6 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 		return nil
 	})
 	if err != nil {
-		// fmt.Println(1)
 		return false, err
 	}
 
@@ -171,11 +172,9 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 		return nil
 	})
 	if err == hasDiff || len(fileInfosB) != len(fileInfosA) {
-		// fmt.Println(2)
 		return false, nil
 	}
 	if err != nil {
-		// fmt.Println(3)
 		return false, err
 	}
 
@@ -185,7 +184,6 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 		if recursive && infoA.IsDir {
 			identical, err = IdenticalDirContents(dirA.Relative(filename), dirB.Relative(filename), true)
 			if !identical {
-				// fmt.Println(4)
 				return false, err
 			}
 		} else {
@@ -193,7 +191,6 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 			if hashA == "" {
 				hashA, err = dirA.Relative(filename).ContentHash()
 				if err != nil {
-					// fmt.Println(5)
 					return false, err
 				}
 			}
@@ -201,18 +198,15 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 			if hashB == "" {
 				hashB, err = dirB.Relative(filename).ContentHash()
 				if err != nil {
-					// fmt.Println(6)
 					return false, err
 				}
 			}
 
 			if hashA != hashB {
-				// fmt.Println(7)
 				return false, nil
 			}
 		}
 	}
 
-	// fmt.Println(8)
 	return true, nil
 }

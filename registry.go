@@ -62,17 +62,23 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 
 	i := strings.Index(uri, PrefixSeparator)
 	if i > 0 {
-		i += len(PrefixSeparator)
-		prefix := uri[:i]
+		// i += len(PrefixSeparator)
+		// prefix := uri[:i]
 
 		registryMtx.RLock()
 		defer registryMtx.RUnlock()
 
-		if fs, ok := Registry[prefix]; ok {
-			return fs, uri[i:]
-		} else {
-			return Invalid, ""
+		for prefix, fs := range Registry {
+			if strings.HasPrefix(uri, prefix) {
+				return fs, uri[len(prefix):]
+			}
 		}
+
+		// if fs, ok := Registry[prefix]; ok {
+		// 	return fs, uri[i:]
+		// } else {
+		// 	return Invalid, ""
+		// }
 	}
 
 	return Local, uri
