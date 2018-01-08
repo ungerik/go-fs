@@ -4,7 +4,7 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/satori/go.uuid"
+	"github.com/ungerik/go-uuid"
 )
 
 // SubFileSystemPrefix is the URI prefix used to identify SubFileSystem files

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/satori/go.uuid"
-	"github.com/ungerik/go-fs"
+	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
+	"github.com/ungerik/go-uuid"
 )
 
 const (
