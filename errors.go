@@ -48,11 +48,8 @@ func (err *ErrDoesNotExist) File() File {
 
 // IsErrDoesNotExist returns if err is of type *ErrDoesNotExist
 func IsErrDoesNotExist(err error) bool {
-	if err == nil {
-		return false
-	}
-	_, isIt := err.(*ErrDoesNotExist)
-	return isIt
+	_, is := err.(*ErrDoesNotExist)
+	return is
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -80,11 +77,8 @@ func (err *ErrIsDirectory) File() File {
 
 // IsErrIsDirectory returns if err is of type *ErrIsDirectory
 func IsErrIsDirectory(err error) bool {
-	if err == nil {
-		return false
-	}
-	_, isIt := err.(*ErrIsDirectory)
-	return isIt
+	_, is := err.(*ErrIsDirectory)
+	return is
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -115,6 +109,6 @@ func IsErrIsNotDirectory(err error) bool {
 	if err == nil {
 		return false
 	}
-	_, isIt := err.(*ErrIsNotDirectory)
-	return isIt
+	_, is := err.(*ErrIsNotDirectory)
+	return is
 }
