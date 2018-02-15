@@ -15,6 +15,32 @@ const (
 	ErrReadOnlyFileSystem = ConstError("file system is read-only")
 )
 
+// errCause returns the underlying cause of the error, if possible.
+// An error value has a cause if it implements the following
+// interface:
+//
+//     type causer interface {
+//            Cause() error
+//     }
+//
+// If the error does not implement Cause, the original error will
+// be returned. If the error is nil, nil will be returned without further
+// investigation.
+func errCause(err error) error {
+	type causer interface {
+		Cause() error
+	}
+
+	for err != nil {
+		cause, ok := err.(causer)
+		if !ok {
+			break
+		}
+		err = cause.Cause()
+	}
+	return err
+}
+
 // FileError is an interface that is implemented by all errors
 // that can reference a file.
 type FileError interface {
@@ -48,7 +74,7 @@ func (err *ErrDoesNotExist) File() File {
 
 // IsErrDoesNotExist returns if err is of type *ErrDoesNotExist
 func IsErrDoesNotExist(err error) bool {
-	_, is := err.(*ErrDoesNotExist)
+	_, is := errCause(err).(*ErrDoesNotExist)
 	return is
 }
 
@@ -77,7 +103,7 @@ func (err *ErrIsDirectory) File() File {
 
 // IsErrIsDirectory returns if err is of type *ErrIsDirectory
 func IsErrIsDirectory(err error) bool {
-	_, is := err.(*ErrIsDirectory)
+	_, is := errCause(err).(*ErrIsDirectory)
 	return is
 }
 
@@ -109,6 +135,6 @@ func IsErrIsNotDirectory(err error) bool {
 	if err == nil {
 		return false
 	}
-	_, is := err.(*ErrIsNotDirectory)
+	_, is := errCause(err).(*ErrIsNotDirectory)
 	return is
 }
