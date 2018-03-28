@@ -17,6 +17,14 @@ func (invalid InvalidFileSystem) IsReadOnly() bool {
 	return true
 }
 
+func (invalid InvalidFileSystem) IsWriteOnly() bool {
+	return false
+}
+
+func (invalid InvalidFileSystem) Root() File {
+	return ""
+}
+
 func (invalid InvalidFileSystem) ID() (string, error) {
 	return "invalid file system", nil
 }

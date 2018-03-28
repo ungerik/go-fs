@@ -35,6 +35,14 @@ func (subfs *SubFileSystem) IsReadOnly() bool {
 	return subfs.Parent.IsReadOnly()
 }
 
+func (subfs *SubFileSystem) IsWriteOnly() bool {
+	return subfs.Parent.IsWriteOnly()
+}
+
+func (subfs *SubFileSystem) Root() File {
+	return File(subfs.Parent.Separator())
+}
+
 func (subfs *SubFileSystem) ID() (string, error) {
 	parentID, err := subfs.Parent.ID()
 	if err != nil {

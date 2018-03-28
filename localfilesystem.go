@@ -50,6 +50,14 @@ func (local *LocalFileSystem) IsReadOnly() bool {
 	return false
 }
 
+func (local *LocalFileSystem) IsWriteOnly() bool {
+	return false
+}
+
+func (local *LocalFileSystem) Root() File {
+	return localRoot
+}
+
 func (local *LocalFileSystem) ID() (string, error) {
 	return "/", nil // TODO something more meaningfull like platform dependend the ID of the actual file system
 }

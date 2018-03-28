@@ -8,6 +8,9 @@ import (
 // a file system to be accessable via this package.
 type FileSystem interface {
 	IsReadOnly() bool
+	IsWriteOnly() bool
+
+	Root() File
 
 	// ID returns a unique identifyer for the FileSystem
 	ID() (string, error)

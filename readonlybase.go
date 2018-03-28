@@ -13,6 +13,10 @@ func (*ReadOnlyBase) IsReadOnly() bool {
 	return true
 }
 
+func (*ReadOnlyBase) IsWriteOnly() bool {
+	return false
+}
+
 func (*ReadOnlyBase) SetPermissions(filePath string, perm Permissions) error {
 	return ErrReadOnlyFileSystem
 }

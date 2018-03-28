@@ -2,6 +2,8 @@ package fs
 
 import "syscall"
 
+const localRoot = `C:\`
+
 func hasFileAttributeHidden(filePath string) (bool, error) {
 	p, e := syscall.UTF16PtrFromString(filePath)
 	if e != nil {
