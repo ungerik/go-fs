@@ -26,7 +26,7 @@ func NewSubFileSystem(parent FileSystem, basePath string) *SubFileSystem {
 	return subfs
 }
 
-func (subfs *SubFileSystem) Destroy() error {
+func (subfs *SubFileSystem) Close() error {
 	Unregister(subfs)
 	return nil
 }
@@ -177,6 +177,7 @@ func (subfs *SubFileSystem) Append(filePath string, data []byte, perm []Permissi
 		return err
 	}
 	defer writer.Close()
+
 	n, err := writer.Write(data)
 	if err == nil && n < len(data) {
 		return io.ErrShortWrite
@@ -184,11 +185,11 @@ func (subfs *SubFileSystem) Append(filePath string, data []byte, perm []Permissi
 	return err
 }
 
-func (subfs *SubFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
+func (subfs *SubFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
+func (subfs *SubFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	panic("not implemented")
 }
 

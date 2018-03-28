@@ -149,11 +149,11 @@ func (invalid InvalidFileSystem) Append(filePath string, data []byte, perm []Per
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
+func (invalid InvalidFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
+func (invalid InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 

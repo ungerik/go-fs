@@ -358,12 +358,12 @@ func (local *LocalFileSystem) Append(filePath string, data []byte, perm []Permis
 	return err
 }
 
-func (local *LocalFileSystem) OpenReader(filePath string) (ReadSeekCloser, error) {
+func (local *LocalFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	f, err := os.OpenFile(filePath, os.O_RDONLY, 0)
 	return f, wrapLocalErrNotExist(filePath, err)
 }
 
-func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
+func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(p))
 	return f, wrapLocalErrNotExist(filePath, err)

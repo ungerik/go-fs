@@ -489,12 +489,31 @@ func (file File) Append(data []byte, perm ...Permissions) error {
 	return fileSystem.Append(path, data, perm)
 }
 
-func (file File) OpenReader() (ReadSeekCloser, error) {
+func (file File) OpenReader() (io.ReadCloser, error) {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.OpenReader(path)
 }
 
-func (file File) OpenWriter(perm ...Permissions) (WriteSeekCloser, error) {
+// OpenReadSeeker returns a ReadSeekCloser.
+// If the FileSystem implementation doesn't support ReadSeekCloser,
+// then the complete file is read into memory and wrapped with a ReadSeekCloser.
+// Warning: this can use up a lot of memory for big files.
+func (file File) OpenReadSeeker() (ReadSeekCloser, error) {
+	fileSystem, path := file.ParseRawURI()
+	readCloser, err := fileSystem.OpenReader(path)
+	if err != nil {
+		return nil, err
+	}
+	if r, ok := readCloser.(ReadSeekCloser); ok {
+		return r, nil
+	}
+
+	defer readCloser.Close()
+
+	return fsimpl.NewReadonlyFileBufferReadAll(readCloser)
+}
+
+func (file File) OpenWriter(perm ...Permissions) (io.WriteCloser, error) {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.OpenWriter(path, perm)
 }

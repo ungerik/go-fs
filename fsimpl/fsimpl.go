@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"path"
 	"strings"
 )
@@ -62,6 +63,14 @@ type ReadonlyFileBuffer struct {
 // NewReadonlyFileBuffer returns a new ReadonlyFileBuffer
 func NewReadonlyFileBuffer(data []byte) *ReadonlyFileBuffer {
 	return &ReadonlyFileBuffer{data: data}
+}
+
+func NewReadonlyFileBufferReadAll(reader io.Reader) (*ReadonlyFileBuffer, error) {
+	data, err := ioutil.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	return NewReadonlyFileBuffer(data), nil
 }
 
 // NewReadonlyFileBufferWithClose returns a new ReadonlyFileBuffer
@@ -130,12 +139,15 @@ func (buf *ReadonlyFileBuffer) Seek(offset int64, whence int) (newPos int64, err
 	return newPos, nil
 }
 
-// Close is a no-op
-func (buf *ReadonlyFileBuffer) Close() error {
-	if buf.close == nil {
-		return nil
+// Close will free the internal buffer
+func (buf *ReadonlyFileBuffer) Close() (err error) {
+	if buf.close != nil {
+		err = buf.close()
 	}
-	return buf.close()
+	buf.data = nil
+	buf.pos = 0
+	buf.close = nil
+	return err
 }
 
 // FileBuffer is a memory buffer that implements ReadWriteSeekCloser which combines the interfaces
@@ -215,5 +227,5 @@ func ContentHash(r io.Reader) (string, error) {
 // ContentHashBytes returns a Dropbox compatible content hash for a byte slice.
 // See https://www.dropbox.com/developers/reference/content-hash
 func ContentHashBytes(buf []byte) (string, error) {
-	return ContentHash(bytes.NewBuffer(buf))
+	return ContentHash(bytes.NewReader(buf))
 }

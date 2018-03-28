@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"testing"
 
-	uuid "github.com/satori/go.uuid"
+	uuid "github.com/ungerik/go-uuid"
 )
 
 func randFileCount() int {

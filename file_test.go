@@ -3,7 +3,7 @@ package fs
 import (
 	"testing"
 
-	uuid "github.com/satori/go.uuid"
+	uuid "github.com/ungerik/go-uuid"
 )
 
 func TestFile_MakeAllDirs(t *testing.T) {

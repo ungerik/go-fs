@@ -1,8 +1,8 @@
 package multipartfs
 
 import (
-	"bytes"
 	"io"
+	"io/ioutil"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -45,7 +45,7 @@ func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSyst
 	return mpfs, err
 }
 
-func (mpfs *MultipartFileSystem) Destroy() error {
+func (mpfs *MultipartFileSystem) Close() error {
 	fs.Unregister(mpfs)
 	return mpfs.Form.RemoveAll()
 }
@@ -263,15 +263,11 @@ func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
 		return nil, err
 	}
 	defer file.Close()
-	var buf bytes.Buffer
-	_, err = io.Copy(&buf, file)
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+
+	return ioutil.ReadAll(file)
 }
 
-func (mpfs *MultipartFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, error) {
+func (mpfs *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	file, err := mpfs.GetMultipartFileHeader(filePath)
 	if err != nil {
 		return nil, err

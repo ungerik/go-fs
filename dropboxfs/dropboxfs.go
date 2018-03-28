@@ -11,11 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tj/go-dropbox"
-	"github.com/ungerik/go-uuid"
-
-	"github.com/ungerik/go-fs"
+	dropbox "github.com/tj/go-dropbox"
+	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
+	uuid "github.com/ungerik/go-uuid"
 )
 
 const (
@@ -58,7 +57,7 @@ func (dbfs *DropboxFileSystem) wrapErrNotExist(filePath string, err error) error
 	return err
 }
 
-func (dbfs *DropboxFileSystem) Destroy() error {
+func (dbfs *DropboxFileSystem) Close() error {
 	fs.Unregister(dbfs)
 	return nil
 }
@@ -316,6 +315,7 @@ func (dbfs *DropboxFileSystem) ReadAll(filePath string) ([]byte, error) {
 		return nil, dbfs.wrapErrNotExist(filePath, err)
 	}
 	defer out.Body.Close()
+
 	return ioutil.ReadAll(out.Body)
 }
 
@@ -344,7 +344,7 @@ func (dbfs *DropboxFileSystem) Append(filePath string, data []byte, perm []fs.Pe
 	return err
 }
 
-func (dbfs *DropboxFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, error) {
+func (dbfs *DropboxFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	data, err := dbfs.ReadAll(filePath)
 	if err != nil {
 		return nil, err
@@ -352,7 +352,7 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (fs.ReadSeekCloser, e
 	return fsimpl.NewReadonlyFileBuffer(data), nil
 }
 
-func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteSeekCloser, error) {
+func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
 	if !dbfs.Stat(path.Dir(filePath)).IsDir {
 		return nil, fs.NewErrIsNotDirectory(dbfs.JoinCleanFile(path.Dir(filePath)))
 	}
