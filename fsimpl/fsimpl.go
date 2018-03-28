@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/url"
 	"path"
 	"strings"
 )
@@ -228,4 +229,26 @@ func ContentHash(r io.Reader) (string, error) {
 // See https://www.dropbox.com/developers/reference/content-hash
 func ContentHashBytes(buf []byte) (string, error) {
 	return ContentHash(bytes.NewReader(buf))
+}
+
+func JoinCleanPath(uriParts []string, prefix, separator string) string {
+	if len(uriParts) > 0 {
+		uriParts[0] = strings.TrimPrefix(uriParts[0], prefix)
+	}
+	cleanPath := path.Join(uriParts...)
+	unescPath, err := url.PathUnescape(cleanPath)
+	if err == nil {
+		cleanPath = unescPath
+	}
+	if !strings.HasPrefix(cleanPath, separator) {
+		cleanPath = separator + cleanPath
+	}
+	return path.Clean(cleanPath)
+}
+
+func SplitPath(filePath, prefix, separator string) []string {
+	filePath = strings.TrimPrefix(filePath, prefix)
+	filePath = strings.TrimPrefix(filePath, separator)
+	filePath = strings.TrimSuffix(filePath, separator)
+	return strings.Split(filePath, separator)
 }

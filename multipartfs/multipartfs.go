@@ -5,9 +5,7 @@ import (
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"path"
-	"strings"
 	"time"
 
 	fs "github.com/ungerik/go-fs"
@@ -55,7 +53,7 @@ func (mpfs *MultipartFileSystem) Close() error {
 func (mpfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
 	ff, _ := mpfs.Form.File[name]
 	if len(ff) == 0 {
-		return "", fs.NewErrDoesNotExist(mpfs.JoinCleanFile(name))
+		return "", fs.NewErrDoesNotExist(mpfs.File(name))
 	}
 	return mpfs.JoinCleanFile(name, ff[0].Filename), nil
 }
@@ -76,7 +74,7 @@ func (mpfs *MultipartFileSystem) FormFiles(name string) (files []fs.File) {
 func (mpfs *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multipart.FileHeader, error) {
 	parts := mpfs.SplitPath(filePath)
 	if len(parts) != 2 {
-		return nil, fs.NewErrDoesNotExist(mpfs.JoinCleanFile(filePath))
+		return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
 	}
 	dir, filename := parts[0], parts[1]
 	ff, _ := mpfs.Form.File[dir]
@@ -85,7 +83,11 @@ func (mpfs *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multi
 			return f, nil
 		}
 	}
-	return nil, fs.NewErrDoesNotExist(mpfs.JoinCleanFile(filePath))
+	return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
+}
+
+func (mpfs *MultipartFileSystem) Root() fs.File {
+	return fs.File(mpfs.prefix + Separator)
 }
 
 func (mpfs *MultipartFileSystem) ID() (string, error) {
@@ -105,6 +107,10 @@ func (mpfs *MultipartFileSystem) String() string {
 	return mpfs.Name() + " with prefix " + mpfs.Prefix()
 }
 
+func (mpfs *MultipartFileSystem) File(filePath string) fs.File {
+	return mpfs.JoinCleanFile(filePath)
+}
+
 func (mpfs *MultipartFileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(mpfs.prefix + mpfs.JoinCleanPath(uriParts...))
 }
@@ -114,22 +120,11 @@ func (mpfs *MultipartFileSystem) URL(cleanPath string) string {
 }
 
 func (mpfs *MultipartFileSystem) JoinCleanPath(uriParts ...string) string {
-	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], mpfs.prefix)
-	}
-	cleanPath := path.Join(uriParts...)
-	unescPath, err := url.PathUnescape(cleanPath)
-	if err == nil {
-		cleanPath = unescPath
-	}
-	return path.Clean(cleanPath)
+	return fsimpl.JoinCleanPath(uriParts, mpfs.prefix, Separator)
 }
 
 func (mpfs *MultipartFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, mpfs.prefix)
-	filePath = strings.TrimPrefix(filePath, Separator)
-	filePath = strings.TrimSuffix(filePath, Separator)
-	return strings.Split(filePath, Separator)
+	return fsimpl.SplitPath(filePath, mpfs.prefix, Separator)
 }
 
 func (*MultipartFileSystem) Separator() string {
@@ -209,7 +204,7 @@ func (mpfs *MultipartFileSystem) ListDirInfo(dirPath string, callback func(fs.Fi
 	switch len(parts) {
 	case 0:
 		for fileDir := range mpfs.Form.File {
-			file := mpfs.JoinCleanFile(fileDir)
+			file := mpfs.File(fileDir)
 			info := mpfs.Stat(fileDir)
 			err = callback(file, info)
 			if err != nil {
@@ -229,12 +224,12 @@ func (mpfs *MultipartFileSystem) ListDirInfo(dirPath string, callback func(fs.Fi
 				}
 			}
 		} else {
-			err = fs.NewErrDoesNotExist(mpfs.JoinCleanFile(dirPath))
+			err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
 		}
 	case 2:
-		err = fs.NewErrIsNotDirectory(mpfs.JoinCleanFile(dirPath))
+		err = fs.NewErrIsNotDirectory(mpfs.File(dirPath))
 	default:
-		err = fs.NewErrDoesNotExist(mpfs.JoinCleanFile(dirPath))
+		err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
 	}
 	return err
 }

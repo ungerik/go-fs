@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
-	"net/url"
 	"path"
 	"path/filepath"
 	"strings"
@@ -52,7 +51,7 @@ func New(accessToken string, cacheTimeout time.Duration) *DropboxFileSystem {
 
 func (dbfs *DropboxFileSystem) wrapErrNotExist(filePath string, err error) error {
 	if err != nil && strings.HasPrefix(err.Error(), "path/not_found/") {
-		return fs.NewErrDoesNotExist(dbfs.JoinCleanFile(filePath))
+		return fs.NewErrDoesNotExist(dbfs.File(filePath))
 	}
 	return err
 }
@@ -64,6 +63,14 @@ func (dbfs *DropboxFileSystem) Close() error {
 
 func (dbfs *DropboxFileSystem) IsReadOnly() bool {
 	return false
+}
+
+func (dbfs *DropboxFileSystem) IsWriteOnly() bool {
+	return false
+}
+
+func (dbfs *DropboxFileSystem) Root() fs.File {
+	return fs.File(dbfs.prefix + Separator)
 }
 
 func (dbfs *DropboxFileSystem) ID() (string, error) {
@@ -89,6 +96,10 @@ func (dbfs *DropboxFileSystem) String() string {
 	return dbfs.Name() + " with prefix " + dbfs.Prefix()
 }
 
+func (dbfs *DropboxFileSystem) File(filePath string) fs.File {
+	return dbfs.JoinCleanFile(filePath)
+}
+
 func (dbfs *DropboxFileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(dbfs.prefix + dbfs.JoinCleanPath(uriParts...))
 }
@@ -98,23 +109,11 @@ func (dbfs *DropboxFileSystem) URL(cleanPath string) string {
 }
 
 func (dbfs *DropboxFileSystem) JoinCleanPath(uriParts ...string) string {
-	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], dbfs.prefix)
-	}
-	cleanPath := path.Join(uriParts...)
-	unescPath, err := url.PathUnescape(cleanPath)
-	if err == nil {
-		cleanPath = unescPath
-	}
-	cleanPath = path.Clean(cleanPath)
-	return cleanPath
+	return fsimpl.JoinCleanPath(uriParts, dbfs.prefix, Separator)
 }
 
 func (dbfs *DropboxFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, dbfs.prefix)
-	filePath = strings.TrimPrefix(filePath, Separator)
-	filePath = strings.TrimSuffix(filePath, Separator)
-	return strings.Split(filePath, Separator)
+	return fsimpl.SplitPath(filePath, dbfs.prefix, Separator)
 }
 
 func (dbfs *DropboxFileSystem) Separator() string {
@@ -209,10 +208,10 @@ func (dbfs *DropboxFileSystem) IsSymbolicLink(filePath string) bool {
 func (dbfs *DropboxFileSystem) listDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
 	info := dbfs.Stat(dirPath)
 	if !info.Exists {
-		return fs.NewErrDoesNotExist(dbfs.JoinCleanFile(dirPath))
+		return fs.NewErrDoesNotExist(dbfs.File(dirPath))
 	}
 	if !info.IsDir {
-		return fs.NewErrIsNotDirectory(dbfs.JoinCleanFile(dirPath))
+		return fs.NewErrIsNotDirectory(dbfs.File(dirPath))
 	}
 
 	var cursor string
@@ -248,7 +247,7 @@ func (dbfs *DropboxFileSystem) listDirInfo(dirPath string, callback func(fs.File
 				if dbfs.fileInfoCache != nil {
 					dbfs.fileInfoCache.Put(entry.PathDisplay, &info)
 				}
-				file := dbfs.JoinCleanFile(entry.PathDisplay)
+				file := dbfs.File(entry.PathDisplay)
 				err = callback(file, info)
 			}
 			if err != nil {
@@ -354,7 +353,7 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (io.ReadCloser, error
 
 func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
 	if !dbfs.Stat(path.Dir(filePath)).IsDir {
-		return nil, fs.NewErrIsNotDirectory(dbfs.JoinCleanFile(path.Dir(filePath)))
+		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
 	}
 	var fileBuffer *fsimpl.FileBuffer
 	fileBuffer = fsimpl.NewFileBufferWithClose(nil, func() error {
@@ -391,10 +390,10 @@ func (dbfs *DropboxFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, err
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
 	info := dbfs.Stat(filePath)
 	if !info.Exists {
-		return fs.NewErrDoesNotExist(dbfs.JoinCleanFile(filePath))
+		return fs.NewErrDoesNotExist(dbfs.File(filePath))
 	}
 	if info.IsDir {
-		return fs.NewErrIsDirectory(dbfs.JoinCleanFile(filePath))
+		return fs.NewErrIsDirectory(dbfs.File(filePath))
 	}
 	if info.Size <= size {
 		return nil

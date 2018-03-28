@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
-	"net/url"
 	"path"
 	"strings"
 
@@ -79,6 +78,10 @@ func (zipfs *ZipFileSystem) IsWriteOnly() bool {
 	return zipfs.zipWriter != nil
 }
 
+func (zipfs *ZipFileSystem) Root() fs.File {
+	return fs.File(zipfs.prefix + Separator)
+}
+
 func (zipfs *ZipFileSystem) ID() (string, error) {
 	return zipfs.prefix, nil
 }
@@ -97,7 +100,7 @@ func (zipfs *ZipFileSystem) String() string {
 }
 
 func (zipfs *ZipFileSystem) File(filePath string) fs.File {
-	return fs.File(zipfs.prefix + zipfs.JoinCleanPath(filePath))
+	return zipfs.JoinCleanFile(filePath)
 }
 
 func (zipfs *ZipFileSystem) JoinCleanFile(uriParts ...string) fs.File {
@@ -109,26 +112,11 @@ func (zipfs *ZipFileSystem) URL(cleanPath string) string {
 }
 
 func (zipfs *ZipFileSystem) JoinCleanPath(uriParts ...string) string {
-	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], zipfs.prefix)
-	}
-	cleanPath := path.Join(uriParts...)
-	unescPath, err := url.PathUnescape(cleanPath)
-	if err == nil {
-		cleanPath = unescPath
-	}
-	cleanPath = path.Clean(cleanPath)
-	if !strings.HasPrefix(cleanPath, Separator) {
-		cleanPath = Separator + cleanPath
-	}
-	return cleanPath
+	return fsimpl.JoinCleanPath(uriParts, zipfs.prefix, Separator)
 }
 
 func (zipfs *ZipFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, zipfs.prefix)
-	filePath = strings.TrimPrefix(filePath, Separator)
-	filePath = strings.TrimSuffix(filePath, Separator)
-	return strings.Split(filePath, Separator)
+	return fsimpl.SplitPath(filePath, zipfs.prefix, Separator)
 }
 
 func (*ZipFileSystem) Separator() string {
