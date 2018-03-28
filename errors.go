@@ -13,6 +13,9 @@ const (
 
 	// ErrReadOnlyFileSystem is returned when a file system doesn't support writes
 	ErrReadOnlyFileSystem = ConstError("file system is read-only")
+
+	// ErrWriteOnlyFileSystem is returned when a file system doesn't support reads
+	ErrWriteOnlyFileSystem = ConstError("file system is write-only")
 )
 
 // errCause returns the underlying cause of the error, if possible.

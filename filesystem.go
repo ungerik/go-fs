@@ -88,8 +88,8 @@ type FileSystem interface {
 	WriteAll(filePath string, data []byte, perm []Permissions) error
 	Append(filePath string, data []byte, perm []Permissions) error
 
-	OpenReader(filePath string) (ReadSeekCloser, error)
-	OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error)
+	OpenReader(filePath string) (io.ReadCloser, error)
+	OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
 	OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
 	OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error)
 
@@ -117,9 +117,9 @@ type FileSystem interface {
 
 // TransientFileSystem is a file system that is created
 // to wrap a transient data source.
-// Calling its Destroy method will remove it from the Registry
+// Calling its Close method will remove it from the Registry
 // and undo other initializations.
 type TransientFileSystem interface {
 	FileSystem
-	Destroy() error
+	Close() error
 }

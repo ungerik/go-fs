@@ -45,7 +45,7 @@ func (*ReadOnlyBase) Append(filePath string, data []byte, perm []Permissions) er
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) OpenWriter(filePath string, perm []Permissions) (WriteSeekCloser, error) {
+func (*ReadOnlyBase) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, ErrReadOnlyFileSystem
 }
 
