@@ -83,6 +83,7 @@ func (local *LocalFileSystem) IsAbsPath(filePath string) bool {
 }
 
 func (local *LocalFileSystem) AbsPath(filePath string) string {
+	filePath = expandTilde(filePath)
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		panic(err)
@@ -110,6 +111,7 @@ func (local *LocalFileSystem) JoinCleanPath(uriParts ...string) string {
 
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
 	filePath = strings.TrimPrefix(filePath, LocalPrefix)
+	filePath = expandTilde(filePath)
 	filePath = strings.TrimPrefix(filePath, Separator)
 	filePath = strings.TrimSuffix(filePath, Separator)
 	return strings.Split(filePath, Separator)
@@ -136,15 +138,18 @@ func (local *LocalFileSystem) MatchAnyPattern(name string, patterns []string) (b
 }
 
 func (local *LocalFileSystem) DirAndName(filePath string) (dir, name string) {
+	filePath = expandTilde(filePath)
 	return fsimpl.DirAndName(filePath, len(filepath.VolumeName(filePath)), Separator)
 }
 
 func (local *LocalFileSystem) VolumeName(filePath string) string {
+	filePath = expandTilde(filePath)
 	return filepath.VolumeName(filePath)
 }
 
 // Stat returns FileInfo
 func (local *LocalFileSystem) Stat(filePath string) FileInfo {
+	filePath = expandTilde(filePath)
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return FileInfo{}
@@ -153,6 +158,7 @@ func (local *LocalFileSystem) Stat(filePath string) FileInfo {
 }
 
 func convertFileInfo(filePath string, info os.FileInfo) FileInfo {
+	filePath = expandTilde(filePath)
 	hidden, err := hasFileAttributeHidden(filePath)
 	if err != nil {
 		// Should not happen, this is why we are logging the error
@@ -174,6 +180,7 @@ func convertFileInfo(filePath string, info os.FileInfo) FileInfo {
 }
 
 func (local *LocalFileSystem) IsHidden(filePath string) bool {
+	filePath = expandTilde(filePath)
 	name := filepath.Base(filePath)
 	if len(name) > 0 && name[0] == '.' {
 		return true
@@ -187,6 +194,7 @@ func (local *LocalFileSystem) IsHidden(filePath string) bool {
 }
 
 func (local *LocalFileSystem) IsSymbolicLink(filePath string) bool {
+	filePath = expandTilde(filePath)
 	info, err := os.Lstat(filePath)
 	if err != nil {
 		return false
@@ -197,6 +205,8 @@ func (local *LocalFileSystem) IsSymbolicLink(filePath string) bool {
 func (local *LocalFileSystem) CreateSymbolicLink(oldFile, newFile File) error {
 	oldFs, oldPath := oldFile.ParseRawURI()
 	newFs, newPath := newFile.ParseRawURI()
+	oldPath = expandTilde(oldPath)
+	newPath = expandTilde(newPath)
 	if oldFs != local || newFs != local {
 		return errors.New("LocalFileSystem.CreateSymbolicLink needs LocalFileSystem files")
 	}
@@ -208,6 +218,7 @@ func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err erro
 	if fileFs != local {
 		return "", errors.New("LocalFileSystem.CreateSymbolicLink needs LocalFileSystem files")
 	}
+	filePath = expandTilde(filePath)
 	linkedPath, err := os.Readlink(filePath)
 	if err != nil {
 		return "", err
@@ -216,6 +227,7 @@ func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err erro
 }
 
 func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+	dirPath = expandTilde(dirPath)
 	info := local.Stat(dirPath)
 	if !info.Exists {
 		return NewErrDoesNotExist(File(dirPath))
@@ -256,10 +268,12 @@ func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, Fi
 }
 
 func (local *LocalFileSystem) ListDirInfoRecursive(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+	dirPath = expandTilde(dirPath)
 	return ListDirInfoRecursiveImpl(local, dirPath, callback, patterns)
 }
 
 func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {
+	dirPath = expandTilde(dirPath)
 	info := local.Stat(dirPath)
 	if !info.Exists {
 		return nil, NewErrDoesNotExist(File(dirPath))
@@ -310,27 +324,36 @@ func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []strin
 }
 
 func (local *LocalFileSystem) SetPermissions(filePath string, perm Permissions) error {
+	filePath = expandTilde(filePath)
 	return os.Chmod(filePath, os.FileMode(perm))
 }
 
 func (local *LocalFileSystem) User(filePath string) string {
+	filePath = expandTilde(filePath)
 
 	panic("not implemented")
 }
 
 func (local *LocalFileSystem) SetUser(filePath string, user string) error {
+	filePath = expandTilde(filePath)
+
 	panic("not implemented")
 }
 
 func (local *LocalFileSystem) Group(filePath string) string {
+	filePath = expandTilde(filePath)
+
 	panic("not implemented")
 }
 
 func (local *LocalFileSystem) SetGroup(filePath string, group string) error {
+	filePath = expandTilde(filePath)
+
 	panic("not implemented")
 }
 
 func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
+	filePath = expandTilde(filePath)
 	if local.Stat(filePath).Exists {
 		now := time.Now()
 		return os.Chtimes(filePath, now, now)
@@ -339,16 +362,19 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 }
 
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
+	dirPath = expandTilde(dirPath)
 	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions)
 	return wrapLocalErrNotExist(dirPath, os.Mkdir(dirPath, os.FileMode(p)))
 }
 
 func (local *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {
+	filePath = expandTilde(filePath)
 	data, err := ioutil.ReadFile(filePath)
 	return data, wrapLocalErrNotExist(filePath, err)
 }
 
 func (local *LocalFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
+	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	return wrapLocalErrNotExist(filePath, ioutil.WriteFile(filePath, data, os.FileMode(p)))
 }
@@ -367,35 +393,41 @@ func (local *LocalFileSystem) Append(filePath string, data []byte, perm []Permis
 }
 
 func (local *LocalFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+	filePath = expandTilde(filePath)
 	f, err := os.OpenFile(filePath, os.O_RDONLY, 0)
 	return f, wrapLocalErrNotExist(filePath, err)
 }
 
 func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(p))
 	return f, wrapLocalErrNotExist(filePath, err)
 }
 
 func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, os.FileMode(p))
 	return f, wrapLocalErrNotExist(filePath, err)
 }
 
 func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
+	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, os.FileMode(p))
 	return f, wrapLocalErrNotExist(filePath, err)
 }
 
 func (local *LocalFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
+	filePath = expandTilde(filePath)
 	return nil, ErrFileWatchNotSupported
 	// events := make(chan WatchEvent, 1)
 	// return events
 }
 
 func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
+	filePath = expandTilde(filePath)
 	info := local.Stat(filePath)
 	if !info.Exists {
 		return NewErrDoesNotExist(File(filePath))
@@ -409,22 +441,24 @@ func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
 	return os.Truncate(filePath, size)
 }
 
-func (local *LocalFileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
-	srcStat, _ := os.Stat(srcFile)
-	destStat, _ := os.Stat(destFile)
+func (local *LocalFileSystem) CopyFile(srcFilePath string, destFilePath string, buf *[]byte) error {
+	srcFilePath = expandTilde(srcFilePath)
+	destFilePath = expandTilde(destFilePath)
+	srcStat, _ := os.Stat(srcFilePath)
+	destStat, _ := os.Stat(destFilePath)
 	if os.SameFile(srcStat, destStat) {
 		return nil
 	}
 
-	r, err := os.OpenFile(srcFile, os.O_RDONLY, 0)
+	r, err := os.OpenFile(srcFilePath, os.O_RDONLY, 0)
 	if err != nil {
-		return wrapLocalErrNotExist(srcFile, err)
+		return wrapLocalErrNotExist(srcFilePath, err)
 	}
 	defer r.Close()
 
-	w, err := os.OpenFile(destFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm())
+	w, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm())
 	if err != nil {
-		return wrapLocalErrNotExist(srcFile, err)
+		return wrapLocalErrNotExist(srcFilePath, err)
 	}
 	defer w.Close()
 
@@ -439,6 +473,7 @@ func (local *LocalFileSystem) CopyFile(srcFile string, destFile string, buf *[]b
 }
 
 func (local *LocalFileSystem) Rename(filePath string, newName string) error {
+	filePath = expandTilde(filePath)
 	if strings.ContainsAny(newName, "/\\") {
 		return errors.New("newName for Rename() contains a path separators: " + newName)
 	}
@@ -450,6 +485,8 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) error {
 }
 
 func (local *LocalFileSystem) Move(filePath string, destPath string) error {
+	filePath = expandTilde(filePath)
+	destPath = expandTilde(destPath)
 	if !local.Stat(filePath).Exists {
 		return NewErrDoesNotExist(File(filePath))
 	}
@@ -460,5 +497,6 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 }
 
 func (local *LocalFileSystem) Remove(filePath string) error {
+	filePath = expandTilde(filePath)
 	return wrapLocalErrNotExist(filePath, os.Remove(filePath))
 }
