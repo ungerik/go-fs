@@ -6,7 +6,7 @@ import (
 	"io"
 )
 
-const copyBufferSize = 1024 * 1024
+const copyBufferSize = 1024 * 1024 * 4
 
 // CopyFile copies a single file between different file systems.
 // If dest has a path that does not exist, then the directories
@@ -42,7 +42,7 @@ func CopyFileBuf(src, dest File, buf *[]byte, perm ...Permissions) error {
 		}
 	}
 
-	// Use inner file system copy if possible
+	// Use same file system copy if possible
 	fs := src.FileSystem()
 	if fs == dest.FileSystem() {
 		return fs.CopyFile(src.Path(), dest.Path(), buf)
