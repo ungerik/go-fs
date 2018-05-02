@@ -364,7 +364,20 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	dirPath = expandTilde(dirPath)
 	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions) | extraDirPermissions
-	return wrapLocalErrNotExist(dirPath, os.Mkdir(dirPath, os.FileMode(p)))
+	err := wrapLocalErrNotExist(dirPath, os.Mkdir(dirPath, os.FileMode(p)))
+	if err != nil {
+		return err
+	}
+
+	if extraDirPermissions != 0 && p&OthersWrite != 0 {
+		// On Linux need additional chmod because os.Mkdir does not set OthersWrite bit
+		err = os.Chmod(dirPath, os.FileMode(p))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (local *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {
