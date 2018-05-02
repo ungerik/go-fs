@@ -6,29 +6,29 @@ var (
 	UserExecute          Permissions = 0100
 	UserWrite            Permissions = 0200
 	UserRead             Permissions = 0400
-	UserReadWrite        Permissions = UserRead + UserWrite
-	UserReadWriteExecute Permissions = UserRead + UserWrite + UserExecute
+	UserReadWrite        Permissions = UserRead | UserWrite
+	UserReadWriteExecute Permissions = UserRead | UserWrite | UserExecute
 
 	GroupExecute          Permissions = 0010
 	GroupWrite            Permissions = 0020
 	GroupRead             Permissions = 0040
-	GroupReadWrite        Permissions = GroupRead + GroupWrite
-	GroupReadWriteExecute Permissions = GroupRead + GroupWrite + GroupExecute
+	GroupReadWrite        Permissions = GroupRead | GroupWrite
+	GroupReadWriteExecute Permissions = GroupRead | GroupWrite | GroupExecute
 
-	UserAndGroupRead             Permissions = UserRead + GroupRead
-	UserAndGroupReadWrite        Permissions = UserReadWrite + GroupReadWrite
-	UserAndGroupReadWriteExecute Permissions = UserReadWriteExecute + GroupReadWriteExecute
+	UserAndGroupRead             Permissions = UserRead | GroupRead
+	UserAndGroupReadWrite        Permissions = UserReadWrite | GroupReadWrite
+	UserAndGroupReadWriteExecute Permissions = UserReadWriteExecute | GroupReadWriteExecute
 
 	OthersExecute          Permissions = 0001
 	OthersWrite            Permissions = 0002
 	OthersRead             Permissions = 0004
-	OthersReadWrite        Permissions = OthersRead + OthersWrite
-	OthersReadWriteExecute Permissions = OthersRead + OthersWrite + OthersExecute
+	OthersReadWrite        Permissions = OthersRead | OthersWrite
+	OthersReadWriteExecute Permissions = OthersRead | OthersWrite | OthersExecute
 
-	AllRead      = UserRead + GroupRead + OthersRead
-	AllWrite     = UserWrite + GroupWrite + OthersWrite
-	AllExecute   = UserExecute + GroupExecute + OthersExecute
-	AllReadWrite = UserReadWrite + GroupReadWrite + OthersReadWrite
+	AllRead      = UserRead | GroupRead | OthersRead
+	AllWrite     = UserWrite | GroupWrite | OthersWrite
+	AllExecute   = UserExecute | GroupExecute | OthersExecute
+	AllReadWrite = UserReadWrite | GroupReadWrite | OthersReadWrite
 )
 
 type Permissions int

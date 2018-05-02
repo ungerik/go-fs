@@ -11,7 +11,7 @@ var (
 	// Local is the local file system
 	Local = &LocalFileSystem{
 		DefaultCreatePermissions:    UserAndGroupReadWrite,
-		DefaultCreateDirPermissions: UserAndGroupReadWrite + AllExecute,
+		DefaultCreateDirPermissions: UserAndGroupReadWrite,
 	}
 
 	Invalid InvalidFileSystem

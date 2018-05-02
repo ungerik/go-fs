@@ -363,7 +363,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	dirPath = expandTilde(dirPath)
-	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions)
+	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions) | extraDirPermissions
 	return wrapLocalErrNotExist(dirPath, os.Mkdir(dirPath, os.FileMode(p)))
 }
 
