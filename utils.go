@@ -104,8 +104,8 @@ func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
 // FilesToURLs returns the URLs of a slice of Files.
 func FilesToURLs(files []File) (fileURLs []string) {
 	fileURLs = make([]string, len(files))
-	for i := range files {
-		fileURLs[i] = files[i].URL()
+	for i, file := range files {
+		fileURLs[i] = file.URL()
 	}
 	return fileURLs
 }
@@ -113,10 +113,19 @@ func FilesToURLs(files []File) (fileURLs []string) {
 // FilesToPaths returns the FileSystem specific paths of a slice of Files.
 func FilesToPaths(files []File) (paths []string) {
 	paths = make([]string, len(files))
-	for i := range files {
-		paths[i] = files[i].Path()
+	for i, file := range files {
+		paths[i] = file.Path()
 	}
 	return paths
+}
+
+// FilesToNames returns a string slice with the names pars from the files
+func FilesToNames(files []File) (names []string) {
+	names = make([]string, len(files))
+	for i, file := range files {
+		names[i] = file.Name()
+	}
+	return names
 }
 
 // URIsToFiles returns Files for the given fileURIs.
