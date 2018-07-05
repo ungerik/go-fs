@@ -480,13 +480,17 @@ func (file File) WriteAll(data []byte, perm ...Permissions) error {
 	return fileSystem.WriteAll(path, data, perm)
 }
 
-func (file File) WriteAllString(data string, perm ...Permissions) error {
-	return file.WriteAll([]byte(data), perm...)
+func (file File) WriteAllString(str string, perm ...Permissions) error {
+	return file.WriteAll([]byte(str), perm...)
 }
 
 func (file File) Append(data []byte, perm ...Permissions) error {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.Append(path, data, perm)
+}
+
+func (file File) AppendString(str string, perm ...Permissions) error {
+	return file.Append([]byte(str), perm...)
 }
 
 func (file File) OpenReader() (io.ReadCloser, error) {
