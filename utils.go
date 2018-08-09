@@ -34,7 +34,7 @@ func CopyFileBuf(src, dest File, buf *[]byte, perm ...Permissions) error {
 
 	// Handle directories
 	if dest.IsDir() {
-		dest = dest.Relative(src.Name())
+		dest = dest.Join(src.Name())
 	} else {
 		err := dest.Dir().MakeDir()
 		if err != nil {
@@ -97,7 +97,7 @@ func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
 
 	// Copy directories recursive
 	return src.ListDir(func(file File) error {
-		return copyRecursive(file, dest.Relative(file.Name()), patterns, buf)
+		return copyRecursive(file, dest.Join(file.Name()), patterns, buf)
 	}, patterns...)
 }
 
@@ -191,21 +191,21 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 		infoB := fileInfosB[filename]
 
 		if recursive && infoA.IsDir {
-			identical, err = IdenticalDirContents(dirA.Relative(filename), dirB.Relative(filename), true)
+			identical, err = IdenticalDirContents(dirA.Join(filename), dirB.Join(filename), true)
 			if !identical {
 				return false, err
 			}
 		} else {
 			hashA := infoA.ContentHash
 			if hashA == "" {
-				hashA, err = dirA.Relative(filename).ContentHash()
+				hashA, err = dirA.Join(filename).ContentHash()
 				if err != nil {
 					return false, err
 				}
 			}
 			hashB := infoB.ContentHash
 			if hashB == "" {
-				hashB, err = dirB.Relative(filename).ContentHash()
+				hashB, err = dirB.Join(filename).ContentHash()
 				if err != nil {
 					return false, err
 				}

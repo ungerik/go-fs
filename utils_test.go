@@ -67,7 +67,7 @@ func deleteRandomSubDir(dir File) error {
 func writeRandomDirFiles(dir File, subDirDepth int) (err error) {
 	numFiles := randFileCount()
 	for i := 0; i < numFiles; i++ {
-		file := dir.Relative(uuid.NewV4().String() + ".bin")
+		file := dir.Join(uuid.NewV4().String() + ".bin")
 		if i == 0 {
 			// always write one empty file
 			err = writeEmptyFile(file)
@@ -82,7 +82,7 @@ func writeRandomDirFiles(dir File, subDirDepth int) (err error) {
 	if subDirDepth > 0 {
 		numDirs := randDirCount()
 		for i := 0; i < numDirs; i++ {
-			subDir := dir.Relative(uuid.NewV4().String())
+			subDir := dir.Join(uuid.NewV4().String())
 			err = subDir.MakeDir()
 			if err != nil {
 				return err
@@ -101,14 +101,14 @@ func writeRandomDirFiles(dir File, subDirDepth int) (err error) {
 }
 
 func Test_IdenticalDirContents(t *testing.T) {
-	testDir := TempDir().Relative("testdir-" + uuid.NewV4().String())
+	testDir := TempDir().Join("testdir-" + uuid.NewV4().String())
 	testDir.MakeDir()
 	fmt.Println("testdir:", testDir.Path())
 
-	a := testDir.Relative("a")
+	a := testDir.Join("a")
 	a.MakeDir()
 
-	b := testDir.Relative("b")
+	b := testDir.Join("b")
 	b.MakeDir()
 
 	recreateBasCopyOfA := func() error {

@@ -51,8 +51,10 @@ type ReadWriteSeekCloser interface {
 	io.Closer
 }
 
-// File is a local file system path or URI
-// describing the location of a file.
+// File is a local file system path or a complete URI.
+// It is a string underneath, so string literals can be passed everywhere a File is expected.
+// Marshalling functions that use reflection will also work out of the box
+// when they detect that File is of kind reflect.String.
 type File string
 
 // FileSystem returns the FileSystem of the File.
@@ -157,10 +159,11 @@ func (file File) TrimExt() File {
 	return file[:len(file)-len(file.Ext())]
 }
 
-// Relative returns a File with a path relative to this file.
-// Every part of pathParts is a subsequent directory of file
-// concaternated with a path Separator.
-func (file File) Relative(pathParts ...string) File {
+// Join returns a new File with pathParts cleaned and joined to the current File's URI.
+// Every element of pathParts is a subsequent directory or file
+// that will be appended to the File URI with a path separator.
+// The resulting URI path will be cleaned, removing relative directory names like "..".
+func (file File) Join(pathParts ...string) File {
 	if len(pathParts) == 0 {
 		return file
 	}
@@ -171,9 +174,9 @@ func (file File) Relative(pathParts ...string) File {
 	return fileSystem.JoinCleanFile(pathParts...)
 }
 
-// Relativef returns a File with a path relative to this file,
-// using the methods arguments with fmt.Sprintf to create the relativ path.
-func (file File) Relativef(format string, args ...interface{}) File {
+// Joinf returns a new File with smf.Sprintf(format, args...) cleaned and joined to the current File's URI.
+// The resulting URI path will be cleaned, removing relative directory names like "..".
+func (file File) Joinf(format string, args ...interface{}) File {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
 }
@@ -551,7 +554,7 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 	if err != nil {
 		return "", err
 	}
-	return file.Dir().Relative(newName), nil
+	return file.Dir().Join(newName), nil
 }
 
 // MoveTo moves and/or renames the file to destination.

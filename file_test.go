@@ -23,7 +23,7 @@ func TestFile_MakeAllDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	file := baseDir.Relative(uuid.NewV4().String())
+	file := baseDir.Join(uuid.NewV4().String())
 	err = file.Touch()
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestFile_MakeAllDirs(t *testing.T) {
 		pathParts[i] = uuid.NewV4().String()
 	}
 
-	dir := baseDir.Relative(pathParts...)
+	dir := baseDir.Join(pathParts...)
 
 	err = dir.MakeAllDirs()
 	if err != nil {
@@ -74,7 +74,7 @@ func TestFile_MakeAllDirs(t *testing.T) {
 	}
 	checkDir(dir)
 
-	err = baseDir.Relative(pathParts[0]).RemoveRecursive()
+	err = baseDir.Join(pathParts[0]).RemoveRecursive()
 	if err != nil {
 		t.Fatal(err)
 	}
