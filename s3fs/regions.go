@@ -1,9 +1,32 @@
 package s3fs
 
+import "errors"
+
 // Region represents an AWS region as an integer. The Region constants can be
 // used to select a region and can then be converted into their respective
 // string representations.
 type Region int
+
+var regionStrings = [...]string{
+	"us-east-1",
+	"us-east-2",
+	"us-west-1",
+	"us-west-2",
+	"ca-central-1",
+	"ap-south-1",
+	"ap-northeast-1",
+	"ap-northeast-2",
+	"ap-northeast-3",
+	"ap-southeast-1",
+	"ap-southeast-2",
+	"cn-north-1",
+	"cn-northwest-1",
+	"eu-central-1",
+	"eu-west-1",
+	"eu-west-2",
+	"eu-west-3",
+	"sa-east-1",
+}
 
 const (
 	// USEast1 (N. Virginia)
@@ -44,25 +67,16 @@ const (
 	SAEast1
 )
 
+// RegionFromString the respective Region for the given region string.
+func RegionFromString(rs string) (Region, error) {
+	for k, v := range regionStrings {
+		if v == rs {
+			return Region(k), nil
+		}
+	}
+	return Region(-1), errors.New("Not a valid region")
+}
+
 func (r Region) String() string {
-	return [...]string{
-		"us-east-1",
-		"us-east-2",
-		"us-west-1",
-		"us-west-2",
-		"ca-central-1",
-		"ap-south-1",
-		"ap-northeast-1",
-		"ap-northeast-2",
-		"ap-northeast-3",
-		"ap-southeast-1",
-		"ap-southeast-2",
-		"cn-north-1",
-		"cn-northwest-1",
-		"eu-central-1",
-		"eu-west-1",
-		"eu-west-2",
-		"eu-west-3",
-		"sa-east-1",
-	}[r]
+	return regionStrings[r]
 }
