@@ -535,40 +535,9 @@ func (s3fs *S3FileSystem) Move(filePath string, destPath string) error {
 
 // Remove deletes an object from the S3 bucket.
 func (s3fs *S3FileSystem) Remove(filePath string) error {
-	// Directories that have to be deleted have to end with a forward slash
-	// since the S3 API doesn't recognize it otherwise.
-	// If a "directory" (S3 does not really have directories) is to be deleted,
-	// we first have to delete its content.
-	if filePath[len(filePath)-1] == '/' {
-		if err := s3fs.deleteDirContent(filePath); err != nil {
-			return err
-		}
-	}
 	_, err := s3fs.s3Client.DeleteObject(&s3.DeleteObjectInput{
 		Bucket: aws.String(s3fs.bucketName),
 		Key:    aws.String(filePath),
 	})
 	return err
-}
-
-func (s3fs *S3FileSystem) deleteDirContent(dirPath string) error {
-	var files []fs.File
-	err := s3fs.ListDirInfo(dirPath, func(f fs.File, fi fs.FileInfo) error {
-		if fi.IsDir {
-			if err := s3fs.deleteDirContent(f.Path()); err != nil {
-				return err
-			}
-		}
-		files = append(files, f)
-		return nil
-	}, nil)
-	if err != nil {
-		return err
-	}
-	for _, f := range files {
-		if err := s3fs.Remove(f.Path()); err != nil {
-			return err
-		}
-	}
-	return nil
 }
