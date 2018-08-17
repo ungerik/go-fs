@@ -350,7 +350,7 @@ func (s3fs *S3FileSystem) SetGroup(filePath string, group string) error {
 // Touch creates a file in the S3 bucket (no data).
 func (s3fs *S3FileSystem) Touch(filePath string, perm []fs.Permissions) error {
 	if s3fs.Stat(filePath).Exists {
-		return errors.New("Touch can't recreate file on S3 buckets")
+		return nil
 	}
 	return s3fs.WriteAll(filePath, nil, perm)
 }
