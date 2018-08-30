@@ -1,17 +1,11 @@
 package fs
 
-import "os"
-
 func CleanFilePath(uri string) File {
 	return GetFileSystem(uri).JoinCleanFile(uri)
 }
 
 func JoinCleanFilePath(uriParts ...string) File {
 	return GetFileSystem(uriParts...).JoinCleanFile(uriParts...)
-}
-
-func TempDir() File {
-	return File(os.TempDir())
 }
 
 // Move moves and/or renames the file to destination.
