@@ -15,11 +15,11 @@ func TempDir() File {
 
 // MakeTempDir makes and returns a new randomly named sub directory in TempDir().
 // Example:
-// tempDir, err := MakeTempDir()
+// tempDir, err := fs.MakeTempDir()
 // if err != nil {
 // 	return err
 // }
-// defer tempDir.RemoveDirContentsRecursive()
+// defer tempDir.RemoveRecursive()
 // doThingsWith(tempDir)
 func MakeTempDir() (File, error) {
 	name, err := tempDirName()

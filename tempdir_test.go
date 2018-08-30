@@ -10,7 +10,7 @@ func Test_MakeTempDir(t *testing.T) {
 		t.Fatalf("Error: %s", err)
 	}
 
-	defer tempDir.RemoveDirContentsRecursive()
+	defer tempDir.RemoveRecursive()
 
 	// fmt.Fprintln(os.Stderr, tempDir.Path())
 
