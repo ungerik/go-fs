@@ -442,6 +442,14 @@ func (file File) ReadAll() ([]byte, error) {
 	return fileSystem.ReadAll(path)
 }
 
+func (file File) ReadAllContentHash() (data []byte, hash string, err error) {
+	data, err = file.ReadAll()
+	if err != nil {
+		return nil, "", err
+	}
+	return data, fsimpl.ContentHashBytes(data), nil
+}
+
 func (file File) ReadAllString() (string, error) {
 	data, err := file.ReadAll()
 	if data == nil || err != nil {

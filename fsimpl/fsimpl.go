@@ -227,8 +227,12 @@ func ContentHash(r io.Reader) (string, error) {
 
 // ContentHashBytes returns a Dropbox compatible content hash for a byte slice.
 // See https://www.dropbox.com/developers/reference/content-hash
-func ContentHashBytes(buf []byte) (string, error) {
-	return ContentHash(bytes.NewReader(buf))
+func ContentHashBytes(buf []byte) string {
+	// bytes.Reader.Read only ever returns io.EOF
+	// which is not treatet as error by ContentHash
+	// so we can ignore all returned errors
+	hash, _ := ContentHash(bytes.NewReader(buf))
+	return hash
 }
 
 func JoinCleanPath(uriParts []string, prefix, separator string) string {
