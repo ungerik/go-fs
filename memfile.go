@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"fmt"
 	"io"
 	"io/ioutil"
 
@@ -70,4 +71,8 @@ func (f *MemFile) OpenReader() (io.ReadCloser, error) {
 // may need additional buffering to support seeking or not support it at all.
 func (f *MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.data), nil
+}
+
+func (f *MemFile) String() string {
+	return fmt.Sprintf("MemFile{name: %#v, size: %d}", f.name, len(f.data))
 }
