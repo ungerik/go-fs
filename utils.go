@@ -13,7 +13,7 @@ const copyBufferSize = 1024 * 1024 * 4
 // up to that path will be created.
 // If dest is an existing directory, then a file with the base name
 // of src will be created there.
-func CopyFile(src, dest File, perm ...Permissions) error {
+func CopyFile(src FileReader, dest File, perm ...Permissions) error {
 	var buf []byte
 	return CopyFileBuf(src, dest, &buf, perm...)
 }
@@ -27,7 +27,7 @@ func CopyFile(src, dest File, perm ...Permissions) error {
 // If that variable is initialized with a byte slice, then this slice will be used as buffer,
 // else a byte slice will be allocated for the variable.
 // Use this function to re-use buffers between CopyFileBuf calls.
-func CopyFileBuf(src, dest File, buf *[]byte, perm ...Permissions) error {
+func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) error {
 	if buf == nil {
 		panic("CopyFileBuf: buf is nil")
 	}
@@ -43,9 +43,12 @@ func CopyFileBuf(src, dest File, buf *[]byte, perm ...Permissions) error {
 	}
 
 	// Use same file system copy if possible
-	fs := src.FileSystem()
-	if fs == dest.FileSystem() {
-		return fs.CopyFile(src.Path(), dest.Path(), buf)
+	srcFile, srcIsFile := src.(File)
+	if srcIsFile {
+		fs := srcFile.FileSystem()
+		if fs == dest.FileSystem() {
+			return fs.CopyFile(srcFile.Path(), dest.Path(), buf)
+		}
 	}
 
 	r, err := src.OpenReader()
@@ -54,8 +57,8 @@ func CopyFileBuf(src, dest File, buf *[]byte, perm ...Permissions) error {
 	}
 	defer r.Close()
 
-	if len(perm) == 0 {
-		perm = []Permissions{src.Permissions()}
+	if len(perm) == 0 && srcIsFile {
+		perm = []Permissions{srcFile.Permissions()}
 	}
 	w, err := dest.OpenWriter(perm...)
 	if err != nil {
@@ -126,6 +129,15 @@ func FilesToNames(files []File) (names []string) {
 		names[i] = file.Name()
 	}
 	return names
+}
+
+// FilesToFileReaders converts a slice of File to a slice of FileReader
+func FilesToFileReaders(files []File) (fileReaders []FileReader) {
+	fileReaders = make([]FileReader, len(files))
+	for i, file := range files {
+		fileReaders[i] = file
+	}
+	return fileReaders
 }
 
 // URIsToFiles returns Files for the given fileURIs.
