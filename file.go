@@ -55,6 +55,7 @@ type ReadWriteSeekCloser interface {
 // It is a string underneath, so string literals can be passed everywhere a File is expected.
 // Marshalling functions that use reflection will also work out of the box
 // when they detect that File is of kind reflect.String.
+// File implements FileReader.
 type File string
 
 // FileSystem returns the FileSystem of the File.
@@ -140,11 +141,7 @@ func (file File) VolumeName() string {
 // Ext returns the extension of file name including the point, or an empty string.
 // Example: File("image.png").Ext() == ".png"
 func (file File) Ext() string {
-	p := strings.LastIndexByte(string(file), '.')
-	if p == -1 {
-		return ""
-	}
-	return string(file)[p:]
+	return fsimpl.Ext(string(file))
 }
 
 // ExtLower returns the lower case extension of file name including the point, or an empty string.
@@ -156,7 +153,7 @@ func (file File) ExtLower() string {
 // TrimExt returns a File with a path where the extension is removed.
 // Note that this does not rename an actual existing file.
 func (file File) TrimExt() File {
-	return file[:len(file)-len(file.Ext())]
+	return File(fsimpl.TrimExt(string(file)))
 }
 
 // Join returns a new File with pathParts cleaned and joined to the current File's URI.
@@ -437,11 +434,15 @@ func (file File) MakeAllDirs(perm ...Permissions) (err error) {
 	return file.MakeDir(perm...)
 }
 
-func (file File) ReadAll() ([]byte, error) {
+// ReadAll reads and returns all bytes of the file
+func (file File) ReadAll() (data []byte, err error) {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.ReadAll(path)
 }
 
+// ReadAllContentHash reads and returns all bytes of the file
+// together with a Dropbox compatible content hash.
+// See https://www.dropbox.com/developers/reference/content-hash
 func (file File) ReadAllContentHash() (data []byte, hash string, err error) {
 	data, err = file.ReadAll()
 	if err != nil {
@@ -450,6 +451,7 @@ func (file File) ReadAllContentHash() (data []byte, hash string, err error) {
 	return data, fsimpl.ContentHashBytes(data), nil
 }
 
+// ReadAllString reads the complete file and returns the content as string.
 func (file File) ReadAllString() (string, error) {
 	data, err := file.ReadAll()
 	if data == nil || err != nil {
@@ -504,12 +506,13 @@ func (file File) AppendString(str string, perm ...Permissions) error {
 	return file.Append([]byte(str), perm...)
 }
 
+// OpenReader opens the file and returns a io.ReadCloser that has be closed after reading
 func (file File) OpenReader() (io.ReadCloser, error) {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.OpenReader(path)
 }
 
-// OpenReadSeeker returns a ReadSeekCloser.
+// OpenReadSeeker opens the file and returns a ReadSeekCloser.
 // If the FileSystem implementation doesn't support ReadSeekCloser,
 // then the complete file is read into memory and wrapped with a ReadSeekCloser.
 // Warning: this can use up a lot of memory for big files.
@@ -619,6 +622,7 @@ func (file File) RemoveDirContents(patterns ...string) error {
 	}, patterns...)
 }
 
+// ReadJSON reads and unmarshalles the JSON content of the file to output.
 func (file File) ReadJSON(output interface{}) error {
 	data, err := file.ReadAll()
 	if err != nil {
@@ -627,6 +631,8 @@ func (file File) ReadJSON(output interface{}) error {
 	return json.Unmarshal(data, output)
 }
 
+// WriteJSON mashalles input to JSON and writes it as the file.
+// Any indent arguments will be concanated and used as JSON line indentation.
 func (file File) WriteJSON(input interface{}, indent ...string) (err error) {
 	var data []byte
 	if len(indent) == 0 {
@@ -640,6 +646,7 @@ func (file File) WriteJSON(input interface{}, indent ...string) (err error) {
 	return file.WriteAll(data)
 }
 
+// ReadXML reads and unmarshalles the XML content of the file to output.
 func (file File) ReadXML(output interface{}) error {
 	data, err := file.ReadAll()
 	if err != nil {
@@ -648,6 +655,8 @@ func (file File) ReadXML(output interface{}) error {
 	return xml.Unmarshal(data, output)
 }
 
+// WriteXML mashalles input to XML and writes it as the file.
+// Any indent arguments will be concanated and used as XML line indentation.
 func (file File) WriteXML(input interface{}, indent ...string) (err error) {
 	var data []byte
 	if len(indent) == 0 {

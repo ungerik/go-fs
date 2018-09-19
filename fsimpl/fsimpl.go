@@ -13,6 +13,25 @@ import (
 	"strings"
 )
 
+// Ext returns the extension of filePath including the point, or an empty string.
+// Example: Ext("image.png") == ".png"
+func Ext(filePath string) string {
+	p := strings.LastIndexByte(filePath, '.')
+	if p == -1 {
+		return ""
+	}
+	return filePath[p:]
+}
+
+// TrimExt returns a filePath with a path where the extension is removed.
+func TrimExt(filePath string) string {
+	p := strings.LastIndexByte(filePath, '.')
+	if p == -1 {
+		return filePath
+	}
+	return filePath[:p]
+}
+
 // DirAndName is a generic helper for FileSystem.DirAndName implementations.
 // path.Split or filepath.Split don't have the wanted behaviour when given a path ending in a separator.
 // DirAndName returns the parent directory of filePath and the name with that directory of the last filePath element.
