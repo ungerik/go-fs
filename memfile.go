@@ -19,9 +19,18 @@ func NewMemFile(name string, data []byte) *MemFile {
 	return &MemFile{name: name, data: data}
 }
 
-// NewMemFileReadAll returns a new MemFile with the data from ioutil.ReadAll(reader)
-func NewMemFileReadAll(name string, reader io.Reader) (*MemFile, error) {
-	data, err := ioutil.ReadAll(reader)
+// NewMemFileReadAll returns a new MemFile with the data from ioutil.ReadAll(ioReader)
+func NewMemFileReadAll(name string, ioReader io.Reader) (*MemFile, error) {
+	data, err := ioutil.ReadAll(ioReader)
+	if err != nil {
+		return nil, err
+	}
+	return &MemFile{name: name, data: data}, nil
+}
+
+// NewMemFileCopy returns a new MemFile with the data from fileReader.ReadAll()
+func NewMemFileCopy(name string, fileReader FileReader) (*MemFile, error) {
+	data, err := fileReader.ReadAll()
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +80,10 @@ func (f *MemFile) OpenReader() (io.ReadCloser, error) {
 // may need additional buffering to support seeking or not support it at all.
 func (f *MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.data), nil
+}
+
+func (f *MemFile) Data() []byte {
+	return f.data
 }
 
 func (f *MemFile) String() string {

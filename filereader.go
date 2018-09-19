@@ -32,3 +32,18 @@ type FileReader interface {
 	// may need additional buffering to support seeking or not support it at all.
 	OpenReadSeeker() (ReadSeekCloser, error)
 }
+
+// FileReaderWithName returns a new FileReader that wraps the passed fileReader,
+// but the Name() method returns the passed name instead of name of the wrapped fileReader.
+func FileReaderWithName(fileReader FileReader, name string) FileReader {
+	return &fileReaderWithName{FileReader: fileReader, name: name}
+}
+
+type fileReaderWithName struct {
+	FileReader
+	name string
+}
+
+func (f *fileReaderWithName) Name() string {
+	return f.name
+}
