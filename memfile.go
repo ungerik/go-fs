@@ -1,6 +1,8 @@
 package fs
 
 import (
+	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -70,6 +72,12 @@ func (f *MemFile) ReadAllString() (string, error) {
 	return string(f.data), nil
 }
 
+// WriteTo implements the io.WriterTo interface
+func (f *MemFile) WriteTo(writer io.Writer) (n int64, err error) {
+	i, err := writer.Write(f.data)
+	return int64(i), err
+}
+
 // OpenReader opens the file and returns a io.ReadCloser that has be closed after reading
 func (f *MemFile) OpenReader() (io.ReadCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.data), nil
@@ -80,6 +88,16 @@ func (f *MemFile) OpenReader() (io.ReadCloser, error) {
 // may need additional buffering to support seeking or not support it at all.
 func (f *MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.data), nil
+}
+
+// ReadJSON reads and unmarshalles the JSON content of the file to output.
+func (f *MemFile) ReadJSON(output interface{}) error {
+	return json.Unmarshal(f.data, output)
+}
+
+// ReadXML reads and unmarshalles the XML content of the file to output.
+func (f *MemFile) ReadXML(output interface{}) error {
+	return xml.Unmarshal(f.data, output)
 }
 
 func (f *MemFile) Data() []byte {

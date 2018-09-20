@@ -624,11 +624,13 @@ func (file File) RemoveDirContents(patterns ...string) error {
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
 func (file File) ReadJSON(output interface{}) error {
-	data, err := file.ReadAll()
+	reader, err := file.OpenReader()
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, output)
+	defer reader.Close()
+
+	return json.NewDecoder(reader).Decode(output)
 }
 
 // WriteJSON mashalles input to JSON and writes it as the file.
@@ -648,11 +650,13 @@ func (file File) WriteJSON(input interface{}, indent ...string) (err error) {
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
 func (file File) ReadXML(output interface{}) error {
-	data, err := file.ReadAll()
+	reader, err := file.OpenReader()
 	if err != nil {
 		return err
 	}
-	return xml.Unmarshal(data, output)
+	defer reader.Close()
+
+	return xml.NewDecoder(reader).Decode(output)
 }
 
 // WriteXML mashalles input to XML and writes it as the file.

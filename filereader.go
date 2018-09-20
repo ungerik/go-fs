@@ -24,6 +24,9 @@ type FileReader interface {
 	// ReadAllString reads the complete file and returns the content as string.
 	ReadAllString() (string, error)
 
+	// WriteTo implements the io.WriterTo interface
+	WriteTo(writer io.Writer) (n int64, err error)
+
 	// OpenReader opens the file and returns a io.ReadCloser that has be closed after reading
 	OpenReader() (io.ReadCloser, error)
 
@@ -31,6 +34,12 @@ type FileReader interface {
 	// Use OpenReader if seeking is not necessary because implementations
 	// may need additional buffering to support seeking or not support it at all.
 	OpenReadSeeker() (ReadSeekCloser, error)
+
+	// ReadJSON reads and unmarshalles the JSON content of the file to output.
+	ReadJSON(output interface{}) error
+
+	// ReadXML reads and unmarshalles the XML content of the file to output.
+	ReadXML(output interface{}) error
 }
 
 // FileReaderWithName returns a new FileReader that wraps the passed fileReader,
