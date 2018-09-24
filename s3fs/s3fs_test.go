@@ -184,6 +184,7 @@ func TestMakeDir(t *testing.T) {
 	for _, d := range directories {
 		assert.NoError(t, s3.MakeDir(d, nil))
 		assert.True(t, s3.Stat(d+"/").Exists)
+		assert.True(t, s3.Stat(d+"/").IsDir)
 	}
 }
 
