@@ -209,7 +209,7 @@ func objectOutputToFileInfo(key string, output *s3.GetObjectOutput) (info fs.Fil
 	info.Name = key
 	info.Exists = true
 	info.IsRegular = true
-	info.IsDir = *output.ContentType == "application/x-directory" || key[len(key)-1] == '/'
+	info.IsDir = *output.ContentType == "application/x-directory" || strings.HasSuffix(key, "/")
 	info.IsHidden = len(key) > 0 && key[0] == '.'
 	info.Size = *output.ContentLength
 	info.ModTime = *output.LastModified
