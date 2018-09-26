@@ -57,14 +57,14 @@ func (f *MemFile) ContentHash() (string, error) {
 
 // ReadAll reads and returns all bytes of the file
 func (f *MemFile) ReadAll() (data []byte, err error) {
-	return data, nil
+	return f.data, nil
 }
 
 // ReadAllContentHash reads and returns all bytes of the file
 // together with a Dropbox compatible content hash.
 // See https://www.dropbox.com/developers/reference/content-hash
 func (f *MemFile) ReadAllContentHash() (data []byte, hash string, err error) {
-	return data, fsimpl.ContentHashBytes(f.data), nil
+	return f.data, fsimpl.ContentHashBytes(f.data), nil
 }
 
 // ReadAllString reads the complete file and returns the content as string.
