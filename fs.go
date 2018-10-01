@@ -8,20 +8,24 @@ func JoinCleanFilePath(uriParts ...string) File {
 	return GetFileSystem(uriParts...).JoinCleanFile(uriParts...)
 }
 
-// Move moves and/or renames the file to destination.
-// destination can be a directory or file-path and
-// can be on another FileSystem.
+// Move moves and/or renames source to destination.
+// source and destination can be files or directories.
+// If source is a directory, it will be moved with all its contents.
+// If source and destination are using the same FileSystem,
+// then FileSystem.Move will be used, else source will be
+// copied recursively first to destination and then deleted.
 func Move(source, destination File) error {
 	srcFS, srcPath := source.ParseRawURI()
 	destFS, destPath := destination.ParseRawURI()
 	if srcFS == destFS {
 		return srcFS.Move(srcPath, destPath)
 	}
-	err := CopyFile(source, destination)
+
+	err := CopyRecursive(source, destination)
 	if err != nil {
 		return err
 	}
-	return source.Remove()
+	return source.RemoveRecursive()
 }
 
 // Remove removes all files with fileURIs.
