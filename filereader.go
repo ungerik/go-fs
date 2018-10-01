@@ -1,10 +1,17 @@
 package fs
 
-import "io"
+import (
+	"io"
+
+	"github.com/ungerik/go-fs/fsimpl"
+)
 
 type FileReader interface {
 	// Name returns the name of the file
 	Name() string
+
+	// Ext returns the extension of file name including the point, or an empty string.
+	Ext() string
 
 	// Size returns the size of the file
 	Size() int64
@@ -55,4 +62,8 @@ type fileReaderWithName struct {
 
 func (f *fileReaderWithName) Name() string {
 	return f.name
+}
+
+func (f *fileReaderWithName) Ext() string {
+	return fsimpl.Ext(f.name)
 }

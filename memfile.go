@@ -44,6 +44,11 @@ func (f *MemFile) Name() string {
 	return f.name
 }
 
+// Ext returns the extension of file name including the point, or an empty string.
+func (f *MemFile) Ext() string {
+	return fsimpl.Ext(f.name)
+}
+
 // Size returns the size of the file
 func (f *MemFile) Size() int64 {
 	return int64(len(f.data))
