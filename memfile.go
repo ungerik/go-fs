@@ -54,6 +54,11 @@ func (f *MemFile) Size() int64 {
 	return int64(len(f.data))
 }
 
+// Exists returns if the MemFile has a Name
+func (f *MemFile) Exists() bool {
+	return f.name != ""
+}
+
 // ContentHash returns a Dropbox compatible content hash for the file.
 // See https://www.dropbox.com/developers/reference/content-hash
 func (f *MemFile) ContentHash() (string, error) {

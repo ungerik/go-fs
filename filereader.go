@@ -16,6 +16,9 @@ type FileReader interface {
 	// Size returns the size of the file
 	Size() int64
 
+	// Exists returns if file or data for the implementation exists
+	Exists() bool
+
 	// ContentHash returns a Dropbox compatible content hash for the file.
 	// See https://www.dropbox.com/developers/reference/content-hash
 	ContentHash() (string, error)
