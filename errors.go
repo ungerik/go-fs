@@ -1,5 +1,7 @@
 package fs
 
+import "net/http"
+
 type ConstError string
 
 func (e ConstError) Error() string {
@@ -57,6 +59,7 @@ type FileError interface {
 // ErrDoesNotExist
 
 // ErrDoesNotExist is returned when a file does not exist
+// Implements http.Handler with http.NotFound
 type ErrDoesNotExist struct {
 	file File
 }
@@ -79,6 +82,10 @@ func (err *ErrDoesNotExist) File() File {
 func IsErrDoesNotExist(err error) bool {
 	_, is := errCause(err).(*ErrDoesNotExist)
 	return is
+}
+
+func (err *ErrDoesNotExist) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	http.NotFound(w, r)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
