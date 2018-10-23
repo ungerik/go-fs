@@ -39,6 +39,11 @@ func NewMemFileCopy(name string, fileReader FileReader) (*MemFile, error) {
 	return &MemFile{name: name, data: data}, nil
 }
 
+// String returns the name and meta information for the FileReader.
+func (f *MemFile) String() string {
+	return fmt.Sprintf("MemFile{name: %#v, size: %d}", f.name, len(f.data))
+}
+
 // Name returns the name of the file
 func (f *MemFile) Name() string {
 	return f.name
@@ -112,8 +117,4 @@ func (f *MemFile) ReadXML(output interface{}) error {
 
 func (f *MemFile) Data() []byte {
 	return f.data
-}
-
-func (f *MemFile) String() string {
-	return fmt.Sprintf("MemFile{name: %#v, size: %d}", f.name, len(f.data))
 }

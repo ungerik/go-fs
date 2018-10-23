@@ -1,12 +1,16 @@
 package fs
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
 type FileReader interface {
+	// String returns the name and meta information for the FileReader.
+	String() string
+
 	// Name returns the name of the file
 	Name() string
 
@@ -61,6 +65,10 @@ func FileReaderWithName(fileReader FileReader, name string) FileReader {
 type fileReaderWithName struct {
 	FileReader
 	name string
+}
+
+func (f *fileReaderWithName) String() string {
+	return fmt.Sprintf("%s -> %s", f.name, f.FileReader.String())
 }
 
 func (f *fileReaderWithName) Name() string {
