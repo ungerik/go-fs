@@ -35,7 +35,8 @@ func TrimExt(filePath string) string {
 // DirAndName is a generic helper for FileSystem.DirAndName implementations.
 // path.Split or filepath.Split don't have the wanted behaviour when given a path ending in a separator.
 // DirAndName returns the parent directory of filePath and the name with that directory of the last filePath element.
-// If filePath is the root of the file systeme, then an empty string will be returned for name.
+// If filePath is the root of the file systeme, then an empty string will be returned as name.
+// If filePath does not contain a separator before the name part, then "." will be returned as dir.
 func DirAndName(filePath string, volumeLen int, separator string) (dir, name string) {
 	if filePath == "" {
 		return "", ""
@@ -43,8 +44,14 @@ func DirAndName(filePath string, volumeLen int, separator string) (dir, name str
 
 	filePath = strings.TrimSuffix(filePath, separator)
 
+	if filePath == "" {
+		return separator, ""
+	}
+
 	pos := strings.LastIndex(filePath, separator)
-	if pos <= volumeLen {
+	if pos == -1 {
+		return ".", filePath
+	} else if pos <= volumeLen {
 		return filePath, ""
 	}
 
