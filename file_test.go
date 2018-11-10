@@ -3,7 +3,7 @@ package fs
 import (
 	"testing"
 
-	uuid "github.com/ungerik/go-uuid"
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 func TestFile_MakeAllDirs(t *testing.T) {
@@ -23,7 +23,7 @@ func TestFile_MakeAllDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	file := baseDir.Join(uuid.NewV4().String())
+	file := baseDir.Join(fsimpl.RandomString())
 	err = file.Touch()
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestFile_MakeAllDirs(t *testing.T) {
 
 	pathParts := make([]string, 5)
 	for i := range pathParts {
-		pathParts[i] = uuid.NewV4().String()
+		pathParts[i] = fsimpl.RandomString()
 	}
 
 	dir := baseDir.Join(pathParts...)
