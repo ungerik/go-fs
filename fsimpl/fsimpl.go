@@ -3,7 +3,9 @@ package fsimpl
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -12,6 +14,18 @@ import (
 	"path"
 	"strings"
 )
+
+// RandomString returns a 120 bit randum number
+// encoded as URL compatible base64 string with a length of 20 characters.
+func RandomString() string {
+	var data [15]byte
+	s := data[:]
+	_, err := rand.Read(s)
+	if err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(s)
+}
 
 // Ext returns the extension of filePath including the point, or an empty string.
 // Example: Ext("image.png") == ".png"

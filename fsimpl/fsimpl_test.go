@@ -28,3 +28,8 @@ func Test_DirAndName(t *testing.T) {
 		assert.Equal(t, name, dirAndName[1], "filePath(%#v): %#v, %#v", filePath, dir, name)
 	}
 }
+
+func Test_RandomString(t *testing.T) {
+	str := RandomString()
+	assert.Equal(t, 20, len(str))
+}

@@ -10,7 +10,6 @@ import (
 
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
-	"github.com/ungerik/go-uuid"
 )
 
 const (
@@ -36,7 +35,7 @@ func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSyst
 		return nil, err
 	}
 	mpfs := &MultipartFileSystem{
-		prefix: Prefix + uuid.NewV4().String(),
+		prefix: Prefix + fsimpl.RandomString(),
 		Form:   request.MultipartForm,
 	}
 	fs.Register(mpfs)

@@ -10,7 +10,6 @@ import (
 
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
-	"github.com/ungerik/go-uuid"
 )
 
 const (
@@ -42,7 +41,7 @@ func NewReaderFileSystem(file fs.File) (zipfs *ZipFileSystem, err error) {
 		return nil, err
 	}
 	zipfs = &ZipFileSystem{
-		prefix:    Prefix + uuid.NewV4().String(),
+		prefix:    Prefix + fsimpl.RandomString(),
 		closer:    fileReader,
 		zipReader: zipReader,
 	}
@@ -57,7 +56,7 @@ func NewWriterFileSystem(file fs.File) (zipfs *ZipFileSystem, err error) {
 	}
 	zipWriter := zip.NewWriter(fileWriter)
 	zipfs = &ZipFileSystem{
-		prefix:    Prefix + uuid.NewV4().String(),
+		prefix:    Prefix + fsimpl.RandomString(),
 		closer:    zipWriter,
 		zipWriter: zipWriter,
 	}

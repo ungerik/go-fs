@@ -4,7 +4,7 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/ungerik/go-uuid"
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // SubFileSystemPrefix is the URI prefix used to identify SubFileSystem files
@@ -18,7 +18,7 @@ type SubFileSystem struct {
 
 func NewSubFileSystem(parent FileSystem, basePath string) *SubFileSystem {
 	subfs := &SubFileSystem{
-		prefix:   SubFileSystemPrefix + uuid.NewV4().String(),
+		prefix:   SubFileSystemPrefix + fsimpl.RandomString(),
 		Parent:   parent,
 		BasePath: basePath,
 	}

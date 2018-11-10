@@ -13,7 +13,6 @@ import (
 	dropbox "github.com/tj/go-dropbox"
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
-	uuid "github.com/ungerik/go-uuid"
 )
 
 const (
@@ -41,7 +40,7 @@ type DropboxFileSystem struct {
 // New returns a new DropboxFileSystem for accessToken
 func New(accessToken string, cacheTimeout time.Duration) *DropboxFileSystem {
 	dbfs := &DropboxFileSystem{
-		prefix:        Prefix + uuid.NewV4().String(),
+		prefix:        Prefix + fsimpl.RandomString(),
 		client:        dropbox.New(dropbox.NewConfig(accessToken)),
 		fileInfoCache: fs.NewFileInfoCache(cacheTimeout),
 	}
