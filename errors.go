@@ -69,6 +69,16 @@ func NewErrDoesNotExist(file File) *ErrDoesNotExist {
 	return &ErrDoesNotExist{file}
 }
 
+// NewErrDoesNotExistFileReader is a hack that tries to cast fileReader to a File
+// or use a pseudo File with the name fromm the FileReader if not possible.
+func NewErrDoesNotExistFileReader(fileReader FileReader) *ErrDoesNotExist {
+	file, ok := fileReader.(File)
+	if !ok {
+		file = File(fileReader.Name())
+	}
+	return &ErrDoesNotExist{file}
+}
+
 func (err *ErrDoesNotExist) Error() string {
 	return "file does not exist: " + err.file.String()
 }

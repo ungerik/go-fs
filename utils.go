@@ -105,8 +105,8 @@ func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
 }
 
 // FilesToURLs returns the URLs of a slice of Files.
-func FilesToURLs(files []File) (fileURLs []string) {
-	fileURLs = make([]string, len(files))
+func FilesToURLs(files []File) []string {
+	fileURLs := make([]string, len(files))
 	for i, file := range files {
 		fileURLs[i] = file.URL()
 	}
@@ -114,8 +114,8 @@ func FilesToURLs(files []File) (fileURLs []string) {
 }
 
 // FilesToPaths returns the FileSystem specific paths of a slice of Files.
-func FilesToPaths(files []File) (paths []string) {
-	paths = make([]string, len(files))
+func FilesToPaths(files []File) []string {
+	paths := make([]string, len(files))
 	for i, file := range files {
 		paths[i] = file.Path()
 	}
@@ -123,8 +123,8 @@ func FilesToPaths(files []File) (paths []string) {
 }
 
 // FilesToNames returns a string slice with the names pars from the files
-func FilesToNames(files []File) (names []string) {
-	names = make([]string, len(files))
+func FilesToNames(files []File) []string {
+	names := make([]string, len(files))
 	for i, file := range files {
 		names[i] = file.Name()
 	}
@@ -132,8 +132,8 @@ func FilesToNames(files []File) (names []string) {
 }
 
 // FilesToFileReaders converts a slice of File to a slice of FileReader
-func FilesToFileReaders(files []File) (fileReaders []FileReader) {
-	fileReaders = make([]FileReader, len(files))
+func FilesToFileReaders(files []File) []FileReader {
+	fileReaders := make([]FileReader, len(files))
 	for i, file := range files {
 		fileReaders[i] = file
 	}
@@ -141,12 +141,21 @@ func FilesToFileReaders(files []File) (fileReaders []FileReader) {
 }
 
 // URIsToFiles returns Files for the given fileURIs.
-func URIsToFiles(fileURIs []string) (files []File) {
-	files = make([]File, len(fileURIs))
+func URIsToFiles(fileURIs []string) []File {
+	files := make([]File, len(fileURIs))
 	for i := range fileURIs {
 		files[i] = File(fileURIs[i])
 	}
 	return files
+}
+
+// URIsToFileReaders returns FileReaders for the given fileURIs.
+func URIsToFileReaders(fileURIs []string) []FileReader {
+	fileReaders := make([]FileReader, len(fileURIs))
+	for i := range fileURIs {
+		fileReaders[i] = File(fileURIs[i])
+	}
+	return fileReaders
 }
 
 type FileCallback func(File) error
