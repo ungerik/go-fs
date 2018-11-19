@@ -78,3 +78,27 @@ func (f *fileReaderWithName) Name() string {
 func (f *fileReaderWithName) Ext() string {
 	return fsimpl.Ext(f.name)
 }
+
+// LocalFileOfReader returns a File and true if fileReader
+// is backed by a file on the local file system.
+func LocalFileOfReader(fileReader FileReader) (localFile File, ok bool) {
+	localFile, ok = fileReader.(File)
+	if !ok || localFile.FileSystem() != Local {
+		return "", false
+	}
+	return localFile, true
+}
+
+// LocalFilePathOfReader returns a file path and true if fileReader
+// is backed by a file on the local file system.
+func LocalFilePathOfReader(fileReader FileReader) (localPath string, ok bool) {
+	file, ok := fileReader.(File)
+	if !ok {
+		return "", false
+	}
+	fs, localPath := file.ParseRawURI()
+	if fs != Local {
+		return "", false
+	}
+	return localPath, true
+}
