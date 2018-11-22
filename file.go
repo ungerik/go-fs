@@ -109,6 +109,26 @@ func (file File) PathWithSlashes() string {
 	return path
 }
 
+// LocalPath returns the cleaned local file-system path of the file,
+// or an empty string if it is not on the local file system.
+func (file File) LocalPath() string {
+	fileSystem, path := file.ParseRawURI()
+	if fileSystem != Local {
+		return ""
+	}
+	return fileSystem.JoinCleanPath(path)
+}
+
+// MustLocalPath returns the cleaned local file-system path of the file,
+// or panics if it is not on the local file system.
+func (file File) MustLocalPath() string {
+	localPath := file.LocalPath()
+	if localPath == "" {
+		panic(fmt.Sprintf("not a local file-system path: '%s'", string(file)))
+	}
+	return localPath
+}
+
 // Name returns the name part of the file path,
 // which is usually the string after the last path Separator.
 func (file File) Name() string {

@@ -54,6 +54,11 @@ func (f *MemFile) Ext() string {
 	return fsimpl.Ext(f.name)
 }
 
+// LocalPath always returns an empty string for a MemFile.
+func (f *MemFile) LocalPath() string {
+	return ""
+}
+
 // Size returns the size of the file
 func (f *MemFile) Size() int64 {
 	return int64(len(f.data))
