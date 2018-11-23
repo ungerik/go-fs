@@ -3,14 +3,23 @@ package fs
 import (
 	"crypto/rand"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
-	"os"
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // TempDir returns the temp directory of the operating system
 func TempDir() File {
 	return File(os.TempDir())
+}
+
+// TempFile returns a randomly named File with an optional extension
+// in the temp directory of the operating system.
+// The file does not exist yet, the returned File just contains the path.
+func TempFile(ext ...string) File {
+	return TempDir().Join(fsimpl.RandomString() + strings.Join(ext, ""))
 }
 
 // MakeTempDir makes and returns a new randomly named sub directory in TempDir().
