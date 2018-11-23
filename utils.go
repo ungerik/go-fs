@@ -140,8 +140,8 @@ func FilesToFileReaders(files []File) []FileReader {
 	return fileReaders
 }
 
-// URIsToFiles returns Files for the given fileURIs.
-func URIsToFiles(fileURIs []string) []File {
+// StringsToFiles returns Files for the given fileURIs.
+func StringsToFiles(fileURIs []string) []File {
 	files := make([]File, len(fileURIs))
 	for i := range fileURIs {
 		files[i] = File(fileURIs[i])
@@ -149,8 +149,8 @@ func URIsToFiles(fileURIs []string) []File {
 	return files
 }
 
-// URIsToFileReaders returns FileReaders for the given fileURIs.
-func URIsToFileReaders(fileURIs []string) []FileReader {
+// StringsToFileReaders returns FileReaders for the given fileURIs.
+func StringsToFileReaders(fileURIs []string) []FileReader {
 	fileReaders := make([]FileReader, len(fileURIs))
 	for i := range fileURIs {
 		fileReaders[i] = File(fileURIs[i])
