@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path"
 	"time"
 
@@ -262,9 +263,21 @@ func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
 }
 
 func (mpfs *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+	filePath, err := EscapePath(filePath)
+	if err != nil {
+		return nil, err
+	}
 	file, err := mpfs.GetMultipartFileHeader(filePath)
 	if err != nil {
 		return nil, err
 	}
 	return file.Open()
+}
+
+func EscapePath(filePath string) (string, error) {
+	parsedFilePath, err := url.Parse(filePath)
+	if err != nil {
+		return "", err
+	}
+	return parsedFilePath.EscapedPath(), nil
 }
