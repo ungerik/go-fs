@@ -5,8 +5,8 @@ import (
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"path"
+	"strings"
 	"time"
 
 	fs "github.com/ungerik/go-fs"
@@ -275,9 +275,12 @@ func (mpfs *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, err
 }
 
 func EscapePath(filePath string) (string, error) {
-	parsedFilePath, err := url.Parse(filePath)
-	if err != nil {
-		return "", err
-	}
-	return parsedFilePath.EscapedPath(), nil
+	// TODO: properly escape paths
+
+	// parsedFilePath, err := url.Parse(filePath)
+	// if err != nil {
+	// 	return "", err
+	// }
+
+	return strings.Replace(filePath, "\"", "%22", -1), nil
 }
