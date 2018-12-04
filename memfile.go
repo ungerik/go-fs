@@ -21,8 +21,8 @@ func NewMemFile(name string, data []byte) *MemFile {
 	return &MemFile{name: name, data: data}
 }
 
-// NewMemFileReadAll returns a new MemFile with the data from ioutil.ReadAll(ioReader)
-func NewMemFileReadAll(name string, ioReader io.Reader) (*MemFile, error) {
+// NewMemFileFromReader returns a new MemFile with the data from ioutil.ReadAll(ioReader)
+func NewMemFileFromReader(name string, ioReader io.Reader) (*MemFile, error) {
 	data, err := ioutil.ReadAll(ioReader)
 	if err != nil {
 		return nil, err
@@ -30,13 +30,24 @@ func NewMemFileReadAll(name string, ioReader io.Reader) (*MemFile, error) {
 	return &MemFile{name: name, data: data}, nil
 }
 
-// NewMemFileCopy returns a new MemFile with the data from fileReader.ReadAll()
-func NewMemFileCopy(name string, fileReader FileReader) (*MemFile, error) {
+// NewMemFileFromFileReader returns a new MemFile with the data from fileReader.ReadAll()
+func NewMemFileFromFileReader(name string, fileReader FileReader) (*MemFile, error) {
 	data, err := fileReader.ReadAll()
 	if err != nil {
 		return nil, err
 	}
 	return &MemFile{name: name, data: data}, nil
+}
+
+// NewMemFileFrom returns a new MemFile with
+// the name from fileReader.Name() and
+// the data from fileReader.ReadAll()
+func NewMemFileFrom(fileReader FileReader) (*MemFile, error) {
+	data, err := fileReader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	return &MemFile{name: fileReader.Name(), data: data}, nil
 }
 
 // String returns the name and meta information for the FileReader.
