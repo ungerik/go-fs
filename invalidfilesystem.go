@@ -37,6 +37,7 @@ func (invalid InvalidFileSystem) Name() string {
 	return "invalid file system"
 }
 
+// String implements the fmt.Stringer interface.
 func (invalid InvalidFileSystem) String() string {
 	return "invalid file system"
 }

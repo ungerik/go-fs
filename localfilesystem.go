@@ -70,6 +70,7 @@ func (local *LocalFileSystem) Name() string {
 	return "local file system"
 }
 
+// String implements the fmt.Stringer interface.
 func (local *LocalFileSystem) String() string {
 	return local.Name() + " with prefix " + local.Prefix()
 }

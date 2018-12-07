@@ -94,6 +94,7 @@ func (zipfs *ZipFileSystem) Name() string {
 	return "Zip reader filesystem " + path.Base(zipfs.prefix)
 }
 
+// String implements the fmt.Stringer interface.
 func (zipfs *ZipFileSystem) String() string {
 	return zipfs.Name() + " with prefix " + zipfs.Prefix()
 }

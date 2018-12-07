@@ -103,6 +103,7 @@ func (mpfs *MultipartFileSystem) Name() string {
 	return "multipart file system " + path.Base(mpfs.prefix)
 }
 
+// String implements the fmt.Stringer interface.
 func (mpfs *MultipartFileSystem) String() string {
 	return mpfs.Name() + " with prefix " + mpfs.Prefix()
 }

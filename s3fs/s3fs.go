@@ -105,6 +105,7 @@ func (s3fs *S3FileSystem) Name() string {
 }
 
 // String returns a string that described the file system.
+// String implements the fmt.Stringer interface.
 func (s3fs *S3FileSystem) String() string {
 	return s3fs.Name() + " with prefix " + s3fs.Prefix()
 }

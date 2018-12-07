@@ -77,6 +77,7 @@ func RegionFromString(rs string) (Region, error) {
 	return Region(-1), errors.New("Not a valid region")
 }
 
+// String implements the fmt.Stringer interface.
 func (r Region) String() string {
 	return regionStrings[r]
 }

@@ -51,6 +51,7 @@ func NewMemFileFrom(fileReader FileReader) (*MemFile, error) {
 }
 
 // String returns the name and meta information for the FileReader.
+// String implements the fmt.Stringer interface.
 func (f *MemFile) String() string {
 	return fmt.Sprintf("MemFile{name: %#v, size: %d}", f.name, len(f.data))
 }

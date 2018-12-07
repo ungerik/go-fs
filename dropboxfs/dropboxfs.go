@@ -91,6 +91,7 @@ func (dbfs *DropboxFileSystem) Name() string {
 	return "Dropbox file system"
 }
 
+// String implements the fmt.Stringer interface.
 func (dbfs *DropboxFileSystem) String() string {
 	return dbfs.Name() + " with prefix " + dbfs.Prefix()
 }

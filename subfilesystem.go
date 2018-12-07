@@ -59,6 +59,7 @@ func (subfs *SubFileSystem) Name() string {
 	return "Sub file system of " + subfs.Parent.Name()
 }
 
+// String implements the fmt.Stringer interface.
 func (subfs *SubFileSystem) String() string {
 	return subfs.Name() + " with prefix " + subfs.Prefix()
 }

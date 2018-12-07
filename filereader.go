@@ -71,6 +71,7 @@ type fileReaderWithName struct {
 	name string
 }
 
+// String implements the fmt.Stringer interface.
 func (f *fileReaderWithName) String() string {
 	return fmt.Sprintf("%s -> %s", f.name, f.FileReader.String())
 }
