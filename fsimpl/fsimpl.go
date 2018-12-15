@@ -18,13 +18,13 @@ import (
 // RandomString returns a 120 bit randum number
 // encoded as URL compatible base64 string with a length of 20 characters.
 func RandomString() string {
-	var data [15]byte
-	s := data[:]
-	_, err := rand.Read(s)
+	var buffer [15]byte
+	b := buffer[:]
+	_, err := rand.Read(b)
 	if err != nil {
 		panic(err)
 	}
-	return base64.RawURLEncoding.EncodeToString(s)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // Ext returns the extension of filePath including the point, or an empty string.
