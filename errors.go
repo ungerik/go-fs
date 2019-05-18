@@ -35,13 +35,19 @@ func errCause(err error) error {
 	type causer interface {
 		Cause() error
 	}
+	type wrapper interface {
+		Unwrap() error
+	}
 
 	for err != nil {
-		cause, ok := err.(causer)
-		if !ok {
+		switch e := err.(type) {
+		case causer:
+			err = e.Cause()
+		case wrapper:
+			err = e.Unwrap()
+		default:
 			break
 		}
-		err = cause.Cause()
 	}
 	return err
 }
