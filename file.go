@@ -305,11 +305,17 @@ func (file File) SetPermissions(perm Permissions) error {
 	return fileSystem.SetPermissions(path, perm)
 }
 
+// ListDir calls the passed callback function for every file and directory in dirPath.
+// If any patterns are passed, then only files with a name that matches
+// at least one of the patterns are returned.
 func (file File) ListDir(callback func(File) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.ListDirInfo(path, FileCallback(callback).FileInfoCallback, patterns)
 }
 
+// ListDirInfo calls the passed callback function for every file and directory in dirPath.
+// If any patterns are passed, then only files with a name that matches
+// at least one of the patterns are returned.
 func (file File) ListDirInfo(callback func(File, FileInfo) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.ListDirInfo(path, callback, patterns)
@@ -322,13 +328,19 @@ func (file File) ListDirRecursive(callback func(File) error, patterns ...string)
 	return fileSystem.ListDirInfoRecursive(path, FileCallback(callback).FileInfoCallback, patterns)
 }
 
-// ListDirInfoRecursive returns only files.
-// patterns are only applied to files, not to directories
+// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
+// recursing into all sub-directories.
+// If any patterns are passed, then only files (not directories) with a name that matches
+// at least one of the patterns are returned.
 func (file File) ListDirInfoRecursive(callback func(File, FileInfo) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.ListDirInfoRecursive(path, callback, patterns)
 }
 
+// ListDirMax returns at most max files and directories in dirPath.
+// A max value of -1 returns all files.
+// If any patterns are passed, then only files or directories with a name that matches
+// at least one of the patterns are returned.
 func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.ListDirMax(path, max, patterns)
