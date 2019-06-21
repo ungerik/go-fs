@@ -40,6 +40,16 @@ func Remove(fileURIs ...string) error {
 	return nil
 }
 
+// RemoveFile removes a single file.
+// It's just a wrapper for calling file.Remove(),
+// useful mostly as callback for methods that list files
+// to delete all files of a certain pattern.
+// Or as a more elegant way to remove a file passed as string literal path:
+//   fs.RemoveFile("/my/hardcoded.path")
+func RemoveFile(file File) error {
+	return file.Remove()
+}
+
 // RemoveFiles removes all files.
 // If a file does not exist, then it is skipped and not reported as error.
 func RemoveFiles(files ...File) error {
