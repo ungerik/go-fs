@@ -32,9 +32,9 @@ func Split(uuid [16]byte) []string {
 	}
 }
 
-// Join returns a directory with the splitted UUID joined to baseDir
-func Join(baseDir fs.File, uuid [16]byte) fs.File {
-	return baseDir.Join(Split(uuid)...)
+// Join returns a directory with the splitted UUID and pathParts joined to baseDir.
+func Join(baseDir fs.File, uuid [16]byte, pathParts ...string) fs.File {
+	return baseDir.Join(append(Split(uuid), pathParts...)...)
 }
 
 // Parse the path of uuidDir for a UUID
