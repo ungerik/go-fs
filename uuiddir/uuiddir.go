@@ -1,11 +1,11 @@
-// Package uuiddirs provides functions to split up a uu.ID
+// Package uuiddirs provides functions to split up a UUID
 // into a series of sub-directories so that an unlimited number
 // of UUIDs can be used as directories.
 //
 // Example:
 //   The UUID f0498fad-437c-4954-ad82-8ec2cc202628 maps to the path
 //   f0/498/fad/437c4954/ad828ec2cc202628
-package uuiddirs
+package uuiddir
 
 import (
 	"encoding/hex"

@@ -1,4 +1,4 @@
-package uuiddirs
+package uuiddir
 
 import (
 	"errors"
