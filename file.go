@@ -591,7 +591,7 @@ func (file File) Truncate(size int64) error {
 
 // Rename changes the name of a file where newName is the name part after file.Dir().
 // Note: this does not move the file like in other rename implementations,
-// it only changes the name of the with within its directdory.
+// it only changes the name of the file within its directdory.
 func (file File) Rename(newName string) (renamedFile File, err error) {
 	fileSystem, path := file.ParseRawURI()
 	err = fileSystem.Rename(path, newName)
