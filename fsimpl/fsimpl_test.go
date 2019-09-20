@@ -33,3 +33,11 @@ func Test_RandomString(t *testing.T) {
 	str := RandomString()
 	assert.Equal(t, 20, len(str))
 }
+
+func Test_ReadonlyFileBuffer(t *testing.T) {
+	out := make([]byte, 0)
+	b := NewReadonlyFileBuffer(nil)
+	n, err := b.Read(out)
+	assert.NoError(t, err, "Read")
+	assert.Equal(t, n, 0, "no bytes read")
+}

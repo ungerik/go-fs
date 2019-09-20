@@ -145,7 +145,7 @@ func (buf *ReadonlyFileBuffer) Read(p []byte) (n int, err error) {
 // read (0 <= n <= len(p)) and any error encountered.
 func (buf *ReadonlyFileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
 	pos := int(off)
-	if pos >= len(buf.data) {
+	if pos > len(buf.data) {
 		return 0, io.ErrShortBuffer
 	}
 	return copy(p, buf.data[pos:]), nil
