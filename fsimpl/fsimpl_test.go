@@ -1,6 +1,7 @@
 package fsimpl
 
 import (
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,6 +39,6 @@ func Test_ReadonlyFileBuffer(t *testing.T) {
 	out := make([]byte, 0)
 	b := NewReadonlyFileBuffer(nil)
 	n, err := b.Read(out)
-	assert.NoError(t, err, "Read")
+	assert.Equal(t, io.EOF, err, "Read")
 	assert.Equal(t, n, 0, "no bytes read")
 }
