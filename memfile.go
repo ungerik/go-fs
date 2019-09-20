@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"strings"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -48,6 +49,25 @@ func NewMemFileFrom(fileReader FileReader) (*MemFile, error) {
 		return nil, err
 	}
 	return &MemFile{name: fileReader.Name(), data: data}, nil
+}
+
+// NewMemFileFromMarshalJSON returns a new MemFile with
+// the result of marshalling input as JSON with optional indentation.
+// (indent strings will be joined)
+func NewMemFileFromMarshalJSON(name string, input interface{}, indent ...string) (*MemFile, error) {
+	var (
+		data []byte
+		err  error
+	)
+	if len(indent) > 0 {
+		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
+	} else {
+		data, err = json.Marshal(input)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &MemFile{name: name, data: data}, nil
 }
 
 // String returns the name and meta information for the FileReader.
