@@ -58,6 +58,10 @@ type FileReader interface {
 
 	// ReadXML reads and unmarshalles the XML content of the file to output.
 	ReadXML(output interface{}) error
+
+	// GobEncode reads and gob encodes the file name and content,
+	// implementing encoding/gob.GobEncoder.
+	GobEncode() ([]byte, error)
 }
 
 // FileReaderWithName returns a new FileReader that wraps the passed fileReader,

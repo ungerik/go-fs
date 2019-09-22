@@ -707,3 +707,25 @@ func (file File) WriteXML(input interface{}, indent ...string) (err error) {
 	data = append([]byte(xml.Header), data...)
 	return file.WriteAll(data)
 }
+
+// GobEncode reads and gob encodes the file name and content,
+// implementing encoding/gob.GobEncoder.
+func (file File) GobEncode() ([]byte, error) {
+	memFile, err := NewMemFileFrom(file)
+	if err != nil {
+		return nil, err
+	}
+	return memFile.GobEncode()
+}
+
+// GobDecode decodes a file name and content from gobBytes
+// and writes the content to this file, ignoring the decoded name.
+// Implements encoding/gob.GobDecoder.
+func (file File) GobDecode(gobBytes []byte) error {
+	var memFile MemFile
+	err := memFile.GobDecode(gobBytes)
+	if err != nil {
+		return err
+	}
+	return file.WriteAll(memFile.FileData)
+}
