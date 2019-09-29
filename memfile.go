@@ -102,7 +102,7 @@ func (f *MemFile) Size() int64 {
 
 // Exists returns if the MemFile has a Name
 func (f *MemFile) Exists() bool {
-	return f.FileName != ""
+	return f != nil && f.FileName != ""
 }
 
 // ContentHash returns a Dropbox compatible content hash for the file.
