@@ -38,7 +38,7 @@ func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) er
 	} else {
 		err := dest.Dir().MakeDir()
 		if err != nil {
-			return err
+			return fmt.Errorf("CopyFileBuf: can't make directory %q: %w", dest.Dir(), err)
 		}
 	}
 
@@ -53,7 +53,7 @@ func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) er
 
 	r, err := src.OpenReader()
 	if err != nil {
-		return err
+		return fmt.Errorf("CopyFileBuf: can't open src reader: %w", err)
 	}
 	defer r.Close()
 
@@ -62,7 +62,7 @@ func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) er
 	}
 	w, err := dest.OpenWriter(perm...)
 	if err != nil {
-		return err
+		return fmt.Errorf("CopyFileBuf: can't open dest writer: %w", err)
 	}
 	defer w.Close()
 
@@ -70,7 +70,10 @@ func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) er
 		*buf = make([]byte, copyBufferSize)
 	}
 	_, err = io.CopyBuffer(w, r, *buf)
-	return err
+	if err != nil {
+		return fmt.Errorf("CopyFileBuf: error from io.CopyBuffer: %w", err)
+	}
+	return nil
 }
 
 // CopyRecursive can copy between files of different file systems.
@@ -94,7 +97,7 @@ func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
 	if !dest.Exists() {
 		err := dest.MakeDir()
 		if err != nil {
-			return err
+			return fmt.Errorf("copyRecursive: can't make dest dir %q: %w", dest, err)
 		}
 	}
 
@@ -186,7 +189,7 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 		return nil
 	})
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("IdenticalDirContents: error listing dirA %q: %w", dirA, err)
 	}
 
 	fileInfosB := make(map[string]FileInfo, len(fileInfosA))
@@ -205,7 +208,7 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 		return false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("IdenticalDirContents: error listing dirB %q: %w", dirB, err)
 	}
 
 	for filename, infoA := range fileInfosA {
@@ -221,14 +224,14 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 			if hashA == "" {
 				hashA, err = dirA.Join(filename).ContentHash()
 				if err != nil {
-					return false, err
+					return false, fmt.Errorf("IdenticalDirContents: error content hashing %q: %w", filename, err)
 				}
 			}
 			hashB := infoB.ContentHash
 			if hashB == "" {
 				hashB, err = dirB.Join(filename).ContentHash()
 				if err != nil {
-					return false, err
+					return false, fmt.Errorf("IdenticalDirContents: error content hashing %q: %w", filename, err)
 				}
 			}
 

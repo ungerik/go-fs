@@ -30,7 +30,7 @@ func NewMemFile(name string, data []byte) *MemFile {
 func NewMemFileFromReader(name string, ioReader io.Reader) (*MemFile, error) {
 	data, err := ioutil.ReadAll(ioReader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NewMemFileFromReader: error reading from io.Reader: %w", err)
 	}
 	return &MemFile{FileName: name, FileData: data}, nil
 }
@@ -39,7 +39,7 @@ func NewMemFileFromReader(name string, ioReader io.Reader) (*MemFile, error) {
 func NewMemFileFromFileReader(name string, fileReader FileReader) (*MemFile, error) {
 	data, err := fileReader.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NewMemFileFromFileReader: error reading from FileReader: %w", err)
 	}
 	return &MemFile{FileName: name, FileData: data}, nil
 }
@@ -50,7 +50,7 @@ func NewMemFileFromFileReader(name string, fileReader FileReader) (*MemFile, err
 func NewMemFileFrom(fileReader FileReader) (*MemFile, error) {
 	data, err := fileReader.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NewMemFileFrom: error reading from FileReader: %w", err)
 	}
 	return &MemFile{FileName: fileReader.Name(), FileData: data}, nil
 }
@@ -69,7 +69,7 @@ func NewMemFileFromMarshalJSON(name string, input interface{}, indent ...string)
 		data, err = json.Marshal(input)
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NewMemFileFromMarshalJSON: error marshalling JSON: %w", err)
 	}
 	return &MemFile{FileName: name, FileData: data}, nil
 }
@@ -163,11 +163,11 @@ func (f *MemFile) GobEncode() ([]byte, error) {
 	enc := gob.NewEncoder(buf)
 	err := enc.Encode(f.FileName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("MemFile.GobEncode: error encoding FileName: %w", err)
 	}
 	err = enc.Encode(f.FileData)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("MemFile.GobEncode: error encoding FileData: %w", err)
 	}
 	return buf.Bytes(), nil
 }
@@ -178,7 +178,11 @@ func (f *MemFile) GobDecode(gobBytes []byte) error {
 	dec := gob.NewDecoder(bytes.NewReader(gobBytes))
 	err := dec.Decode(&f.FileName)
 	if err != nil {
-		return err
+		return fmt.Errorf("MemFile.GobDecode: error decoding FileName: %w", err)
 	}
-	return dec.Decode(&f.FileData)
+	err = dec.Decode(&f.FileData)
+	if err != nil {
+		return fmt.Errorf("MemFile.GobDecode: error decoding FileData: %w", err)
+	}
+	return nil
 }

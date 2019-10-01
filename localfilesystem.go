@@ -131,8 +131,11 @@ func (local *LocalFileSystem) MatchAnyPattern(name string, patterns []string) (b
 	}
 	for _, pattern := range patterns {
 		match, err := filepath.Match(pattern, name)
-		if match || err != nil {
-			return match, err
+		if err != nil {
+			return false, fmt.Errorf("LocalFileSystem.MatchAnyPattern: error matching pattern %q with name %q: %w", pattern, name, err)
+		}
+		if match {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -189,6 +192,7 @@ func (local *LocalFileSystem) IsHidden(filePath string) bool {
 	hidden, err := hasFileAttributeHidden(filePath)
 	if err != nil {
 		// Should not happen, this is why we are logging the error
+		// TODO panic or configurable logger instead?
 		fmt.Fprintf(os.Stderr, "hasFileAttributeHidden(): %s\n", err)
 	}
 	return hidden
@@ -222,7 +226,7 @@ func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err erro
 	filePath = expandTilde(filePath)
 	linkedPath, err := os.Readlink(filePath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("LocalFileSystem.ReadSymbolicLink(%q): error reading link: %w", file, err)
 	}
 	return File(linkedPath), nil
 }
@@ -239,7 +243,7 @@ func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, Fi
 
 	f, err := os.Open(dirPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): error opening directory: %w", dirPath, err)
 	}
 	defer f.Close()
 
@@ -248,7 +252,7 @@ func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, Fi
 		if err != nil {
 			eof = (err == io.EOF)
 			if !eof {
-				return err
+				return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): error reading directory: %w", dirPath, err)
 			}
 		}
 
@@ -261,7 +265,7 @@ func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, Fi
 				err = callback(file, info)
 			}
 			if err != nil {
-				return err
+				return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): %w", dirPath, err)
 			}
 		}
 	}
@@ -285,7 +289,7 @@ func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []strin
 
 	f, err := os.Open(dirPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): error opening directory: %w", dirPath, err)
 	}
 	defer f.Close()
 
@@ -302,7 +306,7 @@ func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []strin
 		if err != nil {
 			eof = (err == io.EOF)
 			if !eof {
-				return nil, err
+				return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): error reading directory: %w", dirPath, err)
 			}
 		}
 
@@ -312,7 +316,7 @@ func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []strin
 				files = append(files, local.JoinCleanFile(dirPath, name))
 			}
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): %w", dirPath, err)
 			}
 		}
 
@@ -374,7 +378,7 @@ func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error 
 		// On Linux need additional chmod because os.Mkdir does not set OthersWrite bit
 		err = os.Chmod(dirPath, os.FileMode(p))
 		if err != nil {
-			return err
+			return fmt.Errorf("LocalFileSystem.MakeDir(%q): can't chmod to %0o: %w", dirPath, p, err)
 		}
 	}
 
@@ -481,7 +485,7 @@ func (local *LocalFileSystem) CopyFile(srcFilePath string, destFilePath string, 
 	}
 	_, err = io.CopyBuffer(w, r, *buf)
 	if err != nil {
-		return err
+		return fmt.Errorf("LocalFileSystem.CopyFile(%q, %q): error from io.CopyBuffer: %w", srcFilePath, destFilePath, err)
 	}
 	return w.Sync()
 }
