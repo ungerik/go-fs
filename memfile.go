@@ -156,7 +156,7 @@ func (f *MemFile) ReadXML(output interface{}) error {
 	return xml.Unmarshal(f.FileData, output)
 }
 
-// GobEncode reads and gob encodes the file name and content,
+// GobEncode gob encodes the file name and content,
 // implementing encoding/gob.GobEncoder.
 func (f *MemFile) GobEncode() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 16+len(f.FileName)+len(f.FileData)))
