@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 )
 
 const copyBufferSize = 1024 * 1024 * 4
@@ -242,4 +243,11 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 	}
 
 	return true, nil
+}
+
+// CurrentWorkingDir returns the current working directory of the process.
+// In case of an erorr, Exists() of the result File will return false.
+func CurrentWorkingDir() File {
+	cwd, _ := os.Getwd()
+	return File(cwd)
 }
