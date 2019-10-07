@@ -57,9 +57,12 @@ func DirAndName(filePath string, volumeLen int, separator string) (dir, name str
 	}
 
 	pos := strings.LastIndex(filePath, separator)
-	if pos == -1 {
+	switch {
+	case pos == -1:
 		return ".", filePath
-	} else if pos <= volumeLen {
+	case pos == 0:
+		return separator, filePath[1:]
+	case pos < volumeLen:
 		return filePath, ""
 	}
 

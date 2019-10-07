@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_LocalFileSystemMakeAllDirs(t *testing.T) {
+func Test_LocalFileSystem_MakeAllDirs(t *testing.T) {
 	const testDir = "TestDir"
 	File(testDir).RemoveRecursive()
 	defer File(testDir).RemoveRecursive()
@@ -18,4 +18,20 @@ func Test_LocalFileSystemMakeAllDirs(t *testing.T) {
 
 	err := localFileSystem.MakeDir(testDir, []Permissions{AllReadWrite})
 	assert.NoError(t, err)
+}
+
+func Test_LocalFileSystem_DirAndName(t *testing.T) {
+	root := Local.Separator()
+
+	dir, name := Local.DirAndName(root)
+	assert.Equal(t, root, dir)
+	assert.Equal(t, "", name)
+
+	dir, name = Local.DirAndName(root + "FileInRoot")
+	assert.Equal(t, root, dir)
+	assert.Equal(t, "FileInRoot", name)
+
+	dir, name = Local.DirAndName(root + "FileInRoot" + Local.Separator())
+	assert.Equal(t, root, dir)
+	assert.Equal(t, "FileInRoot", name)
 }

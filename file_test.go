@@ -3,6 +3,8 @@ package fs
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -77,5 +79,25 @@ func TestFile_MakeAllDirs(t *testing.T) {
 	err = baseDir.Join(pathParts[0]).RemoveRecursive()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func Test_FileJoin(t *testing.T) {
+	exptectedPaths := []string{
+		"/1/2/3/4/5",
+		"/1/2/3/4",
+		"/1/2/3",
+		"/1/2",
+		"/1",
+		"/",
+		"/",
+	}
+
+	f := File("/").Join("1", "2", "3", "4", "5")
+
+	for _, exp := range exptectedPaths {
+		assert.Equal(t, exp, f.LocalPath())
+		// Up one directory
+		f = f.Dir()
 	}
 }
