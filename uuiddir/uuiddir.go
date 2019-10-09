@@ -9,10 +9,9 @@ package uuiddir
 
 import (
 	"encoding/hex"
+	"fmt"
 	"path"
 	"strings"
-
-	"github.com/domonda/errors"
 
 	fs "github.com/ungerik/go-fs"
 )
@@ -41,7 +40,7 @@ func Join(baseDir fs.File, uuid [16]byte, pathParts ...string) fs.File {
 func Parse(uuidDir fs.File) (uuid [16]byte, err error) {
 	uuidPath := strings.TrimSuffix(uuidDir.PathWithSlashes(), "/")
 	if len(uuidPath) < 36 {
-		return nilUUID, errors.Errorf("path can't be parsed as UUID: %q", string(uuidDir))
+		return nilUUID, fmt.Errorf("path can't be parsed as UUID: %q", string(uuidDir))
 	}
 	return ParseString(uuidPath[len(uuidPath)-36:])
 }
@@ -55,15 +54,15 @@ func FormatString(uuid [16]byte) string {
 // ParseString parses a 36 character string (like returned from FormatString) as UUID.
 func ParseString(uuidPath string) (uuid [16]byte, err error) {
 	if len(uuidPath) != 36 {
-		return nilUUID, errors.Errorf("path can't be parsed as UUID: %q", uuidPath)
+		return nilUUID, fmt.Errorf("path can't be parsed as UUID: %q", uuidPath)
 	}
 	uuidPath = strings.Replace(uuidPath, "/", "", 4)
 	if len(uuidPath) != 32 {
-		return nilUUID, errors.Errorf("path can't be parsed as UUID: %q", uuidPath)
+		return nilUUID, fmt.Errorf("path can't be parsed as UUID: %q", uuidPath)
 	}
 	b, err := hex.DecodeString(uuidPath)
 	if err != nil {
-		return nilUUID, errors.Errorf("path can't be parsed as UUID: %q", uuidPath)
+		return nilUUID, fmt.Errorf("path can't be parsed as UUID: %q", uuidPath)
 	}
 	copy(uuid[:], b)
 	return uuid, validateUUID(uuid)
@@ -129,7 +128,7 @@ func RemoveDir(baseDir, uuidDir fs.File) error {
 	basePath := baseDir.Path()
 	uuidPath := uuidDir.Path()
 	if !strings.HasPrefix(uuidPath, basePath) || baseDir.FileSystem() != uuidDir.FileSystem() {
-		return errors.Errorf("uuidDir(%q) is not a sub directory of baseDir(%q)", uuidPath, basePath)
+		return fmt.Errorf("uuidDir(%q) is not a sub directory of baseDir(%q)", uuidPath, basePath)
 	}
 	if uuidPath == basePath {
 		return nil
