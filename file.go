@@ -11,45 +11,8 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-// ReadSeekCloser combines the interfaces
-// io.Reader
-// io.ReaderAt
-// io.Seeker
-// io.Closer
-type ReadSeekCloser interface {
-	io.Reader
-	io.ReaderAt
-	io.Seeker
-	io.Closer
-}
-
-// WriteSeekCloser combines the interfaces
-// io.Writer
-// io.WriterAt
-// io.Seeker
-// io.Closer
-type WriteSeekCloser interface {
-	io.Writer
-	io.WriterAt
-	io.Seeker
-	io.Closer
-}
-
-// ReadWriteSeekCloser combines the interfaces
-// io.Reader
-// io.ReaderAt
-// io.Writer
-// io.WriterAt
-// io.Seeker
-// io.Closer
-type ReadWriteSeekCloser interface {
-	io.Reader
-	io.ReaderAt
-	io.Writer
-	io.WriterAt
-	io.Seeker
-	io.Closer
-}
+// InvalidFile is a file with an empty path and thus invalid.
+const InvalidFile = File("")
 
 // File is a local file system path or a complete URI.
 // It is a string underneath, so string literals can be passed everywhere a File is expected.
