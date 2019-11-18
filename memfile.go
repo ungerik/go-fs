@@ -128,6 +128,32 @@ func (f *MemFile) ReadAllString() (string, error) {
 	return string(f.FileData), nil
 }
 
+// ReadAt reads len(p) bytes into p starting at offset off in the
+// underlying input source. It returns the number of bytes
+// read (0 <= n <= len(p)) and any error encountered.
+//
+// When ReadAt returns n < len(p), it returns a non-nil error
+// explaining why more bytes were not returned. In this respect,
+// ReadAt is stricter than Read.
+//
+// If the n = len(p) bytes returned by ReadAt are at the end of the
+// input source, ReadAt returns err == nil.
+//
+// Clients of ReadAt can execute parallel ReadAt calls on the
+// same input source.
+//
+// ReadAt implements the interface io.ReaderAt.
+func (f *MemFile) ReadAt(p []byte, off int64) (n int, err error) {
+	if off >= int64(len(f.FileData)) {
+		return 0, io.EOF
+	}
+	n = copy(p, f.FileData[off:])
+	if n < len(p) {
+		return n, fmt.Errorf("could only read %d of %d requested bytes", n, len(p))
+	}
+	return n, nil
+}
+
 // WriteTo implements the io.WriterTo interface
 func (f *MemFile) WriteTo(writer io.Writer) (n int64, err error) {
 	i, err := writer.Write(f.FileData)
