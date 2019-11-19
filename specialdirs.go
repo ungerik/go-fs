@@ -4,11 +4,21 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"os/user"
 	"strings"
 	"time"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
+
+// HomeDir returns the home directory of the current user.
+func HomeDir() File {
+	u, err := user.Current()
+	if err != nil {
+		return InvalidFile
+	}
+	return File(u.HomeDir)
+}
 
 // TempDir returns the temp directory of the operating system
 func TempDir() File {
