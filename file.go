@@ -84,11 +84,14 @@ func (file File) LocalPath() string {
 }
 
 // MustLocalPath returns the cleaned local file-system path of the file,
-// or panics if it is not on the local file system.
+// or panics if it is not on the local file system or an empty path.
 func (file File) MustLocalPath() string {
+	if file == "" {
+		panic("empty file path")
+	}
 	localPath := file.LocalPath()
 	if localPath == "" {
-		panic(fmt.Sprintf("not a local file-system path: '%s'", string(file)))
+		panic(fmt.Sprintf("not a local file-system path: %q", string(file)))
 	}
 	return localPath
 }
