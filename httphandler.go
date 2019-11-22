@@ -21,10 +21,12 @@ func HTTPHandler(file FileReader, contentType ...string) http.Handler {
 func ServeHTTP(response http.ResponseWriter, request *http.Request, file FileReader, contentType ...string) {
 	data, err := file.ReadAll()
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		if IsErrDoesNotExist(err) {
-			statusCode = http.StatusNotFound
+		if handler, ok := err.(http.Handler); ok {
+			handler.ServeHTTP(response, request)
+			return
 		}
+
+		statusCode := http.StatusInternalServerError
 		http.Error(response, http.StatusText(statusCode), statusCode)
 		return
 	}

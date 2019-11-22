@@ -43,7 +43,7 @@ func (file File) RawURI() string {
 // See RawURI to just get the string value of it.
 // String implements the fmt.Stringer interface.
 func (file File) String() string {
-	return fmt.Sprintf("%s (%s)", file.Path(), file.FileSystem().Name())
+	return fmt.Sprintf("%q (%s)", file.Path(), file.FileSystem().Name())
 }
 
 // URL of the file
@@ -417,7 +417,8 @@ func (file File) MakeAllDirs(perm ...Permissions) (err error) {
 	info := file.Stat()
 	if info.IsDir {
 		return nil
-	} else if info.Exists {
+	}
+	if info.Exists {
 		return NewErrIsNotDirectory(file)
 	}
 
@@ -599,10 +600,7 @@ func (file File) RemoveDirContentsRecursive() error {
 		// Ignore files that have been deleted,
 		// after all we wanted to get rid of the in the first place,
 		// so this is not an error for us
-		if IsErrDoesNotExist(err) {
-			return nil
-		}
-		return err
+		return RemoveErrDoesNotExist(err)
 	})
 }
 
@@ -614,10 +612,7 @@ func (file File) RemoveDirContents(patterns ...string) error {
 		// Ignore files that have been deleted,
 		// after all we wanted to get rid of the in the first place,
 		// so this is not an error for us
-		if IsErrDoesNotExist(err) {
-			return nil
-		}
-		return err
+		return RemoveErrDoesNotExist(err)
 	}, patterns...)
 }
 

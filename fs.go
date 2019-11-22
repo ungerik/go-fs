@@ -33,7 +33,7 @@ func Move(source, destination File) error {
 func Remove(fileURIs ...string) error {
 	for _, uri := range fileURIs {
 		err := File(uri).Remove()
-		if err != nil && !IsErrDoesNotExist(err) {
+		if RemoveErrDoesNotExist(err) != nil {
 			return err
 		}
 	}
@@ -55,7 +55,7 @@ func RemoveFile(file File) error {
 func RemoveFiles(files ...File) error {
 	for _, file := range files {
 		err := file.Remove()
-		if err != nil && !IsErrDoesNotExist(err) {
+		if RemoveErrDoesNotExist(err) != nil {
 			return err
 		}
 	}

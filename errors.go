@@ -1,73 +1,51 @@
 package fs
 
-import "net/http"
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+)
 
-type ConstError string
+// SentryError is used for const sentry errors
+type SentryError string
 
-func (e ConstError) Error() string {
+func (e SentryError) Error() string {
 	return string(e)
 }
 
 const (
 	// ErrFileWatchNotSupported is returned when file watching is
 	// not available for a file system
-	ErrFileWatchNotSupported = ConstError("file system does not support watching files")
+	ErrFileWatchNotSupported = SentryError("file system does not support watching files")
 
 	// ErrReadOnlyFileSystem is returned when a file system doesn't support writes
-	ErrReadOnlyFileSystem = ConstError("file system is read-only")
+	ErrReadOnlyFileSystem = SentryError("file system is read-only")
 
 	// ErrWriteOnlyFileSystem is returned when a file system doesn't support reads
-	ErrWriteOnlyFileSystem = ConstError("file system is write-only")
+	ErrWriteOnlyFileSystem = SentryError("file system is write-only")
+
+	// ErrInvalidFileSystem indicates an invalid file system
+	ErrInvalidFileSystem = SentryError("invalid file system")
 )
-
-// errCause returns the underlying cause of the error, if possible.
-// An error value has a cause if it implements the following
-// interface:
-//
-//     type causer interface {
-//            Cause() error
-//     }
-//
-// If the error does not implement Cause, the original error will
-// be returned. If the error is nil, nil will be returned without further
-// investigation.
-func errCause(err error) error {
-	type causer interface {
-		Cause() error
-	}
-	type wrapper interface {
-		Unwrap() error
-	}
-
-	for err != nil {
-		switch e := err.(type) {
-		case causer:
-			err = e.Cause()
-		case wrapper:
-			err = e.Unwrap()
-		default:
-			return err
-		}
-	}
-	return err
-}
-
-// FileError is an interface that is implemented by all errors
-// that can reference a file.
-type FileError interface {
-	error
-
-	// File returns the file that error concerns
-	File() File
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 // ErrDoesNotExist
 
+// RemoveErrDoesNotExist returns nil if err is or wraps ErrDoesNotExist,
+// else err will be returned unchanged.
+func RemoveErrDoesNotExist(err error) error {
+	if err != nil && errors.Is(err, new(ErrDoesNotExist)) {
+		return nil
+	}
+	return err
+}
+
 // ErrDoesNotExist is returned when a file does not exist
 // Implements http.Handler with http.NotFound
+// and wraps os.ErrNotExist (returned by Unwrap).
 type ErrDoesNotExist struct {
-	file File
+	file interface{}
 }
 
 // NewErrDoesNotExist returns a new ErrDoesNotExist
@@ -78,26 +56,32 @@ func NewErrDoesNotExist(file File) *ErrDoesNotExist {
 // NewErrDoesNotExistFileReader is a hack that tries to cast fileReader to a File
 // or use a pseudo File with the name fromm the FileReader if not possible.
 func NewErrDoesNotExistFileReader(fileReader FileReader) *ErrDoesNotExist {
-	file, ok := fileReader.(File)
-	if !ok {
-		file = File(fileReader.Name())
-	}
-	return &ErrDoesNotExist{file}
+	return &ErrDoesNotExist{fileReader}
 }
 
 func (err *ErrDoesNotExist) Error() string {
-	return "file does not exist: " + err.file.String()
+	return fmt.Sprintf("file does not exist: %s", err.file)
+}
+
+func (*ErrDoesNotExist) Is(target error) bool {
+	_, is := target.(*ErrDoesNotExist)
+	return is
+}
+
+// Unwrap returns os.ErrNotExist
+func (err *ErrDoesNotExist) Unwrap() error {
+	return os.ErrNotExist
 }
 
 // File returns the file that error concerns
-func (err *ErrDoesNotExist) File() File {
-	return err.file
+func (err *ErrDoesNotExist) File() (file File, ok bool) {
+	file, ok = err.file.(File)
+	return file, ok
 }
 
-// IsErrDoesNotExist returns if err is of type *ErrDoesNotExist
-func IsErrDoesNotExist(err error) bool {
-	_, is := errCause(err).(*ErrDoesNotExist)
-	return is
+func (err *ErrDoesNotExist) FileReader() (file FileReader, ok bool) {
+	file, ok = err.file.(FileReader)
+	return file, ok
 }
 
 func (err *ErrDoesNotExist) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -119,18 +103,17 @@ func NewErrIsDirectory(file File) *ErrIsDirectory {
 }
 
 func (err *ErrIsDirectory) Error() string {
-	return "file is a directory: " + err.file.String()
+	return fmt.Sprintf("file is a directory: %s", err.file)
+}
+
+func (*ErrIsDirectory) Is(target error) bool {
+	_, is := target.(*ErrIsDirectory)
+	return is
 }
 
 // File returns the file that error concerns
 func (err *ErrIsDirectory) File() File {
 	return err.file
-}
-
-// IsErrIsDirectory returns if err is of type *ErrIsDirectory
-func IsErrIsDirectory(err error) bool {
-	_, is := errCause(err).(*ErrIsDirectory)
-	return is
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -148,19 +131,15 @@ func NewErrIsNotDirectory(file File) *ErrIsNotDirectory {
 }
 
 func (err *ErrIsNotDirectory) Error() string {
-	return "file is not a directory: " + err.file.String()
+	return fmt.Sprintf("file is not a directory: %s", err.file)
+}
+
+func (*ErrIsNotDirectory) Is(target error) bool {
+	_, is := target.(*ErrIsNotDirectory)
+	return is
 }
 
 // File returns the file that error concerns
 func (err *ErrIsNotDirectory) File() File {
 	return err.file
-}
-
-// IsErrIsNotDirectory returns if err is of type *ErrIsNotDirectory
-func IsErrIsNotDirectory(err error) bool {
-	if err == nil {
-		return false
-	}
-	_, is := errCause(err).(*ErrIsNotDirectory)
-	return is
 }

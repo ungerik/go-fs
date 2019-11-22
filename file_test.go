@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,8 +34,8 @@ func TestFile_MakeAllDirs(t *testing.T) {
 	defer file.Remove()
 
 	err = file.MakeAllDirs()
-	if !IsErrIsNotDirectory(err) {
-		t.Fatalf("should be ErrIsNotDirectory but is %s", err)
+	if !errors.Is(err, new(ErrIsNotDirectory)) {
+		t.Fatalf("should be ErrIsNotDirectory but is: %s", err)
 	}
 
 	pathParts := make([]string, 5)

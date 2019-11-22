@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-const ErrInvalidFileSystem = ConstError("invalid file system")
-
 // InvalidFileSystem is a file system where all operations are invalid.
 // A File with an empty path defaults to this FS.
 type InvalidFileSystem struct{}

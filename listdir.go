@@ -36,10 +36,7 @@ func ListDirMaxImpl(max int, listDir func(callback func(File) error) error) (fil
 // 		if f.IsDir() {
 // 			err := f.ListDirRecursive(callback, patterns...)
 // 			// Don't mind files that have been deleted while iterating
-// 			if IsErrDoesNotExist(err) {
-// 				err = nil
-// 			}
-// 			return err
+// 			return RemoveErrDoesNotExist(err)
 // 		}
 // 		match, err := fs.MatchAnyPattern(f.Name(), patterns)
 // 		if match {
@@ -57,10 +54,7 @@ func ListDirInfoRecursiveImpl(fs FileSystem, dirPath string, callback func(File,
 		if info.IsDir {
 			err := file.ListDirInfoRecursive(callback, patterns...)
 			// Don't mind files that have been deleted while iterating
-			if IsErrDoesNotExist(err) {
-				err = nil
-			}
-			return err
+			return RemoveErrDoesNotExist(err)
 		}
 		match, err := fs.MatchAnyPattern(info.Name, patterns)
 		if match {
