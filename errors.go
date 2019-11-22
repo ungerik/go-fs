@@ -7,26 +7,26 @@ import (
 	"os"
 )
 
-// SentryError is used for const sentry errors
-type SentryError string
+// SentinelError is used for const sentinel errors
+type SentinelError string
 
-func (e SentryError) Error() string {
+func (e SentinelError) Error() string {
 	return string(e)
 }
 
 const (
 	// ErrFileWatchNotSupported is returned when file watching is
 	// not available for a file system
-	ErrFileWatchNotSupported = SentryError("file system does not support watching files")
+	ErrFileWatchNotSupported = SentinelError("file system does not support watching files")
 
 	// ErrReadOnlyFileSystem is returned when a file system doesn't support writes
-	ErrReadOnlyFileSystem = SentryError("file system is read-only")
+	ErrReadOnlyFileSystem = SentinelError("file system is read-only")
 
 	// ErrWriteOnlyFileSystem is returned when a file system doesn't support reads
-	ErrWriteOnlyFileSystem = SentryError("file system is write-only")
+	ErrWriteOnlyFileSystem = SentinelError("file system is write-only")
 
 	// ErrInvalidFileSystem indicates an invalid file system
-	ErrInvalidFileSystem = SentryError("invalid file system")
+	ErrInvalidFileSystem = SentinelError("invalid file system")
 )
 
 ///////////////////////////////////////////////////////////////////////////////
