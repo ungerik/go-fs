@@ -9,7 +9,21 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-func TestFile_MakeAllDirs(t *testing.T) {
+func TestInvalidFile(t *testing.T) {
+	assert.False(t, InvalidFile.IsDir(), "InvalidFile does not exist")
+
+	assert.Equal(t, InvalidFile, InvalidFile.Dir(), "dir of InvalidFile is still an InvalidFile")
+	dir, name := InvalidFile.DirAndName()
+	assert.Equal(t, InvalidFile, dir, "dir of InvalidFile is still an InvalidFile")
+	assert.Equal(t, "", name, "name of InvalidFile is empty string")
+
+	assert.Equal(t, InvalidFileSystem{}, InvalidFile.FileSystem(), "InvalidFile has an InvalidFileSystem")
+
+	_, err := InvalidFile.OpenReader()
+	assert.Equal(t, ErrInvalidFileSystem, err, "can't open InvalidFile")
+}
+
+func TestFileMakeAllDirs(t *testing.T) {
 	checkDir := func(dir File) {
 		if !dir.Exists() {
 			t.Fatalf("dir does not exist: %s", dir)

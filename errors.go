@@ -35,7 +35,8 @@ const (
 // RemoveErrDoesNotExist returns nil if err is or wraps ErrDoesNotExist,
 // else err will be returned unchanged.
 func RemoveErrDoesNotExist(err error) error {
-	if err != nil && errors.Is(err, new(ErrDoesNotExist)) {
+	var e ErrDoesNotExist
+	if errors.Is(err, &e) {
 		return nil
 	}
 	return err
