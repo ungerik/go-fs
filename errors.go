@@ -15,9 +15,8 @@ func (e SentinelError) Error() string {
 }
 
 const (
-	// ErrFileWatchNotSupported is returned when file watching is
-	// not available for a file system
-	ErrFileWatchNotSupported = SentinelError("file system does not support watching files")
+	// ErrNotSupported is returned when a feature is not supported by a FileSystem implementation
+	ErrNotSupported = SentinelError("not supported")
 
 	// ErrReadOnlyFileSystem is returned when a file system doesn't support writes
 	ErrReadOnlyFileSystem = SentinelError("file system is read-only")

@@ -3,6 +3,7 @@ package zipfs
 import (
 	"archive/zip"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"path"
@@ -18,6 +19,11 @@ const (
 
 	// Separator used in ZipFileSystem paths
 	Separator = "/"
+)
+
+var (
+	// Make sure ZipFileSystem implements fs.FileSystem
+	_ fs.FileSystem = new(ZipFileSystem)
 )
 
 // ZipFileSystem
@@ -410,7 +416,7 @@ func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permission
 }
 
 func (zipfs *ZipFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
-	return nil, fs.ErrFileWatchNotSupported
+	return nil, fmt.Errorf("ZipFileSystem: %w", fs.ErrNotSupported)
 }
 
 func (zipfs *ZipFileSystem) Truncate(filePath string, size int64) error {

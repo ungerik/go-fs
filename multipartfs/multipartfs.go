@@ -21,6 +21,11 @@ const (
 	Separator = "/"
 )
 
+var (
+	// Make sure MultipartFileSystem implements fs.FileSystem
+	_ fs.FileSystem = new(MultipartFileSystem)
+)
+
 // MultipartFileSystem wraps the files in a MIME multipart message as fs.FileSystem
 type MultipartFileSystem struct {
 	fs.ReadOnlyBase
@@ -128,24 +133,13 @@ func (mpfs *MultipartFileSystem) SplitPath(filePath string) []string {
 	return fsimpl.SplitPath(filePath, mpfs.prefix, Separator)
 }
 
-func (*MultipartFileSystem) Separator() string {
-	return Separator
-}
-
-// MatchAnyPattern returns true if name matches any of patterns,
-// or if len(patterns) == 0.
-// The match per pattern works like path.Match or filepath.Match
-func (*MultipartFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
-}
+func (*MultipartFileSystem) Separator() string { return Separator }
 
 func (*MultipartFileSystem) DirAndName(filePath string) (dir, name string) {
 	return fsimpl.DirAndName(filePath, 0, Separator)
 }
 
-func (*MultipartFileSystem) VolumeName(filePath string) string {
-	return ""
-}
+func (*MultipartFileSystem) VolumeName(filePath string) string { return "" }
 
 func (mpfs *MultipartFileSystem) IsAbsPath(filePath string) bool {
 	return path.IsAbs(filePath)
@@ -196,9 +190,7 @@ func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
 	return len(name) > 0 && name[0] == '.'
 }
 
-func (mpfs *MultipartFileSystem) IsSymbolicLink(filePath string) bool {
-	return false
-}
+func (mpfs *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
 func (mpfs *MultipartFileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
 	parts := mpfs.SplitPath(dirPath)
@@ -243,14 +235,6 @@ func (mpfs *MultipartFileSystem) ListDirMax(dirPath string, max int, patterns []
 	return fs.ListDirMaxImpl(max, func(callback func(fs.File) error) error {
 		return mpfs.ListDirInfo(dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
 	})
-}
-
-func (*MultipartFileSystem) User(filePath string) string {
-	return ""
-}
-
-func (*MultipartFileSystem) Group(filePath string) string {
-	return ""
 }
 
 func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {

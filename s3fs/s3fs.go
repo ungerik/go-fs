@@ -3,6 +3,7 @@ package s3fs
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"path"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -30,6 +32,9 @@ var (
 	DefaultPermissions = fs.UserAndGroupReadWrite
 	// DefaultDirPermissions used for S3 bucket directories
 	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllReadWrite
+
+	// Make sure S3FileSystem implements fs.FileSystem
+	_ fs.FileSystem = new(S3FileSystem)
 )
 
 // S3FileSystem implements fs.FileSystem for an S3 bucket.
@@ -467,7 +472,7 @@ func (s3fs *S3FileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
 		}
 	}()*/
 	//return retChan, nil
-	return nil, fs.ErrFileWatchNotSupported
+	return nil, fmt.Errorf("S3FileSystem: %w", fs.ErrNotSupported)
 }
 
 // Truncate shortens an object's data to size (number of bytes).

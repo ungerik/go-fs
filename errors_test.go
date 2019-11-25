@@ -12,7 +12,7 @@ import (
 )
 
 func TestErrDoesNotExist(t *testing.T) {
-	notExistingFile := File(Separator + fsimpl.RandomString())
+	notExistingFile := Local.Root().Join(fsimpl.RandomString())
 	assert.False(t, notExistingFile.Exists(), "file does not exist")
 
 	_, err := notExistingFile.OpenReader()

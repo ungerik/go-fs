@@ -87,9 +87,9 @@ func MatchAnyPattern(name string, patterns []string) (bool, error) {
 	return false, nil
 }
 
-func JoinCleanPath(uriParts []string, prefix, separator string) string {
+func JoinCleanPath(uriParts []string, trimPrefix, separator string) string {
 	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], prefix)
+		uriParts[0] = strings.TrimPrefix(uriParts[0], trimPrefix)
 	}
 	cleanPath := path.Join(uriParts...)
 	unescPath, err := url.PathUnescape(cleanPath)

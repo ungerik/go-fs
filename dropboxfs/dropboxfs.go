@@ -3,6 +3,7 @@ package dropboxfs
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"path"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	dropbox "github.com/tj/go-dropbox"
+
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -27,6 +29,9 @@ var (
 	DefaultPermissions = fs.UserAndGroupReadWrite
 	// DefaultDirPermissions used for Dropbox directories
 	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllExecute
+
+	// Make sure DropboxFileSystem implements fs.FileSystem
+	_ fs.FileSystem = new(DropboxFileSystem)
 )
 
 // DropboxFileSystem implements fs.FileSystem for a Dropbox app.
@@ -384,7 +389,7 @@ func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permiss
 }
 
 func (dbfs *DropboxFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
-	return nil, fs.ErrFileWatchNotSupported
+	return nil, fmt.Errorf("DropboxFileSystem.Watch: %w", fs.ErrNotSupported)
 }
 
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {

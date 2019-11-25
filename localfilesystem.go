@@ -439,7 +439,7 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions
 
 func (local *LocalFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
 	filePath = expandTilde(filePath)
-	return nil, ErrFileWatchNotSupported
+	return nil, fmt.Errorf("LocalFileSystem.Watch: %w", ErrNotSupported)
 	// events := make(chan WatchEvent, 1)
 	// return events
 }
