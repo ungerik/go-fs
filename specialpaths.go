@@ -61,3 +61,13 @@ func tempDirName() (string, error) {
 	}
 	return fmt.Sprintf("%s_%X", time.Now().Format("20060102_150405_999999"), randomBytes), nil
 }
+
+// Executable returns a File for the executable that started the current process.
+// It wraps os.Executable, see https://golang.org/pkg/os/#Executable
+func Executable() File {
+	exe, err := os.Executable()
+	if err != nil {
+		return InvalidFile
+	}
+	return File(exe)
+}
