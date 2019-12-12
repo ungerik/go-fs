@@ -1,9 +1,18 @@
 package fs
 
+import "fmt"
+
+// Filef is a shortcut for File(fmt.Sprintf(format, args...))
+func Filef(format string, args ...interface{}) File {
+	return File(fmt.Sprintf(format, args...))
+}
+
+// CleanFilePath returns a File from uri with cleaned path and a file system prefix
 func CleanFilePath(uri string) File {
 	return GetFileSystem(uri).JoinCleanFile(uri)
 }
 
+// JoinCleanFilePath returns a File from joined and cleaned uriParts with a file system prefix
 func JoinCleanFilePath(uriParts ...string) File {
 	return GetFileSystem(uriParts...).JoinCleanFile(uriParts...)
 }
