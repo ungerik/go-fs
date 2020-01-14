@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"io"
 	"net/url"
 	"path"
@@ -104,15 +105,15 @@ func (invalid InvalidFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (invalid InvalidFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (invalid InvalidFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) ListDirInfoRecursive(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (invalid InvalidFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {
+func (invalid InvalidFileSystem) ListDirMax(ctx context.Context, dirPath string, n int, patterns []string) (files []File, err error) {
 	return nil, ErrInvalidFileSystem
 }
 

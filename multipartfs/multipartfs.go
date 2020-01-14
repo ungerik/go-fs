@@ -1,6 +1,7 @@
 package multipartfs
 
 import (
+	"context"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -192,7 +193,11 @@ func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
 
 func (mpfs *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (mpfs *MultipartFileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	parts := mpfs.SplitPath(dirPath)
 	switch len(parts) {
 	case 0:
@@ -227,13 +232,13 @@ func (mpfs *MultipartFileSystem) ListDirInfo(dirPath string, callback func(fs.Fi
 	return err
 }
 
-func (mpfs *MultipartFileSystem) ListDirInfoRecursive(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
-	return fs.ListDirInfoRecursiveImpl(mpfs, dirPath, callback, patterns)
+func (mpfs *MultipartFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
+	return fs.ListDirInfoRecursiveImpl(ctx, mpfs, dirPath, callback, patterns)
 }
 
-func (mpfs *MultipartFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(max, func(callback func(fs.File) error) error {
-		return mpfs.ListDirInfo(dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
+func (mpfs *MultipartFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
+	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
+		return mpfs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
 	})
 }
 

@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"io"
 )
 
@@ -67,19 +68,19 @@ type FileSystem interface {
 	// ListDirInfo calls the passed callback function for every file and directory in dirPath.
 	// If any patterns are passed, then only files or directores with a name that matches
 	// at least one of the patterns are returned.
-	ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error
+	ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error
 
 	// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
 	// recursing into all sub-directories.
 	// If any patterns are passed, then only files (not directories) with a name that matches
 	// at least one of the patterns are returned.
-	ListDirInfoRecursive(dirPath string, callback func(File, FileInfo) error, patterns []string) error
+	ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error
 
 	// ListDirMax returns at most max files and directories in dirPath.
 	// A max value of -1 returns all files.
 	// If any patterns are passed, then only files or directories with a name that matches
 	// at least one of the patterns are returned.
-	ListDirMax(dirPath string, max int, patterns []string) ([]File, error)
+	ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error)
 
 	SetPermissions(filePath string, perm Permissions) error
 

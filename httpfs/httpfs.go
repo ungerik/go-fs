@@ -5,6 +5,7 @@
 package httpfs
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -154,7 +155,7 @@ func (f *HTTPFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files or directores with a name that matches
 // at least one of the patterns are returned.
-func (f *HTTPFileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
+func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
 	return fmt.Errorf("HTTPFileSystem.ListDirInfo: %w", fs.ErrNotSupported)
 }
 
@@ -162,7 +163,7 @@ func (f *HTTPFileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.F
 // recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
-func (f *HTTPFileSystem) ListDirInfoRecursive(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
+func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
 	return fmt.Errorf("HTTPFileSystem.ListDirInfoRecursive: %w", fs.ErrNotSupported)
 }
 
@@ -170,7 +171,7 @@ func (f *HTTPFileSystem) ListDirInfoRecursive(dirPath string, callback func(fs.F
 // A max value of -1 returns all files.
 // If any patterns are passed, then only files or directories with a name that matches
 // at least one of the patterns are returned.
-func (f *HTTPFileSystem) ListDirMax(dirPath string, max int, patterns []string) ([]fs.File, error) {
+func (f *HTTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]fs.File, error) {
 	return nil, fmt.Errorf("HTTPFileSystem.ListDirMax: %w", fs.ErrNotSupported)
 }
 

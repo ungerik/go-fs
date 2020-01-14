@@ -2,6 +2,7 @@ package s3fs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -246,7 +247,11 @@ func (s3fs *S3FileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (s3fs *S3FileSystem) listDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+func (s3fs *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	if len(dirPath) > 1 && strings.HasPrefix(dirPath, "/") {
 		dirPath = dirPath[1:]
 	}
@@ -268,12 +273,19 @@ func (s3fs *S3FileSystem) listDirInfo(dirPath string, callback func(fs.File, fs.
 	if dirPath != "/" {
 		prefix = dirPath
 	}
-	out, err := s3fs.s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
-		Bucket:     aws.String(s3fs.bucketName),
-		Prefix:     aws.String(prefix),
-		StartAfter: aws.String(dirPath),
-	})
+	out, err := s3fs.s3Client.ListObjectsV2WithContext(
+		ctx,
+		&s3.ListObjectsV2Input{
+			Bucket:     aws.String(s3fs.bucketName),
+			Prefix:     aws.String(prefix),
+			StartAfter: aws.String(dirPath),
+		},
+	)
 	for _, c := range out.Contents {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		// Determine the number of slashes we allow in the path. This is only
 		// used if the recursive argument is set to false because then we want
 		// to filter the results.
@@ -310,19 +322,19 @@ func (s3fs *S3FileSystem) listDirInfo(dirPath string, callback func(fs.File, fs.
 }
 
 // ListDirInfo lists all objects in the given directory and their infos.
-func (s3fs *S3FileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
-	return s3fs.listDirInfo(dirPath, callback, patterns, false)
+func (s3fs *S3FileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	return s3fs.listDirInfo(ctx, dirPath, callback, patterns, false)
 }
 
 // ListDirInfoRecursive lists all objects in the given directory recursively.
-func (s3fs *S3FileSystem) ListDirInfoRecursive(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
-	return s3fs.listDirInfo(dirPath, callback, patterns, true)
+func (s3fs *S3FileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	return s3fs.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 
 // ListDirMax lists a max objects in the dirPath.
-func (s3fs *S3FileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(max, func(callback func(fs.File) error) error {
-		return s3fs.ListDirInfo(dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
+func (s3fs *S3FileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
+	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
+		return s3fs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
 	})
 }
 

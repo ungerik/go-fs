@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -231,7 +232,11 @@ func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err erro
 	return File(linkedPath), nil
 }
 
-func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	dirPath = expandTilde(dirPath)
 	info := local.Stat(dirPath)
 	if !info.Exists {
@@ -248,6 +253,10 @@ func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, Fi
 	defer f.Close()
 
 	for eof := false; !eof; {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		osInfos, err := f.Readdir(64)
 		if err != nil {
 			eof = (err == io.EOF)
@@ -272,12 +281,16 @@ func (local *LocalFileSystem) ListDirInfo(dirPath string, callback func(File, Fi
 	return nil
 }
 
-func (local *LocalFileSystem) ListDirInfoRecursive(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (local *LocalFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	dirPath = expandTilde(dirPath)
-	return ListDirInfoRecursiveImpl(local, dirPath, callback, patterns)
+	return ListDirInfoRecursiveImpl(ctx, local, dirPath, callback, patterns)
 }
 
-func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []string) (files []File, err error) {
+func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n int, patterns []string) (files []File, err error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	dirPath = expandTilde(dirPath)
 	info := local.Stat(dirPath)
 	if !info.Exists {
@@ -302,6 +315,10 @@ func (local *LocalFileSystem) ListDirMax(dirPath string, n int, patterns []strin
 	}
 
 	for eof := false; !eof && numFilesToDo > 0; {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		names, err := f.Readdirnames(numFilesToDo)
 		if err != nil {
 			eof = (err == io.EOF)

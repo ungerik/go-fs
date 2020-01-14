@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"io"
 	"path/filepath"
 
@@ -132,15 +133,15 @@ func (subfs *SubFileSystem) IsSymbolicLink(filePath string) bool {
 	return subfs.Parent.IsSymbolicLink(filePath)
 }
 
-func (subfs *SubFileSystem) ListDirInfo(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (subfs *SubFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) ListDirInfoRecursive(dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (subfs *SubFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []File, err error) {
+func (subfs *SubFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []File, err error) {
 	panic("not implemented")
 }
 

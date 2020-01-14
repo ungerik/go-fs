@@ -2,6 +2,7 @@ package dropboxfs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -210,7 +211,11 @@ func (dbfs *DropboxFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (dbfs *DropboxFileSystem) listDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	info := dbfs.Stat(dirPath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(dbfs.File(dirPath))
@@ -221,6 +226,10 @@ func (dbfs *DropboxFileSystem) listDirInfo(dirPath string, callback func(fs.File
 
 	var cursor string
 	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		var out *dropbox.ListFolderOutput
 
 		if cursor == "" {
@@ -267,17 +276,17 @@ func (dbfs *DropboxFileSystem) listDirInfo(dirPath string, callback func(fs.File
 	return nil
 }
 
-func (dbfs *DropboxFileSystem) ListDirInfo(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
-	return dbfs.listDirInfo(dirPath, callback, patterns, true)
+func (dbfs *DropboxFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 
-func (dbfs *DropboxFileSystem) ListDirInfoRecursive(dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
-	return dbfs.listDirInfo(dirPath, callback, patterns, true)
+func (dbfs *DropboxFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 
-func (dbfs *DropboxFileSystem) ListDirMax(dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(max, func(callback func(fs.File) error) error {
-		return dbfs.ListDirInfo(dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
+func (dbfs *DropboxFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
+	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
+		return dbfs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
 	})
 }
 

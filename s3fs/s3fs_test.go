@@ -1,6 +1,7 @@
 package s3fs_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/s3fs"
 )
@@ -228,7 +230,7 @@ func TestListDirInfo(t *testing.T) {
 	expectedOutput := []string{"test.txt", "test", "test1"}
 
 	result := []string{}
-	assert.NoError(t, s3.ListDirInfo("/", func(file fs.File, _ fs.FileInfo) error {
+	assert.NoError(t, s3.ListDirInfo(context.Background(), "/", func(file fs.File, _ fs.FileInfo) error {
 		result = append(result, file.Path())
 		return nil
 	}, nil))
@@ -238,14 +240,14 @@ func TestListDirInfo(t *testing.T) {
 
 func TestListDirInfoRecursive(t *testing.T) {
 	expectedOutput := append(directories, files...)
-	assert.NoError(t, s3.ListDirInfoRecursive("/", func(file fs.File, _ fs.FileInfo) error {
+	assert.NoError(t, s3.ListDirInfoRecursive(context.Background(), "/", func(file fs.File, _ fs.FileInfo) error {
 		assert.Contains(t, expectedOutput, file.Path())
 		return nil
 	}, nil))
 }
 
 func TestListDirMax(t *testing.T) {
-	files, err := s3.ListDirMax("/", 2, nil)
+	files, err := s3.ListDirMax(context.Background(), "/", 2, nil)
 	assert.NoError(t, err)
 	assert.Condition(t, assert.Comparison(func() bool {
 		return len(files) <= 2
