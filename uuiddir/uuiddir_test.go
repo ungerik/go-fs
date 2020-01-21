@@ -47,8 +47,8 @@ func Test_Parse(t *testing.T) {
 	}
 	for _, dir := range dirs {
 		uuid, err := Parse(dir)
-		assert.NoError(t, err, "Parse(%q)", dir)
-		assert.Equal(t, expected, uuid, "Parse(%q)", dir)
+		assert.NoError(t, err, "Parse(%q)", string(dir))
+		assert.Equal(t, expected, uuid, "Parse(%q)", string(dir))
 	}
 
 	invalidDirs := []fs.File{
@@ -62,7 +62,7 @@ func Test_Parse(t *testing.T) {
 	}
 	for _, dir := range invalidDirs {
 		_, err := Parse(dir)
-		assert.Error(t, err, "Parse(%q)", dir)
+		assert.Error(t, err, "Parse(%q)", string(dir))
 	}
 }
 
