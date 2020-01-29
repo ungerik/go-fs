@@ -34,23 +34,37 @@ func TempFile(ext ...string) File {
 
 // MakeTempDir makes and returns a new randomly named sub directory in TempDir().
 // Example:
-// tempDir, err := fs.MakeTempDir()
-// if err != nil {
-// 	return err
-// }
-// defer tempDir.RemoveRecursive()
-// doThingsWith(tempDir)
+//   tempDir, err := fs.MakeTempDir()
+//   if err != nil {
+//       return err
+//   }
+//   defer tempDir.RemoveRecursive()
+//   doThingsWith(tempDir)
 func MakeTempDir() (File, error) {
 	name, err := tempDirName()
 	if err != nil {
 		return "", err
 	}
-	tempDir := TempDir().Join(name)
-	err = tempDir.MakeDir()
+	dir := TempDir().Join(name)
+	err = dir.MakeDir()
 	if err != nil {
 		return "", err
 	}
-	return tempDir, nil
+	return dir, nil
+}
+
+// MustMakeTempDir makes and returns a new randomly named sub directory in TempDir().
+// It panics on errors.
+// Example:
+//   tempDir := fs.MustMakeTempDir()
+//   defer tempDir.RemoveRecursive()
+//   doThingsWith(tempDir)
+func MustMakeTempDir() File {
+	dir, err := MakeTempDir()
+	if err != nil {
+		panic(err)
+	}
+	return dir
 }
 
 func tempDirName() (string, error) {
