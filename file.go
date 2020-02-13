@@ -195,9 +195,34 @@ func (file File) Exists() bool {
 	return file.Stat().Exists
 }
 
+// CheckExists return an ErrDoesNotExist error
+// if the file does not exist.
+func (file File) CheckExists() error {
+	if !file.Exists() {
+		return NewErrDoesNotExist(file)
+	}
+	return nil
+}
+
 // IsDir returns a directory with the path of File exists.
 func (file File) IsDir() bool {
 	return file.Stat().IsDir
+}
+
+// CheckIsDir return an ErrDoesNotExist error
+// if the file does not exist, an ErrIsNotDirectory error
+// if a file exists, but is not a directory,
+// or nil if the file is a directory.
+func (file File) CheckIsDir() error {
+	stat := file.Stat()
+	switch {
+	case stat.IsDir:
+		return nil
+	case stat.Exists:
+		return NewErrIsNotDirectory(file)
+	default:
+		return NewErrDoesNotExist(file)
+	}
 }
 
 func (file File) IsAbsolute() bool {

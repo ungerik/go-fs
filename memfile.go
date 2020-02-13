@@ -13,6 +13,9 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
+// Check if MemFile implements FileReader
+var _ FileReader = new(MemFile)
+
 // MemFile implements FileReader with a filename and an in memory byte slice.
 // It exposes FileName and FileData as exported struct fields to emphasize
 // its simple nature as just an wrapper of a name and some bytes.
@@ -103,6 +106,15 @@ func (f *MemFile) Size() int64 {
 // Exists returns if the MemFile has a Name
 func (f *MemFile) Exists() bool {
 	return f != nil && f.FileName != ""
+}
+
+// CheckExists return an ErrDoesNotExist error
+// if the file does not exist.
+func (f *MemFile) CheckExists() error {
+	if !f.Exists() {
+		return NewErrDoesNotExistFileReader(f)
+	}
+	return nil
 }
 
 // ContentHash returns a Dropbox compatible content hash for the file.

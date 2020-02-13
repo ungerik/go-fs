@@ -27,6 +27,10 @@ type FileReader interface {
 	// Exists returns if file or data for the implementation exists
 	Exists() bool
 
+	// CheckExists return an ErrDoesNotExist error
+	// if the file does not exist.
+	CheckExists() error
+
 	// ContentHash returns a Dropbox compatible content hash for the file.
 	// See https://www.dropbox.com/developers/reference/content-hash
 	ContentHash() (string, error)
