@@ -181,7 +181,7 @@ func (invalid InvalidFileSystem) Truncate(filePath string, size int64) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
+func (invalid InvalidFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
 	return ErrInvalidFileSystem
 }
 

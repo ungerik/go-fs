@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -29,8 +30,25 @@ func CopyFile(src FileReader, dest File, perm ...Permissions) error {
 // else a byte slice will be allocated for the variable.
 // Use this function to re-use buffers between CopyFileBuf calls.
 func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) error {
+	return CopyFileBufContext(context.Background(), src, dest, buf, perm...)
+}
+
+// CopyFileBufContext copies a single file between different file systems.
+// If dest has a path that does not exist, then the directories
+// up to that path will be created.
+// If dest is an existing directory, then a file with the base name
+// of src will be created there.
+// buf must point to a []byte variable.
+// If that variable is initialized with a byte slice, then this slice will be used as buffer,
+// else a byte slice will be allocated for the variable.
+// Use this function to re-use buffers between CopyFileBufContext calls.
+func CopyFileBufContext(ctx context.Context, src FileReader, dest File, buf *[]byte, perm ...Permissions) error {
 	if buf == nil {
-		panic("CopyFileBuf: buf is nil")
+		panic("CopyFileBuf: buf is nil") // not a file system error
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	// Handle directories
@@ -48,7 +66,7 @@ func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) er
 	if srcIsFile {
 		fs := srcFile.FileSystem()
 		if fs == dest.FileSystem() {
-			return fs.CopyFile(srcFile.Path(), dest.Path(), buf)
+			return fs.CopyFile(ctx, srcFile.Path(), dest.Path(), buf)
 		}
 	}
 
@@ -81,13 +99,24 @@ func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) er
 // The filter patterns are applied on filename level, not the whole path.
 func CopyRecursive(src, dest File, patterns ...string) error {
 	var buf []byte
-	return copyRecursive(src, dest, patterns, &buf)
+	return copyRecursive(context.Background(), src, dest, patterns, &buf)
 }
 
-func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
+// CopyRecursiveContext can copy between files of different file systems.
+// The filter patterns are applied on filename level, not the whole path.
+func CopyRecursiveContext(ctx context.Context, src, dest File, patterns ...string) error {
+	var buf []byte
+	return copyRecursive(ctx, src, dest, patterns, &buf)
+}
+
+func copyRecursive(ctx context.Context, src, dest File, patterns []string, buf *[]byte) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	if !src.IsDir() {
 		// Just copy one file
-		return CopyFileBuf(src, dest, buf)
+		return CopyFileBufContext(ctx, src, dest, buf)
 	}
 
 	if dest.Exists() && !dest.IsDir() {
@@ -103,8 +132,8 @@ func copyRecursive(src, dest File, patterns []string, buf *[]byte) error {
 	}
 
 	// Copy directories recursive
-	return src.ListDir(func(file File) error {
-		return copyRecursive(file, dest.Join(file.Name()), patterns, buf)
+	return src.ListDirContext(ctx, func(file File) error {
+		return copyRecursive(ctx, file, dest.Join(file.Name()), patterns, buf)
 	}, patterns...)
 }
 
@@ -177,13 +206,13 @@ func SameFile(a, b File) bool {
 
 // IdenticalDirContents returns true if the files in dirA and dirB are identical in size and content.
 // If recursive is true, then directories will be considered too.
-func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err error) {
+func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) (identical bool, err error) {
 	if SameFile(dirA, dirB) {
 		return true, nil
 	}
 
 	fileInfosA := make(map[string]FileInfo)
-	err = dirA.ListDirInfo(func(file File, info FileInfo) error {
+	err = dirA.ListDirInfoContext(ctx, func(file File, info FileInfo) error {
 		if !info.IsDir || recursive {
 			fileInfosA[info.Name] = info
 		}
@@ -195,7 +224,7 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 
 	fileInfosB := make(map[string]FileInfo, len(fileInfosA))
 	hasDiff := errors.New("hasDiff")
-	err = dirB.ListDirInfo(func(file File, info FileInfo) error {
+	err = dirB.ListDirInfoContext(ctx, func(file File, info FileInfo) error {
 		if !info.IsDir || recursive {
 			infoA, found := fileInfosA[info.Name]
 			if !found || info.Size != infoA.Size || info.IsDir != infoA.IsDir {
@@ -216,7 +245,7 @@ func IdenticalDirContents(dirA, dirB File, recursive bool) (identical bool, err 
 		infoB := fileInfosB[filename]
 
 		if recursive && infoA.IsDir {
-			identical, err = IdenticalDirContents(dirA.Join(filename), dirB.Join(filename), true)
+			identical, err = IdenticalDirContents(ctx, dirA.Join(filename), dirB.Join(filename), true)
 			if !identical {
 				return false, err
 			}

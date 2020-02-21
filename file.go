@@ -666,6 +666,18 @@ func (file File) RemoveRecursive() error {
 	return file.Remove()
 }
 
+// RemoveRecursiveContext deletes the file or if it's a directory
+// the complete recursive directory tree.
+func (file File) RemoveRecursiveContext(ctx context.Context) error {
+	if file.IsDir() {
+		err := file.RemoveDirContentsRecursiveContext(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	return file.Remove()
+}
+
 // RemoveDirContentsRecursive deletes all files and directories in this directory recursively.
 func (file File) RemoveDirContentsRecursive() error {
 	return file.ListDir(func(f File) error {
@@ -677,10 +689,33 @@ func (file File) RemoveDirContentsRecursive() error {
 	})
 }
 
+// RemoveDirContentsRecursiveContext deletes all files and directories in this directory recursively.
+func (file File) RemoveDirContentsRecursiveContext(ctx context.Context) error {
+	return file.ListDirContext(ctx, func(f File) error {
+		err := f.RemoveRecursiveContext(ctx)
+		// Ignore files that have been deleted,
+		// after all we wanted to get rid of the in the first place,
+		// so this is not an error for us
+		return RemoveErrDoesNotExist(err)
+	})
+}
+
 // RemoveDirContents deletes all files in this directory,
 // or if given all files with patterns from the this directory.
 func (file File) RemoveDirContents(patterns ...string) error {
 	return file.ListDir(func(f File) error {
+		err := f.Remove()
+		// Ignore files that have been deleted,
+		// after all we wanted to get rid of the in the first place,
+		// so this is not an error for us
+		return RemoveErrDoesNotExist(err)
+	}, patterns...)
+}
+
+// RemoveDirContentsContext deletes all files in this directory,
+// or if given all files with patterns from the this directory.
+func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...string) error {
+	return file.ListDirContext(ctx, func(f File) error {
 		err := f.Remove()
 		// Ignore files that have been deleted,
 		// after all we wanted to get rid of the in the first place,

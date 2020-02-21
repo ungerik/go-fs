@@ -219,7 +219,7 @@ func (subfs *SubFileSystem) Truncate(filePath string, size int64) error {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
+func (subfs *SubFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
 	panic("not implemented")
 }
 

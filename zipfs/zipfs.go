@@ -432,7 +432,7 @@ func (zipfs *ZipFileSystem) Truncate(filePath string, size int64) error {
 	return errors.New("ZipFileSystem.Truncate not supported")
 }
 
-func (zipfs *ZipFileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
+func (zipfs *ZipFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
 	return errors.New("ZipFileSystem.CopyFile not supported")
 }
 

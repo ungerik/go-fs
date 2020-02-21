@@ -476,7 +476,11 @@ func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
 	return os.Truncate(filePath, size)
 }
 
-func (local *LocalFileSystem) CopyFile(srcFilePath string, destFilePath string, buf *[]byte) error {
+func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, destFilePath string, buf *[]byte) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	srcFilePath = expandTilde(srcFilePath)
 	destFilePath = expandTilde(destFilePath)
 	srcStat, _ := os.Stat(srcFilePath)
@@ -504,7 +508,7 @@ func (local *LocalFileSystem) CopyFile(srcFilePath string, destFilePath string, 
 	if err != nil {
 		return fmt.Errorf("LocalFileSystem.CopyFile(%q, %q): error from io.CopyBuffer: %w", srcFilePath, destFilePath, err)
 	}
-	return w.Sync()
+	return nil
 }
 
 func (local *LocalFileSystem) Rename(filePath string, newName string) error {

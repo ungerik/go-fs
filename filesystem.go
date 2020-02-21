@@ -108,7 +108,7 @@ type FileSystem interface {
 	// buf must point to a []byte variable.
 	// If that variable is initialized with a byte slice, then this slice will be used as buffer,
 	// else a byte slice will be allocated for the variable.
-	CopyFile(srcFile string, destFile string, buf *[]byte) error
+	CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error
 
 	// Rename only renames the file in its base directory
 	// but does not move it into another directory.

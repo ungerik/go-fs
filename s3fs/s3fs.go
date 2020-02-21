@@ -511,7 +511,10 @@ func (s3fs *S3FileSystem) Truncate(filePath string, size int64) error {
 }
 
 // CopyFile does what its name suggests.
-func (s3fs *S3FileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
+func (s3fs *S3FileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	_, err := s3fs.s3Client.CopyObject(&s3.CopyObjectInput{
 		Bucket:     aws.String(s3fs.bucketName),
 		CopySource: aws.String(s3fs.bucketName + "/" + srcFile),
@@ -536,7 +539,7 @@ func (s3fs *S3FileSystem) Move(filePath string, destPath string) error {
 	if filePath[0] == '/' {
 		filePath = filePath[1:]
 	}
-	err := s3fs.CopyFile(filePath, destPath, nil)
+	err := s3fs.CopyFile(context.Background(), filePath, destPath, nil)
 	if err != nil {
 		return err
 	}

@@ -271,7 +271,7 @@ func TestTruncate(t *testing.T) {
 func TestCopyFile(t *testing.T) {
 	parts := strings.Split(files[1], ".")
 	targetPath := parts[0] + "_copy." + parts[1]
-	assert.NoError(t, s3.CopyFile(files[1], targetPath, nil))
+	assert.NoError(t, s3.CopyFile(context.Background(), files[1], targetPath, nil))
 	assert.True(t, s3.Stat(targetPath).Exists)
 	dataInCopy, err := s3.ReadAll(targetPath)
 	assert.NoError(t, err)

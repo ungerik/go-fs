@@ -424,7 +424,10 @@ func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
 	return dbfs.WriteAll(filePath, data[:size], []fs.Permissions{info.Permissions})
 }
 
-func (dbfs *DropboxFileSystem) CopyFile(srcFile string, destFile string, buf *[]byte) error {
+func (dbfs *DropboxFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	_, err := dbfs.client.Files.Copy(&dropbox.CopyInput{
 		FromPath: srcFile,
 		ToPath:   destFile,
