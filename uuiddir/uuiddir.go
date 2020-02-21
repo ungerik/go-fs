@@ -8,6 +8,7 @@
 package uuiddir
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"path"
@@ -69,8 +70,8 @@ func ParseString(uuidPath string) (uuid [16]byte, err error) {
 }
 
 // Enum calls callback for every directory that represents an UUID under baseDir.
-func Enum(baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) error {
-	return baseDir.ListDir(func(level0Dir fs.File) error {
+func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) error {
+	return baseDir.ListDirContext(ctx, func(level0Dir fs.File) error {
 		if !level0Dir.Exists() || level0Dir.IsHidden() {
 			return nil
 		}
@@ -78,7 +79,7 @@ func Enum(baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) 
 			// fmt.Println("Directory expected but found file:", level0Dir)
 			return nil
 		}
-		return level0Dir.ListDir(func(level1Dir fs.File) error {
+		return level0Dir.ListDirContext(ctx, func(level1Dir fs.File) error {
 			if !level1Dir.Exists() || level1Dir.IsHidden() {
 				return nil
 			}
@@ -86,7 +87,7 @@ func Enum(baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) 
 				// fmt.Println("Directory expected but found file:", level1Dir)
 				return nil
 			}
-			return level1Dir.ListDir(func(level2Dir fs.File) error {
+			return level1Dir.ListDirContext(ctx, func(level2Dir fs.File) error {
 				if !level2Dir.Exists() || level2Dir.IsHidden() {
 					return nil
 				}
@@ -94,7 +95,7 @@ func Enum(baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) 
 					// fmt.Println("Directory expected but found file:", level2Dir)
 					return nil
 				}
-				return level2Dir.ListDir(func(level3Dir fs.File) error {
+				return level2Dir.ListDirContext(ctx, func(level3Dir fs.File) error {
 					if !level3Dir.Exists() || level3Dir.IsHidden() {
 						return nil
 					}
@@ -102,7 +103,7 @@ func Enum(baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) 
 						// fmt.Println("Directory expected but found file:", level3Dir)
 						return nil
 					}
-					return level3Dir.ListDir(func(uuidDir fs.File) error {
+					return level3Dir.ListDirContext(ctx, func(uuidDir fs.File) error {
 						if !uuidDir.Exists() || uuidDir.IsHidden() {
 							return nil
 						}

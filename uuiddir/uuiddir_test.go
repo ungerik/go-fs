@@ -1,6 +1,7 @@
 package uuiddir
 
 import (
+	"context"
 	"testing"
 
 	"github.com/domonda/go-types/uu"
@@ -149,7 +150,7 @@ func Test_Enum(t *testing.T) {
 	assert.NoError(t, err, "makeTestDirs")
 	defer baseDir.RemoveRecursive()
 
-	Enum(baseDir, func(uuidDir fs.File, uuid [16]byte) error {
+	Enum(context.Background(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
 		hasDir := dirs[uuidDir] && uuidDir.IsDir()
 		assert.True(t, hasDir, "valid directory")
 
@@ -162,7 +163,7 @@ func Test_Enum(t *testing.T) {
 
 func findUUIDs(baseDir fs.File) uu.IDSet {
 	ids := make(uu.IDSet)
-	Enum(baseDir, func(uuidDir fs.File, uuid [16]byte) error {
+	Enum(context.Background(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
 		ids.Add(uuid)
 		return nil
 	})
