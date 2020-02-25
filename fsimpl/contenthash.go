@@ -9,26 +9,26 @@ import (
 
 const hashBlockSize = 4 * 1024 * 1024
 
-// DropboxContentHash returns a Dropbox compatible content hash by reading from an io.Reader until io.EOF.
+// DropboxContentHash returns a Dropbox compatible 64 hex character content hash by reading from an io.Reader until io.EOF.
 // See https://www.dropbox.com/developers/reference/content-hash
 func DropboxContentHash(reader io.Reader) (string, error) {
 	buf := make([]byte, hashBlockSize)
 	resultHash := sha256.New()
-	n, err := reader.Read(buf)
+	numReadBytes, err := reader.Read(buf)
 	if err != nil && err != io.EOF {
 		return "", err
 	}
-	if n > 0 {
-		bufHash := sha256.Sum256(buf[:n])
+	if numReadBytes > 0 {
+		bufHash := sha256.Sum256(buf[:numReadBytes])
 		resultHash.Write(bufHash[:])
 	}
-	for n == hashBlockSize && err == nil {
-		n, err = reader.Read(buf)
+	for numReadBytes == hashBlockSize && err == nil {
+		numReadBytes, err = reader.Read(buf)
 		if err != nil && err != io.EOF {
 			return "", err
 		}
-		if n > 0 {
-			bufHash := sha256.Sum256(buf[:n])
+		if numReadBytes > 0 {
+			bufHash := sha256.Sum256(buf[:numReadBytes])
 			resultHash.Write(bufHash[:])
 		}
 	}
@@ -47,7 +47,7 @@ func (f ContentHasherFunc) Hash(reader io.Reader) (string, error) {
 
 var ContentHash = ContentHasherFunc(DropboxContentHash)
 
-// ContentHashBytes returns a Dropbox compatible content hash for a byte slice.
+// ContentHashBytes returns a Dropbox compatible 64 hex character content hash for a byte slice.
 // See https://www.dropbox.com/developers/reference/content-hash
 func ContentHashBytes(buf []byte) string {
 	// bytes.Reader.Read only ever returns io.EOF
