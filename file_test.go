@@ -116,3 +116,43 @@ func Test_FileJoin(t *testing.T) {
 		f = f.Dir()
 	}
 }
+
+func TestFile_Ext(t *testing.T) {
+	tests := []struct {
+		file File
+		want string
+	}{
+		{file: "image.png", want: ".png"},
+		{file: "image.66.png", want: ".png"},
+		{file: "image", want: ""},
+		{file: JoinCleanFilePath("dir.with.ext", "file"), want: ""},
+		{file: JoinCleanFilePath("dir.with.ext", "file.ext"), want: ".ext"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.file), func(t *testing.T) {
+			if got := tt.file.Ext(); got != tt.want {
+				t.Errorf("File.Ext() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFile_TrimExt(t *testing.T) {
+	tests := []struct {
+		file File
+		want File
+	}{
+		{file: "image.png", want: "image"},
+		{file: "image.66.png", want: "image.66"},
+		{file: "image", want: "image"},
+		{file: JoinCleanFilePath("dir.with.ext", "file"), want: JoinCleanFilePath("dir.with.ext", "file")},
+		{file: JoinCleanFilePath("dir.with.ext", "file.ext"), want: JoinCleanFilePath("dir.with.ext", "file")},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.file), func(t *testing.T) {
+			if got := tt.file.TrimExt(); got != tt.want {
+				t.Errorf("File.TrimExt() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

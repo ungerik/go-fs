@@ -127,9 +127,12 @@ func (file File) VolumeName() string {
 }
 
 // Ext returns the extension of file name including the point, or an empty string.
-// Example: File("image.png").Ext() == ".png"
+// Example:
+//   File("image.png").Ext() == ".png"
+//   File("dir.with.ext/file").Ext() == ""
+//   File("dir.with.ext/file.ext").Ext() == ".ext"
 func (file File) Ext() string {
-	return fsimpl.Ext(string(file))
+	return fsimpl.Ext(string(file), file.FileSystem().Separator())
 }
 
 // ExtLower returns the lower case extension of file name including the point, or an empty string.
@@ -141,7 +144,7 @@ func (file File) ExtLower() string {
 // TrimExt returns a File with a path where the extension is removed.
 // Note that this does not rename an actual existing file.
 func (file File) TrimExt() File {
-	return File(fsimpl.TrimExt(string(file)))
+	return File(fsimpl.TrimExt(string(file), file.FileSystem().Separator()))
 }
 
 // Join returns a new File with pathParts cleaned and joined to the current File's URI.

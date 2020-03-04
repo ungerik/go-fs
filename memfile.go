@@ -90,7 +90,7 @@ func (f *MemFile) Name() string {
 
 // Ext returns the extension of file name including the point, or an empty string.
 func (f *MemFile) Ext() string {
-	return fsimpl.Ext(f.FileName)
+	return fsimpl.Ext(f.FileName, "")
 }
 
 // LocalPath always returns an empty string for a MemFile.

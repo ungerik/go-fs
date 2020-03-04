@@ -89,5 +89,5 @@ func (f *fileReaderWithName) Name() string {
 }
 
 func (f *fileReaderWithName) Ext() string {
-	return fsimpl.Ext(f.name)
+	return fsimpl.Ext(f.name, "")
 }

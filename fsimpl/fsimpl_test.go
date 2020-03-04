@@ -1,6 +1,7 @@
 package fsimpl
 
 import (
+	"fmt"
 	"io"
 	"testing"
 
@@ -41,4 +42,46 @@ func Test_ReadonlyFileBuffer(t *testing.T) {
 	n, err := b.Read(out)
 	assert.Equal(t, io.EOF, err, "Read")
 	assert.Equal(t, n, 0, "no bytes read")
+}
+
+func ExampleExt() {
+	fmt.Println(Ext("image.png", "/"))
+	fmt.Println(Ext("image.png", ""))
+	fmt.Println(Ext("image.66.png", "/"))
+	fmt.Println(Ext("file", "/") == "")
+	fmt.Println(Ext("dir.with.ext/file", "/") == "")
+	fmt.Println(Ext("dir.with.ext/file.ext", "/"))
+	fmt.Println(Ext("dir.with.ext/file", "\\"))
+	fmt.Println(Ext("dir.with.ext/file", ""))
+
+	// Output:
+	// .png
+	// .png
+	// .png
+	// true
+	// true
+	// .ext
+	// .ext/file
+	// .ext/file
+}
+
+func ExampleTrimExt() {
+	fmt.Println(TrimExt("image.png", "/"))
+	fmt.Println(TrimExt("image.png", ""))
+	fmt.Println(TrimExt("image.66.png", "/"))
+	fmt.Println(TrimExt("file", "/"))
+	fmt.Println(TrimExt("dir.with.ext/file", "/"))
+	fmt.Println(TrimExt("dir.with.ext/file.ext", "/"))
+	fmt.Println(TrimExt("dir.with.ext/file", "\\"))
+	fmt.Println(TrimExt("dir.with.ext/file", ""))
+
+	// Output:
+	// image
+	// image
+	// image.66
+	// file
+	// dir.with.ext/file
+	// dir.with.ext/file
+	// dir.with
+	// dir.with
 }

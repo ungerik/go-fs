@@ -22,8 +22,13 @@ func RandomString() string {
 }
 
 // Ext returns the extension of filePath including the point, or an empty string.
-// Example: Ext("image.png") == ".png"
-func Ext(filePath string) string {
+// Example:
+//   Ext("image.png", "/") == ".png"
+//   Ext("image.png/file", "/") == ""
+func Ext(filePath, separator string) string {
+	if separator != "" {
+		filePath = filePath[strings.LastIndex(filePath, separator)+1:]
+	}
 	p := strings.LastIndexByte(filePath, '.')
 	if p == -1 {
 		return ""
@@ -32,9 +37,13 @@ func Ext(filePath string) string {
 }
 
 // TrimExt returns a filePath with a path where the extension is removed.
-func TrimExt(filePath string) string {
+func TrimExt(filePath, separator string) string {
+	sep := -1
+	if separator != "" {
+		sep = strings.LastIndex(filePath, separator)
+	}
 	p := strings.LastIndexByte(filePath, '.')
-	if p == -1 {
+	if p == -1 || p < sep {
 		return filePath
 	}
 	return filePath[:p]
