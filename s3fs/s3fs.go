@@ -225,7 +225,7 @@ func objectOutputToFileInfo(key string, output *s3.GetObjectOutput) (info fs.Fil
 	} else {
 		info.Permissions = DefaultPermissions
 	}
-	h, err := fsimpl.ContentHash(output.Body)
+	h, err := fsimpl.ContentHash(context.TODO(), output.Body)
 	if err == nil {
 		info.ContentHash = h
 	}

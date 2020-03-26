@@ -2,6 +2,7 @@ package fsimpl
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -11,7 +12,10 @@ const hashBlockSize = 4 * 1024 * 1024
 
 // DropboxContentHash returns a Dropbox compatible 64 hex character content hash by reading from an io.Reader until io.EOF.
 // See https://www.dropbox.com/developers/reference/content-hash
-func DropboxContentHash(reader io.Reader) (string, error) {
+func DropboxContentHash(ctx context.Context, reader io.Reader) (string, error) {
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	buf := make([]byte, hashBlockSize)
 	resultHash := sha256.New()
 	numReadBytes, err := reader.Read(buf)
@@ -23,6 +27,9 @@ func DropboxContentHash(reader io.Reader) (string, error) {
 		resultHash.Write(bufHash[:])
 	}
 	for numReadBytes == hashBlockSize && err == nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		numReadBytes, err = reader.Read(buf)
 		if err != nil && err != io.EOF {
 			return "", err
@@ -36,13 +43,13 @@ func DropboxContentHash(reader io.Reader) (string, error) {
 }
 
 type ContentHasher interface {
-	Hash(reader io.Reader) (string, error)
+	Hash(ctx context.Context, reader io.Reader) (string, error)
 }
 
-type ContentHasherFunc func(reader io.Reader) (string, error)
+type ContentHasherFunc func(ctx context.Context, reader io.Reader) (string, error)
 
-func (f ContentHasherFunc) Hash(reader io.Reader) (string, error) {
-	return f(reader)
+func (f ContentHasherFunc) Hash(ctx context.Context, reader io.Reader) (string, error) {
+	return f(ctx, reader)
 }
 
 var ContentHash = ContentHasherFunc(DropboxContentHash)
@@ -53,6 +60,6 @@ func ContentHashBytes(buf []byte) string {
 	// bytes.Reader.Read only ever returns io.EOF
 	// which is not treatet as error by ContentHash
 	// so we can ignore all returned errors
-	hash, _ := ContentHash(bytes.NewReader(buf))
+	hash, _ := ContentHash(context.Background(), bytes.NewReader(buf))
 	return hash
 }
