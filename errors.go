@@ -42,10 +42,12 @@ func RemoveErrDoesNotExist(err error) error {
 }
 
 // ErrDoesNotExist is returned when a file does not exist
-// Implements http.Handler with http.NotFound
-// and wraps os.ErrNotExist (returned by Unwrap).
+// and wraps os.ErrNotExist.
+// Check for this error type with:
+//   errors.Is(err, os.ErrNotExist)
+// Implements http.Handler by responding with http.NotFound.
 type ErrDoesNotExist struct {
-	file interface{}
+	file fmt.Stringer
 }
 
 // NewErrDoesNotExist returns a new ErrDoesNotExist
