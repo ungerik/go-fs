@@ -48,7 +48,7 @@ func TestFileMakeAllDirs(t *testing.T) {
 	defer file.Remove()
 
 	err = file.MakeAllDirs()
-	if !errors.Is(err, new(ErrIsNotDirectory)) {
+	if !errors.As(err, new(ErrIsNotDirectory)) {
 		t.Fatalf("should be ErrIsNotDirectory but is: %s", err)
 	}
 

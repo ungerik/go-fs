@@ -31,11 +31,10 @@ const (
 ///////////////////////////////////////////////////////////////////////////////
 // ErrDoesNotExist
 
-// RemoveErrDoesNotExist returns nil if err is or wraps ErrDoesNotExist,
+// RemoveErrDoesNotExist returns nil if err wraps os.ErrNotExist,
 // else err will be returned unchanged.
 func RemoveErrDoesNotExist(err error) error {
-	var e ErrDoesNotExist
-	if errors.As(err, &e) {
+	if err == nil || errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	return err
@@ -65,14 +64,8 @@ func (err ErrDoesNotExist) Error() string {
 	return fmt.Sprintf("file does not exist: %s", err.file)
 }
 
-// TODO remove
-func (ErrDoesNotExist) Is(target error) bool {
-	_, is := target.(*ErrDoesNotExist)
-	return is
-}
-
 // Unwrap returns os.ErrNotExist
-func (err ErrDoesNotExist) Unwrap() error {
+func (ErrDoesNotExist) Unwrap() error {
 	return os.ErrNotExist
 }
 
@@ -92,6 +85,35 @@ func (err ErrDoesNotExist) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// ErrAlreadyExists
+
+// ErrAlreadyExists is returned when a file already exists.
+// It wraps os.ErrExist, check for this error type with:
+//   errors.Is(err, os.ErrExist)
+type ErrAlreadyExists struct {
+	file File
+}
+
+// NewErrAlreadyExists returns a new ErrAlreadyExists
+func NewErrAlreadyExists(file File) ErrAlreadyExists {
+	return ErrAlreadyExists{file}
+}
+
+func (err ErrAlreadyExists) Error() string {
+	return fmt.Sprintf("file already exists: %s", err.file)
+}
+
+// Unwrap returns os.ErrExist
+func (ErrAlreadyExists) Unwrap() error {
+	return os.ErrExist
+}
+
+// File returns the file that already exists
+func (err ErrAlreadyExists) File() File {
+	return err.file
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // ErrIsDirectory
 
 // ErrIsDirectory is returned when an operation is not possible because
@@ -107,12 +129,6 @@ func NewErrIsDirectory(file File) ErrIsDirectory {
 
 func (err ErrIsDirectory) Error() string {
 	return fmt.Sprintf("file is a directory: %s", err.file)
-}
-
-// TODO remove
-func (ErrIsDirectory) Is(target error) bool {
-	_, is := target.(*ErrIsDirectory)
-	return is
 }
 
 // File returns the file that error concerns
@@ -136,12 +152,6 @@ func NewErrIsNotDirectory(file File) ErrIsNotDirectory {
 
 func (err ErrIsNotDirectory) Error() string {
 	return fmt.Sprintf("file is not a directory: %s", err.file)
-}
-
-// TODO remove
-func (ErrIsNotDirectory) Is(target error) bool {
-	_, is := target.(*ErrIsNotDirectory)
-	return is
 }
 
 // File returns the file that error concerns

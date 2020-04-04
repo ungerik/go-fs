@@ -30,9 +30,12 @@ type LocalFileSystem struct {
 	DefaultCreateDirPermissions Permissions
 }
 
-func wrapLocalErrNotExist(filePath string, err error) error {
-	if os.IsNotExist(err) {
+func wrapOSErr(filePath string, err error) error {
+	switch {
+	case os.IsNotExist(err):
 		return NewErrDoesNotExist(File(filePath))
+	case os.IsExist(err):
+		return NewErrAlreadyExists(File(filePath))
 	}
 	return err
 }
@@ -386,7 +389,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	dirPath = expandTilde(dirPath)
 	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions) | extraDirPermissions
-	err := wrapLocalErrNotExist(dirPath, os.Mkdir(dirPath, os.FileMode(p)))
+	err := wrapOSErr(dirPath, os.Mkdir(dirPath, os.FileMode(p)))
 	if err != nil {
 		return err
 	}
@@ -405,13 +408,13 @@ func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error 
 func (local *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {
 	filePath = expandTilde(filePath)
 	data, err := ioutil.ReadFile(filePath)
-	return data, wrapLocalErrNotExist(filePath, err)
+	return data, wrapOSErr(filePath, err)
 }
 
 func (local *LocalFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	return wrapLocalErrNotExist(filePath, ioutil.WriteFile(filePath, data, os.FileMode(p)))
+	return wrapOSErr(filePath, ioutil.WriteFile(filePath, data, os.FileMode(p)))
 }
 
 func (local *LocalFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
@@ -430,28 +433,28 @@ func (local *LocalFileSystem) Append(filePath string, data []byte, perm []Permis
 func (local *LocalFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	filePath = expandTilde(filePath)
 	f, err := os.OpenFile(filePath, os.O_RDONLY, 0)
-	return f, wrapLocalErrNotExist(filePath, err)
+	return f, wrapOSErr(filePath, err)
 }
 
 func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(p))
-	return f, wrapLocalErrNotExist(filePath, err)
+	return f, wrapOSErr(filePath, err)
 }
 
 func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, os.FileMode(p))
-	return f, wrapLocalErrNotExist(filePath, err)
+	return f, wrapOSErr(filePath, err)
 }
 
 func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, os.FileMode(p))
-	return f, wrapLocalErrNotExist(filePath, err)
+	return f, wrapOSErr(filePath, err)
 }
 
 func (local *LocalFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
@@ -491,13 +494,13 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 
 	r, err := os.OpenFile(srcFilePath, os.O_RDONLY, 0)
 	if err != nil {
-		return wrapLocalErrNotExist(srcFilePath, err)
+		return wrapOSErr(srcFilePath, err)
 	}
 	defer r.Close()
 
 	w, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm())
 	if err != nil {
-		return wrapLocalErrNotExist(srcFilePath, err)
+		return wrapOSErr(srcFilePath, err)
 	}
 	defer w.Close()
 
@@ -537,5 +540,5 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 
 func (local *LocalFileSystem) Remove(filePath string) error {
 	filePath = expandTilde(filePath)
-	return wrapLocalErrNotExist(filePath, os.Remove(filePath))
+	return wrapOSErr(filePath, os.Remove(filePath))
 }
