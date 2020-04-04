@@ -26,28 +26,34 @@ const (
 
 // LocalFileSystem implements FileSystem for the local file system.
 type LocalFileSystem struct {
-	DefaultCreatePermissions    Permissions
+	// DefaultCreatePermissions are the default file permissions used for creating new files
+	DefaultCreatePermissions Permissions
+	// DefaultCreateDirPermissions are the default file permissions used for creating new directories
 	DefaultCreateDirPermissions Permissions
 }
 
 func wrapOSErr(filePath string, err error) error {
 	switch {
-	case os.IsNotExist(err):
+	case err == nil:
+		return nil
+	case errors.Is(err, os.ErrNotExist):
 		return NewErrDoesNotExist(File(filePath))
-	case os.IsExist(err):
+	case errors.Is(err, os.ErrExist):
 		return NewErrAlreadyExists(File(filePath))
+	default:
+		return err
 	}
-	return err
 }
 
 func expandTilde(path string) string {
-	if len(path) > 0 && path[0] == '~' {
-		currentUser, _ := user.Current()
-		if currentUser != nil && currentUser.HomeDir != "" {
-			return filepath.Join(currentUser.HomeDir, path[1:])
-		}
+	if len(path) == 0 || path[0] != '~' {
+		return path
 	}
-	return path
+	currentUser, _ := user.Current()
+	if currentUser == nil || currentUser.HomeDir == "" {
+		return path
+	}
+	return filepath.Join(currentUser.HomeDir, path[1:])
 }
 
 func (local *LocalFileSystem) IsReadOnly() bool {
