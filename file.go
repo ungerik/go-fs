@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -815,4 +816,9 @@ func (file File) GobDecode(gobBytes []byte) error {
 		return err
 	}
 	return file.WriteAll(memFile.FileData)
+}
+
+// HTTPFileSystem returns a http.FileSystem with the file as root.
+func (file File) HTTPFileSystem() http.FileSystem {
+	return httpFileSystem{root: file}
 }

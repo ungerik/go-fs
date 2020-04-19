@@ -1,5 +1,7 @@
 package fs
 
+import "os"
+
 var (
 	NoPermissions Permissions = 0
 
@@ -31,7 +33,18 @@ var (
 	AllReadWrite = UserReadWrite | GroupReadWrite | OthersReadWrite
 )
 
+// Permissions for a file, follows the Unix/os.FileMode bit schema.
 type Permissions int
+
+// FileMode returns an os.FileMode for the given permissions
+// together with the information if the file is a directory.
+func (perm Permissions) FileMode(isDir bool) os.FileMode {
+	m := os.FileMode(perm)
+	if isDir {
+		m |= os.ModeDir
+	}
+	return m
+}
 
 func (perm Permissions) Readable() (user, group, others bool) {
 	return perm&UserRead != 0, perm&GroupRead != 0, perm&OthersRead != 0

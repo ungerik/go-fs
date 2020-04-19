@@ -356,7 +356,14 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 
 func (local *LocalFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	filePath = expandTilde(filePath)
-	return os.Chmod(filePath, os.FileMode(perm))
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return err
+	}
+	// Combine os.ModePerm bits from perm and non os.ModePerm bits from info.Mode()
+	// to keep special non permission related file modes
+	mode := (os.FileMode(perm) & os.ModePerm) | (info.Mode() &^ os.ModePerm)
+	return os.Chmod(filePath, mode)
 }
 
 func (local *LocalFileSystem) User(filePath string) string {
@@ -395,14 +402,14 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	dirPath = expandTilde(dirPath)
 	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions) | extraDirPermissions
-	err := wrapOSErr(dirPath, os.Mkdir(dirPath, os.FileMode(p)))
+	err := wrapOSErr(dirPath, os.Mkdir(dirPath, p.FileMode(true)))
 	if err != nil {
 		return err
 	}
 
 	if extraDirPermissions != 0 && p&OthersWrite != 0 {
 		// On Linux need additional chmod because os.Mkdir does not set OthersWrite bit
-		err = os.Chmod(dirPath, os.FileMode(p))
+		err = os.Chmod(dirPath, p.FileMode(true))
 		if err != nil {
 			return fmt.Errorf("LocalFileSystem.MakeDir(%q): can't chmod to %0o: %w", dirPath, p, err)
 		}
@@ -420,7 +427,7 @@ func (local *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {
 func (local *LocalFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	return wrapOSErr(filePath, ioutil.WriteFile(filePath, data, os.FileMode(p)))
+	return wrapOSErr(filePath, ioutil.WriteFile(filePath, data, p.FileMode(false)))
 }
 
 func (local *LocalFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
@@ -445,21 +452,21 @@ func (local *LocalFileSystem) OpenReader(filePath string) (io.ReadCloser, error)
 func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(p))
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, p.FileMode(false))
 	return f, wrapOSErr(filePath, err)
 }
 
 func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, os.FileMode(p))
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, p.FileMode(false))
 	return f, wrapOSErr(filePath, err)
 }
 
 func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, os.FileMode(p))
+	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, p.FileMode(false))
 	return f, wrapOSErr(filePath, err)
 }
 

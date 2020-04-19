@@ -1,27 +1,30 @@
 package fs
 
 import (
+	"errors"
 	"net/http"
 )
 
-// HTTPHandler returns a http.Handler that serves the passed file with a Content-Type header.
+// ServeFileHTTPHandler returns a http.Handler that serves the passed file with a Content-Type header.
 // If no contentType is passed then http.DetectContentType is used with the file content.
 // 404 error is returned if the file does not exist and a 500 error if there was any other
 // error while reading it.
-func HTTPHandler(file FileReader, contentType ...string) http.Handler {
+func ServeFileHTTPHandler(file FileReader, contentType ...string) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		ServeHTTP(response, request, file, contentType...)
+		ServeFileHTTP(response, request, file, contentType...)
 	})
 }
 
-// ServeHTTP serves the passed file with a Content-Type header.
+// ServeFileHTTP serves the passed file with a Content-Type header via HTTP.
 // If no contentType is passed then http.DetectContentType is used with the file content.
 // 404 error is returned if the file does not exist and a 500 error if there was any other
 // error while reading it.
-func ServeHTTP(response http.ResponseWriter, request *http.Request, file FileReader, contentType ...string) {
+func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file FileReader, contentType ...string) {
 	data, err := file.ReadAll()
 	if err != nil {
-		if handler, ok := err.(http.Handler); ok {
+		// ErrDoesNotExist implements http.Handler with a 404 response
+		var handler http.Handler
+		if errors.As(err, &handler) {
 			handler.ServeHTTP(response, request)
 			return
 		}
