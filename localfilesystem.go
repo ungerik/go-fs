@@ -40,6 +40,8 @@ func wrapOSErr(filePath string, err error) error {
 		return NewErrDoesNotExist(File(filePath))
 	case errors.Is(err, os.ErrExist):
 		return NewErrAlreadyExists(File(filePath))
+	case errors.Is(err, os.ErrPermission):
+		return NewErrPermission(File(filePath))
 	default:
 		return err
 	}

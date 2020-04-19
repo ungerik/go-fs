@@ -85,6 +85,41 @@ func (err ErrDoesNotExist) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// ErrPermission
+
+// ErrPermission is returned when an operation lacks
+// permissions on a file. It wraps os.ErrPermission.
+// Check for this error type with:
+//   errors.Is(err, os.ErrPermission)
+// Implements http.Handler by responding with 403 Forbidden.
+type ErrPermission struct {
+	file File
+}
+
+// NewErrPermission returns a new ErrPermission
+func NewErrPermission(file File) ErrPermission {
+	return ErrPermission{file}
+}
+
+func (err ErrPermission) Error() string {
+	return fmt.Sprintf("file lacks permission: %s", err.file)
+}
+
+// Unwrap returns os.ErrPermission
+func (ErrPermission) Unwrap() error {
+	return os.ErrPermission
+}
+
+// File returns the file that error concerns
+func (err ErrPermission) File() File {
+	return err.file
+}
+
+func (err ErrPermission) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // ErrAlreadyExists
 
 // ErrAlreadyExists is returned when a file already exists.
