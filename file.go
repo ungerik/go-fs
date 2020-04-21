@@ -660,6 +660,14 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 	return file.Dir().Join(newName), nil
 }
 
+// Renamef changes the name of a file where fmt.Sprintf(newNameFormat, args...)
+// is the name part after file.Dir().
+// Note: this does not move the file like in other rename implementations,
+// it only changes the name of the file within its directdory.
+func (file File) Renamef(newNameFormat string, args ...interface{}) (renamedFile File, err error) {
+	return file.Rename(fmt.Sprintf(newNameFormat, args...))
+}
+
 // MoveTo moves and/or renames the file to destination.
 // destination can be a directory or file-path and
 // can be on another FileSystem.
