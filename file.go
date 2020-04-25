@@ -1,7 +1,9 @@
 package fs
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -807,23 +809,47 @@ func (file File) WriteXML(input interface{}, indent ...string) (err error) {
 // GobEncode reads and gob encodes the file name and content,
 // implementing encoding/gob.GobEncoder.
 func (file File) GobEncode() ([]byte, error) {
-	memFile, err := NewMemFileFrom(file)
+	fileName := file.Name()
+	fileData, err := file.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("File.GobEncode: error reading file data: %w", err)
 	}
-	return memFile.GobEncode()
+	buf := bytes.NewBuffer(make([]byte, 0, 16+len(fileName)+len(fileData)))
+	enc := gob.NewEncoder(buf)
+	err = enc.Encode(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("File.GobEncode: error encoding file name: %w", err)
+	}
+	err = enc.Encode(fileData)
+	if err != nil {
+		return nil, fmt.Errorf("File.GobEncode: error encoding file data: %w", err)
+	}
+	return buf.Bytes(), nil
+
 }
 
 // GobDecode decodes a file name and content from gobBytes
-// and writes the content to this file, ignoring the decoded name.
+// and writes the content to this file ignoring the decoded name.
 // Implements encoding/gob.GobDecoder.
 func (file File) GobDecode(gobBytes []byte) error {
-	var memFile MemFile
-	err := memFile.GobDecode(gobBytes)
+	var (
+		fileName string
+		fileData []byte
+	)
+	dec := gob.NewDecoder(bytes.NewReader(gobBytes))
+	err := dec.Decode(&fileName)
 	if err != nil {
-		return err
+		return fmt.Errorf("File.GobDecode: error decoding file name: %w", err)
 	}
-	return file.WriteAll(memFile.FileData)
+	err = dec.Decode(&fileData)
+	if err != nil {
+		return fmt.Errorf("File.GobDecode: error decoding file data: %w", err)
+	}
+	err = file.WriteAll(fileData)
+	if err != nil {
+		return fmt.Errorf("File.GobDecode: error writing file data: %w", err)
+	}
+	return nil
 }
 
 // HTTPFileSystem returns a http.FileSystem with the file as root.

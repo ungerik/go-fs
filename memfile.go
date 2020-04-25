@@ -103,7 +103,9 @@ func (f *MemFile) Size() int64 {
 	return int64(len(f.FileData))
 }
 
-// Exists returns if the MemFile has a Name
+// Exists returns true if the MemFile has non empty FileName.
+// It's valid to call this method on a nil pointer,
+// will return false in this case.
 func (f *MemFile) Exists() bool {
 	return f != nil && f.FileName != ""
 }
