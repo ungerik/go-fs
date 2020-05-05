@@ -200,7 +200,7 @@ func (zipfs *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir 
 // Stat returns FileInfo
 func (zipfs *ZipFileSystem) Stat(filePath string) fs.FileInfo {
 	if zipfs.zipReader == nil {
-		return fs.FileInfo{}
+		return fs.NewNonExistingFileInfo(fs.File(filePath))
 	}
 	zipFile, isDir := zipfs.findFile(filePath)
 	return zipfs.stat(filePath, zipFile, isDir)
@@ -208,7 +208,7 @@ func (zipfs *ZipFileSystem) Stat(filePath string) fs.FileInfo {
 
 func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) fs.FileInfo {
 	if zipFile == nil {
-		return fs.FileInfo{Exists: false}
+		return fs.NewNonExistingFileInfo(fs.File(filePath))
 	}
 
 	fileName := path.Base(filePath)
@@ -276,7 +276,7 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 		panic("TODO set rootNode to dirPath")
 	}
 
-	if !rootNode.IsDir {
+	if !rootNode.IsDir() {
 		return fs.NewErrIsNotDirectory(zipfs.File(dirPath))
 	}
 
@@ -292,7 +292,7 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 			if err != nil {
 				return err
 			}
-			if child.IsDir {
+			if child.IsDir() {
 				err = listRecursive(child)
 				if err != nil {
 					return err

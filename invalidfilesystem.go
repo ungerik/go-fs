@@ -93,8 +93,8 @@ func (InvalidFileSystem) VolumeName(filePath string) string {
 	return ""
 }
 
-func (invalid InvalidFileSystem) Stat(filePath string) FileInfo {
-	return FileInfo{}
+func (invalid InvalidFileSystem) Info(filePath string) FileInfo {
+	return NewNonExistingFileInfo(File(filePath))
 }
 
 func (invalid InvalidFileSystem) IsHidden(filePath string) bool {

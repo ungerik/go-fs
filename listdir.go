@@ -63,12 +63,12 @@ func ListDirInfoRecursiveImpl(ctx context.Context, fs FileSystem, dirPath string
 		ctx,
 		dirPath,
 		func(file File, info FileInfo) error {
-			if info.IsDir {
+			if info.IsDir() {
 				err := file.ListDirInfoRecursiveContext(ctx, callback, patterns...)
 				// Don't mind files that have been deleted while iterating
 				return RemoveErrDoesNotExist(err)
 			}
-			match, err := fs.MatchAnyPattern(info.Name, patterns)
+			match, err := fs.MatchAnyPattern(info.Name(), patterns)
 			if match {
 				err = callback(file, info)
 			}

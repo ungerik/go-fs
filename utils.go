@@ -213,8 +213,8 @@ func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) 
 
 	fileInfosA := make(map[string]FileInfo)
 	err = dirA.ListDirInfoContext(ctx, func(file File, info FileInfo) error {
-		if !info.IsDir || recursive {
-			fileInfosA[info.Name] = info
+		if !info.IsDir() || recursive {
+			fileInfosA[info.Name()] = info
 		}
 		return nil
 	})
@@ -225,12 +225,12 @@ func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) 
 	fileInfosB := make(map[string]FileInfo, len(fileInfosA))
 	hasDiff := errors.New("hasDiff")
 	err = dirB.ListDirInfoContext(ctx, func(file File, info FileInfo) error {
-		if !info.IsDir || recursive {
-			infoA, found := fileInfosA[info.Name]
-			if !found || info.Size != infoA.Size || info.IsDir != infoA.IsDir {
+		if !info.IsDir() || recursive {
+			infoA, found := fileInfosA[info.Name()]
+			if !found || info.Size() != infoA.Size() || info.IsDir() != infoA.IsDir() {
 				return hasDiff
 			}
-			fileInfosB[info.Name] = info
+			fileInfosB[info.Name()] = info
 		}
 		return nil
 	})
@@ -244,20 +244,20 @@ func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) 
 	for filename, infoA := range fileInfosA {
 		infoB := fileInfosB[filename]
 
-		if recursive && infoA.IsDir {
+		if recursive && infoA.IsDir() {
 			identical, err = IdenticalDirContents(ctx, dirA.Join(filename), dirB.Join(filename), true)
 			if !identical {
 				return false, err
 			}
 		} else {
-			hashA := infoA.ContentHash
+			hashA := infoA.CachedContentHash()
 			if hashA == "" {
 				hashA, err = dirA.Join(filename).ContentHash()
 				if err != nil {
 					return false, fmt.Errorf("IdenticalDirContents: error content hashing %q: %w", filename, err)
 				}
 			}
-			hashB := infoB.ContentHash
+			hashB := infoB.CachedContentHash()
 			if hashB == "" {
 				hashB, err = dirB.Join(filename).ContentHash()
 				if err != nil {

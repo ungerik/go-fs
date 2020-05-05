@@ -39,6 +39,7 @@ type FileSystem interface {
 	// without the file system prefix.
 	SplitPath(filePath string) []string
 
+	// Separator used between path delements
 	Separator() string
 
 	IsAbsPath(filePath string) bool
@@ -58,11 +59,17 @@ type FileSystem interface {
 	// A volume is for example "C:" on Windows
 	VolumeName(filePath string) string
 
-	// Stat returns FileInfo
-	Stat(filePath string) FileInfo
+	// Info returns a FileInfo
+	Info(filePath string) FileInfo
+
+	// IsHidden returns if the filePath is considered hidden in the file system
+	// which can mean different things in different file systems.
 	IsHidden(filePath string) bool
+
+	// IsSymbolicLink returns if filePath describes a symbolic link
 	IsSymbolicLink(filePath string) bool
 
+	// Watch a filePath for change events
 	Watch(filePath string) (<-chan WatchEvent, error)
 
 	// ListDirInfo calls the passed callback function for every file and directory in dirPath.

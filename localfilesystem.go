@@ -32,32 +32,6 @@ type LocalFileSystem struct {
 	DefaultCreateDirPermissions Permissions
 }
 
-func wrapOSErr(filePath string, err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, os.ErrNotExist):
-		return NewErrDoesNotExist(File(filePath))
-	case errors.Is(err, os.ErrExist):
-		return NewErrAlreadyExists(File(filePath))
-	case errors.Is(err, os.ErrPermission):
-		return NewErrPermission(File(filePath))
-	default:
-		return err
-	}
-}
-
-func expandTilde(path string) string {
-	if len(path) == 0 || path[0] != '~' {
-		return path
-	}
-	currentUser, _ := user.Current()
-	if currentUser == nil || currentUser.HomeDir == "" {
-		return path
-	}
-	return filepath.Join(currentUser.HomeDir, path[1:])
-}
-
 func (local *LocalFileSystem) IsReadOnly() bool {
 	return false
 }
@@ -164,35 +138,13 @@ func (local *LocalFileSystem) VolumeName(filePath string) string {
 }
 
 // Stat returns FileInfo
-func (local *LocalFileSystem) Stat(filePath string) FileInfo {
+func (local *LocalFileSystem) Info(filePath string) FileInfo {
 	filePath = expandTilde(filePath)
-	info, err := os.Stat(filePath)
+	fileInfo, err := os.Stat(filePath)
 	if err != nil {
-		return FileInfo{}
+		return NewNonExistingFileInfo(File(filePath))
 	}
-	return convertFileInfo(filePath, info)
-}
-
-func convertFileInfo(filePath string, info os.FileInfo) FileInfo {
-	filePath = expandTilde(filePath)
-	hidden, err := hasFileAttributeHidden(filePath)
-	if err != nil {
-		// Should not happen, this is why we are logging the error
-		fmt.Fprintf(os.Stderr, "hasFileAttributeHidden(%s): %+v\n", filePath, err)
-		return FileInfo{}
-	}
-	name := info.Name()
-	mode := info.Mode()
-	return FileInfo{
-		Name:        name,
-		Exists:      true,
-		IsDir:       mode.IsDir(),
-		IsRegular:   mode.IsRegular(),
-		IsHidden:    hidden || len(name) > 0 && name[0] == '.',
-		Size:        info.Size(),
-		ModTime:     info.ModTime(),
-		Permissions: Permissions(mode.Perm()),
-	}
+	return newLocalFileInfo(filePath, fileInfo)
 }
 
 func (local *LocalFileSystem) IsHidden(filePath string) bool {
@@ -249,11 +201,11 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 	}
 
 	dirPath = expandTilde(dirPath)
-	info := local.Stat(dirPath)
-	if !info.Exists {
+	info := local.Info(dirPath)
+	if !info.Exists() {
 		return NewErrDoesNotExist(File(dirPath))
 	}
-	if !info.IsDir {
+	if !info.IsDir() {
 		return NewErrIsNotDirectory(File(dirPath))
 	}
 
@@ -281,7 +233,7 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 			match, err := local.MatchAnyPattern(name, patterns)
 			if match {
 				file := local.JoinCleanFile(dirPath, name)
-				info := convertFileInfo(string(file), osInfo)
+				info := newLocalFileInfo(string(file), osInfo)
 				err = callback(file, info)
 			}
 			if err != nil {
@@ -303,11 +255,11 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 	}
 
 	dirPath = expandTilde(dirPath)
-	info := local.Stat(dirPath)
-	if !info.Exists {
+	info := local.Info(dirPath)
+	if !info.Exists() {
 		return nil, NewErrDoesNotExist(File(dirPath))
 	}
-	if !info.IsDir {
+	if !info.IsDir() {
 		return nil, NewErrIsNotDirectory(File(dirPath))
 	}
 
@@ -393,8 +345,7 @@ func (local *LocalFileSystem) SetGroup(filePath string, group string) error {
 }
 
 func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
-	filePath = expandTilde(filePath)
-	if local.Stat(filePath).Exists {
+	if local.Info(filePath).Exists() {
 		now := time.Now()
 		return os.Chtimes(filePath, now, now)
 	}
@@ -481,14 +432,14 @@ func (local *LocalFileSystem) Watch(filePath string) (<-chan WatchEvent, error) 
 
 func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
 	filePath = expandTilde(filePath)
-	info := local.Stat(filePath)
-	if !info.Exists {
+	info := local.Info(filePath)
+	if !info.Exists() {
 		return NewErrDoesNotExist(File(filePath))
 	}
-	if info.IsDir {
+	if info.IsDir() {
 		return NewErrIsDirectory(File(filePath))
 	}
-	if info.Size <= size {
+	if info.Size() <= size {
 		return nil
 	}
 	return os.Truncate(filePath, size)
@@ -534,7 +485,7 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) error {
 	if strings.ContainsAny(newName, "/\\") {
 		return errors.New("newName for Rename() contains a path separators: " + newName)
 	}
-	if !local.Stat(filePath).Exists {
+	if !local.Info(filePath).Exists() {
 		return NewErrDoesNotExist(File(filePath))
 	}
 	newPath := filepath.Join(filepath.Dir(filePath), newName)
@@ -544,10 +495,10 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) error {
 func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 	filePath = expandTilde(filePath)
 	destPath = expandTilde(destPath)
-	if !local.Stat(filePath).Exists {
+	if !local.Info(filePath).Exists() {
 		return NewErrDoesNotExist(File(filePath))
 	}
-	if local.Stat(destPath).IsDir {
+	if local.Info(destPath).IsDir() {
 		destPath = filepath.Join(destPath, filepath.Base(filePath))
 	}
 	return os.Rename(filePath, destPath)
@@ -556,4 +507,30 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 func (local *LocalFileSystem) Remove(filePath string) error {
 	filePath = expandTilde(filePath)
 	return wrapOSErr(filePath, os.Remove(filePath))
+}
+
+func wrapOSErr(filePath string, err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, os.ErrNotExist):
+		return NewErrDoesNotExist(File(filePath))
+	case errors.Is(err, os.ErrExist):
+		return NewErrAlreadyExists(File(filePath))
+	case errors.Is(err, os.ErrPermission):
+		return NewErrPermission(File(filePath))
+	default:
+		return err
+	}
+}
+
+func expandTilde(path string) string {
+	if len(path) == 0 || path[0] != '~' {
+		return path
+	}
+	currentUser, _ := user.Current()
+	if currentUser == nil || currentUser.HomeDir == "" {
+		return path
+	}
+	return filepath.Join(currentUser.HomeDir, path[1:])
 }

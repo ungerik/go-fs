@@ -9,7 +9,7 @@ type FileInfoCache struct {
 }
 
 type fileInfoCacheEntry struct {
-	*FileInfo
+	FileInfo
 	time time.Time
 }
 
@@ -27,7 +27,7 @@ func NewFileInfoCache(timeout time.Duration) *FileInfoCache {
 }
 
 // Put puts or updates a FileInfo for a path.
-func (cache *FileInfoCache) Put(path string, info *FileInfo) {
+func (cache *FileInfoCache) Put(path string, info FileInfo) {
 	if cache == nil {
 		return
 	}
@@ -40,7 +40,7 @@ func (cache *FileInfoCache) Put(path string, info *FileInfo) {
 // Get returns the FileInfo for a path or nil and false
 // if there is no FileInfo for the path or the FileInfo
 // has timed out.
-func (cache *FileInfoCache) Get(path string) (info *FileInfo, ok bool) {
+func (cache *FileInfoCache) Get(path string) (info FileInfo, ok bool) {
 	if cache == nil {
 		return nil, false
 	}

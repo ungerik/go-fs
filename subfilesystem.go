@@ -120,9 +120,9 @@ func (subfs *SubFileSystem) AbsPath(filePath string) string {
 	return subfs.Parent.AbsPath(filePath)
 }
 
-// Stat returns FileInfo
-func (subfs *SubFileSystem) Stat(filePath string) FileInfo {
-	return subfs.Parent.Stat(filePath)
+// Info returns FileInfo
+func (subfs *SubFileSystem) Info(filePath string) FileInfo {
+	return subfs.Parent.Info(filePath)
 }
 
 func (subfs *SubFileSystem) IsHidden(filePath string) bool {

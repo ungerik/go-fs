@@ -32,10 +32,10 @@ func (n *node) sortedChildren() []*node {
 		i++
 	}
 	sort.Slice(s, func(i, j int) bool {
-		if s[i].IsDir != s[j].IsDir {
-			return s[i].IsDir
+		if s[i].IsDir() != s[j].IsDir() {
+			return s[i].IsDir()
 		}
-		return s[i].Name < s[j].Name
+		return s[i].Name() < s[j].Name()
 	})
 	return s
 }
@@ -47,29 +47,29 @@ func (n *node) sortedChildDirs() []*node {
 	}
 	s := make([]*node, 0, l)
 	for _, n := range n.children {
-		if n.IsDir {
+		if n.IsDir() {
 			s = append(s, n)
 		}
 	}
 	sort.Slice(s, func(i, j int) bool {
-		return s[i].Name < s[j].Name
+		return s[i].Name() < s[j].Name()
 	})
 	return s
 }
 
 // func (n *node) addChild(info fs.FileInfo) {
 // 	child := &node{FileInfo: info}
-// 	if info.IsDir {
+// 	if info.IsDir() {
 // 		child.children = make(map[string]*node)
 // 	}
-// 	n.children[info.Name] = child
+// 	n.children[info.Name()] = child
 // }
 
 func (n *node) addChildDir(filePath string, modTime time.Time) (child *node) {
 	name := path.Base(filePath)
 	child = n.children[name]
 	if child != nil {
-		if !child.IsDir {
+		if !child.IsDir() {
 			panic("existing child is not a directory")
 		}
 		return child
@@ -96,7 +96,7 @@ func (n *node) addChildFile(filePath string, modTime time.Time, size int64) (chi
 	name := path.Base(filePath)
 	child = n.children[name]
 	if child != nil {
-		if child.IsDir {
+		if child.IsDir() {
 			panic("existing child is a directory")
 		}
 		return child
