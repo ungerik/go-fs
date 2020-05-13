@@ -147,10 +147,10 @@ func (mpfs *MultipartFileSystem) IsAbsPath(filePath string) bool {
 }
 
 func (mpfs *MultipartFileSystem) AbsPath(filePath string) string {
-	if mpfs.IsAbsPath(filePath) {
-		return filePath
+	if !path.IsAbs(filePath) {
+		filePath = Separator + filePath
 	}
-	return Separator + filePath
+	return path.Clean(filePath)
 }
 
 // Stat returns FileInfo

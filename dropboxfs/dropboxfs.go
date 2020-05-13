@@ -146,10 +146,10 @@ func (dbfs *DropboxFileSystem) IsAbsPath(filePath string) bool {
 }
 
 func (dbfs *DropboxFileSystem) AbsPath(filePath string) string {
-	if dbfs.IsAbsPath(filePath) {
-		return filePath
+	if !path.IsAbs(filePath) {
+		filePath = Separator + filePath
 	}
-	return Separator + filePath
+	return path.Clean(filePath)
 }
 
 func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {

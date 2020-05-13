@@ -150,10 +150,10 @@ func (zipfs *ZipFileSystem) IsAbsPath(filePath string) bool {
 }
 
 func (zipfs *ZipFileSystem) AbsPath(filePath string) string {
-	if zipfs.IsAbsPath(filePath) {
-		return filePath
+	if !path.IsAbs(filePath) {
+		filePath = Separator + filePath
 	}
-	return Separator + filePath
+	return path.Clean(filePath)
 }
 
 // func (zipfs *ZipFileSystem) findFile(filePath string) *zip.File {
