@@ -20,6 +20,13 @@ func HomeDir() File {
 	return File(u.HomeDir)
 }
 
+// CurrentWorkingDir returns the current working directory of the process.
+// In case of an erorr, Exists() of the result File will return false.
+func CurrentWorkingDir() File {
+	cwd, _ := os.Getwd()
+	return File(cwd)
+}
+
 // TempDir returns the temp directory of the operating system
 func TempDir() File {
 	return File(os.TempDir())
