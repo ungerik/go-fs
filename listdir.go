@@ -5,30 +5,31 @@ import (
 	"errors"
 )
 
-// ListDirMaxImpl implements the ListDirMax method functionality
-// by calling listDir.
+// ListDirMaxImpl implements the ListDirMax method functionality by calling listDir.
+// It returns the passed max number of files or an unlimited number if max is < 0.
 // FileSystem implementations can use this function to implement ListDirMax,
-// if a own, specialized implementation doesn't make sense.
+// if an own, specialized implementation doesn't make sense.
 func ListDirMaxImpl(ctx context.Context, max int, listDir func(ctx context.Context, callback func(File) error) error) (files []File, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	errAbort := errors.New("errAbort") // used as an internal flag, won't be returned
 	err = listDir(ctx, func(file File) error {
-		if len(files) >= max {
+		if max >= 0 && len(files) >= max {
 			return errAbort
 		}
 		if files == nil {
-			if max > 0 {
-				files = make([]File, 0, max)
-			} else {
+			// Reserve space for files
+			if max < 0 {
 				files = make([]File, 0, 32)
+			} else {
+				files = make([]File, 0, max)
 			}
 		}
 		files = append(files, file)
 		return nil
 	})
-	if err != nil && err != errAbort {
+	if err != nil && !errors.Is(err, errAbort) {
 		return nil, err
 	}
 	return files, nil
