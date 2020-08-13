@@ -100,6 +100,13 @@ func (file File) MustLocalPath() string {
 	return localPath
 }
 
+// AbsPath returns the absolute path of the file
+// depending on the file system.
+func (file File) AbsPath() string {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.AbsPath(path)
+}
+
 // Name returns the name part of the file path,
 // which is usually the string after the last path Separator.
 func (file File) Name() string {
@@ -237,14 +244,19 @@ func (file File) CheckIsDir() error {
 	}
 }
 
-func (file File) IsAbsolute() bool {
+// HasAbsPath returns wether the file has an absolute
+// path depending on the file system.
+func (file File) HasAbsPath() bool {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.IsAbsPath(path)
 }
 
-func (file File) MakeAbsolute() File {
+// WithAbsPath returns the file with an absolute
+// path depending on the file system.
+func (file File) WithAbsPath() File {
 	fileSystem, path := file.ParseRawURI()
-	return File(fileSystem.AbsPath(path))
+	uri := fileSystem.Prefix() + fileSystem.AbsPath(path)
+	return File(strings.TrimPrefix(uri, LocalPrefix))
 }
 
 // IsRegular reports if this is a regular file.

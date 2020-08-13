@@ -50,7 +50,7 @@ func (invalid InvalidFileSystem) IsAbsPath(filePath string) bool {
 }
 
 func (invalid InvalidFileSystem) AbsPath(filePath string) string {
-	return invalid.Prefix() + invalid.JoinCleanPath(filePath)
+	return invalid.JoinCleanPath(filePath)
 }
 
 func (invalid InvalidFileSystem) URL(cleanPath string) string {
