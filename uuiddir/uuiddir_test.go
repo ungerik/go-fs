@@ -4,19 +4,18 @@ import (
 	"context"
 	"testing"
 
-	"github.com/domonda/go-types/uu"
 	"github.com/stretchr/testify/assert"
 
 	fs "github.com/ungerik/go-fs"
 )
 
 func Test_Split(t *testing.T) {
-	uuid := uu.IDMustFromString("f0498fad-437c-4954-ad82-8ec2cc202628")
+	uuid := mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628")
 	assert.Equal(t, []string{"f0", "498", "fad", "437c4954", "ad828ec2cc202628"}, Split(uuid), "Split(%s)", uuid)
 }
 
 func Test_Join(t *testing.T) {
-	uuid := uu.IDMustFromString("f0498fad-437c-4954-ad82-8ec2cc202628")
+	uuid := mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628")
 
 	baseDir := fs.File("/")
 	uuidDir := Join(baseDir, uuid)
@@ -35,7 +34,7 @@ func Test_Join(t *testing.T) {
 }
 
 func Test_Parse(t *testing.T) {
-	expected := [16]byte(uu.IDMustFromString("f0498fad-437c-4954-ad82-8ec2cc202628"))
+	expected := [16]byte(mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628"))
 	dirs := []fs.File{
 		"f0/498/fad/437c4954/ad828ec2cc202628",
 		"f0/498/fad/437c4954/ad828ec2cc202628/",
@@ -68,12 +67,12 @@ func Test_Parse(t *testing.T) {
 }
 
 func Test_FormatString(t *testing.T) {
-	uuid := uu.IDMustFromString("f0498fad-437c-4954-ad82-8ec2cc202628")
+	uuid := mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628")
 	assert.Equal(t, "f0/498/fad/437c4954/ad828ec2cc202628", FormatString(uuid), "FormatString(%s)", uuid)
 }
 
 func Test_ParseString(t *testing.T) {
-	expected := [16]byte(uu.IDMustFromString("f0498fad-437c-4954-ad82-8ec2cc202628"))
+	expected := [16]byte(mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628"))
 	uuid, err := ParseString("f0/498/fad/437c4954/ad828ec2cc202628")
 	assert.NoError(t, err, `ParseString("f0/498/fad/437c4954/ad828ec2cc202628")`)
 	assert.Equal(t, expected, uuid, `ParseString("f0/498/fad/437c4954/ad828ec2cc202628")`)
@@ -96,7 +95,7 @@ func Test_ParseString(t *testing.T) {
 	}
 }
 
-func makeTestDirs() (baseDir fs.File, dirs map[fs.File]bool, ids uu.IDSet, err error) {
+func makeTestDirs() (baseDir fs.File, dirs map[fs.File]bool, ids map[[16]byte]struct{}, err error) {
 	baseDir, err = fs.MakeTempDir()
 	if err != nil {
 		return "", nil, nil, err
@@ -115,17 +114,17 @@ func makeTestDirs() (baseDir fs.File, dirs map[fs.File]bool, ids uu.IDSet, err e
 		baseDir.Join("3a", "7ed", "2cf", "a00d49ed", "bdf723534d292fcb"): true,
 	}
 
-	ids = uu.IDSet{
-		uu.IDMustFromString("ced14f11-83f6-4908-b502-8971ff464608"): {},
-		uu.IDMustFromString("8e7c40d7-49fa-41e1-8962-263070ecb87f"): {},
-		uu.IDMustFromString("4717a9b7-17d8-4c12-89e1-c998fb34e9ac"): {},
-		uu.IDMustFromString("10ba4b07-907e-4702-a6df-7b5df92c9c2e"): {},
-		uu.IDMustFromString("cc2f6bad-9a2d-4b12-a083-23a05e4207c2"): {},
-		uu.IDMustFromString("165c45c9-2b1c-4b4f-ac66-b6990c38d5df"): {},
-		uu.IDMustFromString("ae31395a-c03a-4962-94fd-bfe859f4d079"): {},
-		uu.IDMustFromString("a914b4b1-2530-48d3-8a36-470adc26101d"): {},
-		uu.IDMustFromString("d78e33ae-dbfc-4878-9e95-41644175f6c9"): {},
-		uu.IDMustFromString("3a7ed2cf-a00d-49ed-bdf7-23534d292fcb"): {},
+	ids = map[[16]byte]struct{}{
+		mustParseUUID("ced14f11-83f6-4908-b502-8971ff464608"): {},
+		mustParseUUID("8e7c40d7-49fa-41e1-8962-263070ecb87f"): {},
+		mustParseUUID("4717a9b7-17d8-4c12-89e1-c998fb34e9ac"): {},
+		mustParseUUID("10ba4b07-907e-4702-a6df-7b5df92c9c2e"): {},
+		mustParseUUID("cc2f6bad-9a2d-4b12-a083-23a05e4207c2"): {},
+		mustParseUUID("165c45c9-2b1c-4b4f-ac66-b6990c38d5df"): {},
+		mustParseUUID("ae31395a-c03a-4962-94fd-bfe859f4d079"): {},
+		mustParseUUID("a914b4b1-2530-48d3-8a36-470adc26101d"): {},
+		mustParseUUID("d78e33ae-dbfc-4878-9e95-41644175f6c9"): {},
+		mustParseUUID("3a7ed2cf-a00d-49ed-bdf7-23534d292fcb"): {},
 	}
 
 	if len(ids) != len(dirs) {
@@ -154,17 +153,17 @@ func Test_Enum(t *testing.T) {
 		hasDir := dirs[uuidDir] && uuidDir.IsDir()
 		assert.True(t, hasDir, "valid directory")
 
-		hasUUID := ids.Contains(uuid)
+		_, hasUUID := ids[uuid]
 		assert.True(t, hasUUID, "valid UUID")
 
 		return nil
 	})
 }
 
-func findUUIDs(baseDir fs.File) uu.IDSet {
-	ids := make(uu.IDSet)
+func findUUIDs(baseDir fs.File) map[[16]byte]struct{} {
+	ids := make(map[[16]byte]struct{})
 	Enum(context.Background(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
-		ids.Add(uuid)
+		ids[uuid] = struct{}{}
 		return nil
 	})
 	return ids
@@ -181,7 +180,19 @@ func Test_RemoveDir(t *testing.T) {
 		err := RemoveDir(baseDir, idDir)
 		assert.NoError(t, err, "RemoveDir")
 
-		ids.Delete(id)
-		ids.Equal(findUUIDs(baseDir))
+		delete(ids, id)
+		idsEqual(ids, findUUIDs(baseDir))
 	}
+}
+
+func idsEqual(a, b map[[16]byte]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if _, ok := b[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
