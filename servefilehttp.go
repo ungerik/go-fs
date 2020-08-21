@@ -17,8 +17,8 @@ func ServeFileHTTPHandler(file FileReader, contentType ...string) http.Handler {
 
 // ServeFileHTTP serves the passed file with a Content-Type header via HTTP.
 // If no contentType is passed then http.DetectContentType is used with the file content.
-// 404 error is returned if the file does not exist and a 500 error if there was any other
-// error while reading it.
+// status code 404 error is returned if the file does not exist
+// and a status code 500 error if there was any other error while reading it.
 func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file FileReader, contentType ...string) {
 	data, err := file.ReadAll()
 	if err != nil {
@@ -34,12 +34,10 @@ func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file Fil
 		return
 	}
 
-	if len(contentType) == 0 {
+	if len(contentType) == 0 || contentType[0] == "" {
 		response.Header().Add("Content-Type", http.DetectContentType(data))
 	} else {
-		for _, ct := range contentType {
-			response.Header().Add("Content-Type", ct)
-		}
+		response.Header().Add("Content-Type", contentType[0])
 	}
 	response.Write(data)
 }
