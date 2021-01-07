@@ -7,8 +7,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"strings"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -29,50 +27,23 @@ func NewMemFile(name string, data []byte) *MemFile {
 	return &MemFile{FileName: name, FileData: data}
 }
 
-// NewMemFileFromReader returns a new MemFile with the data from ioutil.ReadAll(ioReader)
-func NewMemFileFromReader(name string, ioReader io.Reader) (*MemFile, error) {
-	data, err := ioutil.ReadAll(ioReader)
-	if err != nil {
-		return nil, fmt.Errorf("NewMemFileFromReader: error reading from io.Reader: %w", err)
-	}
-	return &MemFile{FileName: name, FileData: data}, nil
-}
-
-// NewMemFileFromFileReader returns a new MemFile with the data from fileReader.ReadAll()
-func NewMemFileFromFileReader(name string, fileReader FileReader) (*MemFile, error) {
-	data, err := fileReader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("NewMemFileFromFileReader: error reading from FileReader: %w", err)
-	}
-	return &MemFile{FileName: name, FileData: data}, nil
-}
-
-// NewMemFileFrom returns a new MemFile with
+// ReadMemFile returns a new MemFile with
 // the name from fileReader.Name() and
 // the data from fileReader.ReadAll()
-func NewMemFileFrom(fileReader FileReader) (*MemFile, error) {
+func ReadMemFile(fileReader FileReader) (*MemFile, error) {
 	data, err := fileReader.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("NewMemFileFrom: error reading from FileReader: %w", err)
+		return nil, fmt.Errorf("ReadMemFile: error reading from FileReader: %w", err)
 	}
 	return &MemFile{FileName: fileReader.Name(), FileData: data}, nil
 }
 
-// NewMemFileFromMarshalJSON returns a new MemFile with
-// the result of marshalling input as JSON with optional indentation.
-// (indent strings will be joined)
-func NewMemFileFromMarshalJSON(name string, input interface{}, indent ...string) (*MemFile, error) {
-	var (
-		data []byte
-		err  error
-	)
-	if len(indent) > 0 {
-		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
-	} else {
-		data, err = json.Marshal(input)
-	}
+// ReadMemFileRename returns a new MemFile with the data
+// from fileReader.ReadAll() and the passed name.
+func ReadMemFileRename(fileReader FileReader, name string) (*MemFile, error) {
+	data, err := fileReader.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("NewMemFileFromMarshalJSON: error marshalling JSON: %w", err)
+		return nil, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
 	}
 	return &MemFile{FileName: name, FileData: data}, nil
 }
