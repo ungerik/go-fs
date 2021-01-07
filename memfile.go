@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"io/ioutil"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -44,6 +45,16 @@ func ReadMemFileRename(fileReader FileReader, name string) (*MemFile, error) {
 	data, err := fileReader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
+	}
+	return &MemFile{FileName: name, FileData: data}, nil
+}
+
+// ReadAllMemFile returns a new MemFile with the data
+// from ioutil.ReadAll(r) and the passed name.
+func ReadAllMemFile(r io.Reader, name string) (*MemFile, error) {
+	data, err := ioutil.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("ReadAllMemFile: error reading from io.Reader: %w", err)
 	}
 	return &MemFile{FileName: name, FileData: data}, nil
 }
