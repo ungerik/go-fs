@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	dropbox "github.com/tj/go-dropbox"
+	"github.com/tj/go-dropbox"
 
-	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
