@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"testing"
 )
@@ -19,7 +18,7 @@ func TestDropboxContentHash(t *testing.T) {
 			t.Fatalf("download(%s) response status %d: %s", url, r.StatusCode, r.Status)
 		}
 		defer r.Body.Close()
-		data, err := ioutil.ReadAll(r.Body)
+		data, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("download(%s) error: %s", url, err)
 		}

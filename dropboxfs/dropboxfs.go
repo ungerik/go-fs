@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"path"
 	"path/filepath"
 	"strings"
@@ -329,7 +328,7 @@ func (dbfs *DropboxFileSystem) ReadAll(filePath string) ([]byte, error) {
 	}
 	defer out.Body.Close()
 
-	return ioutil.ReadAll(out.Body)
+	return io.ReadAll(out.Body)
 }
 
 func (dbfs *DropboxFileSystem) WriteAll(filePath string, data []byte, perm []fs.Permissions) error {

@@ -3,7 +3,6 @@ package multipartfs
 import (
 	"context"
 	"io"
-	"io/ioutil"
 	"mime/multipart"
 	"net/http"
 	"path"
@@ -249,7 +248,7 @@ func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
 	}
 	defer file.Close()
 
-	return ioutil.ReadAll(file)
+	return io.ReadAll(file)
 }
 
 func (mpfs *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {

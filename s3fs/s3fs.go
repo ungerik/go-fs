@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"path"
 	"path/filepath"
 	"strings"
@@ -394,7 +393,7 @@ func (s3fs *S3FileSystem) ReadAll(filePath string) ([]byte, error) {
 		return nil, err
 	}
 	defer out.Body.Close()
-	return ioutil.ReadAll(out.Body)
+	return io.ReadAll(out.Body)
 }
 
 // WriteAll writes data to an object at filePath.

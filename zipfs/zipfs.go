@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"path"
 	"strings"
 
@@ -330,7 +329,7 @@ func (zipfs *ZipFileSystem) ReadAll(filePath string) ([]byte, error) {
 	}
 	defer file.Close()
 
-	return ioutil.ReadAll(file)
+	return io.ReadAll(file)
 }
 
 func (zipfs *ZipFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {

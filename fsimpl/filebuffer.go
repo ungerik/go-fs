@@ -3,7 +3,6 @@ package fsimpl
 import (
 	"errors"
 	"io"
-	"io/ioutil"
 )
 
 // ReadonlyFileBuffer is a memory buffer that implements ReadSeekCloser which combines the interfaces
@@ -23,7 +22,7 @@ func NewReadonlyFileBuffer(data []byte) *ReadonlyFileBuffer {
 }
 
 func NewReadonlyFileBufferReadAll(reader io.Reader) (*ReadonlyFileBuffer, error) {
-	data, err := ioutil.ReadAll(reader)
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}

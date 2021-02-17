@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"path"
 	"strings"
@@ -181,7 +180,7 @@ func (f *HTTPFileSystem) ReadAll(filePath string) (data []byte, err error) {
 		return nil, fmt.Errorf("HTTPFileSystem.ReadAll: %w", err)
 	}
 
-	data, err = ioutil.ReadAll(reader)
+	data, err = io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("HTTPFileSystem.ReadAll: %w", err)
 	}
