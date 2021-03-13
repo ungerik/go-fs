@@ -23,9 +23,9 @@ func CopyFile(src FileReader, dest File, perm ...Permissions) error {
 // up to that path will be created.
 // If dest is an existing directory, then a file with the base name
 // of src will be created there.
-// buf must point to a []byte variable.
-// If that variable is initialized with a byte slice, then this slice will be used as buffer,
-// else a byte slice will be allocated for the variable.
+// An non nil pointer to a []byte variable must be passed for buf.
+// If that variable holds a non zero length byte slice, then this slice will be used as buffer,
+// else a byte slice will be allocated and assigned to the variable.
 // Use this function to re-use buffers between CopyFileBuf calls.
 func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) error {
 	return CopyFileBufContext(context.Background(), src, dest, buf, perm...)
@@ -36,9 +36,9 @@ func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) er
 // up to that path will be created.
 // If dest is an existing directory, then a file with the base name
 // of src will be created there.
-// buf must point to a []byte variable.
-// If that variable is initialized with a byte slice, then this slice will be used as buffer,
-// else a byte slice will be allocated for the variable.
+// An non nil pointer to a []byte variable must be passed for buf.
+// If that variable holds a non zero length byte slice, then this slice will be used as buffer,
+// else a byte slice will be allocated and assigned to the variable.
 // Use this function to re-use buffers between CopyFileBufContext calls.
 func CopyFileBufContext(ctx context.Context, src FileReader, dest File, buf *[]byte, perm ...Permissions) error {
 	if buf == nil {
@@ -83,7 +83,7 @@ func CopyFileBufContext(ctx context.Context, src FileReader, dest File, buf *[]b
 	}
 	defer w.Close()
 
-	if *buf == nil {
+	if len(*buf) == 0 {
 		*buf = make([]byte, copyBufferSize)
 	}
 	_, err = io.CopyBuffer(w, r, *buf)
