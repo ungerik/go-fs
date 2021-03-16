@@ -10,6 +10,9 @@ type httpFileSystem struct {
 }
 
 func (fs httpFileSystem) Open(name string) (http.File, error) {
+	if fs.root == "" || name == "" {
+		return nil, ErrEmptyPath
+	}
 	file := fs.root.Join(name)
 	info := file.Stat()
 	if !info.Exists {

@@ -24,6 +24,10 @@ func JoinCleanFilePath(uriParts ...string) File {
 // then FileSystem.Move will be used, else source will be
 // copied recursively first to destination and then deleted.
 func Move(source, destination File) error {
+	if source == "" || destination == "" {
+		return ErrEmptyPath
+	}
+
 	srcFS, srcPath := source.ParseRawURI()
 	destFS, destPath := destination.ParseRawURI()
 	if srcFS == destFS {
