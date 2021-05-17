@@ -11,12 +11,29 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-// Check if MemFile implements FileReader
-var _ FileReader = new(MemFile)
+// Ensure MemFile implements interfaces
+var (
+	_ FileReader     = new(MemFile)
+	_ io.Writer      = new(MemFile)
+	_ io.WriterTo    = new(MemFile)
+	_ io.ReaderAt    = new(MemFile)
+	_ gob.GobEncoder = new(MemFile)
+	_ gob.GobDecoder = new(MemFile)
+	_ fmt.Stringer   = new(MemFile)
+)
 
 // MemFile implements FileReader with a filename and an in memory byte slice.
 // It exposes FileName and FileData as exported struct fields to emphasize
 // its simple nature as just an wrapper of a name and some bytes.
+//
+// MemFile implements the following interfaces:
+//   - FileReader
+//   - io.Writer
+//   - io.WriterTo
+//   - io.ReaderAt
+//   - gob.GobEncoder
+//   - gob.GobDecoder
+//   - fmt.Stringer
 type MemFile struct {
 	FileName string
 	FileData []byte
@@ -104,6 +121,13 @@ func (f *MemFile) CheckExists() error {
 // See https://www.dropbox.com/developers/reference/content-hash
 func (f *MemFile) ContentHash() (string, error) {
 	return fsimpl.ContentHashBytes(f.FileData), nil
+}
+
+// Write appends the passed bytes to the FileData,
+// implementing the io.Writer interface.
+func (f *MemFile) Write(b []byte) (int, error) {
+	f.FileData = append(f.FileData, b...)
+	return len(b), nil
 }
 
 // ReadAll copies all bytes of the file
