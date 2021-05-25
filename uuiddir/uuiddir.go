@@ -123,12 +123,12 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 	})
 }
 
-// RemoveDir deletes uuidDir recursevely and all directories
-// upward of uuidDir until but not including baseDir.
-func RemoveDir(baseDir, uuidDir fs.File) error {
+// RemoveDir deletes uuidSubDir recursevely and all empty parent
+// directories of uuidSubDir until but not including baseDir.
+func RemoveDir(baseDir, uuidSubDir fs.File) error {
 	basePath := baseDir.Path()
-	uuidPath := uuidDir.Path()
-	if !strings.HasPrefix(uuidPath, basePath) || baseDir.FileSystem() != uuidDir.FileSystem() {
+	uuidPath := uuidSubDir.Path()
+	if !strings.HasPrefix(uuidPath, basePath) || baseDir.FileSystem() != uuidSubDir.FileSystem() {
 		return fmt.Errorf("uuidDir(%q) is not a sub directory of baseDir(%q)", uuidPath, basePath)
 	}
 	if uuidPath == basePath {
@@ -136,17 +136,17 @@ func RemoveDir(baseDir, uuidDir fs.File) error {
 	}
 
 	// fmt.Println("deleting", uuidDir.Path())
-	err := uuidDir.RemoveRecursive()
+	err := uuidSubDir.RemoveRecursive()
 	if err != nil {
 		return err
 	}
 	for {
-		uuidDir = uuidDir.Dir()
-		if uuidDir.Path() == basePath || !uuidDir.IsEmptyDir() {
+		uuidSubDir = uuidSubDir.Dir()
+		if uuidSubDir.Path() == basePath || !uuidSubDir.IsEmptyDir() {
 			return nil
 		}
 		// fmt.Println("deleting", uuidDir.Path())
-		err = uuidDir.Remove()
+		err = uuidSubDir.Remove()
 		if err != nil {
 			return err
 		}
