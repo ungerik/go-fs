@@ -93,7 +93,7 @@ func (InvalidFileSystem) VolumeName(filePath string) string {
 	return ""
 }
 
-func (invalid InvalidFileSystem) Stat(filePath string) FileInfo {
+func (invalid InvalidFileSystem) Info(filePath string) FileInfo {
 	return FileInfo{}
 }
 

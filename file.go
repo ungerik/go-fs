@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 	"time"
@@ -179,10 +180,18 @@ func (file File) Joinf(format string, args ...interface{}) File {
 	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
 }
 
-// Stat returns FileInfo. The FileInfo.ContentHash field is optional.
-func (file File) Stat() FileInfo {
+// Info returns FileInfo. The FileInfo.ContentHash field is optional.
+func (file File) Info() FileInfo {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Stat(path)
+	return fileSystem.Info(path)
+}
+
+// Stat returns a io/fs.FileInfo describing the File.
+func (file File) Stat() (fs.FileInfo, error) {
+	if err := file.CheckExists(); err != nil {
+		return nil, err
+	}
+	return file.Info().FSFileInfo(), nil
 }
 
 // StatWithContentHash returns a FileInfo, but in contrast to Stat
@@ -197,7 +206,7 @@ func (file File) StatWithContentHashContext(ctx context.Context) (FileInfo, erro
 	if file == "" {
 		return FileInfo{}, ErrEmptyPath
 	}
-	info := file.Stat()
+	info := file.Info()
 	if !info.IsDir && info.ContentHash == "" {
 		reader, err := file.OpenReader()
 		if err != nil {
@@ -217,7 +226,7 @@ func (file File) Exists() bool {
 	if file == "" {
 		return false
 	}
-	return file.Stat().Exists
+	return file.Info().Exists
 }
 
 // CheckExists return an ErrDoesNotExist error
@@ -238,7 +247,7 @@ func (file File) IsDir() bool {
 	if file == "" {
 		return false
 	}
-	return file.Stat().IsDir
+	return file.Info().IsDir
 }
 
 // CheckIsDir return an ErrDoesNotExist error
@@ -250,7 +259,7 @@ func (file File) CheckIsDir() error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	stat := file.Stat()
+	stat := file.Info()
 	switch {
 	case stat.IsDir:
 		return nil
@@ -278,7 +287,7 @@ func (file File) WithAbsPath() File {
 
 // IsRegular reports if this is a regular file.
 func (file File) IsRegular() bool {
-	return file.Stat().IsRegular
+	return file.Info().IsRegular
 }
 
 // IsEmptyDir returns if file is an empty directory.
@@ -304,7 +313,7 @@ func (file File) IsSymbolicLink() bool {
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.
 func (file File) Size() int64 {
-	return file.Stat().Size
+	return file.Info().Size
 }
 
 // ContentHash returns a Dropbox compatible content hash for the file.
@@ -325,7 +334,7 @@ func (file File) ContentHashContext(ctx context.Context) (string, error) {
 	if file == "" {
 		return "", ErrEmptyPath
 	}
-	info := file.Stat()
+	info := file.Info()
 	if info.IsDir || info.ContentHash != "" {
 		return info.ContentHash, nil
 	}
@@ -338,11 +347,11 @@ func (file File) ContentHashContext(ctx context.Context) (string, error) {
 }
 
 func (file File) ModTime() time.Time {
-	return file.Stat().ModTime
+	return file.Info().ModTime
 }
 
 func (file File) Permissions() Permissions {
-	return file.Stat().Permissions
+	return file.Info().Permissions
 }
 
 func (file File) SetPermissions(perm Permissions) error {
@@ -591,7 +600,7 @@ func (file File) MakeAllDirs(perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	info := file.Stat()
+	info := file.Info()
 	if info.IsDir {
 		return nil
 	}

@@ -168,8 +168,8 @@ func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
 	return info
 }
 
-// Stat returns FileInfo
-func (dbfs *DropboxFileSystem) Stat(filePath string) (info fs.FileInfo) {
+// Info returns FileInfo
+func (dbfs *DropboxFileSystem) Info(filePath string) (info fs.FileInfo) {
 	// The root folder is unsupported by the API
 	if filePath == "/" {
 		// info.Name = ""
@@ -215,7 +215,7 @@ func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, 
 		return ctx.Err()
 	}
 
-	info := dbfs.Stat(dirPath)
+	info := dbfs.Info(dirPath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(dbfs.File(dirPath))
 	}
@@ -310,7 +310,7 @@ func (dbfs *DropboxFileSystem) SetGroup(filePath string, group string) error {
 }
 
 func (dbfs *DropboxFileSystem) Touch(filePath string, perm []fs.Permissions) error {
-	if dbfs.Stat(filePath).Exists {
+	if dbfs.Info(filePath).Exists {
 		return errors.New("Touch can't change time on Dropbox")
 	}
 	return dbfs.WriteAll(filePath, nil, perm)
@@ -365,7 +365,7 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (io.ReadCloser, error
 }
 
 func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-	if !dbfs.Stat(path.Dir(filePath)).IsDir {
+	if !dbfs.Info(path.Dir(filePath)).IsDir {
 		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
 	}
 	var fileBuffer *fsimpl.FileBuffer
@@ -401,7 +401,7 @@ func (dbfs *DropboxFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, err
 }
 
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
-	info := dbfs.Stat(filePath)
+	info := dbfs.Info(filePath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(dbfs.File(filePath))
 	}

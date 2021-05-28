@@ -20,7 +20,7 @@ func TestInvalidFile(t *testing.T) {
 	assert.Equal(t, InvalidFileSystem{}, InvalidFile.FileSystem(), "InvalidFile has an InvalidFileSystem")
 
 	_, err := InvalidFile.OpenReader()
-	assert.Equal(t, ErrInvalidFileSystem, err, "can't open InvalidFile")
+	assert.Equal(t, ErrEmptyPath, err, "can't open InvalidFile")
 }
 
 func TestFileMakeAllDirs(t *testing.T) {

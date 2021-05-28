@@ -196,8 +196,8 @@ func (zipfs *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir 
 	return nil, false
 }
 
-// Stat returns FileInfo
-func (zipfs *ZipFileSystem) Stat(filePath string) fs.FileInfo {
+// Info returns FileInfo
+func (zipfs *ZipFileSystem) Info(filePath string) fs.FileInfo {
 	if zipfs.zipReader == nil {
 		return fs.FileInfo{}
 	}

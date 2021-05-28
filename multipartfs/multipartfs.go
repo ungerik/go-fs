@@ -152,8 +152,8 @@ func (mpfs *MultipartFileSystem) AbsPath(filePath string) string {
 	return path.Clean(filePath)
 }
 
-// Stat returns FileInfo
-func (mpfs *MultipartFileSystem) Stat(filePath string) (info fs.FileInfo) {
+// Info returns FileInfo
+func (mpfs *MultipartFileSystem) Info(filePath string) (info fs.FileInfo) {
 	parts := mpfs.SplitPath(filePath)
 	switch len(parts) {
 	case 1:
@@ -202,7 +202,7 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 	case 0:
 		for fileDir := range mpfs.Form.File {
 			file := mpfs.File(fileDir)
-			info := mpfs.Stat(fileDir)
+			info := mpfs.Info(fileDir)
 			err = callback(file, info)
 			if err != nil {
 				return err
@@ -214,7 +214,7 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 		if len(ff) > 0 {
 			for _, f := range ff {
 				file := mpfs.JoinCleanFile(dir, f.Filename)
-				info := mpfs.Stat(file.Path())
+				info := mpfs.Info(file.Path())
 				err = callback(file, info)
 				if err != nil {
 					return err

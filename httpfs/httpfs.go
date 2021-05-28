@@ -108,8 +108,8 @@ func (f *HTTPFileSystem) DirAndName(filePath string) (dir, name string) {
 // A volume is for example "C:" on Windows
 func (f *HTTPFileSystem) VolumeName(filePath string) string { return "" }
 
-// Stat returns FileInfo
-func (f *HTTPFileSystem) Stat(filePath string) fs.FileInfo {
+// Info returns FileInfo
+func (f *HTTPFileSystem) Info(filePath string) fs.FileInfo {
 	request, err := http.NewRequest("HEAD", f.URL(filePath), nil)
 	if err != nil {
 		return fs.FileInfo{}

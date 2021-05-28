@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"io/fs"
 	"os"
 	"time"
 )
@@ -18,15 +19,18 @@ type FileInfo struct {
 	ContentHash string //ContentHash is otional. For performance reasons, it will only be filled if the FileSystem implementation already has it cached
 }
 
-// FileInfo returns an os.FileInfo
-func (i FileInfo) FileInfo() os.FileInfo { return osFileInfo{i} }
+// OSFileInfo returns an os.FileInfo
+func (i FileInfo) OSFileInfo() os.FileInfo { return fileInfo{i} }
 
-// osFileInfo implements os.FileInfo for a given FileInfo
-type osFileInfo struct{ i FileInfo }
+// FSFileInfo returns an io/os.FileInfo
+func (i FileInfo) FSFileInfo() fs.FileInfo { return fileInfo{i} }
 
-func (f osFileInfo) Name() string       { return f.i.Name }
-func (f osFileInfo) Size() int64        { return f.i.Size }
-func (f osFileInfo) Mode() os.FileMode  { return f.i.Permissions.FileMode(f.i.IsDir) }
-func (f osFileInfo) ModTime() time.Time { return f.i.ModTime }
-func (f osFileInfo) IsDir() bool        { return f.i.IsDir }
-func (f osFileInfo) Sys() interface{}   { return nil }
+// fileInfo implements os.FileInfo and fs.FileInfo for a given FileInfo
+type fileInfo struct{ i FileInfo }
+
+func (f fileInfo) Name() string       { return f.i.Name }
+func (f fileInfo) Size() int64        { return f.i.Size }
+func (f fileInfo) Mode() os.FileMode  { return f.i.Permissions.FileMode(f.i.IsDir) }
+func (f fileInfo) ModTime() time.Time { return f.i.ModTime }
+func (f fileInfo) IsDir() bool        { return f.i.IsDir }
+func (f fileInfo) Sys() interface{}   { return nil }

@@ -58,8 +58,8 @@ type FileSystem interface {
 	// A volume is for example "C:" on Windows
 	VolumeName(filePath string) string
 
-	// Stat returns FileInfo
-	Stat(filePath string) FileInfo
+	// Info returns FileInfo
+	Info(filePath string) FileInfo
 	IsHidden(filePath string) bool
 	IsSymbolicLink(filePath string) bool
 

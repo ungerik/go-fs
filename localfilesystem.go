@@ -169,8 +169,8 @@ func (local *LocalFileSystem) VolumeName(filePath string) string {
 	return filepath.VolumeName(filePath)
 }
 
-// Stat returns FileInfo
-func (local *LocalFileSystem) Stat(filePath string) FileInfo {
+// Info returns FileInfo
+func (local *LocalFileSystem) Info(filePath string) FileInfo {
 	filePath = expandTilde(filePath)
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -264,7 +264,7 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 	}
 
 	dirPath = expandTilde(dirPath)
-	info := local.Stat(dirPath)
+	info := local.Info(dirPath)
 	if !info.Exists {
 		return NewErrDoesNotExist(File(dirPath))
 	}
@@ -324,7 +324,7 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 	}
 
 	dirPath = expandTilde(dirPath)
-	info := local.Stat(dirPath)
+	info := local.Info(dirPath)
 	if !info.Exists {
 		return nil, NewErrDoesNotExist(File(dirPath))
 	}
@@ -421,7 +421,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 		return ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	if local.Stat(filePath).Exists {
+	if local.Info(filePath).Exists {
 		now := time.Now()
 		return os.Chtimes(filePath, now, now)
 	}
@@ -535,7 +535,7 @@ func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
 		return ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	info := local.Stat(filePath)
+	info := local.Info(filePath)
 	if !info.Exists {
 		return NewErrDoesNotExist(File(filePath))
 	}
@@ -594,7 +594,7 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) error {
 	if strings.ContainsAny(newName, "/\\") {
 		return errors.New("newName for Rename() contains a path separators: " + newName)
 	}
-	if !local.Stat(filePath).Exists {
+	if !local.Info(filePath).Exists {
 		return NewErrDoesNotExist(File(filePath))
 	}
 	newPath := filepath.Join(filepath.Dir(filePath), newName)
@@ -607,10 +607,10 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 	}
 	filePath = expandTilde(filePath)
 	destPath = expandTilde(destPath)
-	if !local.Stat(filePath).Exists {
+	if !local.Info(filePath).Exists {
 		return NewErrDoesNotExist(File(filePath))
 	}
-	if local.Stat(destPath).IsDir {
+	if local.Info(destPath).IsDir {
 		destPath = filepath.Join(destPath, filepath.Base(filePath))
 	}
 	return os.Rename(filePath, destPath)

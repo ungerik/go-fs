@@ -185,8 +185,8 @@ func TestAbsPath(t *testing.T) {
 func TestMakeDir(t *testing.T) {
 	for _, d := range directories {
 		assert.NoError(t, s3.MakeDir(d, nil))
-		assert.True(t, s3.Stat(d+"/").Exists)
-		assert.True(t, s3.Stat(d+"/").IsDir)
+		assert.True(t, s3.Info(d+"/").Exists)
+		assert.True(t, s3.Info(d+"/").IsDir)
 	}
 }
 
@@ -199,14 +199,14 @@ func TestWriteAll(t *testing.T) {
 	}
 }
 
-func TestStat(t *testing.T) {
+func TestInfo(t *testing.T) {
 	for _, f := range files {
-		assert.NotEmpty(t, s3.Stat(f))
+		assert.NotEmpty(t, s3.Info(f))
 	}
 }
 
-func TestStatNotExists(t *testing.T) {
-	i := s3.Stat("DOESNOTEXIST/")
+func TestInfoNotExists(t *testing.T) {
+	i := s3.Info("DOESNOTEXIST/")
 	assert.Equal(t, false, i.Exists)
 }
 
@@ -272,7 +272,7 @@ func TestCopyFile(t *testing.T) {
 	parts := strings.Split(files[1], ".")
 	targetPath := parts[0] + "_copy." + parts[1]
 	assert.NoError(t, s3.CopyFile(context.Background(), files[1], targetPath, nil))
-	assert.True(t, s3.Stat(targetPath).Exists)
+	assert.True(t, s3.Info(targetPath).Exists)
 	dataInCopy, err := s3.ReadAll(targetPath)
 	assert.NoError(t, err)
 	assert.Equal(t, testData, dataInCopy)
@@ -289,7 +289,7 @@ func TestRename(t *testing.T) {
 
 	// Renamed file has to exist
 	renamedPath := path.Join(path.Dir(files[1]), renamedFile)
-	assert.True(t, s3.Stat(renamedPath).Exists)
+	assert.True(t, s3.Info(renamedPath).Exists)
 
 	// Content has to be equal
 	dataOfRenamedFile, err := s3.ReadAll(renamedPath)
@@ -297,7 +297,7 @@ func TestRename(t *testing.T) {
 	assert.Equal(t, originalData, dataOfRenamedFile)
 
 	// Original file cannot exist
-	assert.False(t, s3.Stat(files[1]).Exists)
+	assert.False(t, s3.Info(files[1]).Exists)
 
 	files = append(files, renamedPath)
 }
@@ -308,8 +308,8 @@ func TestMove(t *testing.T) {
 	dest := path.Base(files[2]) // Simply move to root directory
 	assert.NoError(t, err)
 	assert.NoError(t, s3.Move(source, dest))
-	assert.False(t, s3.Stat(source).Exists)
-	assert.True(t, s3.Stat(dest).Exists)
+	assert.False(t, s3.Info(source).Exists)
+	assert.True(t, s3.Info(dest).Exists)
 
 	dataAfterMove, err := s3.ReadAll(dest)
 	assert.NoError(t, err)
@@ -323,7 +323,7 @@ func TestRemoveRecursive(t *testing.T) {
 	assert.NoError(t, s3.File(directories[0]).RemoveRecursive())
 	// This directory actually had contents before so if it doesn't exist
 	// all of its contents were also deleted.
-	assert.False(t, s3.Stat(directories[0]).Exists)
+	assert.False(t, s3.Info(directories[0]).Exists)
 }
 
 func TestRemove(t *testing.T) {

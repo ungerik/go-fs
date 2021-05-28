@@ -9,13 +9,13 @@ import (
 )
 
 func TestStat(t *testing.T) {
-	info := FileSystemTLS.Stat("domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png")
+	info := FileSystemTLS.Info("domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png")
 	assert.True(t, info.Exists)
 	assert.False(t, info.IsDir)
 	assert.Greater(t, info.Size, int64(0), "file size greater zero")
 	assert.NotZero(t, info.ModTime, "has modified time")
 
-	info2 := fs.File("https://domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png").Stat()
+	info2 := fs.File("https://domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png").Info()
 	assert.Equal(t, info, info2)
 }
 

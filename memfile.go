@@ -7,6 +7,8 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"io/fs"
+	"time"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -35,8 +37,8 @@ var (
 //   - gob.GobDecoder
 //   - fmt.Stringer
 type MemFile struct {
-	FileName string
-	FileData []byte
+	FileName string `json:"name"`
+	FileData []byte `json:"data"`
 }
 
 // NewMemFile returns a new MemFile
@@ -231,3 +233,17 @@ func (f *MemFile) GobDecode(gobBytes []byte) error {
 	}
 	return nil
 }
+
+// Stat returns a io/fs.FileInfo describing the MemFile.
+func (f *MemFile) Stat() (fs.FileInfo, error) {
+	return memFileInfo{f}, nil
+}
+
+type memFileInfo struct {
+	*MemFile
+}
+
+func (i memFileInfo) Mode() fs.FileMode  { return 0666 }
+func (i memFileInfo) ModTime() time.Time { return time.Now() }
+func (i memFileInfo) IsDir() bool        { return false }
+func (i memFileInfo) Sys() interface{}   { return nil }

@@ -183,10 +183,10 @@ func (s3fs *S3FileSystem) AbsPath(filePath string) string {
 	return Separator + filePath
 }
 
-// Stat returns a FileInfo instance for the file under the given file path.
+// Info returns a FileInfo instance for the file under the given file path.
 // If the file does not exist in the S3 bucket, an empty FileInfo instance
 // will be returned.
-func (s3fs *S3FileSystem) Stat(filePath string) (info fs.FileInfo) {
+func (s3fs *S3FileSystem) Info(filePath string) (info fs.FileInfo) {
 	if filePath == "/" {
 		info.Exists = true
 		info.IsRegular = true
@@ -257,7 +257,7 @@ func (s3fs *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callb
 	if !strings.HasSuffix(dirPath, "/") {
 		dirPath += "/"
 	}
-	info := s3fs.Stat(dirPath)
+	info := s3fs.Info(dirPath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(s3fs.File(dirPath))
 	}
@@ -314,7 +314,7 @@ func (s3fs *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callb
 			continue
 		}
 		f := fs.File(*c.Key)
-		fi := s3fs.Stat(f.Name())
+		fi := s3fs.Info(f.Name())
 		callback(f, fi)
 	}
 	return nil
@@ -366,7 +366,7 @@ func (s3fs *S3FileSystem) SetGroup(filePath string, group string) error {
 
 // Touch creates a file in the S3 bucket (no data).
 func (s3fs *S3FileSystem) Touch(filePath string, perm []fs.Permissions) error {
-	if s3fs.Stat(filePath).Exists {
+	if s3fs.Info(filePath).Exists {
 		return nil
 	}
 	return s3fs.WriteAll(filePath, nil, perm)
@@ -488,7 +488,7 @@ func (s3fs *S3FileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
 
 // Truncate shortens an object's data to size (number of bytes).
 func (s3fs *S3FileSystem) Truncate(filePath string, size int64) error {
-	info := s3fs.Stat(filePath)
+	info := s3fs.Info(filePath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(s3fs.File(filePath))
 	}
