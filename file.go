@@ -180,6 +180,15 @@ func (file File) Joinf(format string, args ...interface{}) File {
 	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
 }
 
+// Stat returns a io/fs.FileInfo describing the File.
+func (file File) Stat() (fs.FileInfo, error) {
+	if file == "" {
+		return nil, ErrEmptyPath
+	}
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Stat(path)
+}
+
 // Info returns FileInfo. The FileInfo.ContentHash field is optional.
 func (file File) Info() FileInfo {
 	fileSystem, path := file.ParseRawURI()
@@ -191,21 +200,15 @@ func (file File) Info() FileInfo {
 	return NewFileInfo(info, fileSystem.IsHidden(path))
 }
 
-// Stat returns a io/fs.FileInfo describing the File.
-func (file File) Stat() (fs.FileInfo, error) {
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Stat(path)
+// InfoWithContentHash returns a FileInfo, but in contrast to Stat
+// it always fills the ContentHash field.
+func (file File) InfoWithContentHash() (FileInfo, error) {
+	return file.InfoWithContentHashContext(context.Background())
 }
 
-// StatWithContentHash returns a FileInfo, but in contrast to Stat
+// InfoWithContentHashContext returns a FileInfo, but in contrast to Stat
 // it always fills the ContentHash field.
-func (file File) StatWithContentHash() (FileInfo, error) {
-	return file.StatWithContentHashContext(context.Background())
-}
-
-// StatWithContentHashContext returns a FileInfo, but in contrast to Stat
-// it always fills the ContentHash field.
-func (file File) StatWithContentHashContext(ctx context.Context) (FileInfo, error) {
+func (file File) InfoWithContentHashContext(ctx context.Context) (FileInfo, error) {
 	if file == "" {
 		return FileInfo{}, ErrEmptyPath
 	}
@@ -226,10 +229,8 @@ func (file File) StatWithContentHashContext(ctx context.Context) (FileInfo, erro
 
 // Exists returns a file or directory with the path of File exists.
 func (file File) Exists() bool {
-	if file == "" {
-		return false
-	}
-	return file.Info().Exists
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Exists(path)
 }
 
 // CheckExists return an ErrDoesNotExist error
@@ -247,10 +248,11 @@ func (file File) CheckExists() error {
 
 // IsDir returns a directory with the path of File exists.
 func (file File) IsDir() bool {
-	if file == "" {
+	stat, err := file.Stat()
+	if err != nil {
 		return false
 	}
-	return file.Info().IsDir
+	return stat.IsDir()
 }
 
 // CheckIsDir return an ErrDoesNotExist error
@@ -259,17 +261,14 @@ func (file File) IsDir() bool {
 // if a file exists, but is not a directory,
 // or nil if the file is a directory.
 func (file File) CheckIsDir() error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	stat := file.Info()
+	stat, err := file.Stat()
 	switch {
-	case stat.IsDir:
+	case err != nil:
+		return err
+	case stat.IsDir():
 		return nil
-	case stat.Exists:
-		return NewErrIsNotDirectory(file)
 	default:
-		return NewErrDoesNotExist(file)
+		return NewErrIsNotDirectory(file)
 	}
 }
 
@@ -290,7 +289,11 @@ func (file File) WithAbsPath() File {
 
 // IsRegular reports if this is a regular file.
 func (file File) IsRegular() bool {
-	return file.Info().IsRegular
+	stat, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return stat.Mode().IsRegular()
 }
 
 // IsEmptyDir returns if file is an empty directory.
@@ -316,7 +319,11 @@ func (file File) IsSymbolicLink() bool {
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.
 func (file File) Size() int64 {
-	return file.Info().Size
+	stat, err := file.Stat()
+	if err != nil {
+		return 0
+	}
+	return stat.Size()
 }
 
 // ContentHash returns a Dropbox compatible content hash for the file.
@@ -350,11 +357,19 @@ func (file File) ContentHashContext(ctx context.Context) (string, error) {
 }
 
 func (file File) ModTime() time.Time {
-	return file.Info().ModTime
+	stat, err := file.Stat()
+	if err != nil {
+		return time.Time{}
+	}
+	return stat.ModTime()
 }
 
 func (file File) Permissions() Permissions {
-	return file.Info().Permissions
+	stat, err := file.Stat()
+	if err != nil {
+		return 0
+	}
+	return Permissions(stat.Mode().Perm())
 }
 
 func (file File) SetPermissions(perm Permissions) error {
@@ -603,12 +618,12 @@ func (file File) MakeAllDirs(perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	info := file.Info()
-	if info.IsDir {
+	if info, err := file.Stat(); err == nil {
+		// File exists
+		if !info.IsDir() {
+			return NewErrIsNotDirectory(file)
+		}
 		return nil
-	}
-	if info.Exists {
-		return NewErrIsNotDirectory(file)
 	}
 
 	dir, name := file.DirAndName()
@@ -1004,4 +1019,9 @@ func (file File) GobDecode(gobBytes []byte) error {
 // HTTPFileSystem returns a http.FileSystem with the file as root.
 func (file File) HTTPFileSystem() http.FileSystem {
 	return httpFileSystem{root: file}
+}
+
+// AsFS returns an implementation of the io/fs.FS interface
+func (file File) AsFS() FileFS {
+	return FileFS{file}
 }
