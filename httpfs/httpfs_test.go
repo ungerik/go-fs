@@ -9,14 +9,14 @@ import (
 )
 
 func TestStat(t *testing.T) {
-	info := FileSystemTLS.Info("domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png")
-	assert.True(t, info.Exists)
-	assert.False(t, info.IsDir)
-	assert.Greater(t, info.Size, int64(0), "file size greater zero")
-	assert.NotZero(t, info.ModTime, "has modified time")
+	osInfo, err := FileSystemTLS.Stat("domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png")
+	assert.NoError(t, err)
+	assert.False(t, osInfo.IsDir())
+	assert.Greater(t, osInfo.Size(), int64(0), "file size greater zero")
+	assert.NotZero(t, osInfo.ModTime(), "has modified time")
 
-	info2 := fs.File("https://domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png").Info()
-	assert.Equal(t, info, info2)
+	info := fs.File("https://domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png").Info()
+	assert.Equal(t, fs.NewFileInfo(osInfo, false), info)
 }
 
 func TestReadAll(t *testing.T) {

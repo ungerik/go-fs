@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"strings"
 
@@ -196,36 +197,43 @@ func (zipfs *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir 
 	return nil, false
 }
 
-// Info returns FileInfo
-func (zipfs *ZipFileSystem) Info(filePath string) fs.FileInfo {
+func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (os.FileInfo, error) {
+	if zipFile == nil {
+		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+	}
+
+	name := path.Base(filePath)
+	size := int64(zipFile.UncompressedSize64)
+	if isDir {
+		size = 0
+	}
+	info := &fs.FileInfo{
+		Name:        name,
+		Exists:      true,
+		IsDir:       isDir,
+		IsRegular:   true,
+		IsHidden:    len(name) > 0 && name[0] == '.',
+		Size:        size,
+		ModTime:     zipFile.ModTime(),
+		Permissions: fs.AllRead,
+	}
+	return info.OSFileInfo(), nil
+}
+
+func (zipfs *ZipFileSystem) Stat(filePath string) (os.FileInfo, error) {
 	if zipfs.zipReader == nil {
-		return fs.FileInfo{}
+		return nil, fs.ErrWriteOnlyFileSystem
 	}
 	zipFile, isDir := zipfs.findFile(filePath)
 	return zipfs.stat(filePath, zipFile, isDir)
 }
 
-func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) fs.FileInfo {
-	if zipFile == nil {
-		return fs.FileInfo{Exists: false}
+func (zipfs *ZipFileSystem) Exists(filePath string) bool {
+	if zipfs.zipReader == nil {
+		return false
 	}
-
-	fileName := path.Base(filePath)
-	info := fs.FileInfo{
-		Name:        fileName,
-		Exists:      true,
-		IsDir:       isDir,
-		IsRegular:   true,
-		IsHidden:    fileName[0] == '.',
-		Size:        0,
-		ModTime:     zipFile.ModTime(),
-		Permissions: fs.AllRead,
-	}
-	if !isDir {
-		info.Size = int64(zipFile.UncompressedSize64)
-	}
-
-	return info
+	zipFile, _ := zipfs.findFile(filePath)
+	return zipFile != nil
 }
 
 func (zipfs *ZipFileSystem) IsHidden(filePath string) bool {

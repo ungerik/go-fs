@@ -183,15 +183,18 @@ func (file File) Joinf(format string, args ...interface{}) File {
 // Info returns FileInfo. The FileInfo.ContentHash field is optional.
 func (file File) Info() FileInfo {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Info(path)
+	info, err := fileSystem.Stat(path)
+	if err != nil {
+		_, name := fileSystem.DirAndName(path)
+		return NewNonExistingFileInfo(name)
+	}
+	return NewFileInfo(info, fileSystem.IsHidden(path))
 }
 
 // Stat returns a io/fs.FileInfo describing the File.
 func (file File) Stat() (fs.FileInfo, error) {
-	if err := file.CheckExists(); err != nil {
-		return nil, err
-	}
-	return file.Info().FSFileInfo(), nil
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Stat(path)
 }
 
 // StatWithContentHash returns a FileInfo, but in contrast to Stat

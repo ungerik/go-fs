@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"io"
+	"os"
 )
 
 // FileSystem is an interface that has to be implemented for
@@ -58,9 +59,20 @@ type FileSystem interface {
 	// A volume is for example "C:" on Windows
 	VolumeName(filePath string) string
 
-	// Info returns FileInfo
-	Info(filePath string) FileInfo
+	Stat(filePath string) (os.FileInfo, error)
+
+	// Exists returns if a file exists and is accessible.
+	// Depending on the FileSystem implementation,
+	// this could be faster than using Stat.
+	// Note that a file could exist but might not be accessible.
+	Exists(filePath string) bool
+
+	// IsHidden returns if a file is hidden depending
+	// on the definition of hidden files of the file system,
+	// but it will always return true if the name of the file starts with a dot.
 	IsHidden(filePath string) bool
+
+	// IsSymbolicLink returns if a file is a symbolic link
 	IsSymbolicLink(filePath string) bool
 
 	Watch(filePath string) (<-chan WatchEvent, error)

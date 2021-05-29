@@ -6,7 +6,9 @@ import (
 	"time"
 )
 
-// FileInfo is returned by FileSystem.Stat()
+// FileInfo is a snapshot of a file's stat information.
+// In comparison to os.FileInfo it's not an interface
+// but a struct with public fields.
 type FileInfo struct {
 	Name        string
 	Exists      bool
@@ -16,17 +18,54 @@ type FileInfo struct {
 	Size        int64
 	ModTime     time.Time
 	Permissions Permissions
-	ContentHash string //ContentHash is otional. For performance reasons, it will only be filled if the FileSystem implementation already has it cached
+
+	// ContentHash is otional.
+	// For performance reasons, it will only be filled
+	// if the FileSystem implementation already has it cached.
+	ContentHash string
 }
 
-// OSFileInfo returns an os.FileInfo
-func (i FileInfo) OSFileInfo() os.FileInfo { return fileInfo{i} }
+// NewFileInfo returns a FileInfo using the
+// data from an os.FileInfo as snapshot
+// of an existing file.
+// Use NewNonExistingFileInfo to get
+// a FileInfo for non existing file.
+func NewFileInfo(i os.FileInfo, hidden bool) FileInfo {
+	name := i.Name()
+	mode := i.Mode()
+	return FileInfo{
+		Name:        name,
+		Exists:      true,
+		IsDir:       mode.IsDir(),
+		IsRegular:   mode.IsRegular(),
+		IsHidden:    hidden,
+		Size:        i.Size(),
+		ModTime:     i.ModTime(),
+		Permissions: Permissions(mode.Perm()),
+	}
+}
 
-// FSFileInfo returns an io/os.FileInfo
-func (i FileInfo) FSFileInfo() fs.FileInfo { return fileInfo{i} }
+// NewNonExistingFileInfo returns a FileInfo
+// for a non existing file with the given name.
+// IsHidden will be true if the name starts with a dot.
+func NewNonExistingFileInfo(name string) FileInfo {
+	return FileInfo{
+		Name:     name,
+		Exists:   false,
+		IsHidden: len(name) > 0 && name[0] == '.',
+	}
+}
+
+// OSFileInfo returns an os.FileInfo wrapper
+// for the data stored in the FileInfo struct.
+func (i *FileInfo) OSFileInfo() os.FileInfo { return fileInfo{i} }
+
+// FSFileInfo returns an io/os.FileInfo wrapper
+// for the data stored in the FileInfo struct.
+func (i *FileInfo) FSFileInfo() fs.FileInfo { return fileInfo{i} }
 
 // fileInfo implements os.FileInfo and fs.FileInfo for a given FileInfo
-type fileInfo struct{ i FileInfo }
+type fileInfo struct{ i *FileInfo }
 
 func (f fileInfo) Name() string       { return f.i.Name }
 func (f fileInfo) Size() int64        { return f.i.Size }

@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -152,8 +153,7 @@ func (mpfs *MultipartFileSystem) AbsPath(filePath string) string {
 	return path.Clean(filePath)
 }
 
-// Info returns FileInfo
-func (mpfs *MultipartFileSystem) Info(filePath string) (info fs.FileInfo) {
+func (mpfs *MultipartFileSystem) info(filePath string) (info fs.FileInfo) {
 	parts := mpfs.SplitPath(filePath)
 	switch len(parts) {
 	case 1:
@@ -185,6 +185,18 @@ func (mpfs *MultipartFileSystem) Info(filePath string) (info fs.FileInfo) {
 	return info
 }
 
+func (mpfs *MultipartFileSystem) Stat(filePath string) (os.FileInfo, error) {
+	info := mpfs.info(filePath)
+	if !info.Exists {
+		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+	}
+	return info.OSFileInfo(), nil
+}
+
+func (mpfs *MultipartFileSystem) Exists(filePath string) bool {
+	return mpfs.info(filePath).Exists
+}
+
 func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
 	name := path.Base(filePath)
 	return len(name) > 0 && name[0] == '.'
@@ -202,7 +214,7 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 	case 0:
 		for fileDir := range mpfs.Form.File {
 			file := mpfs.File(fileDir)
-			info := mpfs.Info(fileDir)
+			info := mpfs.info(fileDir)
 			err = callback(file, info)
 			if err != nil {
 				return err
@@ -214,7 +226,7 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 		if len(ff) > 0 {
 			for _, f := range ff {
 				file := mpfs.JoinCleanFile(dir, f.Filename)
-				info := mpfs.Info(file.Path())
+				info := mpfs.info(file.Path())
 				err = callback(file, info)
 				if err != nil {
 					return err

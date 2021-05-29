@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -120,9 +121,12 @@ func (subfs *SubFileSystem) AbsPath(filePath string) string {
 	return subfs.Parent.AbsPath(filePath)
 }
 
-// Info returns FileInfo
-func (subfs *SubFileSystem) Info(filePath string) FileInfo {
-	return subfs.Parent.Info(filePath)
+func (subfs *SubFileSystem) Stat(filePath string) (os.FileInfo, error) {
+	return subfs.Parent.Stat(filePath)
+}
+
+func (subfs *SubFileSystem) Exists(filePath string) bool {
+	return subfs.Parent.Exists(filePath)
 }
 
 func (subfs *SubFileSystem) IsHidden(filePath string) bool {

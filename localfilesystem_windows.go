@@ -6,7 +6,7 @@ const localRoot = `C:\`
 
 var extraDirPermissions Permissions = 0
 
-func hasFileAttributeHidden(filePath string) (bool, error) {
+func hasLocalFileAttributeHidden(filePath string) (bool, error) {
 	p, e := syscall.UTF16PtrFromString(filePath)
 	if e != nil {
 		return false, e

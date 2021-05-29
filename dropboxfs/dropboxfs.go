@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -168,8 +169,8 @@ func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
 	return info
 }
 
-// Info returns FileInfo
-func (dbfs *DropboxFileSystem) Info(filePath string) (info fs.FileInfo) {
+// info returns FileInfo
+func (dbfs *DropboxFileSystem) info(filePath string) (info fs.FileInfo) {
 	// The root folder is unsupported by the API
 	if filePath == "/" {
 		// info.Name = ""
@@ -201,6 +202,18 @@ func (dbfs *DropboxFileSystem) Info(filePath string) (info fs.FileInfo) {
 	return info
 }
 
+func (dbfs *DropboxFileSystem) Stat(filePath string) (os.FileInfo, error) {
+	info := dbfs.info(filePath)
+	if !info.Exists {
+		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+	}
+	return info.OSFileInfo(), nil
+}
+
+func (dbfs *DropboxFileSystem) Exists(filePath string) bool {
+	return dbfs.info(filePath).Exists
+}
+
 func (dbfs *DropboxFileSystem) IsHidden(filePath string) bool {
 	name := path.Base(filePath)
 	return len(name) > 0 && name[0] == '.'
@@ -215,7 +228,7 @@ func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, 
 		return ctx.Err()
 	}
 
-	info := dbfs.Info(dirPath)
+	info := dbfs.info(dirPath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(dbfs.File(dirPath))
 	}
@@ -310,7 +323,7 @@ func (dbfs *DropboxFileSystem) SetGroup(filePath string, group string) error {
 }
 
 func (dbfs *DropboxFileSystem) Touch(filePath string, perm []fs.Permissions) error {
-	if dbfs.Info(filePath).Exists {
+	if dbfs.info(filePath).Exists {
 		return errors.New("Touch can't change time on Dropbox")
 	}
 	return dbfs.WriteAll(filePath, nil, perm)
@@ -365,7 +378,7 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (io.ReadCloser, error
 }
 
 func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-	if !dbfs.Info(path.Dir(filePath)).IsDir {
+	if !dbfs.info(path.Dir(filePath)).IsDir {
 		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
 	}
 	var fileBuffer *fsimpl.FileBuffer
@@ -401,7 +414,7 @@ func (dbfs *DropboxFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, err
 }
 
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
-	info := dbfs.Info(filePath)
+	info := dbfs.info(filePath)
 	if !info.Exists {
 		return fs.NewErrDoesNotExist(dbfs.File(filePath))
 	}

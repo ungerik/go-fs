@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 
@@ -108,8 +109,7 @@ func (f *HTTPFileSystem) DirAndName(filePath string) (dir, name string) {
 // A volume is for example "C:" on Windows
 func (f *HTTPFileSystem) VolumeName(filePath string) string { return "" }
 
-// Info returns FileInfo
-func (f *HTTPFileSystem) Info(filePath string) fs.FileInfo {
+func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
 	request, err := http.NewRequest("HEAD", f.URL(filePath), nil)
 	if err != nil {
 		return fs.FileInfo{}
@@ -142,6 +142,18 @@ func (f *HTTPFileSystem) Info(filePath string) fs.FileInfo {
 		Size:    response.ContentLength,
 		ModTime: modified,
 	}
+}
+
+func (f *HTTPFileSystem) Stat(filePath string) (os.FileInfo, error) {
+	info := f.info(filePath)
+	if !info.Exists {
+		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+	}
+	return info.OSFileInfo(), nil
+}
+
+func (f *HTTPFileSystem) Exists(filePath string) bool {
+	return f.info(filePath).Exists
 }
 
 func (f *HTTPFileSystem) IsHidden(filePath string) bool       { return false }

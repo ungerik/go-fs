@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 )
@@ -93,8 +94,12 @@ func (InvalidFileSystem) VolumeName(filePath string) string {
 	return ""
 }
 
-func (invalid InvalidFileSystem) Info(filePath string) FileInfo {
-	return FileInfo{}
+func (InvalidFileSystem) Stat(filePath string) (os.FileInfo, error) {
+	return nil, ErrInvalidFileSystem
+}
+
+func (InvalidFileSystem) Exists(filePath string) bool {
+	return false
 }
 
 func (invalid InvalidFileSystem) IsHidden(filePath string) bool {
