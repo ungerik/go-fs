@@ -26,9 +26,6 @@ const (
 
 	// ErrInvalidFileSystem indicates an invalid file system
 	ErrInvalidFileSystem SentinelError = "invalid file system"
-
-	// ErrEmptyPath indications an empty file path
-	ErrEmptyPath SentinelError = "empty file path"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -42,6 +39,9 @@ func RemoveErrDoesNotExist(err error) error {
 	}
 	return err
 }
+
+// ErrEmptyPath indications an empty file path
+var ErrEmptyPath = NewErrDoesNotExist("")
 
 // ErrDoesNotExist is returned when a file does not exist
 // and wraps os.ErrNotExist.
@@ -64,7 +64,11 @@ func NewErrDoesNotExistFileReader(fileReader FileReader) ErrDoesNotExist {
 }
 
 func (err ErrDoesNotExist) Error() string {
-	return fmt.Sprintf("file does not exist: %s", err.file)
+	path := err.file.String()
+	if path == "" {
+		return "empty file path"
+	}
+	return fmt.Sprintf("file does not exist: %s", path)
 }
 
 // Unwrap returns os.ErrNotExist
