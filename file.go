@@ -1021,7 +1021,21 @@ func (file File) HTTPFileSystem() http.FileSystem {
 	return httpFileSystem{root: file}
 }
 
-// AsFS returns an implementation of the io/fs.FS interface
+// AsFS wraps the file as a FileFS that implements
+// the FS interfaces of the os/fs package for a File.
+//
+// FileFS implements the following interfaces:
+//   os/fs.FS
+//   os/fs.SubFS
+//   os/fs.StatFS
+//   os/fs.GlobFS
+//   os/fs.ReadDirFS
+//   os/fs.ReadFileFS
 func (file File) AsFS() FileFS {
 	return FileFS{file}
+}
+
+// AsDirEntry wraps the file as os/fs.DirEntry.
+func (file File) AsDirEntry() fs.DirEntry {
+	return FileDirEntry{file}
 }
