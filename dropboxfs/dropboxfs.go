@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -369,12 +370,16 @@ func (dbfs *DropboxFileSystem) Append(filePath string, data []byte, perm []fs.Pe
 	return err
 }
 
-func (dbfs *DropboxFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (dbfs *DropboxFileSystem) OpenReader(filePath string) (iofs.File, error) {
+	info, err := dbfs.Stat(filePath)
+	if err != nil {
+		return nil, err
+	}
 	data, err := dbfs.ReadAll(filePath)
 	if err != nil {
 		return nil, err
 	}
-	return fsimpl.NewReadonlyFileBuffer(data), nil
+	return fsimpl.NewReadonlyFileBuffer(data, info), nil
 }
 
 func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {

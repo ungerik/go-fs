@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path"
@@ -162,7 +163,7 @@ func (invalid InvalidFileSystem) Append(filePath string, data []byte, perm []Per
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (invalid InvalidFileSystem) OpenReader(filePath string) (fs.File, error) {
 	return nil, ErrInvalidFileSystem
 }
 

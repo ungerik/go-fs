@@ -725,8 +725,8 @@ func (file File) AppendString(str string, perm ...Permissions) error {
 	return file.Append([]byte(str), perm...)
 }
 
-// OpenReader opens the file and returns a io.ReadCloser that has be closed after reading
-func (file File) OpenReader() (io.ReadCloser, error) {
+// OpenReader opens the file and returns a os/fs.File that has be closed after reading
+func (file File) OpenReader() (fs.File, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
@@ -750,10 +750,12 @@ func (file File) OpenReadSeeker() (ReadSeekCloser, error) {
 	if r, ok := readCloser.(ReadSeekCloser); ok {
 		return r, nil
 	}
-
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
 	defer readCloser.Close()
-
-	return fsimpl.NewReadonlyFileBufferReadAll(readCloser)
+	return fsimpl.NewReadonlyFileBufferReadAll(readCloser, info)
 }
 
 func (file File) OpenWriter(perm ...Permissions) (io.WriteCloser, error) {

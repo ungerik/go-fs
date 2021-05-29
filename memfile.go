@@ -181,16 +181,16 @@ func (f *MemFile) WriteTo(writer io.Writer) (n int64, err error) {
 	return int64(i), err
 }
 
-// OpenReader opens the file and returns a io.ReadCloser that has be closed after reading
-func (f *MemFile) OpenReader() (io.ReadCloser, error) {
-	return fsimpl.NewReadonlyFileBuffer(f.FileData), nil
+// OpenReader opens the file and returns a os/fs.File that has be closed after reading
+func (f *MemFile) OpenReader() (fs.File, error) {
+	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
 // OpenReadSeeker opens the file and returns a ReadSeekCloser.
 // Use OpenReader if seeking is not necessary because implementations
 // may need additional buffering to support seeking or not support it at all.
 func (f *MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
-	return fsimpl.NewReadonlyFileBuffer(f.FileData), nil
+	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.

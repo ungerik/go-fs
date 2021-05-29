@@ -3,6 +3,7 @@ package multipartfs
 import (
 	"context"
 	"io"
+	iofs "io/fs"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -10,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -263,17 +264,42 @@ func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-func (mpfs *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (mpfs *MultipartFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	filePath, err := EscapePath(filePath)
 	if err != nil {
 		return nil, err
 	}
-	file, err := mpfs.GetMultipartFileHeader(filePath)
+	header, err := mpfs.GetMultipartFileHeader(filePath)
 	if err != nil {
 		return nil, err
 	}
-	return file.Open()
+	file, err := header.Open()
+	if err != nil {
+		return nil, err
+	}
+	return multipartFile{File: file, header: header}, nil
 }
+
+type multipartFile struct {
+	multipart.File
+
+	header *multipart.FileHeader
+}
+
+func (f multipartFile) Stat() (iofs.FileInfo, error) {
+	return multipartFileInfo{f.header}, nil
+}
+
+type multipartFileInfo struct {
+	header *multipart.FileHeader
+}
+
+func (f multipartFileInfo) Name() string        { return f.header.Filename }
+func (f multipartFileInfo) Size() int64         { return f.header.Size }
+func (f multipartFileInfo) Mode() iofs.FileMode { return 0666 }
+func (f multipartFileInfo) ModTime() time.Time  { return time.Now() }
+func (f multipartFileInfo) IsDir() bool         { return false }
+func (f multipartFileInfo) Sys() interface{}    { return nil }
 
 func EscapePath(filePath string) (string, error) {
 	// TODO: properly escape paths

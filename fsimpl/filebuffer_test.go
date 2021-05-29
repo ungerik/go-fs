@@ -25,7 +25,7 @@ func TestFileBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = iotest.TestReader(NewReadonlyFileBuffer(data), data)
+		err = iotest.TestReader(NewReadonlyFileBuffer(data, nil), data)
 		if err != nil {
 			t.Fatal(err)
 		}

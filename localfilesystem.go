@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"net/url"
 	"os"
@@ -479,7 +480,7 @@ func (local *LocalFileSystem) Append(filePath string, data []byte, perm []Permis
 	return err
 }
 
-func (local *LocalFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (local *LocalFileSystem) OpenReader(filePath string) (fs.File, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}

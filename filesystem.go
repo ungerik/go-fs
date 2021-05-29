@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"io"
+	"io/fs"
 	"os"
 )
 
@@ -109,7 +110,7 @@ type FileSystem interface {
 	WriteAll(filePath string, data []byte, perm []Permissions) error
 	Append(filePath string, data []byte, perm []Permissions) error
 
-	OpenReader(filePath string) (io.ReadCloser, error)
+	OpenReader(filePath string) (fs.File, error)
 	OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
 	OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
 	OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error)

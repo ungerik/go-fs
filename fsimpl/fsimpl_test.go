@@ -38,7 +38,7 @@ func Test_RandomString(t *testing.T) {
 
 func Test_ReadonlyFileBuffer(t *testing.T) {
 	out := make([]byte, 0)
-	b := NewReadonlyFileBuffer(nil)
+	b := NewReadonlyFileBuffer(nil, nil)
 	n, err := b.Read(out)
 	assert.Equal(t, io.EOF, err, "Read")
 	assert.Equal(t, n, 0, "no bytes read")

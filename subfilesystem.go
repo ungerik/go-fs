@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -199,7 +200,7 @@ func (subfs *SubFileSystem) Append(filePath string, data []byte, perm []Permissi
 	return err
 }
 
-func (subfs *SubFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (subfs *SubFileSystem) OpenReader(filePath string) (fs.File, error) {
 	panic("not implemented")
 }
 

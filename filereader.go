@@ -3,6 +3,7 @@ package fs
 import (
 	"fmt"
 	"io"
+	"io/fs"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -49,8 +50,8 @@ type FileReader interface {
 	// WriteTo implements the io.WriterTo interface
 	WriteTo(writer io.Writer) (n int64, err error)
 
-	// OpenReader opens the file and returns a io.ReadCloser that has be closed after reading
-	OpenReader() (io.ReadCloser, error)
+	// OpenReader opens the file and returns a io/fs.File that has be closed after reading
+	OpenReader() (fs.File, error)
 
 	// OpenReadSeeker opens the file and returns a ReadSeekCloser.
 	// Use OpenReader if seeking is not necessary because implementations

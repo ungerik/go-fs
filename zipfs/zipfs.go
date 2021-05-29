@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path"
 	"strings"
@@ -340,7 +341,7 @@ func (zipfs *ZipFileSystem) ReadAll(filePath string) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-func (zipfs *ZipFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (zipfs *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if zipfs.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
 	}
@@ -352,7 +353,11 @@ func (zipfs *ZipFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if zipFile == nil {
 		return nil, fs.NewErrDoesNotExist(zipfs.File(filePath))
 	}
-	return zipFile.Open()
+	f, err := zipFile.Open()
+	if err != nil {
+		return nil, err
+	}
+	return f.(iofs.File), nil
 }
 
 func (zipfs *ZipFileSystem) SetPermissions(filePath string, perm fs.Permissions) error {

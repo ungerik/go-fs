@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -200,7 +201,11 @@ func (f *HTTPFileSystem) ReadAll(filePath string) (data []byte, err error) {
 	return data, nil
 }
 
-func (f *HTTPFileSystem) OpenReader(filePath string) (reader io.ReadCloser, err error) {
+func (f *HTTPFileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
+	info, err := f.Stat(filePath)
+	if err != nil {
+		return nil, err
+	}
 	response, err := http.DefaultClient.Get(f.URL(filePath))
 	if err != nil {
 		return nil, fmt.Errorf("HTTPFileSystem.OpenReader: %w", err)
@@ -208,6 +213,6 @@ func (f *HTTPFileSystem) OpenReader(filePath string) (reader io.ReadCloser, err 
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return nil, fmt.Errorf("HTTPFileSystem.OpenReader: %d: %s", response.StatusCode, response.Status)
 	}
-
-	return response.Body, nil
+	defer response.Body.Close()
+	return fsimpl.NewReadonlyFileBufferReadAll(response.Body, info)
 }
