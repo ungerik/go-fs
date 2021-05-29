@@ -73,3 +73,23 @@ func (f fileInfo) Mode() os.FileMode  { return f.i.Permissions.FileMode(f.i.IsDi
 func (f fileInfo) ModTime() time.Time { return f.i.ModTime }
 func (f fileInfo) IsDir() bool        { return f.i.IsDir }
 func (f fileInfo) Sys() interface{}   { return nil }
+
+// type NameSizeProvider interface {
+// 	Name() string
+// 	Size() int64
+// }
+
+// // FSFileInfoFromNameSizeProvider wraps a NameSizeProvider as a non-directory fs.FileInfo
+// // that returns 0666 as mode and the current time as modified time.
+// func FSFileInfoFromNameSizeProvider(ns NameSizeProvider) fs.FileInfo {
+// 	return nameSizeInfo{ns}
+// }
+
+// type nameSizeInfo struct {
+// 	NameSizeProvider
+// }
+
+// func (nameSizeInfo) Mode() os.FileMode  { return 0666 }
+// func (nameSizeInfo) ModTime() time.Time { return time.Now() }
+// func (nameSizeInfo) IsDir() bool        { return false }
+// func (nameSizeInfo) Sys() interface{}   { return nil }
