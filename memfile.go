@@ -46,6 +46,15 @@ func NewMemFile(name string, data []byte) *MemFile {
 	return &MemFile{FileName: name, FileData: data}
 }
 
+// MemFileFromFileReader tries to cast and return the passed FileReader
+// as *MemFile or else returns the result of ReadMemFile.
+func MemFileFromFileReader(fileReader FileReader) (*MemFile, error) {
+	if memFile, ok := fileReader.(*MemFile); ok {
+		return memFile, nil
+	}
+	return ReadMemFile(fileReader)
+}
+
 // ReadMemFile returns a new MemFile with
 // the name from fileReader.Name() and
 // the data from fileReader.ReadAll()
