@@ -130,7 +130,11 @@ func copyRecursive(ctx context.Context, src, dest File, patterns []string, buf *
 	}
 
 	// Copy directories recursive
-	return src.ListDirContext(ctx, func(file File) error {
-		return copyRecursive(ctx, file, dest.Join(file.Name()), patterns, buf)
-	}, patterns...)
+	return src.ListDir(
+		true,
+		func(file File) error {
+			return copyRecursive(ctx, file, dest.Join(file.Name()), patterns, buf)
+		},
+		patterns...,
+	)
 }

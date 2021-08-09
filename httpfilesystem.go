@@ -38,9 +38,13 @@ type httpFile struct {
 }
 
 func (f *httpFile) Readdir(count int) (files []os.FileInfo, err error) {
-	err = f.dir.ListDirInfo(func(_ File, info FileInfo) error {
-		if !info.IsHidden {
-			files = append(files, info.OSFileInfo())
+	err = f.dir.ListDirEntries(true, func(entry DirEntry) error {
+		if !f.dir.Join(entry.Name()).IsHidden() {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			files = append(files, info)
 		}
 		return nil
 	})

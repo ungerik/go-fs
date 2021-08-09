@@ -223,6 +223,27 @@ func (local *LocalFileSystem) IsSymbolicLink(filePath string) bool {
 	return info.Mode()&os.ModeSymlink != 0
 }
 
+func (local *LocalFileSystem) IsEmpty(filePath string) bool {
+	if filePath == "" {
+		return true
+	}
+	filePath = expandTilde(filePath)
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return true
+	}
+	if !info.IsDir() {
+		return info.Size() == 0
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return true
+	}
+	defer file.Close()
+	_, err = file.ReadDir(1)
+	return err == io.EOF
+}
+
 func (local *LocalFileSystem) CreateSymbolicLink(oldFile, newFile File) error {
 	if oldFile == "" || newFile == "" {
 		return ErrEmptyPath
@@ -253,10 +274,7 @@ func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err erro
 	return File(linkedPath), nil
 }
 
-func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
+func (local *LocalFileSystem) ListDir(dirPath string, listDirs bool, patterns []string, onDirEntry func(fs.DirEntry) error) error {
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
@@ -272,107 +290,41 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 
 	f, err := os.Open(dirPath)
 	if err != nil {
-		return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): error opening directory: %w", dirPath, err)
+		return fmt.Errorf("LocalFileSystem.ListDir(%q): error opening directory: %w", dirPath, err)
 	}
 	defer f.Close()
 
-	for eof := false; !eof; {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		osInfos, err := f.Readdir(64)
+	for {
+		entries, err := f.ReadDir(256)
 		if err != nil {
-			eof = (err == io.EOF)
-			if !eof {
-				return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): error reading directory: %w", dirPath, err)
+			if errors.Is(err, io.EOF) {
+				return nil
 			}
+			return err
 		}
 
-		for _, osInfo := range osInfos {
-			name := osInfo.Name()
-			match, err := local.MatchAnyPattern(name, patterns)
-			if match {
-				file := local.JoinCleanFile(dirPath, name)
-				info := convertFileInfo(string(file), osInfo)
-				err = callback(file, info)
+		for _, entry := range entries {
+			if !listDirs && entry.IsDir() {
+				continue
 			}
+			match, err := local.MatchAnyPattern(entry.Name(), patterns)
 			if err != nil {
-				return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): %w", dirPath, err)
+				return fmt.Errorf("LocalFileSystem.ListDir(%q): error matching name pattern: %w", dirPath, err)
+			}
+			if !match {
+				continue
+			}
+
+			err = onDirEntry(entry)
+			if err != nil {
+				return err
 			}
 		}
 	}
-	return nil
 }
 
-func (local *LocalFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
-	if dirPath == "" {
-		return ErrEmptyPath
-	}
-	dirPath = expandTilde(dirPath)
-	return ListDirInfoRecursiveImpl(ctx, local, dirPath, callback, patterns)
-}
-
-func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n int, patterns []string) (files []File, err error) {
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if dirPath == "" {
-		return nil, ErrEmptyPath
-	}
-
-	dirPath = expandTilde(dirPath)
-	info, err := local.Stat(dirPath)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, NewErrIsNotDirectory(File(dirPath))
-	}
-
-	f, err := os.Open(dirPath)
-	if err != nil {
-		return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): error opening directory: %w", dirPath, err)
-	}
-	defer f.Close()
-
-	var numFilesToDo int
-	if n > 0 {
-		files = make([]File, 0, n)
-		numFilesToDo = n
-	} else {
-		numFilesToDo = 64
-	}
-
-	for eof := false; !eof && numFilesToDo > 0; {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		names, err := f.Readdirnames(numFilesToDo)
-		if err != nil {
-			eof = (err == io.EOF)
-			if !eof {
-				return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): error reading directory: %w", dirPath, err)
-			}
-		}
-
-		for _, name := range names {
-			match, err := local.MatchAnyPattern(name, patterns)
-			if match {
-				files = append(files, local.JoinCleanFile(dirPath, name))
-			}
-			if err != nil {
-				return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): %w", dirPath, err)
-			}
-		}
-
-		if n > 0 {
-			numFilesToDo = n - len(files)
-		}
-	}
-
-	return files, nil
+func (*LocalFileSystem) ListDirRecursive(dirPath string, listDirs bool, patterns []string, onDirEntry func(dir string, entry DirEntry) error) error {
+	return ErrNotSupported
 }
 
 func (local *LocalFileSystem) SetPermissions(filePath string, perm Permissions) error {

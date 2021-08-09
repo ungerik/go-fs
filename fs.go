@@ -1,6 +1,11 @@
 package fs
 
-import "fmt"
+import (
+	"fmt"
+	"io/fs"
+)
+
+type DirEntry = fs.DirEntry
 
 // Filef is a shortcut for File(fmt.Sprintf(format, args...))
 func Filef(format string, args ...interface{}) File {
@@ -46,7 +51,7 @@ func Move(source, destination File) error {
 func Remove(fileURIs ...string) error {
 	for _, uri := range fileURIs {
 		err := File(uri).Remove()
-		if RemoveErrDoesNotExist(err) != nil {
+		if ReplaceErrDoesNotExist(err, nil) != nil {
 			return err
 		}
 	}
@@ -68,7 +73,7 @@ func RemoveFile(file File) error {
 func RemoveFiles(files ...File) error {
 	for _, file := range files {
 		err := file.Remove()
-		if RemoveErrDoesNotExist(err) != nil {
+		if ReplaceErrDoesNotExist(err, nil) != nil {
 			return err
 		}
 	}

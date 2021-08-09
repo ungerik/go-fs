@@ -71,7 +71,10 @@ func ParseString(uuidPath string) (uuid [16]byte, err error) {
 
 // Enum calls callback for every directory that represents an UUID under baseDir.
 func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) error {
-	return baseDir.ListDirContext(ctx, func(level0Dir fs.File) error {
+	return baseDir.ListDir(true, func(level0Dir fs.File) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if !level0Dir.Exists() || level0Dir.IsHidden() {
 			return nil
 		}
@@ -79,7 +82,10 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 			// fmt.Println("Directory expected but found file:", level0Dir)
 			return nil
 		}
-		return level0Dir.ListDirContext(ctx, func(level1Dir fs.File) error {
+		return level0Dir.ListDir(true, func(level1Dir fs.File) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if !level1Dir.Exists() || level1Dir.IsHidden() {
 				return nil
 			}
@@ -87,7 +93,10 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 				// fmt.Println("Directory expected but found file:", level1Dir)
 				return nil
 			}
-			return level1Dir.ListDirContext(ctx, func(level2Dir fs.File) error {
+			return level1Dir.ListDir(true, func(level2Dir fs.File) error {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				if !level2Dir.Exists() || level2Dir.IsHidden() {
 					return nil
 				}
@@ -95,7 +104,10 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 					// fmt.Println("Directory expected but found file:", level2Dir)
 					return nil
 				}
-				return level2Dir.ListDirContext(ctx, func(level3Dir fs.File) error {
+				return level2Dir.ListDir(true, func(level3Dir fs.File) error {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
 					if !level3Dir.Exists() || level3Dir.IsHidden() {
 						return nil
 					}
@@ -103,7 +115,10 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 						// fmt.Println("Directory expected but found file:", level3Dir)
 						return nil
 					}
-					return level3Dir.ListDirContext(ctx, func(uuidDir fs.File) error {
+					return level3Dir.ListDir(true, func(uuidDir fs.File) error {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
 						if !uuidDir.Exists() || uuidDir.IsHidden() {
 							return nil
 						}
@@ -142,7 +157,7 @@ func RemoveDir(baseDir, uuidSubDir fs.File) error {
 	}
 	for {
 		uuidSubDir = uuidSubDir.Dir()
-		if uuidSubDir.Path() == basePath || !uuidSubDir.IsEmptyDir() {
+		if uuidSubDir.Path() == basePath || !uuidSubDir.IsEmpty() {
 			return nil
 		}
 		// fmt.Println("deleting", uuidDir.Path())

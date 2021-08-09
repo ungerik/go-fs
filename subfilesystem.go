@@ -138,16 +138,16 @@ func (subfs *SubFileSystem) IsSymbolicLink(filePath string) bool {
 	return subfs.Parent.IsSymbolicLink(filePath)
 }
 
-func (subfs *SubFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (subfs *SubFileSystem) IsEmpty(filePath string) bool {
+	return subfs.Parent.IsSymbolicLink(filePath)
+}
+
+func (subfs *SubFileSystem) ListDir(dirPath string, listDirs bool, patterns []string, onDirEntry func(fs.DirEntry) error) error {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
-	panic("not implemented")
-}
-
-func (subfs *SubFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []File, err error) {
-	panic("not implemented")
+func (*SubFileSystem) ListDirRecursive(dirPath string, listDirs bool, patterns []string, onDirEntry func(dir string, entry DirEntry) error) error {
+	return ErrNotSupported
 }
 
 func (subfs *SubFileSystem) SetPermissions(filePath string, perm Permissions) error {

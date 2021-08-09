@@ -76,24 +76,32 @@ type FileSystem interface {
 	// IsSymbolicLink returns if a file is a symbolic link
 	IsSymbolicLink(filePath string) bool
 
+	// IsEmpty returns true in case of a zero size file,
+	// an empty directory, or a non existing file.
+	IsEmpty(filePath string) bool
+
 	Watch(filePath string) (<-chan WatchEvent, error)
 
-	// ListDirInfo calls the passed callback function for every file and directory in dirPath.
-	// If any patterns are passed, then only files or directores with a name that matches
-	// at least one of the patterns are returned.
-	ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error
+	// ListDir lists DirEntry in dirPath.
+	// If listDirs is false then directories will not be listed.
+	// The passed patterns are used to filter entry names using the MatchAnyPattern method.
+	// Returning an error from onDirEntry stops the listing
+	// with the error also getting returned by ListDir.
+	// If the FileSystem implementation does not support this operation
+	// then (a potentially wrapped) ErrNotSupported will be returned.
+	ListDir(dirPath string, listDirs bool, patterns []string, onDirEntry func(DirEntry) error) error
 
-	// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
-	// recursing into all sub-directories.
-	// If any patterns are passed, then only files (not directories) with a name that matches
-	// at least one of the patterns are returned.
-	ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error
-
-	// ListDirMax returns at most max files and directories in dirPath.
-	// A max value of -1 returns all files.
-	// If any patterns are passed, then only files or directories with a name that matches
-	// at least one of the patterns are returned.
-	ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error)
+	// ListDirRecursive lists DirEntry in dirPath and recursive sub-directories.
+	// If listDirs is false then directories themselfes will not be listed
+	// but still recursed into to list files within them.
+	// The passed patterns are used to filter entry names using the MatchAnyPattern method.
+	// Returning an error from onDirEntry stops the listing
+	// with the error also getting returned by ListDirRecursive.
+	// In case of a directory entry onDirEntry can return SkipDir to prevent
+	// recursion into that directory without stopping the listing and returning an error.
+	// If the FileSystem implementation does not support this operation
+	// then (a potentially wrapped) ErrNotSupported will be returned.
+	ListDirRecursive(dirPath string, listDirs bool, patterns []string, onDirEntry func(dir string, entry DirEntry) error) error
 
 	SetPermissions(filePath string, perm Permissions) error
 

@@ -3,9 +3,15 @@ package fs
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 )
+
+// SkipDir is used as a return value from File.ListDirEntriesRecursive callbacks to indicate that
+// the directory named in the call is to be skipped. It is not returned
+// as an error by any function.
+var SkipDir = fs.SkipDir
 
 // SentinelError is used for const sentinel errors
 type SentinelError string
@@ -31,11 +37,12 @@ const (
 ///////////////////////////////////////////////////////////////////////////////
 // ErrDoesNotExist
 
-// RemoveErrDoesNotExist returns nil if err wraps os.ErrNotExist,
-// else err will be returned unchanged.
-func RemoveErrDoesNotExist(err error) error {
-	if err == nil || errors.Is(err, os.ErrNotExist) {
-		return nil
+// ReplaceErrDoesNotExist returns the passed replacement error
+// if err wraps os.ErrNotExist which is the case for ErrDoesNotExist.
+// Without replacement err will be returned unchanged.
+func ReplaceErrDoesNotExist(err, replacement error) error {
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		return replacement
 	}
 	return err
 }

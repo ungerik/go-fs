@@ -205,6 +205,10 @@ func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
 
 func (mpfs *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
+func (mpfs *MultipartFileSystem) IsEmpty(filePath string) bool {
+	panic("not implemented")
+}
+
 func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -244,14 +248,12 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 	return err
 }
 
-func (mpfs *MultipartFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
-	return fs.ListDirInfoRecursiveImpl(ctx, mpfs, dirPath, callback, patterns)
+func (mpfs *MultipartFileSystem) ListDir(dirPath string, listDirs bool, patterns []string, onDirEntry func(fs.DirEntry) error) error {
+	panic("not implemented")
 }
 
-func (mpfs *MultipartFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return mpfs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
-	})
+func (mpfs *MultipartFileSystem) ListDirRecursive(dirPath string, listDirs bool, patterns []string, onDirEntry func(dir string, entry fs.DirEntry) error) error {
+	panic("not implemented")
 }
 
 func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {

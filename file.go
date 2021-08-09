@@ -6,10 +6,12 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -296,10 +298,11 @@ func (file File) IsRegular() bool {
 	return stat.Mode().IsRegular()
 }
 
-// IsEmptyDir returns if file is an empty directory.
-func (file File) IsEmptyDir() bool {
-	l, err := file.ListDirMax(1)
-	return len(l) == 0 && err == nil
+// IsEmpty returns true in case of a zero size file,
+// an empty directory, or a non existing file.
+func (file File) IsEmpty() bool {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.IsEmpty(path)
 }
 
 // IsHidden returns true if the filename begins with a dot,
@@ -380,190 +383,135 @@ func (file File) SetPermissions(perm Permissions) error {
 	return fileSystem.SetPermissions(path, perm)
 }
 
-// ListDir calls the passed callback function for every file and directory in dirPath.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDir(callback func(File) error, patterns ...string) error {
+// ListDir lists files in a directory.
+// If listDirs is false then directories will not be listed.
+// The optional patterns are used to filter entry names using the MatchAnyPattern method.
+// Returning an error from onFile stops the listing
+// with the error also getting returned by ListDir.
+// An ErrIsNotDirectory error will be returned if called on a File that is not a directory.
+func (file File) ListDir(listDirs bool, onFile func(File) error, patterns ...string) error {
+	return file.ListDirEntries(
+		listDirs,
+		func(entry DirEntry) error {
+			return onFile(file.Join(entry.Name()))
+		},
+		patterns...,
+	)
+}
+
+func (file File) ListDirSorted(listDirs bool, patterns ...string) ([]File, error) {
+	var files []File
+	err := file.ListDir(
+		listDirs,
+		func(f File) error {
+			files = append(files, f)
+			return nil
+		},
+		patterns...,
+	)
+	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+	return files, err
+}
+
+func (file File) ListDirRecursive(listDirs bool, onFile func(File) error, patterns ...string) error {
+	return file.ListDirEntriesRecursive(
+		listDirs,
+		func(dir File, entry DirEntry) error {
+			return onFile(dir.Join(entry.Name()))
+		},
+		patterns...,
+	)
+}
+
+// ListDir lists files in a directory as DirEntry.
+// If listDirs is false then directories will not be listed.
+// The optional patterns are used to filter entry names using the MatchAnyPattern method.
+// Returning an error from onDirEntry stops the listing
+// with the error also getting returned by ListDirEntries.
+// An ErrIsNotDirectory error will be returned if called on a File that is not a directory.
+func (file File) ListDirEntries(listDirs bool, onDirEntry func(DirEntry) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(context.Background(), path, FileCallback(callback).FileInfoCallback, patterns)
-}
-
-// ListDirContext calls the passed callback function for every file and directory in dirPath.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirContext(ctx context.Context, callback func(File) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
+	// First try if fileSystem supports ListDir directly
+	err := fileSystem.ListDir(path, listDirs, patterns, onDirEntry)
+	if err == nil || !errors.Is(err, ErrNotSupported) {
+		return err
 	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(ctx, path, FileCallback(callback).FileInfoCallback, patterns)
-}
-
-// ListDirInfo calls the passed callback function for every file and directory in dirPath.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirInfo(callback func(File, FileInfo) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(context.Background(), path, callback, patterns)
-}
-
-// ListDirInfoContext calls the passed callback function for every file and directory in dirPath.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirInfoContext(ctx context.Context, callback func(File, FileInfo) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(ctx, path, callback, patterns)
-}
-
-// ListDirRecursive returns only files.
-// patterns are only applied to files, not to directories
-func (file File) ListDirRecursive(callback func(File) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(context.Background(), path, FileCallback(callback).FileInfoCallback, patterns)
-}
-
-// ListDirRecursiveContext returns only files.
-// patterns are only applied to files, not to directories
-func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(ctx, path, FileCallback(callback).FileInfoCallback, patterns)
-}
-
-// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
-// recursing into all sub-directories.
-// If any patterns are passed, then only files (not directories) with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirInfoRecursive(callback func(File, FileInfo) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(context.Background(), path, callback, patterns)
-}
-
-// ListDirInfoRecursiveContext calls the passed callback function for every file (not directory) in dirPath
-// recursing into all sub-directories.
-// If any patterns are passed, then only files (not directories) with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(File, FileInfo) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(ctx, path, callback, patterns)
-}
-
-// ListDirMax returns at most max files and directories in dirPath.
-// A max value of -1 returns all files.
-// If any patterns are passed, then only files or directories with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirMax(context.Background(), path, max, patterns)
-}
-
-// ListDirMaxContext returns at most max files and directories in dirPath.
-// A max value of -1 returns all files.
-// If any patterns are passed, then only files or directories with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirMaxContext(ctx context.Context, max int, patterns ...string) (files []File, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirMax(ctx, path, max, patterns)
-}
-
-func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	return ListDirMaxImpl(context.Background(), max, func(ctx context.Context, callback func(File) error) error {
-		return file.ListDirRecursiveContext(ctx, callback, patterns...)
-	})
-}
-
-func (file File) ListDirRecursiveMaxContext(ctx context.Context, max int, patterns ...string) (files []File, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	return ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
-		return file.ListDirRecursiveContext(ctx, callback, patterns...)
-	})
-}
-
-// ListDirChan returns listed files over a channel.
-// An error or nil will returned from the error channel.
-// The file channel will be closed after sending all files.
-// If cancel is not nil and an error is sent to this channel, then the listing will be canceled
-// and the error returned in the error channel returned by the method.
-// See pipeline pattern: http://blog.golang.org/pipelines
-func (file File) ListDirChan(cancel <-chan error, patterns ...string) (<-chan File, <-chan error) {
-	files := make(chan File)
-	errs := make(chan error, 1)
-
-	go func() {
-		defer close(files)
-
-		callback := func(f File) error {
-			select {
-			case files <- f:
+	// Use ListDirRecursive when the fileSystem does not support ListDir
+	return fileSystem.ListDirRecursive(
+		path,
+		listDirs,
+		patterns,
+		func(dir string, entry DirEntry) error {
+			if dir != path {
 				return nil
-			case err := <-cancel:
+			}
+			return onDirEntry(entry)
+		},
+	)
+}
+
+func (file File) ListDirEntriesSorted(listDirs bool, patterns ...string) ([]DirEntry, error) {
+	var entries []DirEntry
+	err := file.ListDirEntries(
+		listDirs,
+		func(entry DirEntry) error {
+			entries = append(entries, entry)
+			return nil
+		},
+		patterns...,
+	)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return entries, err
+}
+
+// ListDirEntriesRecursive calls onDirEntry for entries in a directory and recursive sub-directories.
+// If listDirs is true then directories will be reported by onDirEntry.
+// This does not influence the recursive nature of the method.
+// The optional patterns are used to filter entry names using the MatchAnyPattern method.
+// The pattern filtering is only applied to the entries reported by onDirEntry,
+// not to the recursing into sub-directories.
+// Returning an error from onDirEntry stops the listing
+// with the error also getting returned by ListDir.
+// In case of a directory entry onDirEntry can return SkipDir to prevent
+// recursion into that directory without stopping the listing and returning an error.
+func (file File) ListDirEntriesRecursive(listDirs bool, onDirEntry func(dir File, entry DirEntry) error, patterns ...string) error {
+	if file == "" {
+		return ErrEmptyPath
+	}
+	fileSystem, path := file.ParseRawURI()
+	// First try if fileSystem supports ListDirRecursive directly
+	err := fileSystem.ListDirRecursive(
+		path,
+		listDirs,
+		patterns,
+		func(dir string, entry DirEntry) error {
+			return onDirEntry(fileSystem.JoinCleanFile(dir), entry)
+		},
+	)
+	if err == nil || !errors.Is(err, ErrNotSupported) {
+		return err
+	}
+	// Use ListDir when the fileSystem does not support ListDirRecursive
+	return fileSystem.ListDir(path, true, patterns, func(entry DirEntry) error {
+		isDir := entry.IsDir()
+		if !isDir || listDirs {
+			err := onDirEntry(file, entry)
+			if err != nil {
+				if isDir && errors.Is(err, SkipDir) {
+					return nil
+				}
 				return err
 			}
 		}
-
-		errs <- file.ListDir(callback, patterns...)
-	}()
-
-	return files, errs
-}
-
-// ListDirRecursiveChan returns listed files over a channel.
-// An error or nil will returned from the error channel.
-// The file channel will be closed after sending all files.
-// If cancel is not nil and an error is sent to this channel, then the listing will be canceled
-// and the error returned in the error channel returned by the method.
-// See pipeline pattern: http://blog.golang.org/pipelines
-func (file File) ListDirRecursiveChan(cancel <-chan error, patterns ...string) (<-chan File, <-chan error) {
-	files := make(chan File)
-	errs := make(chan error, 1)
-
-	go func() {
-		defer close(files)
-
-		callback := func(f File) error {
-			select {
-			case files <- f:
-				return nil
-			case err := <-cancel:
-				return err
-			}
+		if !isDir {
+			return nil
 		}
-
-		errs <- file.ListDirRecursive(callback, patterns...)
-	}()
-
-	return files, errs
+		dir := file.Join(entry.Name())
+		return dir.ListDirEntriesRecursive(listDirs, onDirEntry, patterns...)
+	})
 }
 
 func (file File) User() string {
@@ -863,48 +811,58 @@ func (file File) RemoveRecursiveContext(ctx context.Context) error {
 
 // RemoveDirContentsRecursive deletes all files and directories in this directory recursively.
 func (file File) RemoveDirContentsRecursive() error {
-	return file.ListDir(func(f File) error {
-		err := f.RemoveRecursive()
-		// Ignore files that have been deleted,
-		// after all we wanted to get rid of the in the first place,
-		// so this is not an error for us
-		return RemoveErrDoesNotExist(err)
-	})
+	return file.ListDir(
+		true,
+		func(f File) error {
+			// Ignore files that have been deleted,
+			// after all we wanted to get rid of the in the first place,
+			// so this is not an error for us
+			return ReplaceErrDoesNotExist(f.RemoveRecursive(), nil)
+		},
+	)
 }
 
 // RemoveDirContentsRecursiveContext deletes all files and directories in this directory recursively.
 func (file File) RemoveDirContentsRecursiveContext(ctx context.Context) error {
-	return file.ListDirContext(ctx, func(f File) error {
-		err := f.RemoveRecursiveContext(ctx)
-		// Ignore files that have been deleted,
-		// after all we wanted to get rid of the in the first place,
-		// so this is not an error for us
-		return RemoveErrDoesNotExist(err)
-	})
+	return file.ListDir(
+		true,
+		func(f File) error {
+			// Ignore files that have been deleted,
+			// after all we wanted to get rid of the in the first place,
+			// so this is not an error for us
+			return ReplaceErrDoesNotExist(f.RemoveRecursiveContext(ctx), nil)
+		},
+	)
 }
 
 // RemoveDirContents deletes all files in this directory,
 // or if given all files with patterns from the this directory.
 func (file File) RemoveDirContents(patterns ...string) error {
-	return file.ListDir(func(f File) error {
-		err := f.Remove()
-		// Ignore files that have been deleted,
-		// after all we wanted to get rid of the in the first place,
-		// so this is not an error for us
-		return RemoveErrDoesNotExist(err)
-	}, patterns...)
+	return file.ListDir(
+		true,
+		func(f File) error {
+			// Ignore files that have been deleted,
+			// after all we wanted to get rid of the in the first place,
+			// so this is not an error for us
+			return ReplaceErrDoesNotExist(f.Remove(), nil)
+		},
+		patterns...,
+	)
 }
 
 // RemoveDirContentsContext deletes all files in this directory,
 // or if given all files with patterns from the this directory.
 func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...string) error {
-	return file.ListDirContext(ctx, func(f File) error {
-		err := f.Remove()
-		// Ignore files that have been deleted,
-		// after all we wanted to get rid of the in the first place,
-		// so this is not an error for us
-		return RemoveErrDoesNotExist(err)
-	}, patterns...)
+	return file.ListDir(
+		true,
+		func(f File) error {
+			// Ignore files that have been deleted,
+			// after all we wanted to get rid of the in the first place,
+			// so this is not an error for us
+			return ReplaceErrDoesNotExist(f.Remove(), nil)
+		},
+		patterns...,
+	)
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
@@ -1037,7 +995,7 @@ func (file File) AsFS() FileFS {
 	return FileFS{file}
 }
 
-// AsDirEntry wraps the file as os/fs.DirEntry.
-func (file File) AsDirEntry() fs.DirEntry {
+// AsDirEntry wraps the file as DirEntry (identical to os/fs.DirEntry).
+func (file File) AsDirEntry() DirEntry {
 	return FileDirEntry{file}
 }

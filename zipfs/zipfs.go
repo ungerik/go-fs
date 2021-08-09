@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
@@ -246,82 +247,82 @@ func (zipfs *ZipFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+func (zipfs *ZipFileSystem) IsEmpty(filePath string) bool {
 	if zipfs.zipReader == nil {
-		return fs.ErrWriteOnlyFileSystem
+		return true
 	}
-
 	panic("not implemented")
 }
 
-func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
+func (*ZipFileSystem) ListDir(dirPath string, listDirs bool, patterns []string, onDirEntry func(fs.DirEntry) error) error {
+	return fs.ErrNotSupported
+}
 
+func (zipfs *ZipFileSystem) ListDirRecursive(dirPath string, listDirs bool, patterns []string, onDirEntry func(dir string, entry fs.DirEntry) error) error {
 	if zipfs.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
 	}
 
-	rootNode := &node{
-		FileInfo: fs.FileInfo{
-			IsDir: true,
-		},
-		children: make(map[string]*node),
-	}
+	// Files within the Zip have paths without leading slash,
+	// so remove it for comparing paths
+	dirPath = strings.TrimPrefix(dirPath, "/")
+
 	for _, file := range zipfs.zipReader.File {
-		currentDir := rootNode
-		parts := strings.Split(file.Name, Separator)
-		lastIndex := len(parts) - 1
-		for i := 0; i < lastIndex; i++ {
-			currentDir = currentDir.addChildDir(parts[i], file.ModTime())
+		if file.Name == "" || !strings.HasPrefix(file.Name, dirPath) {
+			continue
 		}
-		currentDir.addChildFile(parts[lastIndex], file.ModTime(), int64(file.UncompressedSize64))
-	}
 
-	if dirPath != "" && dirPath != "." && dirPath != Separator {
-		// parts := sipfs.SplitPath(dirPath)
-		panic("TODO set rootNode to dirPath")
-	}
-
-	if !rootNode.IsDir {
-		return fs.NewErrIsNotDirectory(zipfs.File(dirPath))
-	}
-
-	var listRecursive func(parent *node) error
-	listRecursive = func(parent *node) error {
-		for _, child := range parent.sortedChildren() {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-
-			file := zipfs.File(child.filePath)
-			err := callback(file, child.FileInfo)
-			if err != nil {
-				return err
-			}
-			if child.IsDir {
-				err = listRecursive(child)
-				if err != nil {
-					return err
-				}
-			}
+		isDir := file.Name[len(file.Name)-1] == '/'
+		if isDir && !listDirs {
+			continue
 		}
-		return nil
-	}
 
-	return listRecursive(rootNode)
+		var (
+			dir      = "/"
+			filename = file.Name
+		)
+		if isDir {
+			filename = filename[:len(filename)-1]
+		}
+		if sl := strings.LastIndexByte(file.Name, '/'); sl != -1 {
+			dir += file.Name[:sl]
+			filename = file.Name[sl+1:]
+		}
+		// Ignore non sane filenames just to be safe
+		if filename == "" || filename == "." || filename == ".." {
+			continue
+		}
+
+		match, err := zipfs.MatchAnyPattern(filename, patterns)
+		if err != nil {
+			return fmt.Errorf("ZipFileSystem.ListDirRecursive(%q): error matching name pattern: %w", dirPath, err)
+		}
+		if !match {
+			continue
+		}
+
+		err = onDirEntry(dir, dirEntry{&file.FileHeader, filename})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (zipfs *ZipFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	if zipfs.zipReader == nil {
-		return nil, fs.ErrWriteOnlyFileSystem
-	}
-
-	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return zipfs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
-	})
+// dirEntry implements io/fs.DirEntry and io/fs.FileInfo
+type dirEntry struct {
+	header *zip.FileHeader
+	name   string
 }
+
+func (e dirEntry) Name() string                 { return e.name }
+func (e dirEntry) IsDir() bool                  { return e.header.Name[len(e.header.Name)-1] == '/' }
+func (e dirEntry) Type() iofs.FileMode          { return e.Type() }
+func (e dirEntry) Info() (iofs.FileInfo, error) { return e, nil }
+func (e dirEntry) Size() int64                  { return int64(e.header.UncompressedSize64) }
+func (e dirEntry) Mode() iofs.FileMode          { return e.header.Mode() }
+func (e dirEntry) ModTime() time.Time           { return e.header.ModTime() }
+func (e dirEntry) Sys() interface{}             { return e.header }
 
 func (*ZipFileSystem) User(filePath string) string {
 	return ""

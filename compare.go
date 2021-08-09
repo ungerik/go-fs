@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 )
 
 // SameFile returns if a and b describe the same file or directory
@@ -88,28 +89,36 @@ func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) 
 		return true, nil
 	}
 
-	fileInfosA := make(map[string]FileInfo)
-	err = dirA.ListDirInfoContext(ctx, func(file File, info FileInfo) error {
-		if !info.IsDir || recursive {
-			fileInfosA[info.Name] = info
+	fileInfosA := make(map[string]fs.FileInfo)
+	err = dirA.ListDirEntries(true, func(entry DirEntry) error {
+		if !entry.IsDir() || recursive {
+			infoA, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			fileInfosA[infoA.Name()] = infoA
 		}
-		return nil
+		return ctx.Err()
 	})
 	if err != nil {
 		return false, fmt.Errorf("IdenticalDirContents: error listing dirA %q: %w", dirA, err)
 	}
 
-	fileInfosB := make(map[string]FileInfo, len(fileInfosA))
+	fileInfosB := make(map[string]fs.FileInfo, len(fileInfosA))
 	hasDiff := errors.New("hasDiff")
-	err = dirB.ListDirInfoContext(ctx, func(file File, info FileInfo) error {
-		if !info.IsDir || recursive {
-			infoA, found := fileInfosA[info.Name]
-			if !found || info.Size != infoA.Size || info.IsDir != infoA.IsDir {
+	err = dirB.ListDirEntries(true, func(entry DirEntry) error {
+		if !entry.IsDir() || recursive {
+			infoB, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			infoA, found := fileInfosA[entry.Name()]
+			if !found || infoB.Size() != infoA.Size() || infoB.IsDir() != infoA.IsDir() {
 				return hasDiff
 			}
-			fileInfosB[info.Name] = info
+			fileInfosB[infoB.Name()] = infoB
 		}
-		return nil
+		return ctx.Err()
 	})
 	if err == hasDiff || len(fileInfosB) != len(fileInfosA) {
 		return false, nil
@@ -119,29 +128,20 @@ func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) 
 	}
 
 	for filename, infoA := range fileInfosA {
-		infoB := fileInfosB[filename]
-
-		if recursive && infoA.IsDir {
+		if recursive && infoA.IsDir() {
 			identical, err = IdenticalDirContents(ctx, dirA.Join(filename), dirB.Join(filename), true)
 			if !identical {
 				return false, err
 			}
 		} else {
-			hashA := infoA.ContentHash
-			if hashA == "" {
-				hashA, err = dirA.Join(filename).ContentHash()
-				if err != nil {
-					return false, fmt.Errorf("IdenticalDirContents: error content hashing %q: %w", filename, err)
-				}
+			hashA, err := dirA.Join(filename).ContentHashContext(ctx)
+			if err != nil {
+				return false, fmt.Errorf("IdenticalDirContents: error content hashing %q: %w", filename, err)
 			}
-			hashB := infoB.ContentHash
-			if hashB == "" {
-				hashB, err = dirB.Join(filename).ContentHash()
-				if err != nil {
-					return false, fmt.Errorf("IdenticalDirContents: error content hashing %q: %w", filename, err)
-				}
+			hashB, err := dirB.Join(filename).ContentHashContext(ctx)
+			if err != nil {
+				return false, fmt.Errorf("IdenticalDirContents: error content hashing %q: %w", filename, err)
 			}
-
 			if hashA != hashB {
 				return false, nil
 			}

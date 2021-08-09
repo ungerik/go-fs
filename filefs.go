@@ -52,14 +52,14 @@ func (f FileFS) ReadFile(name string) ([]byte, error) {
 // and returns a list of directory entries sorted by filename.
 // This method implements the io/fs.ReadDirFS interface.
 func (f FileFS) ReadDir(name string) (entries []fs.DirEntry, err error) {
-	err = f.File.Join(name).ListDir(func(file File) error {
-		entries = append(entries, file.AsDirEntry())
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return entries, nil
+	err = f.File.Join(name).ListDirEntries(
+		true,
+		func(entry DirEntry) error {
+			entries = append(entries, entry)
+			return nil
+		},
+	)
+	return entries, err
 }
 
 // Glob returns the names of all files matching pattern,
@@ -67,17 +67,15 @@ func (f FileFS) ReadDir(name string) (entries []fs.DirEntry, err error) {
 // Glob function.
 // This method implements the io/fs.GlobFS interface.
 func (f FileFS) Glob(pattern string) (names []string, err error) {
-	err = f.File.ListDir(
-		func(file File) error {
-			names = append(names, file.Name())
+	err = f.File.ListDirEntries(
+		true,
+		func(entry DirEntry) error {
+			names = append(names, entry.Name())
 			return nil
 		},
 		pattern,
 	)
-	if err != nil {
-		return nil, err
-	}
-	return names, nil
+	return names, err
 }
 
 type FileDirEntry struct {

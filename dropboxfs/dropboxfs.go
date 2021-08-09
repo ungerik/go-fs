@@ -224,6 +224,10 @@ func (dbfs *DropboxFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
+func (dbfs *DropboxFileSystem) IsEmpty(filePath string) bool {
+	panic("not implemented")
+}
+
 func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -289,18 +293,12 @@ func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, 
 	return nil
 }
 
-func (dbfs *DropboxFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
-	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, true)
+func (dbfs *DropboxFileSystem) ListDir(dirPath string, listDirs bool, patterns []string, onDirEntry func(fs.DirEntry) error) error {
+	panic("not implemented")
 }
 
-func (dbfs *DropboxFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
-	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, true)
-}
-
-func (dbfs *DropboxFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return dbfs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
-	})
+func (dbfs *DropboxFileSystem) ListDirRecursive(dirPath string, listDirs bool, patterns []string, onDirEntry func(dir string, entry fs.DirEntry) error) error {
+	panic("not implemented")
 }
 
 func (dbfs *DropboxFileSystem) SetPermissions(filePath string, perm fs.Permissions) error {

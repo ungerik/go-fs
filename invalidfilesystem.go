@@ -79,15 +79,15 @@ func (invalid InvalidFileSystem) SplitPath(filePath string) []string {
 	return strings.Split(filePath, "/")
 }
 
-func (invalid InvalidFileSystem) Separator() string {
+func (InvalidFileSystem) Separator() string {
 	return "/"
 }
 
-func (invalid InvalidFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+func (InvalidFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
 	return false, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) DirAndName(filePath string) (dir, name string) {
+func (InvalidFileSystem) DirAndName(filePath string) (dir, name string) {
 	return "", ""
 }
 
@@ -103,102 +103,102 @@ func (InvalidFileSystem) Exists(filePath string) bool {
 	return false
 }
 
-func (invalid InvalidFileSystem) IsHidden(filePath string) bool {
+func (InvalidFileSystem) IsHidden(filePath string) bool {
 	return false
 }
 
-func (invalid InvalidFileSystem) IsSymbolicLink(filePath string) bool {
+func (InvalidFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (invalid InvalidFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (InvalidFileSystem) IsEmpty(filePath string) bool {
+	return true
+}
+
+func (InvalidFileSystem) ListDir(dirPath string, listDirs bool, patterns []string, onDirEntry func(fs.DirEntry) error) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (InvalidFileSystem) ListDirRecursive(dirPath string, listDirs bool, patterns []string, onDirEntry func(dir string, entry DirEntry) error) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) ListDirMax(ctx context.Context, dirPath string, n int, patterns []string) (files []File, err error) {
-	return nil, ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) SetPermissions(filePath string, perm Permissions) error {
+func (InvalidFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) User(filePath string) string {
+func (InvalidFileSystem) User(filePath string) string {
 	return ""
 }
 
-func (invalid InvalidFileSystem) SetUser(filePath string, user string) error {
+func (InvalidFileSystem) SetUser(filePath string, user string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Group(filePath string) string {
+func (InvalidFileSystem) Group(filePath string) string {
 	return ""
 }
 
-func (invalid InvalidFileSystem) SetGroup(filePath string, group string) error {
+func (InvalidFileSystem) SetGroup(filePath string, group string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Touch(filePath string, perm []Permissions) error {
+func (InvalidFileSystem) Touch(filePath string, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) MakeDir(dirPath string, perm []Permissions) error {
+func (InvalidFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) ReadAll(filePath string) ([]byte, error) {
+func (InvalidFileSystem) ReadAll(filePath string) ([]byte, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
+func (InvalidFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
+func (InvalidFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) OpenReader(filePath string) (fs.File, error) {
+func (InvalidFileSystem) OpenReader(filePath string) (fs.File, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (InvalidFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
+func (InvalidFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
+func (InvalidFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Truncate(filePath string, size int64) error {
+func (InvalidFileSystem) Truncate(filePath string, size int64) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+func (InvalidFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Rename(filePath string, newName string) error {
+func (InvalidFileSystem) Rename(filePath string, newName string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Move(filePath string, destPath string) error {
+func (InvalidFileSystem) Move(filePath string, destPath string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Remove(filePath string) error {
+func (InvalidFileSystem) Remove(filePath string) error {
 	return ErrInvalidFileSystem
 }
