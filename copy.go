@@ -59,13 +59,16 @@ func CopyFileBufContext(ctx context.Context, src FileReader, dest File, buf *[]b
 		}
 	}
 
-	// Use same file system copy if possible
 	srcFile, srcIsFile := src.(File)
 	if srcIsFile {
+		// Use same file system copy if possible
 		fs := srcFile.FileSystem()
 		if fs == dest.FileSystem() {
 			return fs.CopyFile(ctx, srcFile.Path(), dest.Path(), buf)
 		}
+	} else if srcMemFile, ok := src.(*MemFile); ok {
+		// Don't use io.CopyBuffer in case of MemFile
+		return dest.WriteAll(srcMemFile.FileData, perm...)
 	}
 
 	r, err := src.OpenReader()
