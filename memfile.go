@@ -51,19 +51,13 @@ func NewMemFile(name string, data []byte) *MemFile {
 	return &MemFile{FileName: name, FileData: data}
 }
 
-// MemFileFromFileReader tries to cast and return the passed FileReader
-// as *MemFile or else returns the result of ReadMemFile.
-func MemFileFromFileReader(fileReader FileReader) (*MemFile, error) {
+// ReadMemFile returns a MemFile with name and data from fileReader.
+// If fileReader is already a *MemFile then it will be returned directly,
+// else all data from fileReader will read into memory.
+func ReadMemFile(fileReader FileReader) (*MemFile, error) {
 	if memFile, ok := fileReader.(*MemFile); ok {
 		return memFile, nil
 	}
-	return ReadMemFile(fileReader)
-}
-
-// ReadMemFile returns a new MemFile with
-// the name from fileReader.Name() and
-// the data from fileReader.ReadAll()
-func ReadMemFile(fileReader FileReader) (*MemFile, error) {
 	data, err := fileReader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFile: error reading from FileReader: %w", err)
@@ -71,9 +65,13 @@ func ReadMemFile(fileReader FileReader) (*MemFile, error) {
 	return &MemFile{FileName: fileReader.Name(), FileData: data}, nil
 }
 
-// ReadMemFileRename returns a new MemFile with the data
-// from fileReader.ReadAll() and the passed name.
+// ReadMemFileRename returns a MemFile with the data from fileReader and the passed name.
+// If fileReader is already a *MemFile then its data will be used without copying,
+// else all data from fileReader will read into memory.
 func ReadMemFileRename(fileReader FileReader, name string) (*MemFile, error) {
+	if memFile, ok := fileReader.(*MemFile); ok {
+		return &MemFile{FileName: name, FileData: memFile.FileData}, nil
+	}
 	data, err := fileReader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
