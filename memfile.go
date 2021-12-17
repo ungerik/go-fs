@@ -30,6 +30,9 @@ var (
 // MemFile implements FileReader with a filename and an in memory byte slice.
 // It exposes FileName and FileData as exported struct fields to emphasize
 // its simple nature as just an wrapper of a name and some bytes.
+// Note that the ReadAll method returns FileData directly
+// without copying it to optimized performance.
+// So be careful when modifying the FileData bytes of a MemFile.
 //
 // MemFile implements the following interfaces:
 //   - FileReader
@@ -51,28 +54,22 @@ func NewMemFile(name string, data []byte) *MemFile {
 	return &MemFile{FileName: name, FileData: data}
 }
 
-// ReadMemFile returns a MemFile with name and data from fileReader.
-// If fileReader is already a *MemFile then it will be returned directly,
-// else all data from fileReader will read into memory.
+// ReadMemFile returns a new MemFile with name and data from fileReader.
+// If the passed fileReader is a *MemFile then
+// its FileData is used directly without copying it.
 func ReadMemFile(fileReader FileReader) (*MemFile, error) {
-	if memFile, ok := fileReader.(*MemFile); ok {
-		return memFile, nil
-	}
-	data, err := fileReader.ReadAll()
+	data, err := fileReader.ReadAll() // Does not copy in case of fileReader.(*MemFile)
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFile: error reading from FileReader: %w", err)
 	}
 	return &MemFile{FileName: fileReader.Name(), FileData: data}, nil
 }
 
-// ReadMemFileRename returns a MemFile with the data from fileReader and the passed name.
-// If fileReader is already a *MemFile then its data will be used without copying,
-// else all data from fileReader will read into memory.
+// ReadMemFileRename returns a new MemFile with the data from fileReader and the passed name.
+// If the passed fileReader is a *MemFile then
+// its FileData is used directly without copying it.
 func ReadMemFileRename(fileReader FileReader, name string) (*MemFile, error) {
-	if memFile, ok := fileReader.(*MemFile); ok {
-		return &MemFile{FileName: name, FileData: memFile.FileData}, nil
-	}
-	data, err := fileReader.ReadAll()
+	data, err := fileReader.ReadAll() // Does not copy in case of fileReader.(*MemFile)
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
 	}
@@ -144,19 +141,19 @@ func (f *MemFile) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// ReadAll copies all bytes of the file
+// ReadAll returns the FileData without copying it.
 func (f *MemFile) ReadAll() (data []byte, err error) {
-	return append([]byte(nil), f.FileData...), nil
+	return f.FileData, nil
 }
 
-// ReadAllContentHash copies all bytes of the file
+// ReadAllContentHash returns the FileData without copying it
 // together with a Dropbox compatible content hash.
 // See https://www.dropbox.com/developers/reference/content-hash
 func (f *MemFile) ReadAllContentHash() (data []byte, hash string, err error) {
-	return append([]byte(nil), f.FileData...), fsimpl.ContentHashBytes(f.FileData), nil
+	return f.FileData, fsimpl.ContentHashBytes(f.FileData), nil
 }
 
-// ReadAllString reads the complete file and returns the content as string.
+// ReadAllString returns the FileData as string.
 func (f *MemFile) ReadAllString() (string, error) {
 	return string(f.FileData), nil
 }
