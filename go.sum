@@ -11,6 +11,8 @@ github.com/tj/go-dropbox v0.0.0-20171107035848-42dd2be3662d h1:kc+jLVc4Ivy9I77bY
 github.com/tj/go-dropbox v0.0.0-20171107035848-42dd2be3662d/go.mod h1:+zP9ykDCb5wHDCWHCuLZ2YhDAiy42yV+HAmI2BIocBI=
 github.com/ungerik/go-dry v0.0.0-20210209114055-a3e162a9e62e h1:1oi3J06qNU9zsDsXvzF4oOfezrpf4HEPX9TDfSexiZE=
 github.com/ungerik/go-dry v0.0.0-20210209114055-a3e162a9e62e/go.mod h1:g61b/Pvp64yQ4oYVbcdA7qqzn1RcQIHZQuhWOVG1VHk=
+github.com/ungerik/go-dry v0.0.0-20211126075843-f063768598f2 h1:s4wtkoCGcgdYyExIb8In921HrN9RVsQqmOdfMtZJUAE=
+github.com/ungerik/go-dry v0.0.0-20211126075843-f063768598f2/go.mod h1:g61b/Pvp64yQ4oYVbcdA7qqzn1RcQIHZQuhWOVG1VHk=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c h1:dUUwHk2QECo/6vqA44rthZ8ie2QXMNeKRTHCNY2nXvo=
