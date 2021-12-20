@@ -34,7 +34,7 @@ func TempDir() File {
 
 // TempFile returns a randomly named File with an optional extension
 // in the temp directory of the operating system.
-// The file does not exist yet, the returned File just contains the path.
+// The returned File does not exist yet, it's just a path.
 func TempFile(ext ...string) File {
 	return TempDir().Join(fsimpl.RandomString() + strings.Join(ext, ""))
 }
@@ -80,7 +80,7 @@ func tempDirName() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s_%X", time.Now().Format("20060102_150405_999999"), randomBytes), nil
+	return fmt.Sprintf("%s_%X", time.Now().Format("20060102-150405"), randomBytes), nil
 }
 
 // Executable returns a File for the executable that started the current process.
