@@ -270,11 +270,11 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 		return NewErrIsNotDirectory(File(dirPath))
 	}
 
-	f, err := os.Open(dirPath)
+	f, err := os.Open(dirPath) //#nosec G304
 	if err != nil {
 		return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): error opening directory: %w", dirPath, err)
 	}
-	defer f.Close()
+	defer f.Close() //#nosec G307
 
 	for eof := false; !eof; {
 		if ctx.Err() != nil {
@@ -330,11 +330,11 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 		return nil, NewErrIsNotDirectory(File(dirPath))
 	}
 
-	f, err := os.Open(dirPath)
+	f, err := os.Open(dirPath) //#nosec G304
 	if err != nil {
 		return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): error opening directory: %w", dirPath, err)
 	}
-	defer f.Close()
+	defer f.Close() //#nosec G307
 
 	var numFilesToDo int
 	if n > 0 {
@@ -454,7 +454,7 @@ func (local *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {
 		return nil, ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	data, err := ioutil.ReadFile(filePath)
+	data, err := ioutil.ReadFile(filePath) //#nosec G304
 	return data, wrapOSErr(filePath, err)
 }
 
@@ -485,7 +485,7 @@ func (local *LocalFileSystem) OpenReader(filePath string) (fs.File, error) {
 		return nil, ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	f, err := os.OpenFile(filePath, os.O_RDONLY, 0)
+	f, err := os.OpenFile(filePath, os.O_RDONLY, 0) //#nosec G304
 	return f, wrapOSErr(filePath, err)
 }
 
@@ -495,7 +495,7 @@ func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (i
 	}
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, p.FileMode(false))
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, p.FileMode(false)) //#nosec G304
 	return f, wrapOSErr(filePath, err)
 }
 
@@ -505,7 +505,7 @@ func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissio
 	}
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, p.FileMode(false))
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, p.FileMode(false)) //#nosec G304
 	return f, wrapOSErr(filePath, err)
 }
 
@@ -515,7 +515,7 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions
 	}
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, p.FileMode(false))
+	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, p.FileMode(false)) //#nosec G304
 	return f, wrapOSErr(filePath, err)
 }
 
@@ -563,17 +563,17 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 		return nil
 	}
 
-	r, err := os.OpenFile(srcFilePath, os.O_RDONLY, 0)
+	r, err := os.OpenFile(srcFilePath, os.O_RDONLY, 0) //#nosec G304
 	if err != nil {
 		return wrapOSErr(srcFilePath, err)
 	}
-	defer r.Close()
+	defer r.Close() //#nosec G307
 
-	w, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm())
+	w, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm()) //#nosec G304
 	if err != nil {
 		return wrapOSErr(srcFilePath, err)
 	}
-	defer w.Close()
+	defer w.Close() //#nosec G307
 
 	if *buf == nil {
 		*buf = make([]byte, copyBufferSize)

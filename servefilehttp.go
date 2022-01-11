@@ -39,5 +39,5 @@ func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file Fil
 	} else {
 		response.Header().Add("Content-Type", contentType[0])
 	}
-	response.Write(data)
+	response.Write(data) //#nosec G104
 }
