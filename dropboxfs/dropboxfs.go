@@ -398,8 +398,8 @@ func (dbfs *DropboxFileSystem) OpenAppendWriter(filePath string, perm []fs.Permi
 	if err != nil {
 		return nil, err
 	}
-	writer.Seek(0, io.SeekEnd)
-	return writer, nil
+	_, err = writer.Seek(0, io.SeekEnd)
+	return writer, err
 }
 
 func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
