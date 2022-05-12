@@ -86,6 +86,18 @@ func ReadAllMemFile(r io.Reader, name string) (*MemFile, error) {
 	return &MemFile{FileName: name, FileData: data}, nil
 }
 
+// MemFilesAsFileReaders converts []*MemFile to []FileReader
+func MemFilesAsFileReaders(memFiles []*MemFile) []FileReader {
+	if len(memFiles) == 0 {
+		return nil
+	}
+	fileReaders := make([]FileReader, len(memFiles))
+	for i, memFile := range memFiles {
+		fileReaders[i] = memFile
+	}
+	return fileReaders
+}
+
 // String returns the name and meta information for the FileReader.
 // String implements the fmt.Stringer interface.
 func (f *MemFile) String() string {
