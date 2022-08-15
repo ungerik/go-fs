@@ -101,13 +101,6 @@ func (file File) MustLocalPath() string {
 	return localPath
 }
 
-// AbsPath returns the absolute path of the file
-// depending on the file system.
-func (file File) AbsPath() string {
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.AbsPath(path)
-}
-
 // Name returns the name part of the file path,
 // which is usually the string after the last path Separator.
 func (file File) Name() string {
@@ -138,10 +131,12 @@ func (file File) VolumeName() string {
 }
 
 // Ext returns the extension of file name including the point, or an empty string.
+//
 // Example:
-//   File("image.png").Ext() == ".png"
-//   File("dir.with.ext/file").Ext() == ""
-//   File("dir.with.ext/file.ext").Ext() == ".ext"
+//
+//	File("image.png").Ext() == ".png"
+//	File("dir.with.ext/file").Ext() == ""
+//	File("dir.with.ext/file.ext").Ext() == ".ext"
 func (file File) Ext() string {
 	return fsimpl.Ext(string(file), file.FileSystem().Separator())
 }
@@ -272,6 +267,13 @@ func (file File) CheckIsDir() error {
 	}
 }
 
+// AbsPath returns the absolute path of the file
+// depending on the file system.
+func (file File) AbsPath() string {
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.AbsPath(path)
+}
+
 // HasAbsPath returns wether the file has an absolute
 // path depending on the file system.
 func (file File) HasAbsPath() bool {
@@ -279,9 +281,9 @@ func (file File) HasAbsPath() bool {
 	return fileSystem.IsAbsPath(path)
 }
 
-// WithAbsPath returns the file with an absolute
+// ToAbsPath returns the file with an absolute
 // path depending on the file system.
-func (file File) WithAbsPath() File {
+func (file File) ToAbsPath() File {
 	fileSystem, path := file.ParseRawURI()
 	uri := fileSystem.Prefix() + fileSystem.AbsPath(path)
 	return File(strings.TrimPrefix(uri, LocalPrefix))
@@ -1027,12 +1029,13 @@ func (file File) HTTPFileSystem() http.FileSystem {
 // the FS interfaces of the os/fs package for a File.
 //
 // FileFS implements the following interfaces:
-//   os/fs.FS
-//   os/fs.SubFS
-//   os/fs.StatFS
-//   os/fs.GlobFS
-//   os/fs.ReadDirFS
-//   os/fs.ReadFileFS
+//
+//	os/fs.FS
+//	os/fs.SubFS
+//	os/fs.StatFS
+//	os/fs.GlobFS
+//	os/fs.ReadDirFS
+//	os/fs.ReadFileFS
 func (file File) AsFS() FileFS {
 	return FileFS{file}
 }
