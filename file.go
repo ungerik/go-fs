@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -784,12 +785,29 @@ func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error
 	return fileSystem.OpenReadWriter(path, perm)
 }
 
-func (file File) Watch() (<-chan WatchEvent, error) {
+// Watch a file or directory for changes.
+// If filePath describes a directory then
+// changes directly within it will be reported.
+// This does not apply changes in deeper
+// recursive sub-directories.
+func (file File) Watch(onEvent func(File, Event)) error {
 	if file == "" {
-		return nil, ErrEmptyPath
+		return ErrEmptyPath
+	}
+	if onEvent == nil {
+		return errors.New("nil callback")
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Watch(path)
+	return fileSystem.Watch(path, onEvent)
+}
+
+// Unwatch a previously watched file or directory
+func (file File) Unwatch() error {
+	if file == "" {
+		return ErrEmptyPath
+	}
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Unwatch(path)
 }
 
 func (file File) Truncate(size int64) error {

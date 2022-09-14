@@ -3,9 +3,10 @@ package fs
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
-
+	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -155,4 +156,40 @@ func TestFile_TrimExt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFile_Watch(t *testing.T) {
+	const sleepDurationForCallback = time.Millisecond * 10
+	var (
+		dir       = File(t.TempDir())
+		gotFiles  []File
+		gotEvents []Event
+	)
+	err := dir.Watch(func(file File, event Event) {
+		gotFiles = append(gotFiles, file)
+		gotEvents = append(gotEvents, event)
+	})
+	require.NoError(t, err, "dir.Watch")
+
+	newFile := dir.Join("newFile")
+	err = newFile.Touch()
+	require.NoError(t, err, "newFile.Touch")
+
+	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
+
+	renamedFile, err := newFile.Rename("renamedFile")
+	require.NoError(t, err, "newFile.Rename")
+
+	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
+
+	err = renamedFile.Remove()
+	require.NoError(t, err, "renamedFile.Remove")
+
+	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
+
+	assert.Equal(t, []File{newFile, newFile, renamedFile, renamedFile}, gotFiles)
+	assert.Equal(t, []Event{EventCreate, EventRename, EventCreate, EventRemove}, gotEvents)
+
+	err = dir.Unwatch()
+	assert.NoError(t, err, "dir.Unwatch")
 }

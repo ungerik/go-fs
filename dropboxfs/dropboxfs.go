@@ -414,8 +414,12 @@ func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permiss
 	return fileBuffer, nil
 }
 
-func (dbfs *DropboxFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
-	return nil, fmt.Errorf("DropboxFileSystem.Watch: %w", fs.ErrNotSupported)
+func (dbfs *DropboxFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) error {
+	return fmt.Errorf("DropboxFileSystem.Watch: %w", fs.ErrNotSupported)
+}
+
+func (dbfs *DropboxFileSystem) Unwatch(filePath string) error {
+	return fmt.Errorf("DropboxFileSystem.Unwatch: %w", fs.ErrNotSupported)
 }
 
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {

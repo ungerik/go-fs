@@ -216,7 +216,11 @@ func (subfs *SubFileSystem) OpenReadWriter(filePath string, perm []Permissions) 
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) Watch(filePath string) (<-chan WatchEvent, error) {
+func (subfs *SubFileSystem) Watch(filePath string, onEvent func(File, Event)) error {
+	panic("not implemented")
+}
+
+func (subfs *SubFileSystem) Unwatch(filePath string) error {
 	panic("not implemented")
 }
 

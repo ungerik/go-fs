@@ -76,7 +76,15 @@ type FileSystem interface {
 	// IsSymbolicLink returns if a file is a symbolic link
 	IsSymbolicLink(filePath string) bool
 
-	Watch(filePath string) (<-chan WatchEvent, error)
+	// Watch a file or directory for changes.
+	// If filePath describes a directory then
+	// changes directly within it will be reported.
+	// This does not apply changes in deeper
+	// recursive sub-directories.
+	Watch(filePath string, onEvent func(File, Event)) error
+
+	// Unwatch a previously watched file or directory
+	Unwatch(filePath string) error
 
 	// ListDirInfo calls the passed callback function for every file and directory in dirPath.
 	// If any patterns are passed, then only files or directores with a name that matches

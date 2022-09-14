@@ -3,7 +3,6 @@ package zipfs
 import (
 	"archive/zip"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	iofs "io/fs"
@@ -436,28 +435,32 @@ func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permission
 	// return nil, fs.ErrReadOnlyFileSystem
 }
 
-func (zipfs *ZipFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
-	return nil, fmt.Errorf("ZipFileSystem: %w", fs.ErrNotSupported)
+func (*ZipFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) error {
+	return fmt.Errorf("ZipFileSystem.Watch %w", fs.ErrNotSupported)
 }
 
-func (zipfs *ZipFileSystem) Truncate(filePath string, size int64) error {
-	return errors.New("ZipFileSystem.Truncate not supported")
+func (*ZipFileSystem) Unwatch(filePath string) error {
+	return fmt.Errorf("ZipFileSystem.Unwatch: %w", fs.ErrNotSupported)
 }
 
-func (zipfs *ZipFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
-	return errors.New("ZipFileSystem.CopyFile not supported")
+func (*ZipFileSystem) Truncate(filePath string, size int64) error {
+	return fmt.Errorf("ZipFileSystem.Truncate %w", fs.ErrNotSupported)
 }
 
-func (zipfs *ZipFileSystem) Rename(filePath string, newName string) error {
-	return errors.New("ZipFileSystem.Rename not supported")
+func (*ZipFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+	return fmt.Errorf("ZipFileSystem.CopyFile %w", fs.ErrNotSupported)
 }
 
-func (zipfs *ZipFileSystem) Move(filePath string, destPath string) error {
-	return errors.New("ZipFileSystem.Move not supported")
+func (*ZipFileSystem) Rename(filePath string, newName string) error {
+	return fmt.Errorf("ZipFileSystem.Rename %w", fs.ErrNotSupported)
 }
 
-func (zipfs *ZipFileSystem) Remove(filePath string) error {
-	return errors.New("ZipFileSystem.Remove not supported")
+func (*ZipFileSystem) Move(filePath string, destPath string) error {
+	return fmt.Errorf("ZipFileSystem.Move %w", fs.ErrNotSupported)
+}
+
+func (*ZipFileSystem) Remove(filePath string) error {
+	return fmt.Errorf("ZipFileSystem.Remove %w", fs.ErrNotSupported)
 }
 
 type nopCloser struct {

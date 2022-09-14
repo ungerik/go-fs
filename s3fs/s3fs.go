@@ -475,7 +475,7 @@ package s3fs
 // }
 
 // // Watch is not supported yet for S3.
-// func (s3fs *S3FileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
+// func (s3fs *S3FileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) error {
 // 	// https://stackoverflow.com/questions/18049717/waituntilobjectexists-amazon-s3-php-sdk-method-exactly-how-does-it-work
 // 	// s3fs.s3Client.WaitUntilObjectExists
 // 	// s3fs.s3Client.WaitUntilObjectNotExists

@@ -1,7 +1,8 @@
 // Package httpfs implements a read only file system
 // for HTTP URLs.
 // Import it to register FileSystem and FileSystemTLS:
-//   import _ "github.com/ungerik/go-fs/httpfs"
+//
+//	import _ "github.com/ungerik/go-fs/httpfs"
 package httpfs
 
 import (
@@ -160,8 +161,12 @@ func (f *HTTPFileSystem) Exists(filePath string) bool {
 func (f *HTTPFileSystem) IsHidden(filePath string) bool       { return false }
 func (f *HTTPFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (f *HTTPFileSystem) Watch(filePath string) (<-chan fs.WatchEvent, error) {
-	return nil, fmt.Errorf("HTTPFileSystem.Watch: %w", fs.ErrNotSupported)
+func (f *HTTPFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) error {
+	return fmt.Errorf("HTTPFileSystem.Watch: %w", fs.ErrNotSupported)
+}
+
+func (f *HTTPFileSystem) Unwatch(filePath string) error {
+	return fmt.Errorf("HTTPFileSystem.Unwatch: %w", fs.ErrNotSupported)
 }
 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.

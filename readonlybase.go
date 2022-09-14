@@ -73,8 +73,12 @@ func (*ReadOnlyBase) OpenReadWriter(filePath string, perm []Permissions) (ReadWr
 	return nil, ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) Watch(filePath string) (<-chan WatchEvent, error) {
-	return nil, fmt.Errorf("Watch: %w", ErrNotSupported)
+func (*ReadOnlyBase) Watch(filePath string, onEvent func(File, Event)) error {
+	return fmt.Errorf("Watch %w", ErrNotSupported)
+}
+
+func (*ReadOnlyBase) Unwatch(filePath string) error {
+	return fmt.Errorf("Unwatch %w", ErrNotSupported)
 }
 
 func (*ReadOnlyBase) Truncate(filePath string, size int64) error {
