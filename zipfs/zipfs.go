@@ -435,12 +435,8 @@ func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permission
 	// return nil, fs.ErrReadOnlyFileSystem
 }
 
-func (*ZipFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) error {
-	return fmt.Errorf("ZipFileSystem.Watch %w", fs.ErrNotSupported)
-}
-
-func (*ZipFileSystem) Unwatch(filePath string) error {
-	return fmt.Errorf("ZipFileSystem.Unwatch: %w", fs.ErrNotSupported)
+func (*ZipFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
+	return nil, fmt.Errorf("ZipFileSystem.Watch %w", fs.ErrNotSupported)
 }
 
 func (*ZipFileSystem) Truncate(filePath string, size int64) error {

@@ -37,9 +37,10 @@ type LocalFileSystem struct {
 	WatchEventLogger Logger
 	WatchErrorLogger Logger
 
-	watcherMtx sync.RWMutex
-	watcher    *fsnotify.Watcher
-	callbacks  map[string]func(File, Event)
+	watcherMtx     sync.RWMutex
+	watcher        *fsnotify.Watcher
+	lastCallbackID uint64
+	callbacks      map[string]map[uint64]func(File, Event)
 }
 
 func wrapOSErr(filePath string, err error) error {
@@ -528,95 +529,6 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions
 	return f, wrapOSErr(filePath, err)
 }
 
-func (local *LocalFileSystem) Watch(filePath string, onEvent func(File, Event)) error {
-	if filePath == "" {
-		return ErrEmptyPath
-	}
-	if !local.Exists(filePath) {
-		return NewErrDoesNotExist(File(filePath))
-	}
-	filePath = expandTilde(filePath)
-
-	local.watcherMtx.Lock()
-	defer local.watcherMtx.Unlock()
-
-	var err error
-	if local.watcher == nil {
-		local.watcher, err = fsnotify.NewWatcher()
-		if err != nil {
-			return err
-		}
-		local.callbacks = make(map[string]func(File, Event))
-		go local.watchLoop()
-	}
-
-	err = local.watcher.Add(filePath)
-	if err != nil {
-		return err
-	}
-	local.callbacks[filePath] = onEvent
-	return nil
-}
-
-func (local *LocalFileSystem) watchLoop() {
-	for {
-		select {
-		case event, ok := <-local.watcher.Events:
-			if !ok {
-				return
-			}
-			if local.WatchEventLogger != nil {
-				local.WatchEventLogger.Printf("watch event: %s", event)
-			}
-			local.watcherMtx.RLock()
-			callback := local.callbacks[event.Name]
-			if callback == nil {
-				// Try parent directory if no direct file watch
-				callback = local.callbacks[filepath.Dir(event.Name)]
-			}
-			local.watcherMtx.RUnlock()
-			if callback != nil {
-				local.safeCallback(event, callback)
-			}
-
-		case err, ok := <-local.watcher.Errors:
-			if !ok {
-				return
-			}
-			if local.WatchErrorLogger != nil {
-				local.WatchErrorLogger.Printf("watch error: %s", err)
-			}
-		}
-	}
-}
-
-func (local *LocalFileSystem) safeCallback(event fsnotify.Event, callback func(File, Event)) {
-	defer func() {
-		p := recover()
-		if p != nil && local.WatchErrorLogger != nil {
-			local.WatchErrorLogger.Printf("watch callback panic: %#v", p)
-		}
-	}()
-	callback(File(event.Name), Event(event.Op))
-}
-
-func (local *LocalFileSystem) Unwatch(filePath string) error {
-	if filePath == "" {
-		return ErrEmptyPath
-	}
-	filePath = expandTilde(filePath)
-
-	local.watcherMtx.Lock()
-	defer local.watcherMtx.Unlock()
-
-	_, ok := local.callbacks[filePath]
-	if !ok {
-		return fmt.Errorf("not watched: %s", filePath)
-	}
-	delete(local.callbacks, filePath)
-	return local.watcher.Remove(filePath)
-}
-
 func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -710,4 +622,102 @@ func (local *LocalFileSystem) Remove(filePath string) error {
 	}
 	filePath = expandTilde(filePath)
 	return wrapOSErr(filePath, os.Remove(filePath))
+}
+
+func (local *LocalFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
+	if filePath == "" {
+		return nil, ErrEmptyPath
+	}
+	if !local.Exists(filePath) {
+		return nil, NewErrDoesNotExist(File(filePath))
+	}
+	filePath = expandTilde(filePath)
+
+	local.watcherMtx.Lock()
+	defer local.watcherMtx.Unlock()
+
+	if local.watcher == nil {
+		local.watcher, err = fsnotify.NewWatcher()
+		if err != nil {
+			return nil, err
+		}
+		local.callbacks = make(map[string]map[uint64]func(File, Event), 1)
+		go local.watchLoop()
+	}
+
+	err = local.watcher.Add(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	callbackID := local.lastCallbackID
+	local.lastCallbackID++
+
+	pathCallbacks := local.callbacks[filePath]
+	if pathCallbacks == nil {
+		pathCallbacks = make(map[uint64]func(File, Event), 1)
+	}
+	pathCallbacks[callbackID] = onEvent
+	local.callbacks[filePath] = pathCallbacks
+
+	cancel = func() error {
+		local.watcherMtx.Lock()
+		defer local.watcherMtx.Unlock()
+
+		delete(local.callbacks[filePath], callbackID)
+		if len(local.callbacks[filePath]) > 0 {
+			return nil
+		}
+		return local.watcher.Remove(filePath)
+	}
+	return cancel, nil
+}
+
+func (local *LocalFileSystem) watchLoop() {
+	for {
+		select {
+		case event, ok := <-local.watcher.Events:
+			if !ok {
+				return
+			}
+			if local.WatchEventLogger != nil {
+				local.WatchEventLogger.Printf("watch event: %s", event)
+			}
+
+			// Collect callbacks during lock
+			local.watcherMtx.RLock()
+			var callbacks []func(File, Event)
+			for _, callback := range local.callbacks[event.Name] {
+				callbacks = append(callbacks, callback)
+			}
+			// Also check for watches of parent directory
+			for _, callback := range local.callbacks[filepath.Dir(event.Name)] {
+				callbacks = append(callbacks, callback)
+			}
+			local.watcherMtx.RUnlock()
+
+			// Call them outside of lock
+			for _, callback := range callbacks {
+				local.watchEventCallback(event, callback)
+			}
+
+		case err, ok := <-local.watcher.Errors:
+			if !ok {
+				return
+			}
+			if local.WatchErrorLogger != nil {
+				local.WatchErrorLogger.Printf("watch error: %s", err)
+			}
+		}
+	}
+}
+
+func (local *LocalFileSystem) watchEventCallback(event fsnotify.Event, callback func(File, Event)) {
+	defer func() {
+		p := recover()
+		if p != nil && local.WatchErrorLogger != nil {
+			local.WatchErrorLogger.Printf("watch callback panic: %#v", p)
+		}
+	}()
+	callback(File(event.Name), Event(event.Op))
 }

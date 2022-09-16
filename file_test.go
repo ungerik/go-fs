@@ -2,6 +2,7 @@ package fs
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -159,13 +160,19 @@ func TestFile_TrimExt(t *testing.T) {
 }
 
 func TestFile_Watch(t *testing.T) {
+	Local.WatchEventLogger = LoggerFunc(func(format string, args ...any) {
+		fmt.Printf(format+"\n", args...)
+	})
+	Local.WatchErrorLogger = LoggerFunc(func(format string, args ...any) {
+		t.Errorf(format, args...)
+	})
 	const sleepDurationForCallback = time.Millisecond * 10
 	var (
 		dir       = File(t.TempDir())
 		gotFiles  []File
 		gotEvents []Event
 	)
-	err := dir.Watch(func(file File, event Event) {
+	cancel, err := dir.Watch(func(file File, event Event) {
 		gotFiles = append(gotFiles, file)
 		gotEvents = append(gotEvents, event)
 	})
@@ -190,6 +197,6 @@ func TestFile_Watch(t *testing.T) {
 	assert.Equal(t, []File{newFile, newFile, renamedFile, renamedFile}, gotFiles)
 	assert.Equal(t, []Event{EventCreate, EventRename, EventCreate, EventRemove}, gotEvents)
 
-	err = dir.Unwatch()
-	assert.NoError(t, err, "dir.Unwatch")
+	err = cancel()
+	assert.NoError(t, err, "cancel watch")
 }

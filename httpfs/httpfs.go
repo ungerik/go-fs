@@ -161,12 +161,8 @@ func (f *HTTPFileSystem) Exists(filePath string) bool {
 func (f *HTTPFileSystem) IsHidden(filePath string) bool       { return false }
 func (f *HTTPFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (f *HTTPFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) error {
-	return fmt.Errorf("HTTPFileSystem.Watch: %w", fs.ErrNotSupported)
-}
-
-func (f *HTTPFileSystem) Unwatch(filePath string) error {
-	return fmt.Errorf("HTTPFileSystem.Unwatch: %w", fs.ErrNotSupported)
+func (f *HTTPFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
+	return nil, fmt.Errorf("HTTPFileSystem.Watch: %w", fs.ErrNotSupported)
 }
 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.

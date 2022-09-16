@@ -81,10 +81,11 @@ type FileSystem interface {
 	// changes directly within it will be reported.
 	// This does not apply changes in deeper
 	// recursive sub-directories.
-	Watch(filePath string, onEvent func(File, Event)) error
-
-	// Unwatch a previously watched file or directory
-	Unwatch(filePath string) error
+	//
+	// It is valid to watch a file with multiple
+	// callbacks, calling the returned cancel function
+	// will cancel a particular watch.
+	Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error)
 
 	// ListDirInfo calls the passed callback function for every file and directory in dirPath.
 	// If any patterns are passed, then only files or directores with a name that matches

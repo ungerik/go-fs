@@ -179,12 +179,8 @@ func (invalid InvalidFileSystem) OpenReadWriter(filePath string, perm []Permissi
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Watch(filePath string, onEvent func(File, Event)) error {
-	return ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) Unwatch(filePath string) error {
-	return ErrInvalidFileSystem
+func (invalid InvalidFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
+	return nil, ErrInvalidFileSystem
 }
 
 func (invalid InvalidFileSystem) Truncate(filePath string, size int64) error {

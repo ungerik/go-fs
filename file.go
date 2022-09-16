@@ -786,28 +786,23 @@ func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error
 }
 
 // Watch a file or directory for changes.
-// If filePath describes a directory then
+// If the file describes a directory then
 // changes directly within it will be reported.
 // This does not apply changes in deeper
 // recursive sub-directories.
-func (file File) Watch(onEvent func(File, Event)) error {
+//
+// It is valid to watch a file with multiple
+// callbacks, calling the returned cancel function
+// will cancel a particular watch.
+func (file File) Watch(onEvent func(File, Event)) (cancel func() error, err error) {
 	if file == "" {
-		return ErrEmptyPath
+		return nil, ErrEmptyPath
 	}
 	if onEvent == nil {
-		return errors.New("nil callback")
+		return nil, errors.New("nil callback")
 	}
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.Watch(path, onEvent)
-}
-
-// Unwatch a previously watched file or directory
-func (file File) Unwatch() error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Unwatch(path)
 }
 
 func (file File) Truncate(size int64) error {
