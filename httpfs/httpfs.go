@@ -188,7 +188,11 @@ func (f *HTTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int
 	return nil, fmt.Errorf("HTTPFileSystem.ListDirMax: %w", fs.ErrNotSupported)
 }
 
-func (f *HTTPFileSystem) ReadAll(filePath string) (data []byte, err error) {
+func (f *HTTPFileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	// TODO use HTTP GET with context
 	reader, err := f.OpenReader(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("HTTPFileSystem.ReadAll: %w", err)

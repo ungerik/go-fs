@@ -178,15 +178,15 @@ func (subfs *SubFileSystem) MakeDir(filePath string, perm []Permissions) error {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) ReadAll(filePath string) ([]byte, error) {
+func (subfs *SubFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
+func (subfs *SubFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
+func (subfs *SubFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	writer, err := subfs.OpenAppendWriter(filePath, perm)
 	if err != nil {
 		return err

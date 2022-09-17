@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -37,15 +38,15 @@ type FileReader interface {
 	ContentHash() (string, error)
 
 	// ReadAll reads and returns all bytes of the file
-	ReadAll() (data []byte, err error)
+	ReadAll(context.Context) (data []byte, err error)
 
 	// ReadAllContentHash reads and returns all bytes of the file
 	// together with a Dropbox compatible content hash.
 	// See https://www.dropbox.com/developers/reference/content-hash
-	ReadAllContentHash() (data []byte, hash string, err error)
+	ReadAllContentHash(context.Context) (data []byte, hash string, err error)
 
 	// ReadAllString reads the complete file and returns the content as string.
-	ReadAllString() (string, error)
+	ReadAllString(context.Context) (string, error)
 
 	// WriteTo implements the io.WriterTo interface
 	WriteTo(writer io.Writer) (n int64, err error)
@@ -59,10 +60,10 @@ type FileReader interface {
 	OpenReadSeeker() (ReadSeekCloser, error)
 
 	// ReadJSON reads and unmarshalles the JSON content of the file to output.
-	ReadJSON(output interface{}) error
+	ReadJSON(ctx context.Context, output interface{}) error
 
 	// ReadXML reads and unmarshalles the XML content of the file to output.
-	ReadXML(output interface{}) error
+	ReadXML(ctx context.Context, output interface{}) error
 
 	// GobEncode reads and gob encodes the file name and content,
 	// implementing encoding/gob.GobEncoder.

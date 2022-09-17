@@ -641,35 +641,6 @@ func (file File) MakeAllDirs(perm ...Permissions) error {
 	return file.MakeDir(perm...)
 }
 
-// ReadAll reads and returns all bytes of the file
-func (file File) ReadAll() (data []byte, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ReadAll(path)
-}
-
-// ReadAllContentHash reads and returns all bytes of the file
-// together with a Dropbox compatible content hash.
-// See https://www.dropbox.com/developers/reference/content-hash
-func (file File) ReadAllContentHash() (data []byte, hash string, err error) {
-	data, err = file.ReadAll()
-	if err != nil {
-		return nil, "", err
-	}
-	return data, fsimpl.ContentHashBytes(data), nil
-}
-
-// ReadAllString reads the complete file and returns the content as string.
-func (file File) ReadAllString() (string, error) {
-	data, err := file.ReadAll()
-	if data == nil || err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
 // WriteTo implements the io.WriterTo interface
 func (file File) WriteTo(writer io.Writer) (n int64, err error) {
 	reader, err := file.OpenReader()
@@ -699,33 +670,6 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	}
 	defer writer.Close()
 	return io.Copy(writer, reader)
-}
-
-func (file File) WriteAll(data []byte, perm ...Permissions) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.WriteAll(path, data, perm)
-}
-
-func (file File) WriteAllString(str string, perm ...Permissions) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	return file.WriteAll([]byte(str), perm...)
-}
-
-func (file File) Append(data []byte, perm ...Permissions) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Append(path, data, perm)
-}
-
-func (file File) AppendString(str string, perm ...Permissions) error {
-	return file.Append([]byte(str), perm...)
 }
 
 // OpenReader opens the file and returns a os/fs.File that has be closed after reading
@@ -783,6 +727,62 @@ func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error
 	}
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.OpenReadWriter(path, perm)
+}
+
+// ReadAll reads and returns all bytes of the file
+func (file File) ReadAll(ctx context.Context) (data []byte, err error) {
+	if file == "" {
+		return nil, ErrEmptyPath
+	}
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.ReadAll(ctx, path)
+}
+
+// ReadAllContentHash reads and returns all bytes of the file
+// together with a Dropbox compatible content hash.
+// See https://www.dropbox.com/developers/reference/content-hash
+func (file File) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
+	data, err = file.ReadAll(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, fsimpl.ContentHashBytes(data), nil
+}
+
+// ReadAllString reads the complete file and returns the content as string.
+func (file File) ReadAllString(ctx context.Context) (string, error) {
+	data, err := file.ReadAll(ctx)
+	if data == nil || err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (file File) WriteAll(ctx context.Context, data []byte, perm ...Permissions) error {
+	if file == "" {
+		return ErrEmptyPath
+	}
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.WriteAll(ctx, path, data, perm)
+}
+
+func (file File) WriteAllString(ctx context.Context, str string, perm ...Permissions) error {
+	if file == "" {
+		return ErrEmptyPath
+	}
+	return file.WriteAll(ctx, []byte(str), perm...)
+}
+
+func (file File) Append(ctx context.Context, data []byte, perm ...Permissions) error {
+	if file == "" {
+		return ErrEmptyPath
+	}
+	fileSystem, path := file.ParseRawURI()
+	return fileSystem.Append(ctx, path, data, perm)
+}
+
+func (file File) AppendString(ctx context.Context, str string, perm ...Permissions) error {
+	return file.Append(ctx, []byte(str), perm...)
 }
 
 // Watch a file or directory for changes.
@@ -923,19 +923,17 @@ func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...strin
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
-func (file File) ReadJSON(output interface{}) error {
-	reader, err := file.OpenReader()
+func (file File) ReadJSON(ctx context.Context, output interface{}) error {
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
-
-	return json.NewDecoder(reader).Decode(output)
+	return json.Unmarshal(data, output)
 }
 
 // WriteJSON mashalles input to JSON and writes it as the file.
 // Any indent arguments will be concanated and used as JSON line indentation.
-func (file File) WriteJSON(input interface{}, indent ...string) (err error) {
+func (file File) WriteJSON(ctx context.Context, input interface{}, indent ...string) (err error) {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -948,23 +946,21 @@ func (file File) WriteJSON(input interface{}, indent ...string) (err error) {
 	if err != nil {
 		return err
 	}
-	return file.WriteAll(data)
+	return file.WriteAll(ctx, data)
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
-func (file File) ReadXML(output interface{}) error {
-	reader, err := file.OpenReader()
+func (file File) ReadXML(ctx context.Context, output interface{}) error {
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
-
-	return xml.NewDecoder(reader).Decode(output)
+	return xml.Unmarshal(data, output)
 }
 
 // WriteXML mashalles input to XML and writes it as the file.
 // Any indent arguments will be concanated and used as XML line indentation.
-func (file File) WriteXML(input interface{}, indent ...string) (err error) {
+func (file File) WriteXML(ctx context.Context, input interface{}, indent ...string) (err error) {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -978,7 +974,7 @@ func (file File) WriteXML(input interface{}, indent ...string) (err error) {
 		return err
 	}
 	data = append([]byte(xml.Header), data...)
-	return file.WriteAll(data)
+	return file.WriteAll(ctx, data)
 }
 
 // GobEncode reads and gob encodes the file name and content,
@@ -988,7 +984,7 @@ func (file File) GobEncode() ([]byte, error) {
 		return nil, ErrEmptyPath
 	}
 	fileName := file.Name()
-	fileData, err := file.ReadAll()
+	fileData, err := file.ReadAll(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("File.GobEncode: error reading file data: %w", err)
 	}
@@ -1026,7 +1022,7 @@ func (file File) GobDecode(gobBytes []byte) error {
 	if err != nil {
 		return fmt.Errorf("File.GobDecode: error decoding file data: %w", err)
 	}
-	err = file.WriteAll(fileData)
+	err = file.WriteAll(context.Background(), fileData)
 	if err != nil {
 		return fmt.Errorf("File.GobDecode: error writing file data: %w", err)
 	}

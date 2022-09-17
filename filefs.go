@@ -1,6 +1,9 @@
 package fs
 
-import "io/fs"
+import (
+	"context"
+	"io/fs"
+)
 
 var (
 	_ fs.FS         = FileFS{File("")}
@@ -14,12 +17,13 @@ var (
 // FileFS implements the FS interfaces of the os/fs package for a File.
 //
 // FileFS implements the following interfaces:
-//   os/fs.FS
-//   os/fs.SubFS
-//   os/fs.StatFS
-//   os/fs.GlobFS
-//   os/fs.ReadDirFS
-//   os/fs.ReadFileFS
+//
+//	os/fs.FS
+//	os/fs.SubFS
+//	os/fs.StatFS
+//	os/fs.GlobFS
+//	os/fs.ReadDirFS
+//	os/fs.ReadFileFS
 type FileFS struct {
 	File File
 }
@@ -45,7 +49,7 @@ func (f FileFS) Open(name string) (fs.File, error) {
 // ReadFile reads the named file and returns its contents.
 // This method implements the io/fs.ReadFileFS interface.
 func (f FileFS) ReadFile(name string) ([]byte, error) {
-	return f.File.Join(name).ReadAll()
+	return f.File.Join(name).ReadAll(context.Background())
 }
 
 // ReadDir reads the named directory

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
@@ -57,8 +58,8 @@ func NewMemFile(name string, data []byte) *MemFile {
 // ReadMemFile returns a new MemFile with name and data from fileReader.
 // If the passed fileReader is a *MemFile then
 // its FileData is used directly without copying it.
-func ReadMemFile(fileReader FileReader) (*MemFile, error) {
-	data, err := fileReader.ReadAll() // Does not copy in case of fileReader.(*MemFile)
+func ReadMemFile(ctx context.Context, fileReader FileReader) (*MemFile, error) {
+	data, err := fileReader.ReadAll(ctx) // Does not copy in case of fileReader.(*MemFile)
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFile: error reading from FileReader: %w", err)
 	}
@@ -68,8 +69,8 @@ func ReadMemFile(fileReader FileReader) (*MemFile, error) {
 // ReadMemFileRename returns a new MemFile with the data from fileReader and the passed name.
 // If the passed fileReader is a *MemFile then
 // its FileData is used directly without copying it.
-func ReadMemFileRename(fileReader FileReader, name string) (*MemFile, error) {
-	data, err := fileReader.ReadAll() // Does not copy in case of fileReader.(*MemFile)
+func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) (*MemFile, error) {
+	data, err := fileReader.ReadAll(ctx) // Does not copy in case of fileReader.(*MemFile)
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
 	}
@@ -78,8 +79,8 @@ func ReadMemFileRename(fileReader FileReader, name string) (*MemFile, error) {
 
 // ReadAllMemFile returns a new MemFile with the data
 // from io.ReadAll(r) and the passed name.
-func ReadAllMemFile(r io.Reader, name string) (*MemFile, error) {
-	data, err := io.ReadAll(r)
+func ReadAllMemFile(ctx context.Context, r io.Reader, name string) (*MemFile, error) {
+	data, err := ReadAllContext(ctx, r)
 	if err != nil {
 		return nil, fmt.Errorf("ReadAllMemFile: error reading from io.Reader: %w", err)
 	}
@@ -154,19 +155,25 @@ func (f *MemFile) Write(b []byte) (int, error) {
 }
 
 // ReadAll returns the FileData without copying it.
-func (f *MemFile) ReadAll() (data []byte, err error) {
+func (f *MemFile) ReadAll(ctx context.Context) (data []byte, err error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	return f.FileData, nil
 }
 
 // ReadAllContentHash returns the FileData without copying it
 // together with a Dropbox compatible content hash.
 // See https://www.dropbox.com/developers/reference/content-hash
-func (f *MemFile) ReadAllContentHash() (data []byte, hash string, err error) {
+func (f *MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
 	return f.FileData, fsimpl.ContentHashBytes(f.FileData), nil
 }
 
 // ReadAllString returns the FileData as string.
-func (f *MemFile) ReadAllString() (string, error) {
+func (f *MemFile) ReadAllString(ctx context.Context) (string, error) {
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	return string(f.FileData), nil
 }
 
@@ -215,12 +222,18 @@ func (f *MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
-func (f *MemFile) ReadJSON(output interface{}) error {
+func (f *MemFile) ReadJSON(ctx context.Context, output interface{}) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return json.Unmarshal(f.FileData, output)
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
-func (f *MemFile) ReadXML(output interface{}) error {
+func (f *MemFile) ReadXML(ctx context.Context, output interface{}) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return xml.Unmarshal(f.FileData, output)
 }
 

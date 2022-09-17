@@ -20,7 +20,7 @@ func ServeFileHTTPHandler(file FileReader, contentType ...string) http.Handler {
 // status code 404 error is returned if the file does not exist
 // and a status code 500 error if there was any other error while reading it.
 func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file FileReader, contentType ...string) {
-	data, err := file.ReadAll()
+	data, err := file.ReadAll(request.Context())
 	if err != nil {
 		// ErrDoesNotExist implements http.Handler with a 404 response
 		var handler http.Handler

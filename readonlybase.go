@@ -53,11 +53,11 @@ func (*ReadOnlyBase) MakeDir(dirPath string, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) WriteAll(filePath string, data []byte, perm []Permissions) error {
+func (*ReadOnlyBase) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) Append(filePath string, data []byte, perm []Permissions) error {
+func (*ReadOnlyBase) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 

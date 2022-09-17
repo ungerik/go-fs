@@ -68,7 +68,7 @@ func CopyFileBufContext(ctx context.Context, src FileReader, dest File, buf *[]b
 		}
 	} else if srcMemFile, ok := src.(*MemFile); ok {
 		// Don't use io.CopyBuffer in case of MemFile
-		return dest.WriteAll(srcMemFile.FileData, perm...)
+		return dest.WriteAll(ctx, srcMemFile.FileData, perm...)
 	}
 
 	r, err := src.OpenReader()
@@ -89,6 +89,7 @@ func CopyFileBufContext(ctx context.Context, src FileReader, dest File, buf *[]b
 	if len(*buf) == 0 {
 		*buf = make([]byte, copyBufferSize)
 	}
+	// TODO use a CopyBuffer impll with context
 	_, err = io.CopyBuffer(w, r, *buf)
 	if err != nil {
 		return fmt.Errorf("CopyFileBuf: error from io.CopyBuffer: %w", err)

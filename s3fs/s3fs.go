@@ -20,13 +20,13 @@ package s3fs
 // 	"github.com/ungerik/go-fs/fsimpl"
 // )
 
-// const (
-// 	// Prefix os S3FileSystem URLs
-// 	Prefix = "s3://"
+const (
+	// Prefix os S3FileSystem URLs
+	Prefix = "s3://"
 
-// 	// Separator used in S3FileSystem paths
-// 	Separator = "/"
-// )
+	// Separator used in S3FileSystem paths
+	Separator = "/"
+)
 
 // var (
 // 	// DefaultPermissions used for S3 bucket files

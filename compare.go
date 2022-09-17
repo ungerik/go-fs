@@ -43,15 +43,12 @@ func IdenticalFileContents(ctx context.Context, files ...FileReader) (identical 
 	// Compare bytes directly in memory up to compareContentHashSizeThreshold
 	// use content hash for larger files to not take up too much RAM
 	if size <= compareContentHashSizeThreshold {
-		ref, err := files[0].ReadAll()
+		ref, err := files[0].ReadAll(ctx)
 		if err != nil {
 			return false, err
 		}
 		for _, file := range files[1:] {
-			if ctx.Err() != nil {
-				return false, ctx.Err()
-			}
-			comp, err := file.ReadAll()
+			comp, err := file.ReadAll(ctx)
 			if err != nil {
 				return false, err
 			}

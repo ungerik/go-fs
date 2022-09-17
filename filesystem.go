@@ -115,9 +115,9 @@ type FileSystem interface {
 	Touch(filePath string, perm []Permissions) error
 	MakeDir(dirPath string, perm []Permissions) error
 
-	ReadAll(filePath string) ([]byte, error)
-	WriteAll(filePath string, data []byte, perm []Permissions) error
-	Append(filePath string, data []byte, perm []Permissions) error
+	ReadAll(ctx context.Context, filePath string) ([]byte, error)
+	WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error
+	Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error
 
 	OpenReader(filePath string) (fs.File, error)
 	OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error)

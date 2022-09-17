@@ -1,5 +1,10 @@
 package fs
 
+import (
+	"context"
+	"io"
+)
+
 // FilesToURLs returns the URLs of a slice of Files.
 func FilesToURLs(files []File) []string {
 	fileURLs := make([]string, len(files))
@@ -58,4 +63,26 @@ type FileCallback func(File) error
 
 func (f FileCallback) FileInfoCallback(file File, info FileInfo) error {
 	return f(file)
+}
+
+// ReadAllContext is identical to io.ReadAll
+// except that it can be canceled via context.
+func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
+	// Implementation
+	b := make([]byte, 0, 512)
+	for ctx.Err() == nil {
+		if len(b) == cap(b) {
+			// Add more capacity (let append pick how much).
+			b = append(b, 0)[:len(b)]
+		}
+		n, err := r.Read(b[len(b):cap(b)])
+		b = b[:len(b)+n]
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
+			return b, err
+		}
+	}
+	return nil, ctx.Err()
 }

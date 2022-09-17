@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"os/user"
@@ -434,7 +433,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 		now := time.Now()
 		return os.Chtimes(filePath, now, now)
 	}
-	return local.WriteAll(filePath, nil, perm)
+	return local.WriteAll(context.Background(), filePath, nil, perm)
 }
 
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
@@ -459,25 +458,37 @@ func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error 
 	return nil
 }
 
-func (local *LocalFileSystem) ReadAll(filePath string) ([]byte, error) {
+func (local *LocalFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+	// TODO make really large file op cancelable
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	data, err := ioutil.ReadFile(filePath) //#nosec G304
+	data, err := os.ReadFile(filePath) //#nosec G304
 	return data, wrapOSErr(filePath, err)
 }
 
-func (local *LocalFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
+func (local *LocalFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
+	// TODO make really large file op cancelable
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
 	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
-	return wrapOSErr(filePath, ioutil.WriteFile(filePath, data, p.FileMode(false)))
+	return wrapOSErr(filePath, os.WriteFile(filePath, data, p.FileMode(false)))
 }
 
-func (local *LocalFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
+func (local *LocalFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
+	// TODO make really large file op cancelable
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	writer, err := local.OpenAppendWriter(filePath, perm)
 	if err != nil {
 		return err

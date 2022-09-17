@@ -327,7 +327,7 @@ func (dbfs *DropboxFileSystem) Touch(filePath string, perm []fs.Permissions) err
 	if dbfs.info(filePath).Exists {
 		return errors.New("Touch can't change time on Dropbox")
 	}
-	return dbfs.WriteAll(filePath, nil, perm)
+	return dbfs.WriteAll(context.Background(), filePath, nil, perm)
 }
 
 func (dbfs *DropboxFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
@@ -335,17 +335,23 @@ func (dbfs *DropboxFileSystem) MakeDir(dirPath string, perm []fs.Permissions) er
 	return dbfs.wrapErrNotExist(dirPath, err)
 }
 
-func (dbfs *DropboxFileSystem) ReadAll(filePath string) ([]byte, error) {
+func (dbfs *DropboxFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	out, err := dbfs.client.Files.Download(&dropbox.DownloadInput{Path: filePath})
 	if err != nil {
 		return nil, dbfs.wrapErrNotExist(filePath, err)
 	}
 	defer out.Body.Close()
 
-	return io.ReadAll(out.Body)
+	return fs.ReadAllContext(ctx, out.Body)
 }
 
-func (dbfs *DropboxFileSystem) WriteAll(filePath string, data []byte, perm []fs.Permissions) error {
+func (dbfs *DropboxFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	_, err := dbfs.client.Files.Upload(
 		&dropbox.UploadInput{
 			Path:   filePath,
@@ -357,7 +363,10 @@ func (dbfs *DropboxFileSystem) WriteAll(filePath string, data []byte, perm []fs.
 	return dbfs.wrapErrNotExist(filePath, err)
 }
 
-func (dbfs *DropboxFileSystem) Append(filePath string, data []byte, perm []fs.Permissions) error {
+func (dbfs *DropboxFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	writer, err := dbfs.OpenAppendWriter(filePath, perm)
 	if err != nil {
 		return err
@@ -375,7 +384,7 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := dbfs.ReadAll(filePath)
+	data, err := dbfs.ReadAll(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -388,7 +397,7 @@ func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions
 	}
 	var fileBuffer *fsimpl.FileBuffer
 	fileBuffer = fsimpl.NewFileBufferWithClose(nil, func() error {
-		return dbfs.WriteAll(filePath, fileBuffer.Bytes(), nil)
+		return dbfs.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), nil)
 	})
 	return fileBuffer, nil
 }
@@ -403,13 +412,13 @@ func (dbfs *DropboxFileSystem) OpenAppendWriter(filePath string, perm []fs.Permi
 }
 
 func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	data, err := dbfs.ReadAll(filePath)
+	data, err := dbfs.ReadAll(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
 	var fileBuffer *fsimpl.FileBuffer
 	fileBuffer = fsimpl.NewFileBufferWithClose(data, func() error {
-		return dbfs.WriteAll(filePath, fileBuffer.Bytes(), nil)
+		return dbfs.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), nil)
 	})
 	return fileBuffer, nil
 }
@@ -429,7 +438,7 @@ func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
 	if info.Size <= size {
 		return nil
 	}
-	data, err := dbfs.ReadAll(filePath)
+	data, err := dbfs.ReadAll(context.Background(), filePath)
 	// File size or existence could have changed in the meantime
 	// because this is a slow network FS, the
 	if err != nil {
@@ -438,7 +447,7 @@ func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
 	if int64(len(data)) <= size {
 		return nil
 	}
-	return dbfs.WriteAll(filePath, data[:size], []fs.Permissions{info.Permissions})
+	return dbfs.WriteAll(context.Background(), filePath, data[:size], []fs.Permissions{info.Permissions})
 }
 
 func (dbfs *DropboxFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {

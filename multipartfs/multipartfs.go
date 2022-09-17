@@ -2,7 +2,6 @@ package multipartfs
 
 import (
 	"context"
-	"io"
 	iofs "io/fs"
 	"mime/multipart"
 	"net/http"
@@ -254,14 +253,17 @@ func (mpfs *MultipartFileSystem) ListDirMax(ctx context.Context, dirPath string,
 	})
 }
 
-func (mpfs *MultipartFileSystem) ReadAll(filePath string) ([]byte, error) {
+func (mpfs *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	file, err := mpfs.OpenReader(filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	return io.ReadAll(file)
+	return fs.ReadAllContext(ctx, file)
 }
 
 func (mpfs *MultipartFileSystem) OpenReader(filePath string) (iofs.File, error) {

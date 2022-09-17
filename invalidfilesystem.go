@@ -151,15 +151,15 @@ func (invalid InvalidFileSystem) MakeDir(dirPath string, perm []Permissions) err
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) ReadAll(filePath string) ([]byte, error) {
+func (invalid InvalidFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) WriteAll(filePath string, data []byte, perm []Permissions) error {
+func (invalid InvalidFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Append(filePath string, data []byte, perm []Permissions) error {
+func (invalid InvalidFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
 

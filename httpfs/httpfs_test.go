@@ -1,6 +1,7 @@
 package httpfs
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,11 +21,11 @@ func TestStat(t *testing.T) {
 }
 
 func TestReadAll(t *testing.T) {
-	data, err := FileSystemTLS.ReadAll("domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png")
+	data, err := FileSystemTLS.ReadAll(context.Background(), "domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png")
 	assert.NoError(t, err)
 	assert.Greater(t, len(data), 0, "file size greater zero")
 
-	data2, err := fs.File("https://domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png").ReadAll()
+	data2, err := fs.File("https://domonda.com/wp-content/uploads/2019/10/domonda-red@2x.png").ReadAll(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, data, data2)
 }

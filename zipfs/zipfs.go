@@ -330,14 +330,14 @@ func (*ZipFileSystem) Group(filePath string) string {
 	return ""
 }
 
-func (zipfs *ZipFileSystem) ReadAll(filePath string) ([]byte, error) {
+func (zipfs *ZipFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	file, err := zipfs.OpenReader(filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	return io.ReadAll(file)
+	return fs.ReadAllContext(ctx, file)
 }
 
 func (zipfs *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
@@ -384,7 +384,10 @@ func (zipfs *ZipFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error
 	return nil
 }
 
-func (zipfs *ZipFileSystem) WriteAll(filePath string, data []byte, perm []fs.Permissions) error {
+func (zipfs *ZipFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	writer, err := zipfs.OpenWriter(filePath, perm)
 	if err != nil {
 		return err
@@ -395,7 +398,10 @@ func (zipfs *ZipFileSystem) WriteAll(filePath string, data []byte, perm []fs.Per
 	return err
 }
 
-func (zipfs *ZipFileSystem) Append(filePath string, data []byte, perm []fs.Permissions) error {
+func (zipfs *ZipFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	writer, err := zipfs.OpenAppendWriter(filePath, perm)
 	if err != nil {
 		return err
