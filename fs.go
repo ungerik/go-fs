@@ -1,6 +1,9 @@
 package fs
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // Filef is a shortcut for File(fmt.Sprintf(format, args...))
 func Filef(format string, args ...interface{}) File {
@@ -23,7 +26,7 @@ func JoinCleanFilePath(uriParts ...string) File {
 // If source and destination are using the same FileSystem,
 // then FileSystem.Move will be used, else source will be
 // copied recursively first to destination and then deleted.
-func Move(source, destination File) error {
+func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath
 	}
@@ -34,7 +37,7 @@ func Move(source, destination File) error {
 		return srcFS.Move(srcPath, destPath)
 	}
 
-	err := CopyRecursive(source, destination)
+	err := CopyRecursive(ctx, source, destination)
 	if err != nil {
 		return err
 	}
@@ -58,7 +61,8 @@ func Remove(fileURIs ...string) error {
 // useful mostly as callback for methods that list files
 // to delete all files of a certain pattern.
 // Or as a more elegant way to remove a file passed as string literal path:
-//   fs.RemoveFile("/my/hardcoded.path")
+//
+//	fs.RemoveFile("/my/hardcoded.path")
 func RemoveFile(file File) error {
 	return file.Remove()
 }

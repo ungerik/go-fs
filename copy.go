@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -13,9 +14,9 @@ const copyBufferSize = 1024 * 1024 * 4
 // up to that path will be created.
 // If dest is an existing directory, then a file with the base name
 // of src will be created there.
-func CopyFile(src FileReader, dest File, perm ...Permissions) error {
+func CopyFile(ctx context.Context, src FileReader, dest File, perm ...Permissions) error {
 	var buf []byte
-	return CopyFileBuf(src, dest, &buf, perm...)
+	return CopyFileBuf(ctx, src, dest, &buf, perm...)
 }
 
 // CopyFileBuf copies a single file between different file systems.
@@ -27,20 +28,7 @@ func CopyFile(src FileReader, dest File, perm ...Permissions) error {
 // If that variable holds a non zero length byte slice, then this slice will be used as buffer,
 // else a byte slice will be allocated and assigned to the variable.
 // Use this function to re-use buffers between CopyFileBuf calls.
-func CopyFileBuf(src FileReader, dest File, buf *[]byte, perm ...Permissions) error {
-	return CopyFileBufContext(context.Background(), src, dest, buf, perm...)
-}
-
-// CopyFileBufContext copies a single file between different file systems.
-// If dest has a path that does not exist, then the directories
-// up to that path will be created.
-// If dest is an existing directory, then a file with the base name
-// of src will be created there.
-// An non nil pointer to a []byte variable must be passed for buf.
-// If that variable holds a non zero length byte slice, then this slice will be used as buffer,
-// else a byte slice will be allocated and assigned to the variable.
-// Use this function to re-use buffers between CopyFileBufContext calls.
-func CopyFileBufContext(ctx context.Context, src FileReader, dest File, buf *[]byte, perm ...Permissions) error {
+func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, perm ...Permissions) error {
 	if buf == nil {
 		panic("CopyFileBuf: buf is nil") // not a file system error
 	}
@@ -89,24 +77,44 @@ func CopyFileBufContext(ctx context.Context, src FileReader, dest File, buf *[]b
 	if len(*buf) == 0 {
 		*buf = make([]byte, copyBufferSize)
 	}
-	// TODO use a CopyBuffer impll with context
-	_, err = io.CopyBuffer(w, r, *buf)
+	err = copyBuffer(ctx, w, r, *buf)
 	if err != nil {
 		return fmt.Errorf("CopyFileBuf: error from io.CopyBuffer: %w", err)
 	}
 	return nil
 }
 
-// CopyRecursive can copy between files of different file systems.
-// The filter patterns are applied on filename level, not the whole path.
-func CopyRecursive(src, dest File, patterns ...string) error {
-	var buf []byte
-	return copyRecursive(context.Background(), src, dest, patterns, &buf)
+func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (err error) {
+	for err = ctx.Err(); err == nil; {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[0:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = errors.New("invalid write result")
+				}
+			}
+			if ew != nil {
+				return ew
+			}
+			if nr != nw {
+				return io.ErrShortWrite
+			}
+		}
+		if er != nil {
+			if er == io.EOF {
+				return nil
+			}
+			return er
+		}
+	}
+	return err
 }
 
-// CopyRecursiveContext can copy between files of different file systems.
+// CopyRecursive can copy between files of different file systems.
 // The filter patterns are applied on filename level, not the whole path.
-func CopyRecursiveContext(ctx context.Context, src, dest File, patterns ...string) error {
+func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) error {
 	var buf []byte
 	return copyRecursive(ctx, src, dest, patterns, &buf)
 }
@@ -118,7 +126,7 @@ func copyRecursive(ctx context.Context, src, dest File, patterns []string, buf *
 
 	if !src.IsDir() {
 		// Just copy one file
-		return CopyFileBufContext(ctx, src, dest, buf)
+		return CopyFileBuf(ctx, src, dest, buf)
 	}
 
 	if dest.Exists() && !dest.IsDir() {

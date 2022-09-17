@@ -840,7 +840,7 @@ func (file File) Renamef(newNameFormat string, args ...interface{}) (renamedFile
 // destination can be a directory or file-path and
 // can be on another FileSystem.
 func (file File) MoveTo(destination File) error {
-	return Move(file, destination)
+	return Move(context.Background(), file, destination)
 }
 
 // Remove deletes the file.

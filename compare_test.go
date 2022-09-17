@@ -118,7 +118,7 @@ func Test_IdenticalDirContents(t *testing.T) {
 			return err
 		}
 		b.MakeDir()
-		return CopyRecursive(a, b)
+		return CopyRecursive(context.Background(), a, b)
 	}
 
 	// Empty directories should be identical:
