@@ -41,9 +41,13 @@ type FileSystem interface {
 	// without the file system prefix.
 	SplitPath(filePath string) []string
 
+	// Separator for paths of the file system
 	Separator() string
 
+	// IsAbsPath indicates if the passed filePath is absolute
 	IsAbsPath(filePath string) bool
+
+	// AbsPath returns the passe filePath in absolute form
 	AbsPath(filePath string) string
 
 	// MatchAnyPattern returns true if name matches any of patterns,
@@ -75,17 +79,6 @@ type FileSystem interface {
 
 	// IsSymbolicLink returns if a file is a symbolic link
 	IsSymbolicLink(filePath string) bool
-
-	// Watch a file or directory for changes.
-	// If filePath describes a directory then
-	// changes directly within it will be reported.
-	// This does not apply changes in deeper
-	// recursive sub-directories.
-	//
-	// It is valid to watch a file with multiple
-	// callbacks, calling the returned cancel function
-	// will cancel a particular watch.
-	Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error)
 
 	// ListDirInfo calls the passed callback function for every file and directory in dirPath.
 	// If any patterns are passed, then only files or directores with a name that matches
@@ -144,13 +137,15 @@ type FileSystem interface {
 
 	// Remove deletes the file.
 	Remove(filePath string) error
-}
 
-// TransientFileSystem is a file system that is created
-// to wrap a transient data source.
-// Calling its Close method will remove it from the Registry
-// and undo other initializations.
-type TransientFileSystem interface {
-	FileSystem
-	Close() error
+	// Watch a file or directory for changes.
+	// If filePath describes a directory then
+	// changes directly within it will be reported.
+	// This does not apply changes in deeper
+	// recursive sub-directories.
+	//
+	// It is valid to watch a file with multiple
+	// callbacks, calling the returned cancel function
+	// will cancel a particular watch.
+	Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error)
 }

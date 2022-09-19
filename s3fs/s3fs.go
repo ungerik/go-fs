@@ -1,13 +1,24 @@
 package s3fs
 
 import (
+	"bytes"
 	"context"
-	"time"
+	"errors"
+	"fmt"
+	"io"
+	iofs "io/fs"
+	"os"
+	"path"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/ungerik/go-fs"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 )
+
+// TODO use multipart download/upload https://aws.github.io/aws-sdk-go-v2/docs/sdk-utilities/s3/
 
 const (
 	// Prefix os S3FileSystem URLs
@@ -24,542 +35,526 @@ var (
 	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllReadWrite
 
 	// Make sure S3FileSystem implements fs.FileSystem
-	// _ fs.FileSystem = new(S3FileSystem)
+	_ fs.FileSystem = new(S3FileSystem)
 )
 
 // // S3FileSystem implements fs.FileSystem for an S3 bucket.
 type S3FileSystem struct {
-	client        *s3.Client
-	bucketName    string
-	prefix        string
-	readOnly      bool
-	fileInfoCache *fs.FileInfoCache
+	client     *s3.Client
+	bucketName string
+	prefix     string
+	readOnly   bool
 }
 
 // New initializes a new S3 instance + session and returns an S3FileSystem
 // instance that contains the required settings to work with an S3 bucket.
-func New(client *s3.Client, bucketName string, readOnly bool, cacheTimeout time.Duration) *S3FileSystem {
+func New(client *s3.Client, bucketName string, readOnly bool) *S3FileSystem {
 	s3fs := &S3FileSystem{
-		client:        client,
-		bucketName:    bucketName,
-		prefix:        Prefix + bucketName,
-		readOnly:      readOnly,
-		fileInfoCache: fs.NewFileInfoCache(cacheTimeout),
+		client:     client,
+		bucketName: bucketName,
+		prefix:     Prefix + bucketName,
+		readOnly:   readOnly,
 	}
-	// fs.Register(s3fs)
+	fs.Register(s3fs)
 	return s3fs
 }
 
-func NewLoadDefaultConfig(ctx context.Context, bucketName string, readOnly bool, cacheTimeout time.Duration) (*S3FileSystem, error) {
+func NewLoadDefaultConfig(ctx context.Context, bucketName string, readOnly bool) (*S3FileSystem, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 	client := s3.NewFromConfig(cfg)
-	return New(client, bucketName, readOnly, cacheTimeout), nil
+	return New(client, bucketName, readOnly), nil
 }
 
-// func (s3fs *S3FileSystem) wrapErrNotExist(filePath string, err error) error {
-// 	if err != nil && strings.HasPrefix(err.Error(), "path/not_found/") {
-// 		return fs.NewErrDoesNotExist(s3fs.File(filePath))
-// 	}
-// 	return err
-// }
-
-// // Close removes the file system from the registry.
-// func (s3fs *S3FileSystem) Close() error {
-// 	fs.Unregister(s3fs)
-// 	return nil
-// }
-
-func (s3fs *S3FileSystem) IsReadOnly() bool {
-	return s3fs.readOnly
+func (s *S3FileSystem) IsReadOnly() bool {
+	return s.readOnly
 }
 
-func (s3fs *S3FileSystem) IsWriteOnly() bool {
+func (s *S3FileSystem) IsWriteOnly() bool {
 	return false
 }
 
-// // Root returns the root path of the file system (which includes the file
-// // system's prefix).
-// // e.g.: s3://<bucket name>/
-// func (s3fs *S3FileSystem) Root() fs.File {
-// 	return fs.File(s3fs.prefix + Separator)
-// }
+func (s *S3FileSystem) Root() fs.File {
+	return fs.File(s.prefix + Separator)
+}
 
-// // ID returns the file system's unique bucket name.
-// func (s3fs *S3FileSystem) ID() (string, error) {
-// 	return s3fs.bucketName, nil
-// }
+func (s *S3FileSystem) ID() (string, error) {
+	return s.bucketName, nil
+}
 
-// // Prefix returns the "s3://" prefix + the name of the bucket that's
-// // been configured for this file system.
-// func (s3fs *S3FileSystem) Prefix() string {
-// 	return s3fs.prefix
-// }
+func (s *S3FileSystem) Prefix() string {
+	return s.prefix
+}
 
-// // Name returns the file system's name.
-// func (s3fs *S3FileSystem) Name() string {
-// 	return s3fs.bucketName + " S3 bucket file system"
-// }
+func (s *S3FileSystem) Name() string {
+	return "S3 file system for bucket: s.bucketName"
+}
 
-// // String returns a string that described the file system.
-// // String implements the fmt.Stringer interface.
-// func (s3fs *S3FileSystem) String() string {
-// 	return s3fs.Name() + " with prefix " + s3fs.Prefix()
-// }
+func (s *S3FileSystem) String() string {
+	return s.Name() + " with prefix " + s.prefix
+}
 
-// // File creates and returns a file for the S3 file system.
-// func (s3fs *S3FileSystem) File(filePath string) fs.File {
-// 	return s3fs.JoinCleanFile(filePath)
-// }
+func (s *S3FileSystem) URL(cleanPath string) string {
+	return s.prefix + cleanPath
+}
 
-// // JoinCleanFile creates and returns a file for this file system with the
-// // prefix + a clean joined path.
-// func (s3fs *S3FileSystem) JoinCleanFile(uriParts ...string) fs.File {
-// 	return fs.File(s3fs.Prefix() + s3fs.JoinCleanPath(uriParts...))
-// }
+func (s *S3FileSystem) JoinCleanFile(uriParts ...string) fs.File {
+	return fs.File(s.prefix + s.JoinCleanPath(uriParts...))
+}
 
-// // URL returns the URL for the given file.
-// func (s3fs *S3FileSystem) URL(cleanPath string) string {
-// 	return s3fs.Prefix() + cleanPath
-// }
+func (s *S3FileSystem) JoinCleanPath(uriParts ...string) string {
+	return fsimpl.JoinCleanPath(uriParts, s.prefix, Separator)
+}
 
-// // JoinCleanPath returns joined path without the file system's prefix.
-// // Also, if the path does not start with a forward slash, the function
-// // will attach one to the start.
-// func (s3fs *S3FileSystem) JoinCleanPath(uriParts ...string) string {
-// 	return fsimpl.JoinCleanPath(uriParts, s3fs.Prefix(), Separator)
-// }
+func (s *S3FileSystem) SplitPath(filePath string) []string {
+	return fsimpl.SplitPath(filePath, s.prefix, Separator)
+}
 
-// // SplitPath returns a string array containing the parts of the filePath
-// // argument. The file system's prefix and leading and trailing separators are
-// // removed.
-// func (s3fs *S3FileSystem) SplitPath(filePath string) []string {
-// 	return fsimpl.SplitPath(filePath, s3fs.prefix, Separator)
-// }
+func (s *S3FileSystem) Separator() string {
+	return Separator
+}
 
-// // Separator returns the file system's separator (/).
-// func (s3fs *S3FileSystem) Separator() string {
-// 	return Separator
-// }
+func (s *S3FileSystem) IsAbsPath(filePath string) bool {
+	return path.IsAbs(filePath)
+}
 
-// // MatchAnyPattern returns whether the given name mathces any of the patterns.
-// func (s3fs *S3FileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-// 	return fsimpl.MatchAnyPattern(name, patterns)
-// }
+func (s *S3FileSystem) AbsPath(filePath string) string {
+	if path.IsAbs(filePath) {
+		return filePath
+	}
+	return Separator + filePath
+}
 
-// // DirAndName returns the directory and name portions of the given file path.
-// func (s3fs *S3FileSystem) DirAndName(filePath string) (dir, name string) {
-// 	return fsimpl.DirAndName(filePath, 0, Separator)
-// }
+func (s *S3FileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	return fsimpl.MatchAnyPattern(name, patterns)
+}
 
-// // VolumeName returns nothing for the S3 file system since there are no volume
-// // names in S3 buckets.
-// func (s3fs *S3FileSystem) VolumeName(filePath string) string {
-// 	return ""
-// }
+func (s *S3FileSystem) DirAndName(filePath string) (dir, name string) {
+	return fsimpl.DirAndName(filePath, 0, Separator)
+}
 
-// // IsAbsPath checks if a file path is an absolute path
-// func (s3fs *S3FileSystem) IsAbsPath(filePath string) bool {
-// 	return path.IsAbs(filePath)
-// }
+func (s *S3FileSystem) VolumeName(filePath string) string {
+	return s.bucketName
+}
 
-// // AbsPath returns the absolute version of a file path
-// func (s3fs *S3FileSystem) AbsPath(filePath string) string {
-// 	// If the path already is an absolute path or even starts with the
-// 	// entire prefix, we can just return what we got.
-// 	isAbs := s3fs.IsAbsPath(filePath)
-// 	isAbsWithPrefix := (len(filePath) >= len(s3fs.Prefix()) && filePath[0:len(s3fs.Prefix())] == s3fs.Prefix())
-// 	if isAbs || isAbsWithPrefix {
-// 		return filePath
-// 	}
-// 	return Separator + filePath
-// }
+func (s *S3FileSystem) Stat(filePath string) (os.FileInfo, error) {
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
+	}
+	out, err := s.client.HeadObject(
+		context.Background(),
+		&s3.HeadObjectInput{
+			Bucket: &s.bucketName,
+			Key:    &filePath,
+		},
+	)
+	if err != nil {
+		var notFound types.NotFound
+		if errors.Is(err, &notFound) {
+			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
+		}
+		return nil, err
+	}
+	return &fileInfo{
+		name: path.Base(filePath),
+		size: out.ContentLength,
+		time: *out.LastModified,
+	}, nil
+}
 
-// // Info returns a FileInfo instance for the file under the given file path.
-// // If the file does not exist in the S3 bucket, an empty FileInfo instance
-// // will be returned.
-// func (s3fs *S3FileSystem) Info(filePath string) (info fs.FileInfo) {
-// 	if filePath == "/" {
-// 		info.Exists = true
-// 		info.IsRegular = true
-// 		info.IsDir = true
-// 		info.Permissions = DefaultPermissions
-// 		return
-// 	}
+func (s *S3FileSystem) Exists(filePath string) bool {
+	if filePath == "" || filePath == "/" {
+		return false
+	}
+	_, err := s.client.HeadObject(
+		context.Background(),
+		&s3.HeadObjectInput{
+			Bucket: &s.bucketName,
+			Key:    &filePath,
+		},
+	)
+	return err == nil
+}
 
-// 	if cachedInfo, ok := s3fs.fileInfoCache.Get(filePath); ok {
-// 		return *cachedInfo
-// 	}
+// IsHidden returns true if the given file path is not empty and starts with a
+// dot. There are no real "hidden" files in S3 buckets, but since dot prefixes
+// are the general convention to determine which directories/files are hidden
+// and which are not, the function behaves this way.
+func (s *S3FileSystem) IsHidden(filePath string) bool {
+	name := path.Base(filePath)
+	return len(name) > 0 && name[0] == '.'
+}
 
-// 	out, err := s3fs.s3Client.GetObject(&s3.GetObjectInput{
-// 		Bucket: aws.String(s3fs.bucketName),
-// 		Key:    aws.String(filePath),
-// 	})
+func (s *S3FileSystem) IsSymbolicLink(filePath string) bool {
+	return false
+}
 
-// 	if err != nil {
-// 		s3fs.fileInfoCache.Delete(filePath)
-// 		return fs.FileInfo{}
-// 	}
-// 	return objectOutputToFileInfo(filePath, out)
-// }
+func (s *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+	if dirPath == "" {
+		return fs.ErrEmptyPath
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fs.ErrNotSupported
 
-// func (s3fs *S3FileSystem) Stat(filePath string) (os.FileInfo, error) {
-// 	panic("TODO")
-// }
+	// if len(dirPath) > 1 && strings.HasPrefix(dirPath, "/") {
+	// 	dirPath = dirPath[1:]
+	// }
+	// if !strings.HasSuffix(dirPath, "/") {
+	// 	dirPath += "/"
+	// }
+	// info, err := s.Stat(dirPath)
+	// if err != nil {
+	// 	return err
+	// }
+	// if !info.IsDir() {
+	// 	return fs.NewErrIsNotDirectory(fs.File(dirPath))
+	// }
 
-// func (s3fs *S3FileSystem) Exists(filePath string) bool {
-// 	panic("TODO")
-// }
+	// // We only need to set the prefix if we're listing the objects in any other
+	// // directory than the root directory. For the root dir, the StartAfter param
+	// // suffices.
+	// var prefix string
+	// if dirPath != "/" {
+	// 	prefix = dirPath
+	// }
+	// out, err := s.client.ListObjectsV2WithContext(
+	// 	ctx,
+	// 	&s3.ListObjectsV2Input{
+	// 		Bucket:     &s.bucketName,
+	// 		Prefix:     &prefix,
+	// 		StartAfter: &dirPath,
+	// 	},
+	// )
+	// for _, c := range out.Contents {
+	// 	if ctx.Err() != nil {
+	// 		return ctx.Err()
+	// 	}
 
-// func objectOutputToFileInfo(key string, output *s3.GetObjectOutput) (info fs.FileInfo) {
-// 	info.Name = key
-// 	info.Exists = true
-// 	info.IsRegular = true
-// 	info.IsDir = *output.ContentType == "application/x-directory" || strings.HasSuffix(key, "/")
-// 	info.IsHidden = len(key) > 0 && key[0] == '.'
-// 	info.Size = *output.ContentLength
-// 	info.ModTime = *output.LastModified
-// 	if info.IsDir {
-// 		info.Permissions = DefaultDirPermissions
-// 	} else {
-// 		info.Permissions = DefaultPermissions
-// 	}
-// 	h, err := fsimpl.ContentHash(context.TODO(), output.Body)
-// 	if err == nil {
-// 		info.ContentHash = h
-// 	}
-// 	return
-// }
+	// 	// Determine the number of slashes we allow in the path. This is only
+	// 	// used if the recursive argument is set to false because then we want
+	// 	// to filter the results.
+	// 	// If the contents of 'test/test/' are to be queried, we need to allow
+	// 	// more slashes than we would have to with '/' or 'test/'.
+	// 	var nos int
+	// 	if dirPath == "/" {
+	// 		nos = 1
+	// 	} else {
+	// 		nos = 1 + strings.Count(dirPath, "/")
+	// 	}
+	// 	var isNestedObject bool
+	// 	// Different rules apply to files than to directories.
+	// 	// e.g.:
+	// 	//		key:			slashes			ends with slash
+	// 	// 		test/ 			1 				true
+	// 	// 		test/doc.pdf 	1 				false
+	// 	// These would both only have 1 occurrence of the forward slash.
+	// 	// We want to allow the directory in this case since it is a direct
+	// 	// child of the target directory. We don't want to allow the file.
+	// 	if *c.Size == 0 { // Directory
+	// 		isNestedObject = strings.Count(*c.Key, "/") > nos
+	// 	} else { // File
+	// 		isNestedObject = strings.Count(*c.Key, "/") >= nos
+	// 	}
+	// 	if !recursive && isNestedObject {
+	// 		continue
+	// 	}
+	// 	f := fs.File(*c.Key)
+	// 	fi := s.Info(f.Name())
+	// 	callback(f, fi)
+	// }
+	// return nil
+}
 
-// // IsHidden returns true if the given file path is not empty and starts with a
-// // dot. There are no real "hidden" files in S3 buckets, but since dot prefixes
-// // are the general convention to determine which directories/files are hidden
-// // and which are not, the function behaves this way.
-// func (s3fs *S3FileSystem) IsHidden(filePath string) bool {
-// 	name := path.Base(filePath)
-// 	return len(name) > 0 && name[0] == '.'
-// }
+func (s *S3FileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	return s.listDirInfo(ctx, dirPath, callback, patterns, false)
+}
 
-// // IsSymbolicLink always returns false for the S3 file system since there are no
-// // symbolic links in S3 buckets.
-// func (s3fs *S3FileSystem) IsSymbolicLink(filePath string) bool {
-// 	return false
-// }
+func (s *S3FileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+	return s.listDirInfo(ctx, dirPath, callback, patterns, true)
+}
 
-// func (s3fs *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string, recursive bool) (err error) {
-// 	if ctx.Err() != nil {
-// 		return ctx.Err()
-// 	}
+func (s *S3FileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
+	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
+		return s.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
+	})
+}
 
-// 	if len(dirPath) > 1 && strings.HasPrefix(dirPath, "/") {
-// 		dirPath = dirPath[1:]
-// 	}
-// 	if !strings.HasSuffix(dirPath, "/") {
-// 		dirPath += "/"
-// 	}
-// 	info := s3fs.Info(dirPath)
-// 	if !info.Exists {
-// 		return fs.NewErrDoesNotExist(s3fs.File(dirPath))
-// 	}
-// 	if !info.IsDir {
-// 		return fs.NewErrIsNotDirectory(s3fs.File(dirPath))
-// 	}
+func (s *S3FileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
+	return fs.ErrNotSupported
+}
 
-// 	// We only need to set the prefix if we're listing the objects in any other
-// 	// directory than the root directory. For the root dir, the StartAfter param
-// 	// suffices.
-// 	var prefix string
-// 	if dirPath != "/" {
-// 		prefix = dirPath
-// 	}
-// 	out, err := s3fs.s3Client.ListObjectsV2WithContext(
-// 		ctx,
-// 		&s3.ListObjectsV2Input{
-// 			Bucket:     aws.String(s3fs.bucketName),
-// 			Prefix:     aws.String(prefix),
-// 			StartAfter: aws.String(dirPath),
-// 		},
-// 	)
-// 	for _, c := range out.Contents {
-// 		if ctx.Err() != nil {
-// 			return ctx.Err()
-// 		}
+func (s *S3FileSystem) User(filePath string) string {
+	return ""
+}
 
-// 		// Determine the number of slashes we allow in the path. This is only
-// 		// used if the recursive argument is set to false because then we want
-// 		// to filter the results.
-// 		// If the contents of 'test/test/' are to be queried, we need to allow
-// 		// more slashes than we would have to with '/' or 'test/'.
-// 		var nos int
-// 		if dirPath == "/" {
-// 			nos = 1
-// 		} else {
-// 			nos = 1 + strings.Count(dirPath, "/")
-// 		}
-// 		var isNestedObject bool
-// 		// Different rules apply to files than to directories.
-// 		// e.g.:
-// 		//		key:			slashes			ends with slash
-// 		// 		test/ 			1 				true
-// 		// 		test/doc.pdf 	1 				false
-// 		// These would both only have 1 occurrence of the forward slash.
-// 		// We want to allow the directory in this case since it is a direct
-// 		// child of the target directory. We don't want to allow the file.
-// 		if *c.Size == 0 { // Directory
-// 			isNestedObject = strings.Count(*c.Key, "/") > nos
-// 		} else { // File
-// 			isNestedObject = strings.Count(*c.Key, "/") >= nos
-// 		}
-// 		if !recursive && isNestedObject {
-// 			continue
-// 		}
-// 		f := fs.File(*c.Key)
-// 		fi := s3fs.Info(f.Name())
-// 		callback(f, fi)
-// 	}
-// 	return nil
-// }
+func (s *S3FileSystem) SetUser(filePath string, user string) error {
+	return fs.ErrNotSupported
+}
 
-// // ListDirInfo lists all objects in the given directory and their infos.
-// func (s3fs *S3FileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
-// 	return s3fs.listDirInfo(ctx, dirPath, callback, patterns, false)
-// }
+func (s *S3FileSystem) Group(filePath string) string {
+	return ""
+}
 
-// // ListDirInfoRecursive lists all objects in the given directory recursively.
-// func (s3fs *S3FileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
-// 	return s3fs.listDirInfo(ctx, dirPath, callback, patterns, true)
-// }
+func (s *S3FileSystem) SetGroup(filePath string, group string) error {
+	return fs.ErrNotSupported
+}
 
-// // ListDirMax lists a max objects in the dirPath.
-// func (s3fs *S3FileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-// 	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-// 		return s3fs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
-// 	})
-// }
+func (s *S3FileSystem) Touch(filePath string, perm []fs.Permissions) error {
+	if s.Exists(filePath) {
+		return nil
+	}
+	return s.WriteAll(context.Background(), filePath, make([]byte, 0), perm)
+}
 
-// // SetPermissions does not do anything. Setting permissions is not yet
-// // implemented.
-// // https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/examples-s3-access-permissions.html
-// func (s3fs *S3FileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
-// 	return errors.New("SetPermissions not possible on S3 buckets")
-// }
+func (s *S3FileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+	if dirPath == "" {
+		return fs.ErrEmptyPath
+	}
+	if dirPath == "/" {
+		return nil
+	}
+	if !strings.HasSuffix(dirPath, "/") {
+		dirPath += "/"
+	}
+	// Touch pretty much does what we need. In order to create a "directory"
+	// in the S3 bucket, we need to pass a key that ends on '/' and has no data.
+	// We add the slash above and Touch writes an object with no data.
+	return s.Touch(dirPath, perm)
+}
 
-// // User is not implemented for S3 file system.
-// func (s3fs *S3FileSystem) User(filePath string) string {
-// 	return ""
-// }
+func (s *S3FileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
+	}
+	out, err := s.client.GetObject(
+		ctx,
+		&s3.GetObjectInput{
+			Bucket: &s.bucketName,
+			Key:    &filePath,
+		},
+	)
+	if err != nil {
+		var notFound types.NotFound
+		if errors.Is(err, &notFound) {
+			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
+		}
+		return nil, err
+	}
+	defer out.Body.Close()
 
-// // SetUser is not possible for S3 file  system.
-// func (s3fs *S3FileSystem) SetUser(filePath string, user string) error {
-// 	return errors.New("SetUser not possible on S3 buckets")
-// }
+	data := make([]byte, int(out.ContentLength))
+	n, err := out.Body.Read(data)
+	if err != nil {
+		return nil, err
+	}
+	if n < int(out.ContentLength) {
+		return nil, fmt.Errorf("read %d bytes from body but content-length is %d", n, out.ContentLength)
+	}
+	return data, nil
+}
 
-// // Group is not implemented for S3 file system.
-// func (s3fs *S3FileSystem) Group(filePath string) string {
-// 	return ""
-// }
+func (s *S3FileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+	if filePath == "" {
+		return fs.ErrEmptyPath
+	}
+	if s.readOnly {
+		return fs.ErrReadOnlyFileSystem
+	}
+	_, err := s.client.PutObject(
+		ctx,
+		&s3.PutObjectInput{
+			Bucket: &s.bucketName,
+			Key:    &filePath,
+			Body:   bytes.NewReader(data),
+		},
+	)
+	return err
+}
 
-// // SetGroup is not implemented for S3 file system.
-// func (s3fs *S3FileSystem) SetGroup(filePath string, group string) error {
-// 	return errors.New("SetGroup not possible on S3 buckets")
-// }
+func (s *S3FileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+	if s.readOnly {
+		return fs.ErrReadOnlyFileSystem
+	}
+	current, err := s.ReadAll(ctx, filePath)
+	if err != nil {
+		return err
+	}
+	return s.WriteAll(ctx, filePath, append(current, data...), perm)
+}
 
-// // Touch creates a file in the S3 bucket (no data).
-// func (s3fs *S3FileSystem) Touch(filePath string, perm []fs.Permissions) error {
-// 	if s3fs.Info(filePath).Exists {
-// 		return nil
-// 	}
-// 	return s3fs.WriteAll(filePath, nil, perm)
-// }
+func (s *S3FileSystem) OpenReader(filePath string) (iofs.File, error) {
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
+	}
+	out, err := s.client.GetObject(
+		context.Background(),
+		&s3.GetObjectInput{
+			Bucket: &s.bucketName,
+			Key:    &filePath,
+		},
+	)
+	if err != nil {
+		var notFound types.NotFound
+		if errors.Is(err, &notFound) {
+			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
+		}
+		return nil, err
+	}
+	defer out.Body.Close()
 
-// // MakeDir creates a directory in the S3 bucket.
-// func (s3fs *S3FileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
-// 	if !strings.HasSuffix(dirPath, "/") {
-// 		dirPath += "/"
-// 	}
-// 	// Touch pretty much does what we need. In order to create a "directory"
-// 	// in the S3 bucket, we need to pass a key that ends on '/' and has no data.
-// 	// We add the slash above and Touch writes an object with no data.
-// 	return s3fs.Touch(dirPath, perm)
-// }
+	data := make([]byte, int(out.ContentLength))
+	n, err := out.Body.Read(data)
+	if err != nil {
+		return nil, err
+	}
+	if n < int(out.ContentLength) {
+		return nil, fmt.Errorf("read %d bytes from body but content-length is %d", n, out.ContentLength)
+	}
 
-// // ReadAll returns a byte array containing all data of an object.
-// func (s3fs *S3FileSystem) ReadAll(filePath string) ([]byte, error) {
-// 	out, err := s3fs.s3Client.GetObject(&s3.GetObjectInput{
-// 		Bucket: aws.String(s3fs.bucketName),
-// 		Key:    aws.String(filePath),
-// 	})
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer out.Body.Close()
-// 	return io.ReadAll(out.Body)
-// }
+	info := &fileInfo{
+		name: path.Base(filePath),
+		size: out.ContentLength,
+		time: *out.LastModified,
+	}
+	return fsimpl.NewReadonlyFileBuffer(data, info), nil
+}
 
-// // WriteAll writes data to an object at filePath.
-// func (s3fs *S3FileSystem) WriteAll(filePath string, data []byte, perm []fs.Permissions) error {
-// 	_, err := s3fs.s3Client.PutObject(&s3.PutObjectInput{
-// 		Bucket: aws.String(s3fs.bucketName),
-// 		Key:    aws.String(filePath),
-// 		Body:   bytes.NewReader(data),
-// 	})
-// 	return s3fs.wrapErrNotExist(filePath, err)
-// }
+func (s *S3FileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
+	}
+	if s.readOnly {
+		return nil, fs.ErrReadOnlyFileSystem
+	}
+	var fileBuffer *fsimpl.FileBuffer
+	fileBuffer = fsimpl.NewFileBufferWithClose(nil, func() error {
+		return s.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), perm)
+	})
+	return fileBuffer, nil
+}
 
-// // Append appends data to the object at filePath.
-// func (s3fs *S3FileSystem) Append(filePath string, data []byte, perm []fs.Permissions) error {
-// 	writer, err := s3fs.OpenAppendWriter(filePath, perm)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer writer.Close()
-// 	n, err := writer.Write(data)
-// 	if err == nil && n < len(data) {
-// 		return io.ErrShortWrite
-// 	}
-// 	return err
-// }
+func (s *S3FileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
+	return s.openFileBuffer(filePath)
+}
 
-// // OpenAppendWriter returns a WriteCloser that appends to the existing object
-// // when calling .Write.
-// func (s3fs *S3FileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-// 	data, err := s3fs.ReadAll(filePath)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	var fileBuffer *fsimpl.FileBuffer
-// 	fileBuffer = fsimpl.NewFileBufferWithClose(data, func() error {
-// 		return s3fs.WriteAll(filePath, fileBuffer.Bytes(), nil)
-// 	})
-// 	return fileBuffer, nil
-// }
+func (s *S3FileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+	return s.openFileBuffer(filePath)
+}
 
-// // OpenReader returns a ReadCloser for the data in the object at filePath.
-// func (s3fs *S3FileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
-// 	data, err := s3fs.ReadAll(filePath)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return fsimpl.NewReadonlyFileBuffer(data), nil
-// }
+func (s *S3FileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileBuffer, err error) {
+	if s.readOnly {
+		return nil, fs.ErrReadOnlyFileSystem
+	}
+	current, err := s.ReadAll(context.Background(), filePath)
+	if err != nil {
+		return nil, err
+	}
+	fileBuffer = fsimpl.NewFileBufferWithClose(current, func() error {
+		return s.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), nil)
+	})
+	return fileBuffer, nil
+}
 
-// // OpenWriter returns a WriteCloser for the object at filePath.
-// func (s3fs *S3FileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-// 	var fileBuffer *fsimpl.FileBuffer
-// 	fileBuffer = fsimpl.NewFileBufferWithClose(nil, func() error {
-// 		return s3fs.WriteAll(filePath, fileBuffer.Bytes(), nil)
-// 	})
-// 	return fileBuffer, nil
-// }
+func (s *S3FileSystem) Truncate(filePath string, size int64) error {
+	if s.readOnly {
+		return fs.ErrReadOnlyFileSystem
+	}
+	current, err := s.ReadAll(context.Background(), filePath)
+	if err != nil {
+		return err
+	}
+	if len(current) <= int(size) {
+		return nil
+	}
+	return s.WriteAll(context.Background(), filePath, current[:size], nil)
+}
 
-// // OpenReadWriter opens a ReadWriteSeekCloser the the object at filePath.
-// func (s3fs *S3FileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-// 	data, err := s3fs.ReadAll(filePath)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	var fileBuffer *fsimpl.FileBuffer
-// 	fileBuffer = fsimpl.NewFileBufferWithClose(data, func() error {
-// 		return s3fs.WriteAll(filePath, fileBuffer.Bytes(), nil)
-// 	})
-// 	return fileBuffer, nil
-// }
+func (s *S3FileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+	if s.readOnly {
+		return fs.ErrReadOnlyFileSystem
+	}
+	if srcFile == "" || destFile == "" {
+		return fs.ErrEmptyPath
+	}
+	srcFile = s.bucketName + "/" + srcFile
+	_, err := s.client.CopyObject(
+		ctx, &s3.CopyObjectInput{
+			Bucket:     &s.bucketName,
+			CopySource: &srcFile,
+			Key:        &destFile,
+		},
+	)
+	var notFound types.NotFound
+	if err != nil && errors.Is(err, &notFound) {
+		err = fs.NewErrDoesNotExist(fs.File(s.prefix + srcFile))
+	}
+	return err
+}
 
-// // Watch is not supported yet for S3.
-// func (s3fs *S3FileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
-// 	// https://stackoverflow.com/questions/18049717/waituntilobjectexists-amazon-s3-php-sdk-method-exactly-how-does-it-work
-// 	// s3fs.s3Client.WaitUntilObjectExists
-// 	// s3fs.s3Client.WaitUntilObjectNotExists
-// 	/*retChan := make(chan fs.WatchEvent)
-// 	go func() {
-// 		err := s3fs.s3Client.WaitUntilObjectExists(&s3.HeadObjectInput{
-// 			Bucket: aws.String(s3fs.bucketName),
-// 			Key:    aws.String(filePath),
-// 		})
-// 		if err != nil {
-// 			retChan <- fs.WatchEvent{
-// 				Err: err,
-// 			}
-// 		}
-// 	}()*/
-// 	//return retChan, nil
-// 	return nil, fmt.Errorf("S3FileSystem: %w", fs.ErrNotSupported)
-// }
+func (s *S3FileSystem) Rename(filePath string, newName string) error {
+	if s.readOnly {
+		return fs.ErrReadOnlyFileSystem
+	}
+	if filePath == "" || newName == "" {
+		return fs.ErrEmptyPath
+	}
+	if strings.ContainsAny(newName, `/\`) {
+		return errors.New("newName for Rename() contains path separators: " + newName)
+	}
+	newPath := path.Join(path.Dir(filePath), newName)
+	return s.Move(filePath, newPath)
+}
 
-// // Truncate shortens an object's data to size (number of bytes).
-// func (s3fs *S3FileSystem) Truncate(filePath string, size int64) error {
-// 	info := s3fs.Info(filePath)
-// 	if !info.Exists {
-// 		return fs.NewErrDoesNotExist(s3fs.File(filePath))
-// 	}
-// 	if info.IsDir {
-// 		return fs.NewErrIsDirectory(s3fs.File(filePath))
-// 	}
-// 	if info.Size <= size {
-// 		return nil
-// 	}
+func (s *S3FileSystem) Move(filePath string, destPath string) error {
+	if s.readOnly {
+		return fs.ErrReadOnlyFileSystem
+	}
+	if filePath == "" || destPath == "" {
+		return fs.ErrEmptyPath
+	}
+	err := s.CopyFile(context.Background(), filePath, destPath, nil)
+	if err != nil {
+		return err
+	}
+	return s.Remove(filePath)
+}
 
-// 	data, err := s3fs.ReadAll(filePath)
-// 	if err != nil {
-// 		return s3fs.wrapErrNotExist(filePath, err)
-// 	}
-// 	if int64(len(data)) <= size {
-// 		return nil
-// 	}
-// 	return s3fs.WriteAll(filePath, data[:size], []fs.Permissions{info.Permissions})
-// }
+func (s *S3FileSystem) Remove(filePath string) error {
+	if s.readOnly {
+		return fs.ErrReadOnlyFileSystem
+	}
+	if filePath == "" {
+		return fs.ErrEmptyPath
+	}
+	_, err := s.client.DeleteObject(
+		context.Background(),
+		&s3.DeleteObjectInput{
+			Bucket: &s.bucketName,
+			Key:    &filePath,
+		})
+	return err
+}
 
-// // CopyFile does what its name suggests.
-// func (s3fs *S3FileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
-// 	if ctx.Err() != nil {
-// 		return ctx.Err()
-// 	}
-// 	_, err := s3fs.s3Client.CopyObject(&s3.CopyObjectInput{
-// 		Bucket:     aws.String(s3fs.bucketName),
-// 		CopySource: aws.String(s3fs.bucketName + "/" + srcFile),
-// 		Key:        aws.String(destFile),
-// 	})
-// 	return s3fs.wrapErrNotExist(srcFile, err)
-// }
-
-// // Rename does what its name suggests. Internally uses move.
-// func (s3fs *S3FileSystem) Rename(filePath string, newName string) error {
-// 	if strings.ContainsAny(newName, "/\\") {
-// 		return errors.New("newName for Rename() contains path separators: " + newName)
-// 	}
-// 	newPath := filepath.Join(filepath.Dir(filePath), newName)
-// 	return s3fs.Move(filePath, newPath)
-// }
-
-// // Move "moves" a file. S3 does not have an atomic move / rename operation, so
-// // the function simply copies the object to destPath before deleting the old
-// // object at filePath.
-// func (s3fs *S3FileSystem) Move(filePath string, destPath string) error {
-// 	if filePath[0] == '/' {
-// 		filePath = filePath[1:]
-// 	}
-// 	err := s3fs.CopyFile(context.Background(), filePath, destPath, nil)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	// S3 does not have an atomic move / rename operation. There are "Move"
-// 	// operations in the .NET SDK and some other language SDKs which
-// 	// essentially do exactly the same thing (copy file, delete old file).
-// 	_, err = s3fs.s3Client.DeleteObject(&s3.DeleteObjectInput{
-// 		Bucket: aws.String(s3fs.bucketName),
-// 		Key:    aws.String(filePath),
-// 	})
-// 	return err
-// }
-
-// // Remove deletes an object from the S3 bucket.
-// func (s3fs *S3FileSystem) Remove(filePath string) error {
-// 	_, err := s3fs.s3Client.DeleteObject(&s3.DeleteObjectInput{
-// 		Bucket: aws.String(s3fs.bucketName),
-// 		Key:    aws.String(filePath),
-// 	})
-// 	return err
-// }
+func (s *S3FileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
+	// https://stackoverflow.com/questions/18049717/waituntilobjectexists-amazon-s3-php-sdk-method-exactly-how-does-it-work
+	// s.client.WaitUntilObjectExists
+	// s.client.WaitUntilObjectNotExists
+	/*retChan := make(chan fs.WatchEvent)
+	go func() {
+		err := s.client.WaitUntilObjectExists(&s3.HeadObjectInput{
+			Bucket: &s.bucketName),
+			Key:    &filePath),
+		})
+		if err != nil {
+			retChan <- fs.WatchEvent{
+				Err: err,
+			}
+		}
+	}()*/
+	//return retChan, nil
+	return nil, fs.ErrNotSupported
+}

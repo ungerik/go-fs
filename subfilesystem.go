@@ -29,11 +29,6 @@ func NewSubFileSystem(parent FileSystem, basePath string) *SubFileSystem {
 	return subfs
 }
 
-func (subfs *SubFileSystem) Close() error {
-	Unregister(subfs)
-	return nil
-}
-
 func (subfs *SubFileSystem) IsReadOnly() bool {
 	return subfs.Parent.IsReadOnly()
 }
