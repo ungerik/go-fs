@@ -1,24 +1,13 @@
 package s3fs
 
-// import (
-// 	"bytes"
-// 	"context"
-// 	"errors"
-// 	"fmt"
-// 	"io"
-// 	"os"
-// 	"path"
-// 	"path/filepath"
-// 	"strings"
-// 	"time"
+import (
+	"context"
+	"time"
 
-// 	"github.com/aws/aws-sdk-go/aws"
-// 	"github.com/aws/aws-sdk-go/aws/session"
-// 	"github.com/aws/aws-sdk-go/service/s3"
-
-// 	fs "github.com/ungerik/go-fs"
-// 	"github.com/ungerik/go-fs/fsimpl"
-// )
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ungerik/go-fs"
+)
 
 const (
 	// Prefix os S3FileSystem URLs
@@ -28,39 +17,47 @@ const (
 	Separator = "/"
 )
 
-// var (
-// 	// DefaultPermissions used for S3 bucket files
-// 	DefaultPermissions = fs.UserAndGroupReadWrite
-// 	// DefaultDirPermissions used for S3 bucket directories
-// 	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllReadWrite
+var (
+	// DefaultPermissions used for S3 bucket files
+	DefaultPermissions = fs.UserAndGroupReadWrite
+	// DefaultDirPermissions used for S3 bucket directories
+	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllReadWrite
 
-// 	// Make sure S3FileSystem implements fs.FileSystem
-// 	_ fs.FileSystem = new(S3FileSystem)
-// )
+	// Make sure S3FileSystem implements fs.FileSystem
+	// _ fs.FileSystem = new(S3FileSystem)
+)
 
 // // S3FileSystem implements fs.FileSystem for an S3 bucket.
-// type S3FileSystem struct {
-// 	bucketName    string
-// 	prefix        string
-// 	s3Client      *s3.S3
-// 	fileInfoCache *fs.FileInfoCache
-// }
+type S3FileSystem struct {
+	client        *s3.Client
+	bucketName    string
+	prefix        string
+	readOnly      bool
+	fileInfoCache *fs.FileInfoCache
+}
 
-// // New initializes a new S3 instance + session and returns an S3FileSystem
-// // instance that contains the required settings to work with an S3 bucket.
-// func New(bucketName string, region Region, cacheTimeout time.Duration) *S3FileSystem {
-// 	session := session.Must(session.NewSession(&aws.Config{
-// 		Region: aws.String(region.String()),
-// 	}))
-// 	s3fs := &S3FileSystem{
-// 		bucketName:    bucketName,
-// 		prefix:        Prefix + bucketName,
-// 		s3Client:      s3.New(session),
-// 		fileInfoCache: fs.NewFileInfoCache(cacheTimeout),
-// 	}
-// 	fs.Register(s3fs)
-// 	return s3fs
-// }
+// New initializes a new S3 instance + session and returns an S3FileSystem
+// instance that contains the required settings to work with an S3 bucket.
+func New(client *s3.Client, bucketName string, readOnly bool, cacheTimeout time.Duration) *S3FileSystem {
+	s3fs := &S3FileSystem{
+		client:        client,
+		bucketName:    bucketName,
+		prefix:        Prefix + bucketName,
+		readOnly:      readOnly,
+		fileInfoCache: fs.NewFileInfoCache(cacheTimeout),
+	}
+	// fs.Register(s3fs)
+	return s3fs
+}
+
+func NewLoadDefaultConfig(ctx context.Context, bucketName string, readOnly bool, cacheTimeout time.Duration) (*S3FileSystem, error) {
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	client := s3.NewFromConfig(cfg)
+	return New(client, bucketName, readOnly, cacheTimeout), nil
+}
 
 // func (s3fs *S3FileSystem) wrapErrNotExist(filePath string, err error) error {
 // 	if err != nil && strings.HasPrefix(err.Error(), "path/not_found/") {
@@ -75,17 +72,13 @@ const (
 // 	return nil
 // }
 
-// // IsReadOnly returns a boolean value indicating whether the file system is
-// // read-only.
-// func (s3fs *S3FileSystem) IsReadOnly() bool {
-// 	return false
-// }
+func (s3fs *S3FileSystem) IsReadOnly() bool {
+	return s3fs.readOnly
+}
 
-// // IsWriteOnly returns a boolean value indicating whether the file system is
-// // write-only.
-// func (s3fs *S3FileSystem) IsWriteOnly() bool {
-// 	return false
-// }
+func (s3fs *S3FileSystem) IsWriteOnly() bool {
+	return false
+}
 
 // // Root returns the root path of the file system (which includes the file
 // // system's prefix).
