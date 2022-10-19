@@ -195,7 +195,7 @@ func TestFile_Watch(t *testing.T) {
 	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
 
 	assert.Equal(t, []File{newFile, newFile, renamedFile, renamedFile}, gotFiles)
-	assert.Equal(t, []Event{EventCreate, EventRename, EventCreate, EventRemove}, gotEvents)
+	assert.Equal(t, []Event{eventCreate, eventRename, eventCreate, eventRemove}, gotEvents)
 
 	err = cancel()
 	assert.NoError(t, err, "cancel watch")
