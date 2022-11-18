@@ -4,8 +4,8 @@ go-fs: A unified file system for Go
 fs.File
 -------
 
-The package is built around a `File` type that is a string underneath interpets its value as
-local file-system path or as URI.
+The package is built around a `File` type that is a string underneath
+and interpets its value as local file-system path or as URI.
 
 ```go
 type File string
@@ -30,11 +30,11 @@ func readFile(f fs.File) { /* ... */ }
 
 readFile("../my-local-file.txt")
 
-// Reading via HTTP works out of the box
-readFile("http://example.com/file-via-uri.txt")
+// HTTP reading works out of the box
+readFile("https://example.com/file-via-uri.txt")
 ```
 
-As a string type it naturally marshals/unmarshals as string path/URI
+As a string type `File` naturally marshals/unmarshals as string path/URI
 without having to implementing marshalling interfaces.
 
 But it implements `fmt.Stringer` to add the name of the path/URI filesystem
@@ -44,8 +44,8 @@ encode filename and content instead of the path/URI value.
 fs.FileReader
 -------------
 
-For cases where a file should be passed only for reading it's recommended
-to use the interface type `FileReader`.
+For cases where a file should be passed only for reading,
+it's recommended to use the interface type `FileReader`.
 It has all the read related methods of `File`, so a `File` can be assigned
 or passed as `FileReader`:
 
@@ -56,8 +56,8 @@ type FileReader interface { /* ... */ }
 ```go
 func readFile(f fs.FileReader) { /* ... */ }
 
-// Untyped string literal does not work as interface
-// needs a concreate type like fs.File
+// An untyped string literal does not work as interface,
+// needs a concrete type like fs.File
 readFile(fs.File("../my-local-file.txt"))
 ```
 
@@ -86,6 +86,13 @@ readFile(fs.NewMemFile("hello-world.txt", []byte("Hello World!")))
 
 // Read another fs.FileReader into a fs.MemFile
 // to have it buffered in memory
-f, err := fs.ReadMemFile(ctx, fs.File("../my-local-file.txt"))
+memFile, err := fs.ReadMemFile(ctx, fs.File("../my-local-file.txt"))
+
+// Read all data similar to io.ReadAll from an io.Reader
+var r io.Rader
+memFile, err := fs.ReadAllMemFile(cxt, r, "in-mem-file.txt")
 ```
 
+Note that `MemFile` is not a `File` because it doesn't have a path or URI.
+The in-memory `FileName` is not interpreted as path and should not contain
+path separators.

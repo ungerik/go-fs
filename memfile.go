@@ -78,7 +78,9 @@ func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) 
 }
 
 // ReadAllMemFile returns a new MemFile with the data
-// from io.ReadAll(r) and the passed name.
+// from ReadAllContext(r) and the passed name.
+// It reads all data from r until EOF is reached,
+// another error is returned, or the context got canceled.
 func ReadAllMemFile(ctx context.Context, r io.Reader, name string) (*MemFile, error) {
 	data, err := ReadAllContext(ctx, r)
 	if err != nil {

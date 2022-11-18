@@ -65,8 +65,10 @@ func (f FileCallback) FileInfoCallback(file File, info FileInfo) error {
 	return f(file)
 }
 
-// ReadAllContext is identical to io.ReadAll
-// except that it can be canceled via context.
+// ReadAllContext reads all data from r until EOF is reached,
+// another error is returned, or the context got canceled.
+// It is identical to io.ReadAll
+// except that it can be canceled via a context.
 func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
 	// Implementation
 	b := make([]byte, 0, 512)
