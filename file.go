@@ -17,6 +17,13 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
+var (
+	_ FileReader     = File("")
+	_ fmt.Stringer   = File("")
+	_ gob.GobEncoder = File("")
+	_ gob.GobDecoder = File("")
+)
+
 // InvalidFile is a file with an empty path and thus invalid.
 const InvalidFile = File("")
 
