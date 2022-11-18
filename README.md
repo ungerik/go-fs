@@ -56,16 +56,62 @@ file2 := file.Dir().Join("a", "b", "c").Joinf("file%d.txt", 2)
 path2 := file2.Path() // "/tmp/a/b/c/file2.txt"
 
 abs := fs.File("~/some-dir/../file").AbsPath() // "/home/erik/file"
+```
 
+Meta information:
+
+```go
 size := file.Size() // int64, 0 for non existing or dirs
 isDir := dir.IsDir()      // true
 exists := file.Exists()   // true
 fileIsDir := file.IsDir() // false
 modTime := file.ModTime()
-hash, err := file.ContentHash()
+hash, err := file.ContentHash()  // Dropbox hash algo
 regular := file.Info().IsRegular // true
 info := file.Info().FSFileInfo() // io/fs.FileInfo
 ```
+
+Reading and writing files
+-------------------------
+
+Reading:
+
+```go
+bytes, err := file.ReadAll(ctx)
+
+str, err := file.ReadAllString(ctx)
+
+var w io.Writer
+n, err := file.WriteTo(w)
+
+f, err := file.OpenReader()     // os/fs.File 
+r, err := file.OpenReadSeeker() // fs.ReadSeekCloser
+
+```
+
+Writing:
+
+```go
+err := file.WriteAll(ctx, []byte("Hello"))
+
+err := file.WriteAllString(ctx, "Hello")
+
+err := file.Append(ctx, []byte("Hello"))
+
+err := file.AppendString(ctx, "Hello")
+
+var r io.Reader
+n, err := file.ReadFrom(r)
+
+w, err := file.OpenWriter()       // io.WriteCloser
+w, err := file.OpenAppendWriter() // io.WriteCloser
+
+rw, err := file.OpenReadWriter() // fs.ReadWriteSeekCloser
+```
+
+Watching the local file-system
+------------------------------
+
 
 fs.FileReader
 -------------
@@ -122,3 +168,27 @@ memFile, err := fs.ReadAllMemFile(cxt, r, "in-mem-file.txt")
 Note that `MemFile` is not a `File` because it doesn't have a path or URI.
 The in-memory `FileName` is not interpreted as path and should not contain
 path separators.
+
+Listing directories
+-------------------
+
+```go
+// Print names of all JPEGs in dir
+dir.ListDir(func(f fs.File) error {
+	_, err := fmt.Println(f.Name())
+	return err
+})
+
+// Print names of all JPEGs in dir and all recursive sub-dirs
+// with cancelable context
+dir.ListDirRecursiveContext(ctx, func(f fs.File) error {
+	_, err := fmt.Println(f.Name())
+	return err
+}, "*.jpg", "*.jpeg")
+
+// Get all files in dir without limit
+files, err := dir.ListDirMax(-1)
+
+// Get the first 100 JPEGs in dir
+files, err := dir.ListDirMaxContext(ctx, 100, "*.jpg", "*.jpeg")
+```
