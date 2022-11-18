@@ -5,11 +5,11 @@ The package is built around a `File` type that is a string underneath
 and interprets its value as local file-system path or as URI.
 
 `FileSystem` implementations can be registered with their
-URI qualifyers like `file://` or `http://`.
+URI qualifiers like `file://` or `http://`.
 
-The methods of `File` parse their string value for a qualifyer
+The methods of `File` parse their string value for a qualifier
 and look up a `FileSystem` in the `Registry`.
-They only special rule is, that if no qualifyer is present,
+They only special rule is, that if no qualifier is present,
 then the string value is interpreted as local file path.
 
 The `LocalFileSystem` is registered by default
@@ -72,7 +72,7 @@ fileVar = fileConst
 fileVar = "~/file.c"
 ```
 
-Handy to pass string literals of local paths or URI to functions:
+Handy to pass string literals of local paths or URIs to functions:
 
 ```go
 func readFile(f fs.File) { /* ... */ }
@@ -243,4 +243,4 @@ files, err := dir.ListDirMaxContext(ctx, 100, "*.jpg", "*.jpeg")
 Watching the local file-system
 ------------------------------
 
-TODO
+TODO description
