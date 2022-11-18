@@ -60,7 +60,7 @@ func NewNonExistingFileInfo(name string) FileInfo {
 // for the data stored in the FileInfo struct.
 func (i *FileInfo) OSFileInfo() os.FileInfo { return fileInfo{i} }
 
-// FSFileInfo returns an io/os.FileInfo wrapper
+// FSFileInfo returns an io/fs.FileInfo wrapper
 // for the data stored in the FileInfo struct.
 func (i *FileInfo) FSFileInfo() fs.FileInfo { return fileInfo{i} }
 

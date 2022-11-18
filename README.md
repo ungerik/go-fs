@@ -41,6 +41,32 @@ But it implements `fmt.Stringer` to add the name of the path/URI filesystem
 as debug information and `gob.GobEncoder`, `gob.GobDecoder` to
 encode filename and content instead of the path/URI value.
 
+Path related methods:
+
+```go
+file := fs.TempDir().Join("file.txt")
+
+dir := file.Dir()   // "/tmp" == fs.TempDir()
+name := file.Name() // "file.txt"
+path := file.Path() // "/tmp/file.txt"
+url := file.URL()   // "file:///tmp/file.txt"
+ext := file.Ext()   // ".txt"
+
+file2 := file.Dir().Join("a", "b", "c").Joinf("file%d.txt", 2)
+path2 := file2.Path() // "/tmp/a/b/c/file2.txt"
+
+abs := fs.File("~/some-dir/../file").AbsPath() // "/home/erik/file"
+
+size := file.Size() // int64, 0 for non existing or dirs
+isDir := dir.IsDir()      // true
+exists := file.Exists()   // true
+fileIsDir := file.IsDir() // false
+modTime := file.ModTime()
+hash, err := file.ContentHash()
+regular := file.Info().IsRegular // true
+info := file.Info().FSFileInfo() // io/fs.FileInfo
+```
+
 fs.FileReader
 -------------
 
