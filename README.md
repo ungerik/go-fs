@@ -1,11 +1,60 @@
 go-fs: A unified file system for Go
 ===================================
 
+The package is built around a `File` type that is a string underneath
+and interprets its value as local file-system path or as URI.
+
+`FileSystem` implementations can be registered with their
+URI qualifyers like `file://` or `http://`.
+
+The methods of `File` parse their string value for a qualifyer
+and look up a `FileSystem` in the `Registry`.
+They only special rule is, that if no qualifyer is present,
+then the string value is interpreted as local file path.
+
+The `LocalFileSystem` is registered by default
+in simplified for like this:
+
+```go
+var Local = &LocalFileSystem{
+	// Config default file permissions
+}
+
+var Registry = map[string]FileSystem{
+	Local.Prefix(): Local, // file://
+}
+```
+
+Work with `Local` directly:
+
+```go
+fs.Local.Separator() // Either `/` or `\`
+
+fs.Local.IsSymbolicLink("~/file") // Tilde expands to user home dir
+```
+
+For example create a `FileSystem` from a multi-part
+HTTP form request that contains an uploaded file: 
+
+```go
+import "github.com/ungerik/go-fs/multipartfs"
+
+multipartFS, err := multipartfs.FromRequestForm(request, MaxUploadSize)
+
+defer multipartFS.Close()
+
+// Access form values as string
+multipartFS.Form.Value["email"] 
+
+// Access form files as fs.File
+file, err := multipartFS.FormFile("file")
+
+// Use like any other fs.File
+bytes, err := file.ReadAll(ctx)
+```
+
 fs.File
 -------
-
-The package is built around a `File` type that is a string underneath
-and interpets its value as local file-system path or as URI.
 
 ```go
 type File string
@@ -30,7 +79,9 @@ func readFile(f fs.File) { /* ... */ }
 
 readFile("../my-local-file.txt")
 
-// HTTP reading works out of the box
+// HTTP reading works when httpfs is imported
+import _ "github.com/ungerik/go-fs/httpfs"
+
 readFile("https://example.com/file-via-uri.txt")
 ```
 
@@ -108,10 +159,6 @@ w, err := file.OpenAppendWriter() // io.WriteCloser
 
 rw, err := file.OpenReadWriter() // fs.ReadWriteSeekCloser
 ```
-
-Watching the local file-system
-------------------------------
-
 
 fs.FileReader
 -------------
@@ -192,3 +239,8 @@ files, err := dir.ListDirMax(-1)
 // Get the first 100 JPEGs in dir
 files, err := dir.ListDirMaxContext(ctx, 100, "*.jpg", "*.jpeg")
 ```
+
+Watching the local file-system
+------------------------------
+
+TODO

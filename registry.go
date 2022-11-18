@@ -19,8 +19,8 @@ var (
 	// Registry contains all registerred file systems.
 	// Contains the local file system by default.
 	Registry = map[string]FileSystem{
-		Local.Prefix():   Local,
-		Invalid.Prefix(): Invalid,
+		Local.Prefix():   Local,   // file://
+		Invalid.Prefix(): Invalid, // invalid://
 	}
 
 	registryMtx sync.RWMutex
