@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
@@ -112,6 +113,7 @@ func (f *HTTPFileSystem) DirAndName(filePath string) (dir, name string) {
 func (f *HTTPFileSystem) VolumeName(filePath string) string { return "" }
 
 func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
+	// First try fast HEAD request
 	request, err := http.NewRequest("HEAD", f.URL(filePath), nil)
 	if err != nil {
 		return fs.FileInfo{}
@@ -120,10 +122,14 @@ func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
 	if err != nil {
 		return fs.FileInfo{}
 	}
-	// contentLength := response.Header.Get("Content-Length")
-	// size, err := strconv.ParseInt(contentLength, 10, 64)
 	if response.ContentLength >= 0 {
-		modified, _ := http.ParseTime(response.Header.Get("Last-Modified"))
+		modified, err := http.ParseTime(response.Header.Get("Last-Modified"))
+		if err != nil {
+			modified, err = http.ParseTime(response.Header.Get("Date"))
+			if err != nil {
+				modified = time.Time{}
+			}
+		}
 		return fs.FileInfo{
 			Exists:  true,
 			Name:    path.Base(request.URL.Path),
@@ -132,16 +138,34 @@ func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
 		}
 	}
 
+	// If HEAD request did not return a ContentLength do a full GET request
 	response, err = http.DefaultClient.Get(f.URL(filePath))
-	if err != nil || response.ContentLength == -1 {
+	if err != nil {
 		return fs.FileInfo{}
 	}
+	modified, err := http.ParseTime(response.Header.Get("Last-Modified"))
+	if err != nil {
+		modified, err = http.ParseTime(response.Header.Get("Date"))
+		if err != nil {
+			modified = time.Time{}
+		}
+	}
+	size := response.ContentLength
 
-	modified, _ := http.ParseTime(response.Header.Get("Last-Modified"))
+	if size < 0 {
+		// Read full body if still no ContentLength available
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			return fs.FileInfo{}
+		}
+		size = int64(len(body))
+	}
+
 	return fs.FileInfo{
 		Exists:  true,
 		Name:    path.Base(request.URL.Path),
-		Size:    response.ContentLength,
+		Size:    size,
 		ModTime: modified,
 	}
 }
