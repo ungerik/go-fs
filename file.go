@@ -222,7 +222,7 @@ func (file File) InfoWithContentHashContext(ctx context.Context) (FileInfo, erro
 			return FileInfo{}, err
 		}
 		defer reader.Close()
-		info.ContentHash, err = fsimpl.ContentHash(ctx, reader)
+		info.ContentHash, err = DefaultContentHash(ctx, reader)
 		if err != nil {
 			return FileInfo{}, err
 		}
@@ -336,20 +336,18 @@ func (file File) Size() int64 {
 	return stat.Size()
 }
 
-// ContentHash returns a Dropbox compatible content hash for the file.
+// ContentHash returns the DefaultContentHash for the file.
 // If the FileSystem implementation does not have this hash pre-computed,
 // then the whole file is read to compute it.
 // If the file is a directory, then an empty string will be returned.
-// See https://www.dropbox.com/developers/reference/content-hash
 func (file File) ContentHash() (string, error) {
 	return file.ContentHashContext(context.Background())
 }
 
-// ContentHashContext returns a Dropbox compatible content hash for the file.
+// ContentHashContext returns the DefaultContentHash for the file.
 // If the FileSystem implementation does not have this hash pre-computed,
 // then the whole file is read to compute it.
 // If the file is a directory, then an empty string will be returned.
-// See https://www.dropbox.com/developers/reference/content-hash
 func (file File) ContentHashContext(ctx context.Context) (string, error) {
 	if file == "" {
 		return "", ErrEmptyPath
@@ -363,7 +361,7 @@ func (file File) ContentHashContext(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer reader.Close()
-	return fsimpl.ContentHash(ctx, reader)
+	return DefaultContentHash(ctx, reader)
 }
 
 func (file File) ModTime() time.Time {
@@ -746,14 +744,17 @@ func (file File) ReadAll(ctx context.Context) (data []byte, err error) {
 }
 
 // ReadAllContentHash reads and returns all bytes of the file
-// together with a Dropbox compatible content hash.
-// See https://www.dropbox.com/developers/reference/content-hash
+// together with the DefaultContentHash.
 func (file File) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
 	data, err = file.ReadAll(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-	return data, fsimpl.ContentHashBytes(data), nil
+	hash, err = DefaultContentHash(ctx, bytes.NewReader(data))
+	if err != nil {
+		return nil, "", err
+	}
+	return data, hash, nil
 }
 
 // ReadAllString reads the complete file and returns the content as string.

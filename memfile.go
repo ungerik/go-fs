@@ -143,10 +143,9 @@ func (f *MemFile) CheckExists() error {
 	return nil
 }
 
-// ContentHash returns a Dropbox compatible content hash for the file.
-// See https://www.dropbox.com/developers/reference/content-hash
+// ContentHash returns the DefaultContentHash for the file.
 func (f *MemFile) ContentHash() (string, error) {
-	return fsimpl.ContentHashBytes(f.FileData), nil
+	return DefaultContentHash(context.Background(), bytes.NewReader(f.FileData))
 }
 
 // Write appends the passed bytes to the FileData,
@@ -165,10 +164,13 @@ func (f *MemFile) ReadAll(ctx context.Context) (data []byte, err error) {
 }
 
 // ReadAllContentHash returns the FileData without copying it
-// together with a Dropbox compatible content hash.
-// See https://www.dropbox.com/developers/reference/content-hash
+// together with the DefaultContentHash.
 func (f *MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
-	return f.FileData, fsimpl.ContentHashBytes(f.FileData), nil
+	hash, err = DefaultContentHash(ctx, bytes.NewReader(f.FileData))
+	if err != nil {
+		return nil, "", err
+	}
+	return f.FileData, hash, nil
 }
 
 // ReadAllString returns the FileData as string.

@@ -33,16 +33,14 @@ type FileReader interface {
 	// if the file does not exist.
 	CheckExists() error
 
-	// ContentHash returns a Dropbox compatible content hash for the file.
-	// See https://www.dropbox.com/developers/reference/content-hash
+	// ContentHash returns the DefaultContentHash for the file.
 	ContentHash() (string, error)
 
 	// ReadAll reads and returns all bytes of the file
 	ReadAll(context.Context) (data []byte, err error)
 
 	// ReadAllContentHash reads and returns all bytes of the file
-	// together with a Dropbox compatible content hash.
-	// See https://www.dropbox.com/developers/reference/content-hash
+	// together with the DefaultContentHash.
 	ReadAllContentHash(context.Context) (data []byte, hash string, err error)
 
 	// ReadAllString reads the complete file and returns the content as string.
