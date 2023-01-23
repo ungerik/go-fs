@@ -59,7 +59,7 @@ func NewMemFile(name string, data []byte) *MemFile {
 // If the passed fileReader is a *MemFile then
 // its FileData is used directly without copying it.
 func ReadMemFile(ctx context.Context, fileReader FileReader) (*MemFile, error) {
-	data, err := fileReader.ReadAll(ctx) // Does not copy in case of fileReader.(*MemFile)
+	data, err := fileReader.ReadAllContext(ctx) // Does not copy in case of fileReader.(*MemFile)
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFile: error reading from FileReader: %w", err)
 	}
@@ -70,7 +70,7 @@ func ReadMemFile(ctx context.Context, fileReader FileReader) (*MemFile, error) {
 // If the passed fileReader is a *MemFile then
 // its FileData is used directly without copying it.
 func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) (*MemFile, error) {
-	data, err := fileReader.ReadAll(ctx) // Does not copy in case of fileReader.(*MemFile)
+	data, err := fileReader.ReadAllContext(ctx) // Does not copy in case of fileReader.(*MemFile)
 	if err != nil {
 		return nil, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
 	}
@@ -145,7 +145,12 @@ func (f *MemFile) CheckExists() error {
 
 // ContentHash returns the DefaultContentHash for the file.
 func (f *MemFile) ContentHash() (string, error) {
-	return DefaultContentHash(context.Background(), bytes.NewReader(f.FileData))
+	return f.ContentHashContext(context.Background())
+}
+
+// ContentHashContext returns the DefaultContentHash for the file.
+func (f *MemFile) ContentHashContext(ctx context.Context) (string, error) {
+	return DefaultContentHash(ctx, bytes.NewReader(f.FileData))
 }
 
 // Write appends the passed bytes to the FileData,
@@ -156,7 +161,12 @@ func (f *MemFile) Write(b []byte) (int, error) {
 }
 
 // ReadAll returns the FileData without copying it.
-func (f *MemFile) ReadAll(ctx context.Context) (data []byte, err error) {
+func (f *MemFile) ReadAll() (data []byte, err error) {
+	return f.FileData, nil
+}
+
+// ReadAllContext returns the FileData without copying it.
+func (f *MemFile) ReadAllContext(ctx context.Context) (data []byte, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -174,7 +184,12 @@ func (f *MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash str
 }
 
 // ReadAllString returns the FileData as string.
-func (f *MemFile) ReadAllString(ctx context.Context) (string, error) {
+func (f *MemFile) ReadAllString() (string, error) {
+	return string(f.FileData), nil
+}
+
+// ReadAllStringContext returns the FileData as string.
+func (f *MemFile) ReadAllStringContext(ctx context.Context) (string, error) {
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}

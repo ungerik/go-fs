@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"context"
 	"io/fs"
 )
 
@@ -49,7 +48,7 @@ func (f FileFS) Open(name string) (fs.File, error) {
 // ReadFile reads the named file and returns its contents.
 // This method implements the io/fs.ReadFileFS interface.
 func (f FileFS) ReadFile(name string) ([]byte, error) {
-	return f.File.Join(name).ReadAll(context.Background())
+	return f.File.Join(name).ReadAll()
 }
 
 // ReadDir reads the named directory

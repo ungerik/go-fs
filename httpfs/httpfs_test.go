@@ -25,7 +25,7 @@ func TestReadAll(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Greater(t, len(data), 0, "file size greater zero")
 
-	data2, err := fs.File("https://raw.githubusercontent.com/ungerik/go-fs/master/README.md").ReadAll(context.Background())
+	data2, err := fs.File("https://raw.githubusercontent.com/ungerik/go-fs/master/README.md").ReadAll()
 	assert.NoError(t, err)
 	assert.Equal(t, data, data2)
 }

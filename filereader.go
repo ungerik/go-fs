@@ -36,15 +36,24 @@ type FileReader interface {
 	// ContentHash returns the DefaultContentHash for the file.
 	ContentHash() (string, error)
 
+	// ContentHashContext returns the DefaultContentHash for the file.
+	ContentHashContext(ctx context.Context) (string, error)
+
 	// ReadAll reads and returns all bytes of the file
-	ReadAll(context.Context) (data []byte, err error)
+	ReadAll() (data []byte, err error)
+
+	// ReadAllContext reads and returns all bytes of the file
+	ReadAllContext(context.Context) (data []byte, err error)
 
 	// ReadAllContentHash reads and returns all bytes of the file
 	// together with the DefaultContentHash.
 	ReadAllContentHash(context.Context) (data []byte, hash string, err error)
 
 	// ReadAllString reads the complete file and returns the content as string.
-	ReadAllString(context.Context) (string, error)
+	ReadAllString() (string, error)
+
+	// ReadAllStringContext reads the complete file and returns the content as string.
+	ReadAllStringContext(context.Context) (string, error)
 
 	// WriteTo implements the io.WriterTo interface
 	WriteTo(writer io.Writer) (n int64, err error)

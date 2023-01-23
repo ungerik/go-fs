@@ -22,11 +22,11 @@ func writeRandomFileContent(file File) error {
 	size := 1 + int(rand.Float64()*1024*1024)
 	buffer := make([]byte, size)
 	rand.Read(buffer)
-	return file.WriteAll(context.Background(), buffer)
+	return file.WriteAll(buffer)
 }
 
 func writeEmptyFile(file File) error {
-	return file.WriteAllString(context.Background(), "")
+	return file.WriteAllString("")
 }
 
 func deleteRandomFileInDir(dir File) error {

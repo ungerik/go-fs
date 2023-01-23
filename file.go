@@ -735,7 +735,12 @@ func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error
 }
 
 // ReadAll reads and returns all bytes of the file
-func (file File) ReadAll(ctx context.Context) (data []byte, err error) {
+func (file File) ReadAll() (data []byte, err error) {
+	return file.ReadAllContext(context.Background())
+}
+
+// ReadAllContext reads and returns all bytes of the file
+func (file File) ReadAllContext(ctx context.Context) (data []byte, err error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
@@ -746,7 +751,7 @@ func (file File) ReadAll(ctx context.Context) (data []byte, err error) {
 // ReadAllContentHash reads and returns all bytes of the file
 // together with the DefaultContentHash.
 func (file File) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
-	data, err = file.ReadAll(ctx)
+	data, err = file.ReadAllContext(ctx)
 	if err != nil {
 		return nil, "", err
 	}
@@ -758,15 +763,24 @@ func (file File) ReadAllContentHash(ctx context.Context) (data []byte, hash stri
 }
 
 // ReadAllString reads the complete file and returns the content as string.
-func (file File) ReadAllString(ctx context.Context) (string, error) {
-	data, err := file.ReadAll(ctx)
+func (file File) ReadAllString() (string, error) {
+	return file.ReadAllStringContext(context.Background())
+}
+
+// ReadAllStringContext reads the complete file and returns the content as string.
+func (file File) ReadAllStringContext(ctx context.Context) (string, error) {
+	data, err := file.ReadAllContext(ctx)
 	if data == nil || err != nil {
 		return "", err
 	}
 	return string(data), nil
 }
 
-func (file File) WriteAll(ctx context.Context, data []byte, perm ...Permissions) error {
+func (file File) WriteAll(data []byte, perm ...Permissions) error {
+	return file.WriteAllContext(context.Background(), data, perm...)
+}
+
+func (file File) WriteAllContext(ctx context.Context, data []byte, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -774,11 +788,15 @@ func (file File) WriteAll(ctx context.Context, data []byte, perm ...Permissions)
 	return fileSystem.WriteAll(ctx, path, data, perm)
 }
 
-func (file File) WriteAllString(ctx context.Context, str string, perm ...Permissions) error {
+func (file File) WriteAllString(str string, perm ...Permissions) error {
+	return file.WriteAllStringContext(context.Background(), str, perm...)
+}
+
+func (file File) WriteAllStringContext(ctx context.Context, str string, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	return file.WriteAll(ctx, []byte(str), perm...)
+	return file.WriteAllContext(ctx, []byte(str), perm...)
 }
 
 func (file File) Append(ctx context.Context, data []byte, perm ...Permissions) error {
@@ -932,7 +950,7 @@ func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...strin
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
 func (file File) ReadJSON(ctx context.Context, output interface{}) error {
-	data, err := file.ReadAll(ctx)
+	data, err := file.ReadAllContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -954,12 +972,12 @@ func (file File) WriteJSON(ctx context.Context, input interface{}, indent ...str
 	if err != nil {
 		return err
 	}
-	return file.WriteAll(ctx, data)
+	return file.WriteAllContext(ctx, data)
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
 func (file File) ReadXML(ctx context.Context, output interface{}) error {
-	data, err := file.ReadAll(ctx)
+	data, err := file.ReadAllContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -982,7 +1000,7 @@ func (file File) WriteXML(ctx context.Context, input interface{}, indent ...stri
 		return err
 	}
 	data = append([]byte(xml.Header), data...)
-	return file.WriteAll(ctx, data)
+	return file.WriteAllContext(ctx, data)
 }
 
 // GobEncode reads and gob encodes the file name and content,
@@ -992,7 +1010,7 @@ func (file File) GobEncode() ([]byte, error) {
 		return nil, ErrEmptyPath
 	}
 	fileName := file.Name()
-	fileData, err := file.ReadAll(context.Background())
+	fileData, err := file.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("File.GobEncode: error reading file data: %w", err)
 	}
@@ -1030,7 +1048,7 @@ func (file File) GobDecode(gobBytes []byte) error {
 	if err != nil {
 		return fmt.Errorf("File.GobDecode: error decoding file data: %w", err)
 	}
-	err = file.WriteAll(context.Background(), fileData)
+	err = file.WriteAll(fileData)
 	if err != nil {
 		return fmt.Errorf("File.GobDecode: error writing file data: %w", err)
 	}

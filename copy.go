@@ -56,7 +56,7 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 		}
 	} else if srcMemFile, ok := src.(*MemFile); ok {
 		// Don't use io.CopyBuffer in case of MemFile
-		return dest.WriteAll(ctx, srcMemFile.FileData, perm...)
+		return dest.WriteAllContext(ctx, srcMemFile.FileData, perm...)
 	}
 
 	r, err := src.OpenReader()
