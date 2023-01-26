@@ -152,8 +152,8 @@ func (s *S3FileSystem) Stat(filePath string) (os.FileInfo, error) {
 		},
 	)
 	if err != nil {
-		var notFound types.NotFound
-		if errors.Is(err, &notFound) {
+		var notFound *types.NotFound
+		if errors.As(err, &notFound) {
 			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
 		}
 		return nil, err
@@ -339,8 +339,8 @@ func (s *S3FileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, er
 		},
 	)
 	if err != nil {
-		var notFound types.NotFound
-		if errors.Is(err, &notFound) {
+		var notFound *types.NotFound
+		if errors.As(err, &notFound) {
 			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
 		}
 		return nil, err
@@ -399,8 +399,8 @@ func (s *S3FileSystem) OpenReader(filePath string) (iofs.File, error) {
 		},
 	)
 	if err != nil {
-		var notFound types.NotFound
-		if errors.Is(err, &notFound) {
+		var notFound *types.NotFound
+		if errors.As(err, &notFound) {
 			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
 		}
 		return nil, err
@@ -489,8 +489,8 @@ func (s *S3FileSystem) CopyFile(ctx context.Context, srcFile string, destFile st
 			Key:        &destFile,
 		},
 	)
-	var notFound types.NotFound
-	if err != nil && errors.Is(err, &notFound) {
+	var notFound *types.NotFound
+	if err != nil && errors.As(err, &notFound) {
 		err = fs.NewErrDoesNotExist(fs.File(s.prefix + srcFile))
 	}
 	return err
