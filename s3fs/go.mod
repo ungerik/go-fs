@@ -2,12 +2,13 @@ module github.com/ungerik/go-fs/s3fs
 
 go 1.19
 
+// Parent module in same repo
+require github.com/ungerik/go-fs v0.0.0-20230123084935-ad138e78535a
+
 replace github.com/ungerik/go-fs => ../
 
-require (
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.30.1
-	github.com/ungerik/go-fs v0.0.0-20230123084935-ad138e78535a
-)
+// External
+require github.com/aws/aws-sdk-go-v2/service/s3 v1.30.1
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.17.3 // indirect
