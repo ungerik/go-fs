@@ -1,8 +1,10 @@
 package fs
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"strconv"
 )
 
 // ServeFileHTTPHandler returns a http.Handler that serves the passed file with a Content-Type header.
@@ -17,27 +19,31 @@ func ServeFileHTTPHandler(file FileReader, contentType ...string) http.Handler {
 
 // ServeFileHTTP serves the passed file with a Content-Type header via HTTP.
 // If no contentType is passed then http.DetectContentType is used with the file content.
-// status code 404 error is returned if the file does not exist
+// A status code 404 error is returned if the file does not exist
 // and a status code 500 error if there was any other error while reading it.
 func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file FileReader, contentType ...string) {
 	data, err := file.ReadAllContext(request.Context())
 	if err != nil {
 		// ErrDoesNotExist implements http.Handler with a 404 response
-		var handler http.Handler
-		if errors.As(err, &handler) {
-			handler.ServeHTTP(response, request)
+		var errHandler http.Handler
+		if errors.As(err, &errHandler) {
+			errHandler.ServeHTTP(response, request)
 			return
 		}
 
-		statusCode := http.StatusInternalServerError
-		http.Error(response, http.StatusText(statusCode), statusCode)
+		if !errors.Is(err, context.Canceled) {
+			http.Error(response, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		}
 		return
 	}
 
-	if len(contentType) == 0 || contentType[0] == "" {
+	response.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if len(contentType) == 0 {
 		response.Header().Add("Content-Type", http.DetectContentType(data))
 	} else {
-		response.Header().Add("Content-Type", contentType[0])
+		for _, t := range contentType {
+			response.Header().Add("Content-Type", t)
+		}
 	}
 	response.Write(data) //#nosec G104
 }
