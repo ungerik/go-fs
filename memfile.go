@@ -104,7 +104,7 @@ func MemFilesAsFileReaders(memFiles []*MemFile) []FileReader {
 // String returns the name and meta information for the FileReader.
 // String implements the fmt.Stringer interface.
 func (f *MemFile) String() string {
-	return fmt.Sprintf("MemFile{name: %q, size: %d}", f.FileName, len(f.FileData))
+	return fmt.Sprintf("MemFile{name: `%s`, size: %d}", f.FileName, len(f.FileData))
 }
 
 // Name returns the name of the file
