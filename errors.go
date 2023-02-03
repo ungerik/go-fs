@@ -46,10 +46,12 @@ var ErrEmptyPath = NewErrDoesNotExist("")
 // ErrDoesNotExist is returned when a file does not exist
 // and wraps os.ErrNotExist.
 // Check for this error type with:
-//   errors.Is(err, os.ErrNotExist)
+//
+//	errors.Is(err, os.ErrNotExist)
+//
 // Implements http.Handler by responding with http.NotFound.
 type ErrDoesNotExist struct {
-	file fmt.Stringer
+	file any
 }
 
 // NewErrDoesNotExist returns a new ErrDoesNotExist
@@ -57,14 +59,21 @@ func NewErrDoesNotExist(file File) ErrDoesNotExist {
 	return ErrDoesNotExist{file}
 }
 
-// NewErrDoesNotExistFileReader is a hack that tries to cast fileReader to a File
-// or use a pseudo File with the name fromm the FileReader if not possible.
+// NewErrDoesNotExistFileReader returns an ErrDoesNotExist
+// error for a FileReader.
 func NewErrDoesNotExistFileReader(fileReader FileReader) ErrDoesNotExist {
 	return ErrDoesNotExist{fileReader}
 }
 
+// NewErrPathDoesNotExist returns an ErrDoesNotExist
+// error for a file path.
+func NewErrPathDoesNotExist(path string) ErrDoesNotExist {
+	return ErrDoesNotExist{path}
+}
+
+// Error implements the error interface
 func (err ErrDoesNotExist) Error() string {
-	path := err.file.String()
+	path := fmt.Sprintf("%s", err.file)
 	if path == "" {
 		return "empty file path"
 	}
@@ -97,7 +106,9 @@ func (err ErrDoesNotExist) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // ErrPermission is returned when an operation lacks
 // permissions on a file. It wraps os.ErrPermission.
 // Check for this error type with:
-//   errors.Is(err, os.ErrPermission)
+//
+//	errors.Is(err, os.ErrPermission)
+//
 // Implements http.Handler by responding with 403 Forbidden.
 type ErrPermission struct {
 	file File
@@ -131,7 +142,8 @@ func (err ErrPermission) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ErrAlreadyExists is returned when a file already exists.
 // It wraps os.ErrExist, check for this error type with:
-//   errors.Is(err, os.ErrExist)
+//
+//	errors.Is(err, os.ErrExist)
 type ErrAlreadyExists struct {
 	file File
 }
