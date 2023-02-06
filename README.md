@@ -1,6 +1,8 @@
 go-fs: A unified file system for Go
 ===================================
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/ungerik/go-fs.svg)](https://pkg.go.dev/github.com/ungerik/go-fs)
+
 The package is built around a `File` type that is a string underneath
 and interprets its value as local file-system path or as URI.
 
