@@ -18,15 +18,15 @@ import (
 
 // Ensure MemFile implements interfaces
 var (
-	_ FileReader       = new(MemFile)
-	_ io.Writer        = new(MemFile)
-	_ io.WriterTo      = new(MemFile)
-	_ io.ReaderAt      = new(MemFile)
-	_ json.Marshaler   = new(MemFile)
-	_ json.Unmarshaler = new(MemFile)
-	_ gob.GobEncoder   = new(MemFile)
-	_ gob.GobDecoder   = new(MemFile)
-	_ fmt.Stringer     = new(MemFile)
+	_ FileReader       = MemFile{}
+	_ io.Writer        = &MemFile{}
+	_ io.WriterTo      = MemFile{}
+	_ io.ReaderAt      = MemFile{}
+	_ json.Marshaler   = MemFile{}
+	_ json.Unmarshaler = &MemFile{}
+	_ gob.GobEncoder   = MemFile{}
+	_ gob.GobDecoder   = &MemFile{}
+	_ fmt.Stringer     = MemFile{}
 )
 
 // MemFile implements FileReader with a filename and an in memory byte slice.
@@ -104,14 +104,14 @@ func MemFilesAsFileReaders(memFiles []*MemFile) []FileReader {
 
 // String returns the name and meta information for the FileReader.
 // String implements the fmt.Stringer interface.
-func (f *MemFile) String() string {
+func (f MemFile) String() string {
 	return fmt.Sprintf("MemFile{name: `%s`, size: %d}", f.FileName, len(f.FileData))
 }
 
 // Name returns the name of the file.
 // If FileName contains a slash or backslash
 // then only the part after it will be returned.
-func (f *MemFile) Name() string {
+func (f MemFile) Name() string {
 	if i := strings.LastIndexAny(f.FileName, `/\`); i >= 0 {
 		return f.FileName[i+1:]
 	}
@@ -119,30 +119,30 @@ func (f *MemFile) Name() string {
 }
 
 // Ext returns the extension of file name including the point, or an empty string.
-func (f *MemFile) Ext() string {
+func (f MemFile) Ext() string {
 	return fsimpl.Ext(f.FileName, "")
 }
 
 // LocalPath always returns an empty string for a MemFile.
-func (f *MemFile) LocalPath() string {
+func (MemFile) LocalPath() string {
 	return ""
 }
 
 // Size returns the size of the file
-func (f *MemFile) Size() int64 {
+func (f MemFile) Size() int64 {
 	return int64(len(f.FileData))
 }
 
 // Exists returns true if the MemFile has non empty FileName.
 // It's valid to call this method on a nil pointer,
 // will return false in this case.
-func (f *MemFile) Exists() bool {
-	return f != nil && f.FileName != ""
+func (f MemFile) Exists() bool {
+	return &f != nil && f.FileName != ""
 }
 
 // CheckExists return an ErrDoesNotExist error
 // if the file does not exist.
-func (f *MemFile) CheckExists() error {
+func (f MemFile) CheckExists() error {
 	if !f.Exists() {
 		return NewErrDoesNotExistFileReader(f)
 	}
@@ -150,12 +150,12 @@ func (f *MemFile) CheckExists() error {
 }
 
 // ContentHash returns the DefaultContentHash for the file.
-func (f *MemFile) ContentHash() (string, error) {
+func (f MemFile) ContentHash() (string, error) {
 	return f.ContentHashContext(context.Background())
 }
 
 // ContentHashContext returns the DefaultContentHash for the file.
-func (f *MemFile) ContentHashContext(ctx context.Context) (string, error) {
+func (f MemFile) ContentHashContext(ctx context.Context) (string, error) {
 	return DefaultContentHash(ctx, bytes.NewReader(f.FileData))
 }
 
@@ -167,12 +167,12 @@ func (f *MemFile) Write(b []byte) (int, error) {
 }
 
 // ReadAll returns the FileData without copying it.
-func (f *MemFile) ReadAll() (data []byte, err error) {
+func (f MemFile) ReadAll() (data []byte, err error) {
 	return f.FileData, nil
 }
 
 // ReadAllContext returns the FileData without copying it.
-func (f *MemFile) ReadAllContext(ctx context.Context) (data []byte, err error) {
+func (f MemFile) ReadAllContext(ctx context.Context) (data []byte, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -181,7 +181,7 @@ func (f *MemFile) ReadAllContext(ctx context.Context) (data []byte, err error) {
 
 // ReadAllContentHash returns the FileData without copying it
 // together with the DefaultContentHash.
-func (f *MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
+func (f MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
 	hash, err = DefaultContentHash(ctx, bytes.NewReader(f.FileData))
 	if err != nil {
 		return nil, "", err
@@ -190,12 +190,12 @@ func (f *MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash str
 }
 
 // ReadAllString returns the FileData as string.
-func (f *MemFile) ReadAllString() (string, error) {
+func (f MemFile) ReadAllString() (string, error) {
 	return string(f.FileData), nil
 }
 
 // ReadAllStringContext returns the FileData as string.
-func (f *MemFile) ReadAllStringContext(ctx context.Context) (string, error) {
+func (f MemFile) ReadAllStringContext(ctx context.Context) (string, error) {
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
@@ -217,7 +217,7 @@ func (f *MemFile) ReadAllStringContext(ctx context.Context) (string, error) {
 // same input source.
 //
 // ReadAt implements the interface io.ReaderAt.
-func (f *MemFile) ReadAt(p []byte, off int64) (n int, err error) {
+func (f MemFile) ReadAt(p []byte, off int64) (n int, err error) {
 	if off >= int64(len(f.FileData)) {
 		return 0, io.EOF
 	}
@@ -229,25 +229,25 @@ func (f *MemFile) ReadAt(p []byte, off int64) (n int, err error) {
 }
 
 // WriteTo implements the io.WriterTo interface
-func (f *MemFile) WriteTo(writer io.Writer) (n int64, err error) {
+func (f MemFile) WriteTo(writer io.Writer) (n int64, err error) {
 	i, err := writer.Write(f.FileData)
 	return int64(i), err
 }
 
 // OpenReader opens the file and returns a os/fs.File that has be closed after reading
-func (f *MemFile) OpenReader() (fs.File, error) {
+func (f MemFile) OpenReader() (fs.File, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
 // OpenReadSeeker opens the file and returns a ReadSeekCloser.
 // Use OpenReader if seeking is not necessary because implementations
 // may need additional buffering to support seeking or not support it at all.
-func (f *MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
+func (f MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
-func (f *MemFile) ReadJSON(ctx context.Context, output interface{}) error {
+func (f MemFile) ReadJSON(ctx context.Context, output interface{}) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -255,7 +255,7 @@ func (f *MemFile) ReadJSON(ctx context.Context, output interface{}) error {
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
-func (f *MemFile) ReadXML(ctx context.Context, output interface{}) error {
+func (f MemFile) ReadXML(ctx context.Context, output interface{}) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -263,7 +263,7 @@ func (f *MemFile) ReadXML(ctx context.Context, output interface{}) error {
 }
 
 // MarshalJSON implements the json.Marshaler interface
-func (f *MemFile) MarshalJSON() ([]byte, error) {
+func (f MemFile) MarshalJSON() ([]byte, error) {
 	encodedData := base64.RawURLEncoding.EncodeToString(f.FileData)
 	return json.Marshal(map[string]string{f.FileName: encodedData})
 }
@@ -291,7 +291,7 @@ func (f *MemFile) UnmarshalJSON(j []byte) error {
 
 // GobEncode gob encodes the file name and content,
 // implementing encoding/gob.GobEncoder.
-func (f *MemFile) GobEncode() ([]byte, error) {
+func (f MemFile) GobEncode() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 16+len(f.FileName)+len(f.FileData)))
 	enc := gob.NewEncoder(buf)
 	err := enc.Encode(f.FileName)
@@ -321,12 +321,12 @@ func (f *MemFile) GobDecode(gobBytes []byte) error {
 }
 
 // Stat returns a io/fs.FileInfo describing the MemFile.
-func (f *MemFile) Stat() (fs.FileInfo, error) {
+func (f MemFile) Stat() (fs.FileInfo, error) {
 	return memFileInfo{f}, nil
 }
 
 type memFileInfo struct {
-	*MemFile
+	MemFile
 }
 
 func (i memFileInfo) Mode() fs.FileMode  { return 0666 }
