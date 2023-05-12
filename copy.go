@@ -24,8 +24,8 @@ func CopyFile(ctx context.Context, src FileReader, dest File, perm ...Permission
 // up to that path will be created.
 // If dest is an existing directory, then a file with the base name
 // of src will be created there.
-// An non nil pointer to a []byte variable must be passed for buf.
-// If that variable holds a non zero length byte slice, then this slice will be used as buffer,
+// An pointer to a []byte variable must be passed for buf.
+// If that variable holds a non zero length byte slice then this slice will be used as buffer,
 // else a byte slice will be allocated and assigned to the variable.
 // Use this function to re-use buffers between CopyFileBuf calls.
 func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, perm ...Permissions) error {

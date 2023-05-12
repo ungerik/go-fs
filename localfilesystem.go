@@ -586,7 +586,7 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 	}
 	defer w.Close() //#nosec G307
 
-	if *buf == nil {
+	if len(*buf) == 0 {
 		*buf = make([]byte, copyBufferSize)
 	}
 	_, err = io.CopyBuffer(w, r, *buf)
