@@ -3,7 +3,6 @@ package fs
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
 	"encoding/xml"
@@ -18,15 +17,15 @@ import (
 
 // Ensure MemFile implements interfaces
 var (
-	_ FileReader       = MemFile{}
-	_ io.Writer        = &MemFile{}
-	_ io.WriterTo      = MemFile{}
-	_ io.ReaderAt      = MemFile{}
-	_ json.Marshaler   = MemFile{}
-	_ json.Unmarshaler = &MemFile{}
-	_ gob.GobEncoder   = MemFile{}
-	_ gob.GobDecoder   = &MemFile{}
-	_ fmt.Stringer     = MemFile{}
+	_ FileReader  = MemFile{}
+	_ io.Writer   = &MemFile{}
+	_ io.WriterTo = MemFile{}
+	_ io.ReaderAt = MemFile{}
+	// _ json.Marshaler   = MemFile{}
+	// _ json.Unmarshaler = &MemFile{}
+	_ gob.GobEncoder = MemFile{}
+	_ gob.GobDecoder = &MemFile{}
+	_ fmt.Stringer   = MemFile{}
 )
 
 // MemFile implements FileReader with a filename and an in memory byte slice.
@@ -47,8 +46,8 @@ var (
 //   - gob.GobDecoder
 //   - fmt.Stringer
 type MemFile struct {
-	FileName string
-	FileData []byte
+	FileName string `json:"filename"`
+	FileData []byte `json:"data"`
 }
 
 // NewMemFile returns a new MemFile
@@ -262,32 +261,32 @@ func (f MemFile) ReadXML(ctx context.Context, output interface{}) error {
 	return xml.Unmarshal(f.FileData, output)
 }
 
-// MarshalJSON implements the json.Marshaler interface
-func (f MemFile) MarshalJSON() ([]byte, error) {
-	encodedData := base64.RawURLEncoding.EncodeToString(f.FileData)
-	return json.Marshal(map[string]string{f.FileName: encodedData})
-}
+// // MarshalJSON implements the json.Marshaler interface
+// func (f MemFile) MarshalJSON() ([]byte, error) {
+// 	encodedData := base64.RawURLEncoding.EncodeToString(f.FileData)
+// 	return json.Marshal(map[string]string{f.FileName: encodedData})
+// }
 
-// UnmarshalJSON implements the json.Unmarshaler interface
-func (f *MemFile) UnmarshalJSON(j []byte) error {
-	m := make(map[string]string, 1)
-	err := json.Unmarshal(j, &m)
-	if err != nil {
-		return fmt.Errorf("can't unmarshal JSON as MemFile: %w", err)
-	}
-	if len(m) != 1 {
-		return fmt.Errorf("can't unmarshal JSON as MemFile: %d object keys", len(m))
-	}
-	for fileName, encodedData := range m {
-		fileData, err := base64.RawURLEncoding.DecodeString(encodedData)
-		if err != nil {
-			return fmt.Errorf("can't decode base64 JSON data of MemFile: %w", err)
-		}
-		f.FileName = fileName
-		f.FileData = fileData
-	}
-	return nil
-}
+// // UnmarshalJSON implements the json.Unmarshaler interface
+// func (f *MemFile) UnmarshalJSON(j []byte) error {
+// 	m := make(map[string]string, 1)
+// 	err := json.Unmarshal(j, &m)
+// 	if err != nil {
+// 		return fmt.Errorf("can't unmarshal JSON as MemFile: %w", err)
+// 	}
+// 	if len(m) != 1 {
+// 		return fmt.Errorf("can't unmarshal JSON as MemFile: %d object keys", len(m))
+// 	}
+// 	for fileName, encodedData := range m {
+// 		fileData, err := base64.RawURLEncoding.DecodeString(encodedData)
+// 		if err != nil {
+// 			return fmt.Errorf("can't decode base64 JSON data of MemFile: %w", err)
+// 		}
+// 		f.FileName = fileName
+// 		f.FileData = fileData
+// 	}
+// 	return nil
+// }
 
 // GobEncode gob encodes the file name and content,
 // implementing encoding/gob.GobEncoder.
