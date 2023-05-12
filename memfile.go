@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -107,8 +108,13 @@ func (f *MemFile) String() string {
 	return fmt.Sprintf("MemFile{name: `%s`, size: %d}", f.FileName, len(f.FileData))
 }
 
-// Name returns the name of the file
+// Name returns the name of the file.
+// If FileName contains a slash or backslash
+// then only the part after it will be returned.
 func (f *MemFile) Name() string {
+	if i := strings.LastIndexAny(f.FileName, `/\`); i >= 0 {
+		return f.FileName[i+1:]
+	}
 	return f.FileName
 }
 
