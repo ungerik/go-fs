@@ -158,13 +158,6 @@ func (f MemFile) ContentHashContext(ctx context.Context) (string, error) {
 	return DefaultContentHash(ctx, bytes.NewReader(f.FileData))
 }
 
-// Write appends the passed bytes to the FileData,
-// implementing the io.Writer interface.
-func (f *MemFile) Write(b []byte) (int, error) {
-	f.FileData = append(f.FileData, b...)
-	return len(b), nil
-}
-
 // ReadAll returns the FileData without copying it.
 func (f MemFile) ReadAll() (data []byte, err error) {
 	return f.FileData, nil
@@ -317,6 +310,13 @@ func (f *MemFile) GobDecode(gobBytes []byte) error {
 		return fmt.Errorf("MemFile.GobDecode: error decoding FileData: %w", err)
 	}
 	return nil
+}
+
+// Write appends the passed bytes to the FileData,
+// implementing the io.Writer interface.
+func (f *MemFile) Write(b []byte) (int, error) {
+	f.FileData = append(f.FileData, b...)
+	return len(b), nil
 }
 
 // Stat returns a io/fs.FileInfo describing the MemFile.
