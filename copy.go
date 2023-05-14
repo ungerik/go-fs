@@ -47,16 +47,19 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 		}
 	}
 
-	srcFile, srcIsFile := src.(File)
-	if srcIsFile {
+	switch f := src.(type) {
+	case File:
 		// Use same file system copy if possible
-		fs := srcFile.FileSystem()
-		if fs == dest.FileSystem() {
-			return fs.CopyFile(ctx, srcFile.Path(), dest.Path(), buf)
+		if fs := f.FileSystem(); fs == dest.FileSystem() {
+			return fs.CopyFile(ctx, f.Path(), dest.Path(), buf)
 		}
-	} else if srcMemFile, ok := src.(*MemFile); ok {
+		// Else use at least same permissions
+		if len(perm) == 0 {
+			perm = []Permissions{f.Permissions()}
+		}
+	case MemFile:
 		// Don't use io.CopyBuffer in case of MemFile
-		return dest.WriteAllContext(ctx, srcMemFile.FileData, perm...)
+		return dest.WriteAllContext(ctx, f.FileData, perm...)
 	}
 
 	r, err := src.OpenReader()
@@ -65,9 +68,6 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 	}
 	defer r.Close()
 
-	if len(perm) == 0 && srcIsFile {
-		perm = []Permissions{srcFile.Permissions()}
-	}
 	w, err := dest.OpenWriter(perm...)
 	if err != nil {
 		return fmt.Errorf("CopyFileBuf: can't open dest writer: %w", err)

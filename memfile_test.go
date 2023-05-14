@@ -51,12 +51,16 @@ func TestMemFile_Ext(t *testing.T) {
 
 func TestMemFile_MarshalJSON(t *testing.T) {
 	tests := []struct {
-		memFile *MemFile
+		memFile MemFile
 		want    []byte
 	}{
 		{
-			memFile: nil,
-			want:    []byte(`null`),
+			memFile: MemFile{},
+			want:    []byte(`{"filename":""}`),
+		},
+		{
+			memFile: NewMemFile("no data", nil),
+			want:    []byte(`{"filename":"no data"}`),
 		},
 		{
 			memFile: NewMemFile("hello.txt", []byte(`Hello World!`)),

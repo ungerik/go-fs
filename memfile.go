@@ -47,50 +47,50 @@ var (
 //   - fmt.Stringer
 type MemFile struct {
 	FileName string `json:"filename"`
-	FileData []byte `json:"data"`
+	FileData []byte `json:"data,omitempty"`
 }
 
 // NewMemFile returns a new MemFile
-func NewMemFile(name string, data []byte) *MemFile {
-	return &MemFile{FileName: name, FileData: data}
+func NewMemFile(name string, data []byte) MemFile {
+	return MemFile{FileName: name, FileData: data}
 }
 
 // ReadMemFile returns a new MemFile with name and data from fileReader.
-// If the passed fileReader is a *MemFile then
+// If the passed fileReader is a MemFile then
 // its FileData is used directly without copying it.
-func ReadMemFile(ctx context.Context, fileReader FileReader) (*MemFile, error) {
-	data, err := fileReader.ReadAllContext(ctx) // Does not copy in case of fileReader.(*MemFile)
+func ReadMemFile(ctx context.Context, fileReader FileReader) (MemFile, error) {
+	data, err := fileReader.ReadAllContext(ctx) // Does not copy in case of fileReader.(MemFile)
 	if err != nil {
-		return nil, fmt.Errorf("ReadMemFile: error reading from FileReader: %w", err)
+		return MemFile{}, fmt.Errorf("ReadMemFile: error reading from FileReader: %w", err)
 	}
-	return &MemFile{FileName: fileReader.Name(), FileData: data}, nil
+	return MemFile{FileName: fileReader.Name(), FileData: data}, nil
 }
 
 // ReadMemFileRename returns a new MemFile with the data from fileReader and the passed name.
-// If the passed fileReader is a *MemFile then
+// If the passed fileReader is a MemFile then
 // its FileData is used directly without copying it.
-func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) (*MemFile, error) {
-	data, err := fileReader.ReadAllContext(ctx) // Does not copy in case of fileReader.(*MemFile)
+func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) (MemFile, error) {
+	data, err := fileReader.ReadAllContext(ctx) // Does not copy in case of fileReader.(MemFile)
 	if err != nil {
-		return nil, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
+		return MemFile{}, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
 	}
-	return &MemFile{FileName: name, FileData: data}, nil
+	return MemFile{FileName: name, FileData: data}, nil
 }
 
 // ReadAllMemFile returns a new MemFile with the data
 // from ReadAllContext(r) and the passed name.
 // It reads all data from r until EOF is reached,
 // another error is returned, or the context got canceled.
-func ReadAllMemFile(ctx context.Context, r io.Reader, name string) (*MemFile, error) {
+func ReadAllMemFile(ctx context.Context, r io.Reader, name string) (MemFile, error) {
 	data, err := ReadAllContext(ctx, r)
 	if err != nil {
-		return nil, fmt.Errorf("ReadAllMemFile: error reading from io.Reader: %w", err)
+		return MemFile{}, fmt.Errorf("ReadAllMemFile: error reading from io.Reader: %w", err)
 	}
-	return &MemFile{FileName: name, FileData: data}, nil
+	return MemFile{FileName: name, FileData: data}, nil
 }
 
-// MemFilesAsFileReaders converts []*MemFile to []FileReader
-func MemFilesAsFileReaders(memFiles []*MemFile) []FileReader {
+// MemFilesAsFileReaders converts []MemFile to []FileReader
+func MemFilesAsFileReaders(memFiles []MemFile) []FileReader {
 	if len(memFiles) == 0 {
 		return nil
 	}
