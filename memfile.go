@@ -30,9 +30,13 @@ var (
 
 // MemFile implements FileReader with a filename and an in memory byte slice.
 // It exposes FileName and FileData as exported struct fields to emphasize
-// its simple nature as just an wrapper of a name and some bytes.
-// Note that the ReadAll method returns FileData directly
-// without copying it to optimized performance.
+// its simple nature as just an wrapper around a name and some bytes.
+//
+// As a small an simple struct MemFile is usually passed by value.
+// This is why NewMemFile does not return a pointer.
+//
+// Note that the ReadAll and ReadAllContext methods return FileData
+// directly without copying it to optimized performance.
 // So be careful when modifying the FileData bytes of a MemFile.
 //
 // MemFile implements the following interfaces:
