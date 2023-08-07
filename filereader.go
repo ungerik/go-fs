@@ -77,6 +77,58 @@ type FileReader interface {
 	GobEncode() ([]byte, error)
 }
 
+// FileReaderNameIndex returns the slice index of the first FileReader
+// with the passed filename returned from its Name method
+// or -1 in case of no match.
+func FileReaderNameIndex(fileReades []FileReader, filename string) int {
+	for i, f := range fileReades {
+		if f.Name() == filename {
+			return i
+		}
+	}
+	return -1
+}
+
+// FileReaderLocalPathIndex returns the slice index of the first FileReader
+// with the passed localPath returned from its LocalPath method
+// or -1 in case of no match.
+func FileReaderLocalPathIndex(fileReades []FileReader, localPath string) int {
+	for i, f := range fileReades {
+		if f.LocalPath() == localPath {
+			return i
+		}
+	}
+	return -1
+}
+
+// FileReaderContentHashIndex returns the slice index of the first FileReader
+// with the passed hash returned from its ContentHashContext method
+// or -1 in case of no match.
+func FileReaderContentHashIndex(ctx context.Context, fileReades []FileReader, hash string) (int, error) {
+	for i, f := range fileReades {
+		fFash, err := f.ContentHashContext(ctx)
+		if err != nil {
+			return -1, err
+		}
+		if fFash == hash {
+			return i, nil
+		}
+	}
+	return -1, nil
+}
+
+// FileReaderNotExistsIndex returns the slice index of the first FileReader
+// where the Exists method returned false
+// or -1 in case of no match.
+func FileReaderNotExistsIndex(fileReades []FileReader, filename string) int {
+	for i, f := range fileReades {
+		if !f.Exists() {
+			return i
+		}
+	}
+	return -1
+}
+
 // FileReaderWithName returns a new FileReader that wraps the passed fileReader,
 // but the Name() method returns the passed name instead of name of the wrapped fileReader.
 func FileReaderWithName(fileReader FileReader, name string) FileReader {
