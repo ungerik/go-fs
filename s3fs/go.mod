@@ -3,7 +3,7 @@ module github.com/ungerik/go-fs/s3fs
 go 1.21
 
 // Parent module in same repo
-require github.com/ungerik/go-fs v0.0.0-20230807121636-85bb9b253cc4
+require github.com/ungerik/go-fs v0.0.0-20230810125331-2caa3ff9c562
 
 replace github.com/ungerik/go-fs => ../
 
