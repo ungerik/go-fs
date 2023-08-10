@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -74,7 +75,7 @@ func (*ReadOnlyBase) OpenReadWriter(filePath string, perm []Permissions) (ReadWr
 }
 
 func (*ReadOnlyBase) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
-	return nil, fmt.Errorf("Watch %w", ErrNotSupported)
+	return nil, fmt.Errorf("Watch is %w", errors.ErrUnsupported)
 }
 
 func (*ReadOnlyBase) Truncate(filePath string, size int64) error {

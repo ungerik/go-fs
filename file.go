@@ -677,7 +677,7 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	return io.Copy(writer, reader)
 }
 
-// OpenReader opens the file and returns a os/fs.File that has be closed after reading
+// OpenReader opens the file and returns a os/fs.File that has to be closed after reading
 func (file File) OpenReader() (fs.File, error) {
 	if file == "" {
 		return nil, ErrEmptyPath

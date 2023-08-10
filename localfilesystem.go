@@ -290,7 +290,7 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 			return ctx.Err()
 		}
 
-		osInfos, err := f.Readdir(64)
+		osInfos, err := f.Readdir(64) // TODO use more efficient ReadDir()
 		if err != nil {
 			eof = (err == io.EOF)
 			if !eof {

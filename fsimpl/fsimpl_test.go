@@ -85,3 +85,49 @@ func ExampleTrimExt() {
 	// dir.with
 	// dir.with
 }
+
+func TestJoinCleanPath(t *testing.T) {
+	type args struct {
+		uriParts   []string
+		trimPrefix string
+		separator  string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: `empty`,
+			args: args{uriParts: nil, trimPrefix: ``, separator: ``},
+			want: `.`,
+		},
+		{
+			name: `C:`,
+			args: args{uriParts: nil, trimPrefix: `C:`, separator: `\`},
+			want: `\`,
+		},
+		{
+			name: `C:\`,
+			args: args{uriParts: nil, trimPrefix: `C:\`, separator: `\`},
+			want: `\`,
+		},
+		{
+			name: `C:\\`,
+			args: args{uriParts: nil, trimPrefix: `C:\`, separator: `\`},
+			want: `\`,
+		},
+		{
+			name: `weird C:\ with / sep`,
+			args: args{uriParts: nil, trimPrefix: `C:\`, separator: `/`},
+			want: `/`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := JoinCleanPath(tt.args.uriParts, tt.args.trimPrefix, tt.args.separator); got != tt.want {
+				t.Errorf("JoinCleanPath(%#v, %#v, %#v) = %#v, want %#v", tt.args.uriParts, tt.args.trimPrefix, tt.args.separator, got, tt.want)
+			}
+		})
+	}
+}

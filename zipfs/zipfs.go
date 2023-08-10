@@ -3,6 +3,7 @@ package zipfs
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	iofs "io/fs"
@@ -442,27 +443,27 @@ func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permission
 }
 
 func (*ZipFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
-	return nil, fmt.Errorf("ZipFileSystem.Watch %w", fs.ErrNotSupported)
+	return nil, fmt.Errorf("%w: ZipFileSystem.Watch", errors.ErrUnsupported)
 }
 
 func (*ZipFileSystem) Truncate(filePath string, size int64) error {
-	return fmt.Errorf("ZipFileSystem.Truncate %w", fs.ErrNotSupported)
+	return fmt.Errorf("%w: ZipFileSystem.Truncate", errors.ErrUnsupported)
 }
 
 func (*ZipFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
-	return fmt.Errorf("ZipFileSystem.CopyFile %w", fs.ErrNotSupported)
+	return fmt.Errorf("%w: ZipFileSystem.CopyFile", errors.ErrUnsupported)
 }
 
 func (*ZipFileSystem) Rename(filePath string, newName string) error {
-	return fmt.Errorf("ZipFileSystem.Rename %w", fs.ErrNotSupported)
+	return fmt.Errorf("%w: ZipFileSystem.Rename", errors.ErrUnsupported)
 }
 
 func (*ZipFileSystem) Move(filePath string, destPath string) error {
-	return fmt.Errorf("ZipFileSystem.Move %w", fs.ErrNotSupported)
+	return fmt.Errorf("%w: ZipFileSystem.Move", errors.ErrUnsupported)
 }
 
 func (*ZipFileSystem) Remove(filePath string) error {
-	return fmt.Errorf("ZipFileSystem.Remove %w", fs.ErrNotSupported)
+	return fmt.Errorf("%w: ZipFileSystem.Remove", errors.ErrUnsupported)
 }
 
 type nopCloser struct {

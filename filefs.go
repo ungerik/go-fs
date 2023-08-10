@@ -1,7 +1,12 @@
 package fs
 
 import (
+	"errors"
+	"fmt"
 	"io/fs"
+	"path"
+	"sort"
+	"strings"
 )
 
 var (
@@ -28,57 +33,95 @@ type FileFS struct {
 }
 
 // Stat returns a FileInfo describing the file.
+//
 // This method implements the io/fs.StatFS interface.
 func (f FileFS) Stat(name string) (fs.FileInfo, error) {
 	return f.File.Join(name).Stat()
 }
 
 // Sub returns an FS corresponding to the subtree rooted at dir.
+//
 // This method implements the io/fs.SubFS interface.
 func (f FileFS) Sub(dir string) (fs.FS, error) {
 	return f.File.Join(dir).AsFS(), nil
 }
 
 // Open opens the named file.
+//
 // This method implements the io/fs.FS interface.
 func (f FileFS) Open(name string) (fs.File, error) {
-	panic("TODO")
+	if err := checkFileFSName(name); err != nil {
+		return nil, err
+	}
+	return f.File.Join(name).OpenReader()
 }
 
 // ReadFile reads the named file and returns its contents.
+//
 // This method implements the io/fs.ReadFileFS interface.
 func (f FileFS) ReadFile(name string) ([]byte, error) {
+	if err := checkFileFSName(name); err != nil {
+		return nil, err
+	}
 	return f.File.Join(name).ReadAll()
 }
 
 // ReadDir reads the named directory
 // and returns a list of directory entries sorted by filename.
+//
 // This method implements the io/fs.ReadDirFS interface.
-func (f FileFS) ReadDir(name string) (entries []fs.DirEntry, err error) {
-	err = f.File.Join(name).ListDir(func(file File) error {
+func (f FileFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if err := checkFileFSName(name); err != nil {
+		return nil, err
+	}
+	var entries []fs.DirEntry
+	err := f.File.Join(name).ListDir(func(file File) error {
 		entries = append(entries, file.AsDirEntry())
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	return entries, nil
 }
 
 // Glob returns the names of all files matching pattern,
 // providing an implementation of the top-level
 // Glob function.
+//
 // This method implements the io/fs.GlobFS interface.
 func (f FileFS) Glob(pattern string) (names []string, err error) {
+	// if pattern == `u[u][i-i][\d][\d-\d]i[r]/*e*` {
+	// 	fmt.Println(pattern)
+	// }
+	if strings.Contains(pattern, "//") || strings.Contains(pattern, "[]") {
+		return nil, fmt.Errorf("invalid glob pattern: %#v", pattern)
+	}
+	parentPattern, childPattern, cut := strings.Cut(pattern, "/")
 	err = f.File.ListDir(
 		func(file File) error {
 			names = append(names, file.Name())
 			return nil
 		},
-		pattern,
+		parentPattern,
 	)
 	if err != nil {
 		return nil, err
+	}
+	sort.Strings(names)
+	if cut {
+		parentNames := names
+		names = nil // Don't include parents in final result
+		for _, parent := range parentNames {
+			children, err := f.File.Join(parent).AsFS().Glob(childPattern)
+			if err != nil {
+				return nil, err
+			}
+			for _, child := range children {
+				names = append(names, path.Join(parent, child))
+			}
+		}
 	}
 	return names, nil
 }
@@ -117,4 +160,14 @@ func (e FileDirEntry) Type() fs.FileMode {
 // not the link's target.
 func (e FileDirEntry) Info() (fs.FileInfo, error) {
 	return e.File.Stat()
+}
+
+func checkFileFSName(name string) error {
+	if name == "" {
+		return errors.New("empty filename")
+	}
+	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.Contains(name, "/.") || strings.Contains(name, "//") {
+		return fmt.Errorf("invalid filename: %s", name)
+	}
+	return nil
 }

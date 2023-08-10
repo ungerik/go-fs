@@ -7,6 +7,7 @@ package httpfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	iofs "io/fs"
@@ -186,14 +187,14 @@ func (f *HTTPFileSystem) IsHidden(filePath string) bool       { return false }
 func (f *HTTPFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
 func (f *HTTPFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
-	return nil, fmt.Errorf("HTTPFileSystem.Watch: %w", fs.ErrNotSupported)
+	return nil, fmt.Errorf("HTTPFileSystem.Watch: %w", errors.ErrUnsupported)
 }
 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files or directores with a name that matches
 // at least one of the patterns are returned.
 func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("HTTPFileSystem.ListDirInfo: %w", fs.ErrNotSupported)
+	return fmt.Errorf("HTTPFileSystem.ListDirInfo: %w", errors.ErrUnsupported)
 }
 
 // ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
@@ -201,7 +202,7 @@ func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callba
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
 func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("HTTPFileSystem.ListDirInfoRecursive: %w", fs.ErrNotSupported)
+	return fmt.Errorf("HTTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
 }
 
 // ListDirMax returns at most max files and directories in dirPath.
@@ -209,7 +210,7 @@ func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath strin
 // If any patterns are passed, then only files or directories with a name that matches
 // at least one of the patterns are returned.
 func (f *HTTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]fs.File, error) {
-	return nil, fmt.Errorf("HTTPFileSystem.ListDirMax: %w", fs.ErrNotSupported)
+	return nil, fmt.Errorf("HTTPFileSystem.ListDirMax: %w", errors.ErrUnsupported)
 }
 
 func (f *HTTPFileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {

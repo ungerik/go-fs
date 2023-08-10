@@ -199,7 +199,7 @@ func (s *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return fs.ErrNotSupported
+	return errors.ErrUnsupported
 
 	// if len(dirPath) > 1 && strings.HasPrefix(dirPath, "/") {
 	// 	dirPath = dirPath[1:]
@@ -285,7 +285,7 @@ func (s *S3FileSystem) ListDirMax(ctx context.Context, dirPath string, max int, 
 }
 
 func (s *S3FileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
-	return fs.ErrNotSupported
+	return errors.ErrUnsupported
 }
 
 func (s *S3FileSystem) User(filePath string) string {
@@ -293,7 +293,7 @@ func (s *S3FileSystem) User(filePath string) string {
 }
 
 func (s *S3FileSystem) SetUser(filePath string, user string) error {
-	return fs.ErrNotSupported
+	return errors.ErrUnsupported
 }
 
 func (s *S3FileSystem) Group(filePath string) string {
@@ -301,7 +301,7 @@ func (s *S3FileSystem) Group(filePath string) string {
 }
 
 func (s *S3FileSystem) SetGroup(filePath string, group string) error {
-	return fs.ErrNotSupported
+	return errors.ErrUnsupported
 }
 
 func (s *S3FileSystem) Touch(filePath string, perm []fs.Permissions) error {
@@ -557,5 +557,5 @@ func (s *S3FileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (
 		}
 	}()*/
 	//return retChan, nil
-	return nil, fs.ErrNotSupported
+	return nil, errors.ErrUnsupported
 }

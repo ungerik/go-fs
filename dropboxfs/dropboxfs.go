@@ -424,7 +424,7 @@ func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permiss
 }
 
 func (dbfs *DropboxFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
-	return nil, fmt.Errorf("DropboxFileSystem.Watch: %w", fs.ErrNotSupported)
+	return nil, fmt.Errorf("DropboxFileSystem.Watch: %w", errors.ErrUnsupported)
 }
 
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
