@@ -215,7 +215,7 @@ func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool)
 		IsRegular:   true,
 		IsHidden:    len(name) > 0 && name[0] == '.',
 		Size:        size,
-		ModTime:     zipFile.ModTime(),
+		ModTime:     zipFile.Modified,
 		Permissions: fs.AllRead,
 	}
 	return info.StdFileInfo(), nil
@@ -274,9 +274,9 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 		parts := strings.Split(file.Name, Separator)
 		lastIndex := len(parts) - 1
 		for i := 0; i < lastIndex; i++ {
-			currentDir = currentDir.addChildDir(parts[i], file.ModTime())
+			currentDir = currentDir.addChildDir(parts[i], file.Modified)
 		}
-		currentDir.addChildFile(parts[lastIndex], file.ModTime(), int64(file.UncompressedSize64))
+		currentDir.addChildFile(parts[lastIndex], file.Modified, int64(file.UncompressedSize64))
 	}
 
 	if dirPath != "" && dirPath != "." && dirPath != Separator {
