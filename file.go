@@ -183,7 +183,7 @@ func (file File) Joinf(format string, args ...interface{}) File {
 	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
 }
 
-// Stat returns a io/fs.FileInfo describing the File.
+// Stat returns a standard library io/fs.FileInfo describing the file.
 func (file File) Stat() (fs.FileInfo, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -193,6 +193,8 @@ func (file File) Stat() (fs.FileInfo, error) {
 }
 
 // Info returns FileInfo. The FileInfo.ContentHash field is optional.
+//
+// Use File.Stat to get a standard library io/fs.FileInfo.
 func (file File) Info() FileInfo {
 	fileSystem, path := file.ParseRawURI()
 	info, err := fileSystem.Stat(path)
@@ -677,7 +679,7 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	return io.Copy(writer, reader)
 }
 
-// OpenReader opens the file and returns a os/fs.File that has to be closed after reading
+// OpenReader opens the file and returns a io/fs.File that has to be closed after reading
 func (file File) OpenReader() (fs.File, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -1060,22 +1062,24 @@ func (file File) HTTPFileSystem() http.FileSystem {
 	return httpFileSystem{root: file}
 }
 
-// AsFS wraps the file as a FileFS that implements
-// the FS interfaces of the os/fs package for a File.
+// StdFS wraps the file as a StdFS struct that
+// implements the io/fs.FS interface
+// of the standard library for a File.
 //
-// FileFS implements the following interfaces:
-//
-//	os/fs.FS
-//	os/fs.SubFS
-//	os/fs.StatFS
-//	os/fs.GlobFS
-//	os/fs.ReadDirFS
-//	os/fs.ReadFileFS
-func (file File) AsFS() FileFS {
-	return FileFS{file}
+// StdFS implements the following interfaces:
+//   - io/fs.FS
+//   - io/fs.SubFS
+//   - io/fs.StatFS
+//   - io/fs.GlobFS
+//   - io/fs.ReadDirFS
+//   - io/fs.ReadFileFS
+func (file File) StdFS() StdFS {
+	return StdFS{file}
 }
 
-// AsDirEntry wraps the file as os/fs.DirEntry.
-func (file File) AsDirEntry() fs.DirEntry {
-	return FileDirEntry{file}
+// StdDirEntry wraps the file as a StdDirEntry struct
+// that implements the io/fs.DirEntry interface
+// from the standard library for a File.
+func (file File) StdDirEntry() StdDirEntry {
+	return StdDirEntry{file}
 }

@@ -176,7 +176,7 @@ func (f *HTTPFileSystem) Stat(filePath string) (os.FileInfo, error) {
 	if !info.Exists {
 		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
 	}
-	return info.OSFileInfo(), nil
+	return info.StdFileInfo(), nil
 }
 
 func (f *HTTPFileSystem) Exists(filePath string) bool {

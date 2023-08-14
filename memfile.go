@@ -230,7 +230,7 @@ func (f MemFile) WriteTo(writer io.Writer) (n int64, err error) {
 	return int64(i), err
 }
 
-// OpenReader opens the file and returns a os/fs.File that has be closed after reading
+// OpenReader opens the file and returns a io/fs.File that has to be closed after reading
 func (f MemFile) OpenReader() (fs.File, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }

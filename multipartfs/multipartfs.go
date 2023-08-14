@@ -190,7 +190,7 @@ func (mpfs *MultipartFileSystem) Stat(filePath string) (os.FileInfo, error) {
 	if !info.Exists {
 		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
 	}
-	return info.OSFileInfo(), nil
+	return info.StdFileInfo(), nil
 }
 
 func (mpfs *MultipartFileSystem) Exists(filePath string) bool {

@@ -137,7 +137,7 @@ str, err := file.ReadAllString(ctx)
 var w io.Writer
 n, err := file.WriteTo(w)
 
-f, err := file.OpenReader()     // os/fs.File 
+f, err := file.OpenReader()     // io/fs.File 
 r, err := file.OpenReadSeeker() // fs.ReadSeekCloser
 
 ```

@@ -56,13 +56,9 @@ func NewNonExistingFileInfo(name string) FileInfo {
 	}
 }
 
-// OSFileInfo returns an os.FileInfo wrapper
+// StdFileInfo returns an io/fs.FileInfo wrapper
 // for the data stored in the FileInfo struct.
-func (i *FileInfo) OSFileInfo() os.FileInfo { return fileInfo{i} }
-
-// FSFileInfo returns an io/fs.FileInfo wrapper
-// for the data stored in the FileInfo struct.
-func (i *FileInfo) FSFileInfo() fs.FileInfo { return fileInfo{i} }
+func (i *FileInfo) StdFileInfo() fs.FileInfo { return fileInfo{i} }
 
 // fileInfo implements os.FileInfo and fs.FileInfo for a given FileInfo
 type fileInfo struct{ i *FileInfo }

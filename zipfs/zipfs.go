@@ -218,7 +218,7 @@ func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool)
 		ModTime:     zipFile.ModTime(),
 		Permissions: fs.AllRead,
 	}
-	return info.OSFileInfo(), nil
+	return info.StdFileInfo(), nil
 }
 
 func (zipfs *ZipFileSystem) Stat(filePath string) (os.FileInfo, error) {

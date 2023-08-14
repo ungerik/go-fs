@@ -5,11 +5,11 @@ import (
 	"testing/fstest"
 )
 
-func TestFileFS(t *testing.T) {
+func TestStdFS(t *testing.T) {
 	err := fstest.TestFS(
-		File(".").AsFS(),
-		"filefs_test.go",
-		"filefs.go",
+		File(".").StdFS(),
+		"stdfs_test.go",
+		"stdfs.go",
 		"go.mod",
 		"go.sum",
 		"LICENSE",
