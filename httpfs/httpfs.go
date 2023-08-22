@@ -12,7 +12,6 @@ import (
 	"io"
 	iofs "io/fs"
 	"net/http"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -171,7 +170,7 @@ func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
 	}
 }
 
-func (f *HTTPFileSystem) Stat(filePath string) (os.FileInfo, error) {
+func (f *HTTPFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	info := f.info(filePath)
 	if !info.Exists {
 		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
@@ -193,7 +192,7 @@ func (f *HTTPFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event))
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files or directores with a name that matches
 // at least one of the patterns are returned.
-func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
+func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
 	return fmt.Errorf("HTTPFileSystem.ListDirInfo: %w", errors.ErrUnsupported)
 }
 
@@ -201,7 +200,7 @@ func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callba
 // recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
-func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
+func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
 	return fmt.Errorf("HTTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
 }
 

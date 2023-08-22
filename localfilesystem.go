@@ -179,7 +179,7 @@ func (local *LocalFileSystem) VolumeName(filePath string) string {
 	return filepath.VolumeName(filePath)
 }
 
-func (local *LocalFileSystem) Stat(filePath string) (os.FileInfo, error) {
+func (local *LocalFileSystem) Stat(filePath string) (fs.FileInfo, error) {
 	filePath = expandTilde(filePath)
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -194,18 +194,6 @@ func (local *LocalFileSystem) Stat(filePath string) (os.FileInfo, error) {
 func (local *LocalFileSystem) Exists(filePath string) bool {
 	_, err := os.Stat(expandTilde(filePath))
 	return err == nil
-}
-
-func convertFileInfo(filePath string, info os.FileInfo) FileInfo {
-	filePath = expandTilde(filePath)
-	hidden, err := hasLocalFileAttributeHidden(filePath)
-	if err != nil {
-		// Should not happen, this is why we are logging the error
-		fmt.Fprintf(os.Stderr, "hasLocalFileAttributeHidden(%s): %+v\n", filePath, err)
-		return FileInfo{}
-	}
-	name := info.Name()
-	return NewFileInfo(info, hidden || len(name) > 0 && name[0] == '.')
 }
 
 func (local *LocalFileSystem) IsHidden(filePath string) bool {
@@ -257,12 +245,12 @@ func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err erro
 	filePath = expandTilde(filePath)
 	linkedPath, err := os.Readlink(filePath)
 	if err != nil {
-		return "", fmt.Errorf("LocalFileSystem.ReadSymbolicLink(%q): error reading link: %w", file, err)
+		return "", fmt.Errorf("LocalFileSystem.ReadSymbolicLink(%#v): error reading link: %w", file, err)
 	}
 	return File(linkedPath), nil
 }
 
-func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -270,7 +258,15 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 		return ErrEmptyPath
 	}
 
+	dirPath = filepath.Clean(dirPath)
 	dirPath = expandTilde(dirPath)
+
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("LocalFileSystem.ListDirInfo(%#v): %w", dirPath, err)
+		}
+	}()
+
 	info, err := local.Stat(dirPath)
 	if err != nil {
 		return err
@@ -281,7 +277,7 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 
 	f, err := os.Open(dirPath) //#nosec G304
 	if err != nil {
-		return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): error opening directory: %w", dirPath, err)
+		return fmt.Errorf("error opening directory: %w", err)
 	}
 	defer f.Close() //#nosec G307
 
@@ -290,34 +286,49 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 			return ctx.Err()
 		}
 
-		osInfos, err := f.Readdir(64) // TODO use more efficient ReadDir()
+		entries, err := f.ReadDir(256)
 		if err != nil {
 			eof = (err == io.EOF)
 			if !eof {
-				return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): error reading directory: %w", dirPath, err)
+				return fmt.Errorf("error reading directory: %w", err)
 			}
 		}
 
-		for _, osInfo := range osInfos {
-			name := osInfo.Name()
+		for _, entry := range entries {
+			name := entry.Name()
 			match, err := local.MatchAnyPattern(name, patterns)
-			if match {
-				file := local.JoinCleanFile(dirPath, name)
-				info := convertFileInfo(string(file), osInfo)
-				err = callback(file, info)
-			}
 			if err != nil {
-				return fmt.Errorf("LocalFileSystem.ListDirInfo(%q): %w", dirPath, err)
+				return err
+			}
+			if !match {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return fmt.Errorf("error from fs.DirEntry.Info: %w", err)
+			}
+			filePath := filepath.Join(dirPath, name)
+			hidden := strings.HasPrefix(name, ".")
+			if !hidden {
+				hidden, err = hasLocalFileAttributeHidden(filePath)
+				if err != nil {
+					return fmt.Errorf("hasLocalFileAttributeHidden(%#v): %+v\n", filePath, err)
+				}
+			}
+			err = callback(NewFileInfo(File(filePath), info, hidden))
+			if err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func (local *LocalFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (local *LocalFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
+	dirPath = filepath.Clean(dirPath)
 	dirPath = expandTilde(dirPath)
 	return ListDirInfoRecursiveImpl(ctx, local, dirPath, callback, patterns)
 }
@@ -330,7 +341,15 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 		return nil, ErrEmptyPath
 	}
 
+	dirPath = filepath.Clean(dirPath)
 	dirPath = expandTilde(dirPath)
+
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("LocalFileSystem.ListDirMax(%#v): %w", dirPath, err)
+		}
+	}()
+
 	info, err := local.Stat(dirPath)
 	if err != nil {
 		return nil, err
@@ -341,7 +360,7 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 
 	f, err := os.Open(dirPath) //#nosec G304
 	if err != nil {
-		return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): error opening directory: %w", dirPath, err)
+		return nil, fmt.Errorf("error opening directory: %w", err)
 	}
 	defer f.Close() //#nosec G307
 
@@ -362,18 +381,19 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 		if err != nil {
 			eof = (err == io.EOF)
 			if !eof {
-				return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): error reading directory: %w", dirPath, err)
+				return nil, fmt.Errorf("error reading directory: %w", err)
 			}
 		}
 
 		for _, name := range names {
 			match, err := local.MatchAnyPattern(name, patterns)
-			if match {
-				files = append(files, local.JoinCleanFile(dirPath, name))
-			}
 			if err != nil {
-				return nil, fmt.Errorf("LocalFileSystem.ListDirMax(%q): %w", dirPath, err)
+				return nil, err
 			}
+			if !match {
+				continue
+			}
+			files = append(files, File(filepath.Join(dirPath, name)))
 		}
 
 		if n > 0 {
@@ -451,7 +471,7 @@ func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error 
 		// On Linux need additional chmod because os.Mkdir does not set OthersWrite bit
 		err = os.Chmod(dirPath, p.FileMode(true))
 		if err != nil {
-			return fmt.Errorf("LocalFileSystem.MakeDir(%q): can't chmod to %0o: %w", dirPath, p, err)
+			return fmt.Errorf("LocalFileSystem.MakeDir(%#v): can't chmod to %0o: %w", dirPath, p, err)
 		}
 	}
 

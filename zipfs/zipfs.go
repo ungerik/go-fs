@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
-	"os"
 	"path"
 	"strings"
 
@@ -198,9 +197,9 @@ func (zipfs *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir 
 	return nil, false
 }
 
-func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (os.FileInfo, error) {
+func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (iofs.FileInfo, error) {
 	if zipFile == nil {
-		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(zipfs.File(filePath))
 	}
 
 	name := path.Base(filePath)
@@ -221,7 +220,7 @@ func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool)
 	return info.StdFileInfo(), nil
 }
 
-func (zipfs *ZipFileSystem) Stat(filePath string) (os.FileInfo, error) {
+func (zipfs *ZipFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	if zipfs.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
 	}
@@ -246,7 +245,7 @@ func (zipfs *ZipFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) (err error) {
 	if zipfs.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
 	}
@@ -254,7 +253,7 @@ func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, cal
 	panic("not implemented")
 }
 
-func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
+func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -295,8 +294,7 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 				return ctx.Err()
 			}
 
-			file := zipfs.File(child.filePath)
-			err := callback(file, child.FileInfo)
+			err := callback(child.FileInfo)
 			if err != nil {
 				return err
 			}
@@ -319,7 +317,7 @@ func (zipfs *ZipFileSystem) ListDirMax(ctx context.Context, dirPath string, max 
 	}
 
 	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return zipfs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
+		return zipfs.ListDirInfo(ctx, dirPath, fs.FileInfoCallback(callback), patterns)
 	})
 }
 

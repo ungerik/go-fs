@@ -5,7 +5,6 @@ import (
 	"io"
 	"io/fs"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 )
@@ -95,7 +94,7 @@ func (InvalidFileSystem) VolumeName(filePath string) string {
 	return ""
 }
 
-func (InvalidFileSystem) Stat(filePath string) (os.FileInfo, error) {
+func (InvalidFileSystem) Stat(filePath string) (fs.FileInfo, error) {
 	return nil, ErrInvalidFileSystem
 }
 
@@ -111,11 +110,11 @@ func (invalid InvalidFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (invalid InvalidFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (invalid InvalidFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (invalid InvalidFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
 

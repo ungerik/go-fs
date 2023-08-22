@@ -5,7 +5,6 @@ import (
 	iofs "io/fs"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -176,6 +175,7 @@ func (mpfs *MultipartFileSystem) info(filePath string) (info fs.FileInfo) {
 		}
 	}
 	if info.Exists {
+		info.File = fs.File(filePath)
 		info.IsRegular = true
 		info.Size = -1
 		// TODO get time from header if exists
@@ -185,7 +185,7 @@ func (mpfs *MultipartFileSystem) info(filePath string) (info fs.FileInfo) {
 	return info
 }
 
-func (mpfs *MultipartFileSystem) Stat(filePath string) (os.FileInfo, error) {
+func (mpfs *MultipartFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	info := mpfs.info(filePath)
 	if !info.Exists {
 		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
@@ -198,13 +198,12 @@ func (mpfs *MultipartFileSystem) Exists(filePath string) bool {
 }
 
 func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
-	name := path.Base(filePath)
-	return len(name) > 0 && name[0] == '.'
+	return strings.HasPrefix(path.Base(filePath), ".")
 }
 
 func (mpfs *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) (err error) {
+func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -213,9 +212,8 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 	switch len(parts) {
 	case 0:
 		for fileDir := range mpfs.Form.File {
-			file := mpfs.File(fileDir)
 			info := mpfs.info(fileDir)
-			err = callback(file, info)
+			err = callback(info)
 			if err != nil {
 				return err
 			}
@@ -225,9 +223,9 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 		ff, _ := mpfs.Form.File[dir]
 		if len(ff) > 0 {
 			for _, f := range ff {
-				file := mpfs.JoinCleanFile(dir, f.Filename)
-				info := mpfs.info(file.Path())
-				err = callback(file, info)
+				filePath := path.Join(dir, f.Filename)
+				info := mpfs.info(filePath)
+				err = callback(info)
 				if err != nil {
 					return err
 				}
@@ -243,13 +241,13 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 	return err
 }
 
-func (mpfs *MultipartFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.File, fs.FileInfo) error, patterns []string) error {
+func (mpfs *MultipartFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
 	return fs.ListDirInfoRecursiveImpl(ctx, mpfs, dirPath, callback, patterns)
 }
 
 func (mpfs *MultipartFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
 	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return mpfs.ListDirInfo(ctx, dirPath, fs.FileCallback(callback).FileInfoCallback, patterns)
+		return mpfs.ListDirInfo(ctx, dirPath, fs.FileInfoCallback(callback), patterns)
 	})
 }
 

@@ -9,7 +9,6 @@ import (
 )
 
 type node struct {
-	filePath string
 	fs.FileInfo
 	children map[string]*node
 }
@@ -75,8 +74,8 @@ func (n *node) addChildDir(filePath string, modTime time.Time) (child *node) {
 		return child
 	}
 	child = &node{
-		filePath: filePath,
 		FileInfo: fs.FileInfo{
+			File:        fs.File(filePath),
 			Name:        name,
 			Exists:      true,
 			IsDir:       true,
@@ -102,8 +101,8 @@ func (n *node) addChildFile(filePath string, modTime time.Time, size int64) (chi
 		return child
 	}
 	child = &node{
-		filePath: filePath,
 		FileInfo: fs.FileInfo{
+			File:        fs.File(filePath),
 			Name:        name,
 			Exists:      true,
 			IsDir:       false,

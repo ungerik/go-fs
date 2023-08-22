@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"io/fs"
 	"net/http"
 	"os"
 )
@@ -34,11 +35,11 @@ func (fs httpFileSystem) Open(name string) (http.File, error) {
 type httpFile struct {
 	ReadSeekCloser             // set when not a directory
 	dir            File        // set when directory
-	info           os.FileInfo // always set
+	info           fs.FileInfo // always set
 }
 
-func (f *httpFile) Readdir(count int) (files []os.FileInfo, err error) {
-	err = f.dir.ListDirInfo(func(_ File, info FileInfo) error {
+func (f *httpFile) Readdir(count int) (files []fs.FileInfo, err error) {
+	err = f.dir.ListDirInfo(func(info FileInfo) error {
 		if !info.IsHidden {
 			files = append(files, info.StdFileInfo())
 		}
@@ -53,6 +54,6 @@ func (f *httpFile) Readdir(count int) (files []os.FileInfo, err error) {
 	return files, nil
 }
 
-func (f *httpFile) Stat() (os.FileInfo, error) {
+func (f *httpFile) Stat() (fs.FileInfo, error) {
 	return f.info, nil
 }

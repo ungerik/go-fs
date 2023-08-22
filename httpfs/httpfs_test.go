@@ -16,8 +16,9 @@ func TestStat(t *testing.T) {
 	assert.Greater(t, osInfo.Size(), int64(0), "file size greater zero")
 	assert.NotZero(t, osInfo.ModTime(), "has modified time")
 
-	info := fs.File("https://raw.githubusercontent.com/ungerik/go-fs/master/README.md").Info()
-	assert.Equal(t, fs.NewFileInfo(osInfo, false), info)
+	file := fs.File("https://raw.githubusercontent.com/ungerik/go-fs/master/README.md")
+	info := file.Info()
+	assert.Equal(t, fs.NewFileInfo(file, osInfo, false), info)
 }
 
 func TestReadAll(t *testing.T) {

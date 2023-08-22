@@ -59,10 +59,13 @@ func StringsToFileReaders(fileURIs []string) []FileReader {
 	return fileReaders
 }
 
-type FileCallback func(File) error
-
-func (f FileCallback) FileInfoCallback(file File, info FileInfo) error {
-	return f(file)
+// FileInfoCallback converts a File callback function
+// into a FileInfo callback function that is calling
+// the passed fileCallback with the FileInfo.File.
+func FileInfoCallback(fileCallback func(File) error) func(FileInfo) error {
+	return func(info FileInfo) error {
+		return fileCallback(info.File)
+	}
 }
 
 // ReadAllContext reads all data from r until EOF is reached,

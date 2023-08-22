@@ -192,45 +192,44 @@ func (file File) Stat() (fs.FileInfo, error) {
 	return fileSystem.Stat(path)
 }
 
-// Info returns FileInfo. The FileInfo.ContentHash field is optional.
+// Info returns FileInfo.
 //
 // Use File.Stat to get a standard library io/fs.FileInfo.
 func (file File) Info() FileInfo {
 	fileSystem, path := file.ParseRawURI()
 	info, err := fileSystem.Stat(path)
 	if err != nil {
-		_, name := fileSystem.DirAndName(path)
-		return NewNonExistingFileInfo(name)
+		return NewNonExistingFileInfo(file)
 	}
-	return NewFileInfo(info, fileSystem.IsHidden(path))
+	return NewFileInfo(file, info, fileSystem.IsHidden(path))
 }
 
 // InfoWithContentHash returns a FileInfo, but in contrast to Stat
 // it always fills the ContentHash field.
-func (file File) InfoWithContentHash() (FileInfo, error) {
-	return file.InfoWithContentHashContext(context.Background())
-}
+// func (file File) InfoWithContentHash() (FileInfo, error) {
+// 	return file.InfoWithContentHashContext(context.Background())
+// }
 
 // InfoWithContentHashContext returns a FileInfo, but in contrast to Stat
 // it always fills the ContentHash field.
-func (file File) InfoWithContentHashContext(ctx context.Context) (FileInfo, error) {
-	if file == "" {
-		return FileInfo{}, ErrEmptyPath
-	}
-	info := file.Info()
-	if !info.IsDir && info.ContentHash == "" {
-		reader, err := file.OpenReader()
-		if err != nil {
-			return FileInfo{}, err
-		}
-		defer reader.Close()
-		info.ContentHash, err = DefaultContentHash(ctx, reader)
-		if err != nil {
-			return FileInfo{}, err
-		}
-	}
-	return info, nil
-}
+// func (file File) InfoWithContentHashContext(ctx context.Context) (FileInfo, error) {
+// 	if file == "" {
+// 		return FileInfo{}, ErrEmptyPath
+// 	}
+// 	info := file.Info()
+// 	if !info.IsDir && info.ContentHash == "" {
+// 		reader, err := file.OpenReader()
+// 		if err != nil {
+// 			return FileInfo{}, err
+// 		}
+// 		defer reader.Close()
+// 		info.ContentHash, err = DefaultContentHash(ctx, reader)
+// 		if err != nil {
+// 			return FileInfo{}, err
+// 		}
+// 	}
+// 	return info, nil
+// }
 
 // Exists returns a file or directory with the path of File exists.
 func (file File) Exists() bool {
@@ -354,9 +353,8 @@ func (file File) ContentHashContext(ctx context.Context) (string, error) {
 	if file == "" {
 		return "", ErrEmptyPath
 	}
-	info := file.Info()
-	if info.IsDir || info.ContentHash != "" {
-		return info.ContentHash, nil
+	if file.IsDir() {
+		return "", nil
 	}
 	reader, err := file.OpenReader()
 	if err != nil {
@@ -398,7 +396,7 @@ func (file File) ListDir(callback func(File) error, patterns ...string) error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(context.Background(), path, FileCallback(callback).FileInfoCallback, patterns)
+	return fileSystem.ListDirInfo(context.Background(), path, FileInfoCallback(callback), patterns)
 }
 
 // ListDirContext calls the passed callback function for every file and directory in dirPath.
@@ -409,13 +407,13 @@ func (file File) ListDirContext(ctx context.Context, callback func(File) error, 
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(ctx, path, FileCallback(callback).FileInfoCallback, patterns)
+	return fileSystem.ListDirInfo(ctx, path, FileInfoCallback(callback), patterns)
 }
 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfo(callback func(File, FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfo(callback func(FileInfo) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -426,7 +424,7 @@ func (file File) ListDirInfo(callback func(File, FileInfo) error, patterns ...st
 // ListDirInfoContext calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfoContext(ctx context.Context, callback func(File, FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfoContext(ctx context.Context, callback func(FileInfo) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -441,7 +439,7 @@ func (file File) ListDirRecursive(callback func(File) error, patterns ...string)
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(context.Background(), path, FileCallback(callback).FileInfoCallback, patterns)
+	return fileSystem.ListDirInfoRecursive(context.Background(), path, FileInfoCallback(callback), patterns)
 }
 
 // ListDirRecursiveContext returns only files.
@@ -451,14 +449,14 @@ func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(ctx, path, FileCallback(callback).FileInfoCallback, patterns)
+	return fileSystem.ListDirInfoRecursive(ctx, path, FileInfoCallback(callback), patterns)
 }
 
 // ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
 // recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfoRecursive(callback func(File, FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfoRecursive(callback func(FileInfo) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -470,7 +468,7 @@ func (file File) ListDirInfoRecursive(callback func(File, FileInfo) error, patte
 // recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(File, FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(FileInfo) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}

@@ -31,9 +31,9 @@ func writeEmptyFile(file File) error {
 
 func deleteRandomFileInDir(dir File) error {
 	var files []File
-	err := dir.ListDirInfo(func(file File, info FileInfo) error {
+	err := dir.ListDirInfo(func(info FileInfo) error {
 		if !info.IsDir {
-			files = append(files, file)
+			files = append(files, info.File)
 		}
 		return nil
 	})
@@ -49,9 +49,9 @@ func deleteRandomFileInDir(dir File) error {
 
 func deleteRandomSubDir(dir File) error {
 	var dirs []File
-	err := dir.ListDirInfo(func(file File, info FileInfo) error {
+	err := dir.ListDirInfo(func(info FileInfo) error {
 		if info.IsDir {
-			dirs = append(dirs, file)
+			dirs = append(dirs, info.File)
 		}
 		return nil
 	})

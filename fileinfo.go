@@ -7,9 +7,11 @@ import (
 )
 
 // FileInfo is a snapshot of a file's stat information.
-// In comparison to os.FileInfo it's not an interface
+// In comparison to io/fs.FileInfo it's not an interface
 // but a struct with public fields.
 type FileInfo struct {
+	File File
+
 	Name        string
 	Exists      bool
 	IsDir       bool
@@ -18,11 +20,6 @@ type FileInfo struct {
 	Size        int64
 	ModTime     time.Time
 	Permissions Permissions
-
-	// ContentHash is otional.
-	// For performance reasons, it will only be filled
-	// if the FileSystem implementation already has it cached.
-	ContentHash string
 }
 
 // NewFileInfo returns a FileInfo using the
@@ -30,26 +27,30 @@ type FileInfo struct {
 // of an existing file.
 // Use NewNonExistingFileInfo to get
 // a FileInfo for non existing file.
-func NewFileInfo(i os.FileInfo, hidden bool) FileInfo {
-	name := i.Name()
-	mode := i.Mode()
+func NewFileInfo(file File, info fs.FileInfo, hidden bool) FileInfo {
+	mode := info.Mode()
 	return FileInfo{
-		Name:        name,
+		File:        file,
+		Name:        info.Name(),
 		Exists:      true,
 		IsDir:       mode.IsDir(),
 		IsRegular:   mode.IsRegular(),
 		IsHidden:    hidden,
-		Size:        i.Size(),
-		ModTime:     i.ModTime(),
+		Size:        info.Size(),
+		ModTime:     info.ModTime(),
 		Permissions: Permissions(mode.Perm()),
 	}
 }
 
 // NewNonExistingFileInfo returns a FileInfo
-// for a non existing file with the given name.
+// for a potentially non existing file.
+// FileInfo.Exists will be false, but the
+// file may exist at any point of time.
 // IsHidden will be true if the name starts with a dot.
-func NewNonExistingFileInfo(name string) FileInfo {
+func NewNonExistingFileInfo(file File) FileInfo {
+	name := file.Name()
 	return FileInfo{
+		File:     file,
 		Name:     name,
 		Exists:   false,
 		IsHidden: len(name) > 0 && name[0] == '.',

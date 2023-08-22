@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -117,7 +116,7 @@ func (subfs *SubFileSystem) AbsPath(filePath string) string {
 	return subfs.Parent.AbsPath(filePath)
 }
 
-func (subfs *SubFileSystem) Stat(filePath string) (os.FileInfo, error) {
+func (subfs *SubFileSystem) Stat(filePath string) (fs.FileInfo, error) {
 	return subfs.Parent.Stat(filePath)
 }
 
@@ -133,11 +132,11 @@ func (subfs *SubFileSystem) IsSymbolicLink(filePath string) bool {
 	return subfs.Parent.IsSymbolicLink(filePath)
 }
 
-func (subfs *SubFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (subfs *SubFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(File, FileInfo) error, patterns []string) error {
+func (subfs *SubFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }
 
