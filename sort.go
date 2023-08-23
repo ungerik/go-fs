@@ -40,19 +40,19 @@ func SortBySize(files []File) {
 	})
 }
 
-func SortByModTime(files []File) {
+func SortByModified(files []File) {
 	sort.Slice(files, func(i, j int) bool {
-		return files[i].ModTime().Before(files[j].ModTime())
+		return files[i].Modified().Before(files[j].Modified())
 	})
 }
 
-func SortByModTimeDirsFirst(files []File) {
+func SortByModifiedDirsFirst(files []File) {
 	sort.Slice(files, func(i, j int) bool {
 		fi := files[i]
 		fj := files[j]
 		if isLess, ok := compareDirsFirst(fi, fj); ok {
 			return isLess
 		}
-		return fi.ModTime().Before(fj.ModTime())
+		return fi.Modified().Before(fj.Modified())
 	})
 }

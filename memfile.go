@@ -328,6 +328,11 @@ func (f MemFile) Stat() (fs.FileInfo, error) {
 	return memFileInfo{f}, nil
 }
 
+var _ fs.FileInfo = memFileInfo{}
+
+// memFileInfo implements io/fs.FileInfo for a MemFile.
+//
+// Name() is derived from MemFile.
 type memFileInfo struct {
 	MemFile
 }

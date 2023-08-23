@@ -10,15 +10,14 @@ import (
 // In comparison to io/fs.FileInfo it's not an interface
 // but a struct with public fields.
 type FileInfo struct {
-	File File
-
+	File        File
 	Name        string
 	Exists      bool
 	IsDir       bool
 	IsRegular   bool
 	IsHidden    bool
 	Size        int64
-	ModTime     time.Time
+	Modified    time.Time
 	Permissions Permissions
 }
 
@@ -37,7 +36,7 @@ func NewFileInfo(file File, info fs.FileInfo, hidden bool) FileInfo {
 		IsRegular:   mode.IsRegular(),
 		IsHidden:    hidden,
 		Size:        info.Size(),
-		ModTime:     info.ModTime(),
+		Modified:    info.ModTime(),
 		Permissions: Permissions(mode.Perm()),
 	}
 }
@@ -67,7 +66,7 @@ type fileInfo struct{ i *FileInfo }
 func (f fileInfo) Name() string       { return f.i.Name }
 func (f fileInfo) Size() int64        { return f.i.Size }
 func (f fileInfo) Mode() os.FileMode  { return f.i.Permissions.FileMode(f.i.IsDir) }
-func (f fileInfo) ModTime() time.Time { return f.i.ModTime }
+func (f fileInfo) ModTime() time.Time { return f.i.Modified }
 func (f fileInfo) IsDir() bool        { return f.i.IsDir }
 func (f fileInfo) Sys() interface{}   { return nil }
 

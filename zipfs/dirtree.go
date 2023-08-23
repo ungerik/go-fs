@@ -82,7 +82,7 @@ func (n *node) addChildDir(filePath string, modTime time.Time) (child *node) {
 			IsRegular:   true,
 			IsHidden:    name[0] == '.',
 			Size:        0,
-			ModTime:     modTime,
+			Modified:    modTime,
 			Permissions: fs.AllRead,
 		},
 		children: make(map[string]*node),
@@ -109,7 +109,7 @@ func (n *node) addChildFile(filePath string, modTime time.Time, size int64) (chi
 			IsRegular:   true,
 			IsHidden:    name[0] == '.',
 			Size:        size,
-			ModTime:     modTime,
+			Modified:    modTime,
 			Permissions: fs.AllRead,
 		},
 	}

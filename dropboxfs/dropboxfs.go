@@ -159,7 +159,7 @@ func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
 	info.IsDir = meta.Tag == "folder"
 	info.IsHidden = len(meta.Name) > 0 && meta.Name[0] == '.'
 	info.Size = int64(meta.Size)
-	info.ModTime = meta.ServerModified
+	info.Modified = meta.ServerModified
 	if info.IsDir {
 		info.Permissions = DefaultDirPermissions
 	} else {

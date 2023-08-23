@@ -179,7 +179,7 @@ func (mpfs *MultipartFileSystem) info(filePath string) (info fs.FileInfo) {
 		info.IsRegular = true
 		info.Size = -1
 		// TODO get time from header if exists
-		info.ModTime = time.Now()
+		info.Modified = time.Now()
 		info.Permissions = fs.AllRead
 	}
 	return info

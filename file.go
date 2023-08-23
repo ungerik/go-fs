@@ -364,7 +364,7 @@ func (file File) ContentHashContext(ctx context.Context) (string, error) {
 	return DefaultContentHash(ctx, reader)
 }
 
-func (file File) ModTime() time.Time {
+func (file File) Modified() time.Time {
 	stat, err := file.Stat()
 	if err != nil {
 		return time.Time{}

@@ -214,7 +214,7 @@ func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool)
 		IsRegular:   true,
 		IsHidden:    len(name) > 0 && name[0] == '.',
 		Size:        size,
-		ModTime:     zipFile.Modified,
+		Modified:    zipFile.Modified,
 		Permissions: fs.AllRead,
 	}
 	return info.StdFileInfo(), nil

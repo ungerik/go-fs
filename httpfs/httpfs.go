@@ -131,10 +131,10 @@ func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
 			}
 		}
 		return fs.FileInfo{
-			Exists:  true,
-			Name:    path.Base(request.URL.Path),
-			Size:    response.ContentLength,
-			ModTime: modified,
+			Exists:   true,
+			Name:     path.Base(request.URL.Path),
+			Size:     response.ContentLength,
+			Modified: modified,
 		}
 	}
 
@@ -163,10 +163,10 @@ func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
 	}
 
 	return fs.FileInfo{
-		Exists:  true,
-		Name:    path.Base(request.URL.Path),
-		Size:    size,
-		ModTime: modified,
+		Exists:   true,
+		Name:     path.Base(request.URL.Path),
+		Size:     size,
+		Modified: modified,
 	}
 }
 

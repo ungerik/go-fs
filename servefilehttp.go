@@ -42,7 +42,7 @@ func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file Fil
 	}
 	var modTime time.Time
 	if f, ok := file.(File); ok {
-		modTime = f.ModTime()
+		modTime = f.Modified()
 	}
 	http.ServeContent(response, request, file.Name(), modTime, readSeeker)
 }
