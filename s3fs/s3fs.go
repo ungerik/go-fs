@@ -68,6 +68,11 @@ func NewLoadDefaultConfig(ctx context.Context, bucketName string, readOnly bool)
 	return New(client, bucketName, readOnly), nil
 }
 
+func (s *S3FileSystem) Close() error {
+	fs.Unregister(s)
+	return nil
+}
+
 func (s *S3FileSystem) IsReadOnly() bool {
 	return s.readOnly
 }
@@ -76,7 +81,7 @@ func (s *S3FileSystem) IsWriteOnly() bool {
 	return false
 }
 
-func (s *S3FileSystem) Root() fs.File {
+func (s *S3FileSystem) RootDir() fs.File {
 	return fs.File(s.prefix + Separator)
 }
 
@@ -131,8 +136,8 @@ func (s *S3FileSystem) MatchAnyPattern(name string, patterns []string) (bool, er
 	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
-func (s *S3FileSystem) DirAndName(filePath string) (dir, name string) {
-	return fsimpl.DirAndName(filePath, 0, Separator)
+func (s *S3FileSystem) SplitDirAndName(filePath string) (dir, name string) {
+	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
 func (s *S3FileSystem) VolumeName(filePath string) string {
@@ -493,34 +498,6 @@ func (s *S3FileSystem) CopyFile(ctx context.Context, srcFile string, destFile st
 		err = fs.NewErrDoesNotExist(fs.File(s.prefix + srcFile))
 	}
 	return err
-}
-
-func (s *S3FileSystem) Rename(filePath string, newName string) error {
-	if s.readOnly {
-		return fs.ErrReadOnlyFileSystem
-	}
-	if filePath == "" || newName == "" {
-		return fs.ErrEmptyPath
-	}
-	if strings.ContainsAny(newName, `/\`) {
-		return errors.New("newName for Rename() contains path separators: " + newName)
-	}
-	newPath := path.Join(path.Dir(filePath), newName)
-	return s.Move(filePath, newPath)
-}
-
-func (s *S3FileSystem) Move(filePath string, destPath string) error {
-	if s.readOnly {
-		return fs.ErrReadOnlyFileSystem
-	}
-	if filePath == "" || destPath == "" {
-		return fs.ErrEmptyPath
-	}
-	err := s.CopyFile(context.Background(), filePath, destPath, nil)
-	if err != nil {
-		return err
-	}
-	return s.Remove(filePath)
 }
 
 func (s *S3FileSystem) Remove(filePath string) error {

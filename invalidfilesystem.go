@@ -21,7 +21,7 @@ func (invalid InvalidFileSystem) IsWriteOnly() bool {
 	return false
 }
 
-func (invalid InvalidFileSystem) Root() File {
+func (invalid InvalidFileSystem) RootDir() File {
 	return ""
 }
 
@@ -86,12 +86,8 @@ func (invalid InvalidFileSystem) MatchAnyPattern(name string, patterns []string)
 	return false, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) DirAndName(filePath string) (dir, name string) {
+func (invalid InvalidFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return "", ""
-}
-
-func (InvalidFileSystem) VolumeName(filePath string) string {
-	return ""
 }
 
 func (InvalidFileSystem) Stat(filePath string) (fs.FileInfo, error) {
@@ -178,23 +174,7 @@ func (invalid InvalidFileSystem) OpenReadWriter(filePath string, perm []Permissi
 	return nil, ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
-	return nil, ErrInvalidFileSystem
-}
-
 func (invalid InvalidFileSystem) Truncate(filePath string, size int64) error {
-	return ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
-	return ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) Rename(filePath string, newName string) error {
-	return ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) Move(filePath string, destPath string) error {
 	return ErrInvalidFileSystem
 }
 

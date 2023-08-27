@@ -23,8 +23,9 @@ func RandomString() string {
 
 // Ext returns the extension of filePath including the point, or an empty string.
 // Example:
-//   Ext("image.png", "/") == ".png"
-//   Ext("image.png/file", "/") == ""
+//
+//	Ext("image.png", "/") == ".png"
+//	Ext("image.png/file", "/") == ""
 func Ext(filePath, separator string) string {
 	if separator != "" {
 		filePath = filePath[strings.LastIndex(filePath, separator)+1:]
@@ -49,12 +50,12 @@ func TrimExt(filePath, separator string) string {
 	return filePath[:p]
 }
 
-// DirAndName is a generic helper for FileSystem.DirAndName implementations.
+// SplitDirAndName is a generic helper for FileSystem.SplitDirAndName implementations.
 // path.Split or filepath.Split don't have the wanted behaviour when given a path ending in a separator.
-// DirAndName returns the parent directory of filePath and the name with that directory of the last filePath element.
+// SplitDirAndName returns the parent directory of filePath and the name with that directory of the last filePath element.
 // If filePath is the root of the file systeme, then an empty string will be returned as name.
 // If filePath does not contain a separator before the name part, then "." will be returned as dir.
-func DirAndName(filePath string, volumeLen int, separator string) (dir, name string) {
+func SplitDirAndName(filePath string, volumeLen int, separator string) (dir, name string) {
 	if filePath == "" {
 		return "", ""
 	}

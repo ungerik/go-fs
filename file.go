@@ -126,7 +126,7 @@ func (file File) Dir() File {
 // If filePath is the root of the file systeme, then an empty string will be returned for name.
 func (file File) DirAndName() (dir File, name string) {
 	fileSystem, path := file.ParseRawURI()
-	dirPath, name := fileSystem.DirAndName(path)
+	dirPath, name := fileSystem.SplitDirAndName(path)
 	return File(dirPath), name
 }
 
@@ -135,7 +135,10 @@ func (file File) DirAndName() (dir File, name string) {
 // A volume is for example "C:" on Windows
 func (file File) VolumeName() string {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.VolumeName(path)
+	if fs, ok := fileSystem.(VolumeNameFileSystem); ok {
+		return fs.VolumeName(path)
+	}
+	return ""
 }
 
 // Ext returns the extension of file name including the point, or an empty string.
@@ -828,7 +831,10 @@ func (file File) Watch(onEvent func(File, Event)) (cancel func() error, err erro
 		return nil, errors.New("nil callback")
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Watch(path, onEvent)
+	if fs, ok := fileSystem.(WatchFileSystem); ok {
+		return fs.Watch(path, onEvent)
+	}
+	return nil, fmt.Errorf("%w: %s Watch", errors.ErrUnsupported, fileSystem.Name())
 }
 
 func (file File) Truncate(size int64) error {
@@ -847,11 +853,36 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 		return "", ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	err = fileSystem.Rename(path, newName)
-	if err != nil {
-		return "", err
+	if strings.ContainsAny(newName, fileSystem.Separator()) {
+		return "", fmt.Errorf("newName %#v for File.Rename contains path separator %s", newName, fileSystem.Separator())
 	}
-	return file.Dir().Join(newName), nil
+	switch fs := fileSystem.(type) {
+	case RenameFileSystem:
+		newPath, err := fs.Rename(path, newName)
+		if err != nil {
+			return "", err
+		}
+		return fs.RootDir().Join(newPath), nil
+	case MoveFileSystem:
+		dir, _ := fs.SplitDirAndName(path)
+		newPath := fs.JoinCleanPath(dir, newName)
+		err = fs.Move(path, newPath)
+		if err != nil {
+			return "", err
+		}
+		return fs.RootDir().Join(newPath), nil
+	default:
+		renamedFile = file.Dir().Join(newName)
+		if file.IsDir() {
+			err = renamedFile.MakeDir()
+		} else {
+			err = CopyFile(context.Background(), file, renamedFile)
+		}
+		if err != nil {
+			return "", err
+		}
+		return renamedFile, file.Remove()
+	}
 }
 
 // Renamef changes the name of a file where fmt.Sprintf(newNameFormat, args...)

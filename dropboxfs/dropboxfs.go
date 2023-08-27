@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	iofs "io/fs"
 	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -74,7 +72,7 @@ func (dbfs *DropboxFileSystem) IsWriteOnly() bool {
 	return false
 }
 
-func (dbfs *DropboxFileSystem) Root() fs.File {
+func (dbfs *DropboxFileSystem) RootDir() fs.File {
 	return fs.File(dbfs.prefix + Separator)
 }
 
@@ -126,19 +124,12 @@ func (dbfs *DropboxFileSystem) Separator() string {
 	return Separator
 }
 
-// MatchAnyPattern returns true if name matches any of patterns,
-// or if len(patterns) == 0.
-// The match per pattern works like path.Match or filepath.Match
 func (*DropboxFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
 	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
-func (dbfs *DropboxFileSystem) DirAndName(filePath string) (dir, name string) {
-	return fsimpl.DirAndName(filePath, 0, Separator)
-}
-
-func (*DropboxFileSystem) VolumeName(filePath string) string {
-	return ""
+func (dbfs *DropboxFileSystem) SplitDirAndName(filePath string) (dir, name string) {
+	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
 func (dbfs *DropboxFileSystem) IsAbsPath(filePath string) bool {
@@ -422,10 +413,6 @@ func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permiss
 	return fileBuffer, nil
 }
 
-func (dbfs *DropboxFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
-	return nil, fmt.Errorf("DropboxFileSystem.Watch: %w", errors.ErrUnsupported)
-}
-
 func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
 	info := dbfs.info(filePath)
 	if !info.Exists {
@@ -458,18 +445,6 @@ func (dbfs *DropboxFileSystem) CopyFile(ctx context.Context, srcFile string, des
 		ToPath:   destFile,
 	})
 	return dbfs.wrapErrNotExist(srcFile, err)
-}
-
-func (dbfs *DropboxFileSystem) Rename(filePath string, newName string) error {
-	if strings.ContainsAny(newName, "/\\") {
-		return errors.New("newName for Rename() contains a path separators: " + newName)
-	}
-	newPath := filepath.Join(filepath.Dir(filePath), newName)
-	_, err := dbfs.client.Files.Move(&dropbox.MoveInput{
-		FromPath: filePath,
-		ToPath:   newPath,
-	})
-	return dbfs.wrapErrNotExist(filePath, err)
 }
 
 func (dbfs *DropboxFileSystem) Move(filePath string, destPath string) error {

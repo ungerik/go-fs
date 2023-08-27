@@ -51,7 +51,9 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 	case File:
 		// Use same file system copy if possible
 		if fs := f.FileSystem(); fs == dest.FileSystem() {
-			return fs.CopyFile(ctx, f.Path(), dest.Path(), buf)
+			if copyFS, ok := fs.(CopyFileSystem); ok {
+				return copyFS.CopyFile(ctx, f.Path(), dest.Path(), buf)
+			}
 		}
 		// Else use at least same permissions
 		if len(perm) == 0 {

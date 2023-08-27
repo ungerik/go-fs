@@ -30,13 +30,13 @@ func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath
 	}
-
 	srcFS, srcPath := source.ParseRawURI()
 	destFS, destPath := destination.ParseRawURI()
 	if srcFS == destFS {
-		return srcFS.Move(srcPath, destPath)
+		if moveFS, ok := srcFS.(MoveFileSystem); ok {
+			return moveFS.Move(srcPath, destPath)
+		}
 	}
-
 	err := CopyRecursive(ctx, source, destination)
 	if err != nil {
 		return err

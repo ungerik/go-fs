@@ -84,7 +84,7 @@ func (zipfs *ZipFileSystem) IsWriteOnly() bool {
 	return zipfs.zipWriter != nil
 }
 
-func (zipfs *ZipFileSystem) Root() fs.File {
+func (zipfs *ZipFileSystem) RootDir() fs.File {
 	return fs.File(zipfs.prefix + Separator)
 }
 
@@ -137,12 +137,8 @@ func (*ZipFileSystem) MatchAnyPattern(name string, patterns []string) (bool, err
 	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
-func (*ZipFileSystem) DirAndName(filePath string) (dir, name string) {
-	return fsimpl.DirAndName(filePath, 0, Separator)
-}
-
-func (*ZipFileSystem) VolumeName(filePath string) string {
-	return ""
+func (*ZipFileSystem) SplitDirAndName(filePath string) (dir, name string) {
+	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
 func (zipfs *ZipFileSystem) IsAbsPath(filePath string) bool {
@@ -315,7 +311,6 @@ func (zipfs *ZipFileSystem) ListDirMax(ctx context.Context, dirPath string, max 
 	if zipfs.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
 	}
-
 	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
 		return zipfs.ListDirInfo(ctx, dirPath, fs.FileInfoCallback(callback), patterns)
 	})
@@ -440,24 +435,8 @@ func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permission
 	// return nil, fs.ErrReadOnlyFileSystem
 }
 
-func (*ZipFileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
-	return nil, fmt.Errorf("%w: ZipFileSystem.Watch", errors.ErrUnsupported)
-}
-
 func (*ZipFileSystem) Truncate(filePath string, size int64) error {
 	return fmt.Errorf("%w: ZipFileSystem.Truncate", errors.ErrUnsupported)
-}
-
-func (*ZipFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
-	return fmt.Errorf("%w: ZipFileSystem.CopyFile", errors.ErrUnsupported)
-}
-
-func (*ZipFileSystem) Rename(filePath string, newName string) error {
-	return fmt.Errorf("%w: ZipFileSystem.Rename", errors.ErrUnsupported)
-}
-
-func (*ZipFileSystem) Move(filePath string, destPath string) error {
-	return fmt.Errorf("%w: ZipFileSystem.Move", errors.ErrUnsupported)
 }
 
 func (*ZipFileSystem) Remove(filePath string) error {

@@ -13,6 +13,9 @@ func ListDirMaxImpl(ctx context.Context, max int, listDir func(ctx context.Conte
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	if max == 0 {
+		return nil, nil
+	}
 	errAbort := errors.New("errAbort") // used as an internal flag, won't be returned
 	err = listDir(ctx, func(file File) error {
 		if max >= 0 && len(files) >= max {

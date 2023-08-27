@@ -25,7 +25,7 @@ func Test_DirAndName(t *testing.T) {
 	}
 
 	for filePath, dirAndName := range refTable {
-		dir, name := DirAndName(filePath, 0, "/")
+		dir, name := SplitDirAndName(filePath, 0, "/")
 		assert.Equal(t, dir, dirAndName[0], "filePath(%#v): %#v, %#v", filePath, dir, name)
 		assert.Equal(t, name, dirAndName[1], "filePath(%#v): %#v, %#v", filePath, dir, name)
 	}

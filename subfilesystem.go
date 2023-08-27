@@ -36,7 +36,7 @@ func (subfs *SubFileSystem) IsWriteOnly() bool {
 	return subfs.Parent.IsWriteOnly()
 }
 
-func (subfs *SubFileSystem) Root() File {
+func (subfs *SubFileSystem) RootDir() File {
 	return File(subfs.Parent.Separator())
 }
 
@@ -100,12 +100,15 @@ func (subfs *SubFileSystem) MatchAnyPattern(name string, patterns []string) (boo
 	return subfs.Parent.MatchAnyPattern(name, patterns)
 }
 
-func (subfs *SubFileSystem) DirAndName(filePath string) (dir, name string) {
+func (subfs *SubFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	panic("not implemented")
 }
 
 func (subfs *SubFileSystem) VolumeName(filePath string) string {
-	return subfs.Parent.VolumeName(filePath)
+	if fs, ok := subfs.Parent.(VolumeNameFileSystem); ok {
+		return fs.VolumeName(filePath)
+	}
+	return ""
 }
 
 func (subfs *SubFileSystem) IsAbsPath(filePath string) bool {
@@ -210,23 +213,7 @@ func (subfs *SubFileSystem) OpenReadWriter(filePath string, perm []Permissions) 
 	panic("not implemented")
 }
 
-func (subfs *SubFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
-	panic("not implemented")
-}
-
 func (subfs *SubFileSystem) Truncate(filePath string, size int64) error {
-	panic("not implemented")
-}
-
-func (subfs *SubFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
-	panic("not implemented")
-}
-
-func (subfs *SubFileSystem) Rename(filePath string, newName string) error {
-	panic("not implemented")
-}
-
-func (subfs *SubFileSystem) Move(filePath string, destPath string) error {
 	panic("not implemented")
 }
 

@@ -91,7 +91,7 @@ func (mpfs *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multi
 	return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
 }
 
-func (mpfs *MultipartFileSystem) Root() fs.File {
+func (mpfs *MultipartFileSystem) RootDir() fs.File {
 	return fs.File(mpfs.prefix + Separator)
 }
 
@@ -135,11 +135,9 @@ func (mpfs *MultipartFileSystem) SplitPath(filePath string) []string {
 
 func (*MultipartFileSystem) Separator() string { return Separator }
 
-func (*MultipartFileSystem) DirAndName(filePath string) (dir, name string) {
-	return fsimpl.DirAndName(filePath, 0, Separator)
+func (*MultipartFileSystem) SplitDirAndName(filePath string) (dir, name string) {
+	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
-
-func (*MultipartFileSystem) VolumeName(filePath string) string { return "" }
 
 func (mpfs *MultipartFileSystem) IsAbsPath(filePath string) bool {
 	return path.IsAbs(filePath)

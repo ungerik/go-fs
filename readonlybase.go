@@ -2,8 +2,6 @@ package fs
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"io"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -74,23 +72,7 @@ func (*ReadOnlyBase) OpenReadWriter(filePath string, perm []Permissions) (ReadWr
 	return nil, ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
-	return nil, fmt.Errorf("Watch is %w", errors.ErrUnsupported)
-}
-
 func (*ReadOnlyBase) Truncate(filePath string, size int64) error {
-	return ErrReadOnlyFileSystem
-}
-
-func (*ReadOnlyBase) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
-	return ErrReadOnlyFileSystem
-}
-
-func (*ReadOnlyBase) Rename(filePath string, newName string) error {
-	return ErrReadOnlyFileSystem
-}
-
-func (*ReadOnlyBase) Move(filePath string, destPath string) error {
 	return ErrReadOnlyFileSystem
 }
 

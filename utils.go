@@ -70,10 +70,9 @@ func FileInfoCallback(fileCallback func(File) error) func(FileInfo) error {
 
 // ReadAllContext reads all data from r until EOF is reached,
 // another error is returned, or the context got canceled.
-// It is identical to io.ReadAll
-// except that it can be canceled via a context.
+// It is identical to io.ReadAll except that
+// it can be canceled via a context.
 func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
-	// Implementation
 	b := make([]byte, 0, 512)
 	for ctx.Err() == nil {
 		if len(b) == cap(b) {

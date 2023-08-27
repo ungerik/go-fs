@@ -76,7 +76,7 @@ func (local *LocalFileSystem) IsWriteOnly() bool {
 	return false
 }
 
-func (local *LocalFileSystem) Root() File {
+func (local *LocalFileSystem) RootDir() File {
 	return localRoot
 }
 
@@ -169,9 +169,9 @@ func (local *LocalFileSystem) MatchAnyPattern(name string, patterns []string) (b
 	return false, nil
 }
 
-func (local *LocalFileSystem) DirAndName(filePath string) (dir, name string) {
+func (local *LocalFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	filePath = expandTilde(filePath)
-	return fsimpl.DirAndName(filePath, len(filepath.VolumeName(filePath)), Separator)
+	return fsimpl.SplitDirAndName(filePath, len(filepath.VolumeName(filePath)), Separator)
 }
 
 func (local *LocalFileSystem) VolumeName(filePath string) string {
@@ -333,12 +333,15 @@ func (local *LocalFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath 
 	return ListDirInfoRecursiveImpl(ctx, local, dirPath, callback, patterns)
 }
 
-func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n int, patterns []string) (files []File, err error) {
+func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []File, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if dirPath == "" {
 		return nil, ErrEmptyPath
+	}
+	if max == 0 {
+		return nil, nil
 	}
 
 	dirPath = filepath.Clean(dirPath)
@@ -365,9 +368,9 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 	defer f.Close() //#nosec G307
 
 	var numFilesToDo int
-	if n > 0 {
-		files = make([]File, 0, n)
-		numFilesToDo = n
+	if max > 0 {
+		files = make([]File, 0, max)
+		numFilesToDo = max
 	} else {
 		numFilesToDo = 64
 	}
@@ -396,8 +399,8 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, n 
 			files = append(files, File(filepath.Join(dirPath, name)))
 		}
 
-		if n > 0 {
-			numFilesToDo = n - len(files)
+		if max > 0 {
+			numFilesToDo = max - len(files)
 		}
 	}
 
@@ -616,19 +619,23 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 	return nil
 }
 
-func (local *LocalFileSystem) Rename(filePath string, newName string) error {
+func (local *LocalFileSystem) Rename(filePath string, newName string) (newPath string, err error) {
 	if filePath == "" || newName == "" {
-		return ErrEmptyPath
+		return "", ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	if strings.ContainsAny(newName, "/\\") {
-		return errors.New("newName for Rename() contains a path separators: " + newName)
+	if strings.ContainsAny(newName, local.Separator()) {
+		return "", fmt.Errorf("newName %#v for File.Rename contains path separator %s", newName, local.Separator())
 	}
 	if !local.Exists(filePath) {
-		return NewErrDoesNotExist(File(filePath))
+		return "", NewErrDoesNotExist(File(filePath))
 	}
-	newPath := filepath.Join(filepath.Dir(filePath), newName)
-	return os.Rename(filePath, newPath)
+	newPath = filepath.Join(filepath.Dir(filePath), newName)
+	err = os.Rename(filePath, newPath)
+	if err != nil {
+		return "", err
+	}
+	return newPath, nil
 }
 
 func (local *LocalFileSystem) Move(filePath string, destPath string) error {
