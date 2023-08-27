@@ -380,17 +380,6 @@ func (s *S3FileSystem) WriteAll(ctx context.Context, filePath string, data []byt
 	return err
 }
 
-func (s *S3FileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
-	if s.readOnly {
-		return fs.ErrReadOnlyFileSystem
-	}
-	current, err := s.ReadAll(ctx, filePath)
-	if err != nil {
-		return err
-	}
-	return s.WriteAll(ctx, filePath, append(current, data...), perm)
-}
-
 func (s *S3FileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath

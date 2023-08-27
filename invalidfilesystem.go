@@ -138,23 +138,7 @@ func (invalid InvalidFileSystem) SetGroup(filePath string, group string) error {
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) Touch(filePath string, perm []Permissions) error {
-	return ErrInvalidFileSystem
-}
-
 func (invalid InvalidFileSystem) MakeDir(dirPath string, perm []Permissions) error {
-	return ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	return nil, ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-	return ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
 

@@ -608,7 +608,14 @@ func (file File) Touch(perm ...Permissions) error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Touch(path, perm)
+	if fs, ok := fileSystem.(TouchFileSystem); ok {
+		return fs.Touch(path, perm)
+	}
+	w, err := file.OpenWriter(perm...)
+	if err != nil {
+		return err
+	}
+	return w.Close()
 }
 
 func (file File) MakeDir(perm ...Permissions) error {
@@ -748,7 +755,15 @@ func (file File) ReadAllContext(ctx context.Context) (data []byte, err error) {
 		return nil, ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ReadAll(ctx, path)
+	if fs, ok := fileSystem.(ReadAllFileSystem); ok {
+		return fs.ReadAll(ctx, path)
+	}
+	r, err := fileSystem.OpenReader(path)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return ReadAllContext(ctx, r)
 }
 
 // ReadAllContentHash reads and returns all bytes of the file
@@ -788,7 +803,15 @@ func (file File) WriteAllContext(ctx context.Context, data []byte, perm ...Permi
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.WriteAll(ctx, path, data, perm)
+	if fs, ok := fileSystem.(WriteAllFileSystem); ok {
+		return fs.WriteAll(ctx, path, data, perm)
+	}
+	w, err := fileSystem.OpenReadWriter(path, perm)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+	return WriteAllContext(ctx, w, data)
 }
 
 func (file File) WriteAllString(str string, perm ...Permissions) error {
@@ -807,7 +830,15 @@ func (file File) Append(ctx context.Context, data []byte, perm ...Permissions) e
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Append(ctx, path, data, perm)
+	if fs, ok := fileSystem.(AppendFileSystem); ok {
+		return fs.Append(ctx, path, data, perm)
+	}
+	w, err := fileSystem.OpenAppendWriter(path, perm)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+	return WriteAllContext(ctx, w, data)
 }
 
 func (file File) AppendString(ctx context.Context, str string, perm ...Permissions) error {

@@ -102,12 +102,7 @@ type FileSystem interface {
 	Group(filePath string) string                 // TODO
 	SetGroup(filePath string, group string) error // TODO
 
-	Touch(filePath string, perm []Permissions) error
 	MakeDir(dirPath string, perm []Permissions) error
-
-	ReadAll(ctx context.Context, filePath string) ([]byte, error)
-	WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error
-	Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error
 
 	OpenReader(filePath string) (fs.File, error)
 	OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
@@ -191,4 +186,28 @@ type WatchFileSystem interface {
 	// callbacks, calling the returned cancel function
 	// will cancel a particular watch.
 	Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error)
+}
+
+type TouchFileSystem interface {
+	FileSystem
+
+	Touch(filePath string, perm []Permissions) error
+}
+
+type ReadAllFileSystem interface {
+	FileSystem
+
+	ReadAll(ctx context.Context, filePath string) ([]byte, error)
+}
+
+type WriteAllFileSystem interface {
+	FileSystem
+
+	WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error
+}
+
+type AppendFileSystem interface {
+	FileSystem
+
+	Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error
 }

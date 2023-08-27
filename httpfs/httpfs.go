@@ -32,8 +32,8 @@ const (
 )
 
 var (
-	FileSystem    fs.FileSystem = &HTTPFileSystem{prefix: Prefix}
-	FileSystemTLS fs.FileSystem = &HTTPFileSystem{prefix: PrefixTLS}
+	FileSystem    = &HTTPFileSystem{prefix: Prefix}
+	FileSystemTLS = &HTTPFileSystem{prefix: PrefixTLS}
 )
 
 type HTTPFileSystem struct {

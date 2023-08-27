@@ -90,3 +90,20 @@ func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
 	}
 	return nil, ctx.Err()
 }
+
+// WriteAllContext writes all data wo the to w
+// with a cancelable context.
+func WriteAllContext(ctx context.Context, w io.Writer, data []byte) error {
+	const chunkSize = 4 * 1024 * 1024 // 4MB
+	for len(data) > 0 {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		n, err := w.Write(data[:max(chunkSize, len(data))])
+		if err != nil {
+			return err
+		}
+		data = data[n:]
+	}
+	return nil
+}

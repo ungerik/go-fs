@@ -44,10 +44,6 @@ func (*ReadOnlyBase) SetGroup(filePath string, group string) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) Touch(filePath string, perm []Permissions) error {
-	return ErrReadOnlyFileSystem
-}
-
 func (*ReadOnlyBase) MakeDir(dirPath string, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
