@@ -5,7 +5,6 @@ import (
 	"io"
 	"io/fs"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 
@@ -75,10 +74,8 @@ func (InvalidFileSystem) JoinCleanPath(uriParts ...string) string {
 	return cleanPath
 }
 
-func (InvalidFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, "invalid://")
-	filePath = strings.Trim(filePath, "/")
-	return strings.Split(filePath, "/")
+func (fs InvalidFileSystem) SplitPath(filePath string) []string {
+	return fsimpl.SplitPath(filePath, fs.Prefix(), fs.Separator())
 }
 
 func (InvalidFileSystem) Separator() string {
@@ -97,7 +94,7 @@ func (InvalidFileSystem) VolumeName(filePath string) string {
 	return "invalid:"
 }
 
-func (InvalidFileSystem) Stat(filePath string) (os.FileInfo, error) {
+func (InvalidFileSystem) Stat(filePath string) (fs.FileInfo, error) {
 	return nil, ErrInvalidFileSystem
 }
 
@@ -150,6 +147,10 @@ func (InvalidFileSystem) Touch(filePath string, perm []Permissions) error {
 }
 
 func (InvalidFileSystem) MakeDir(dirPath string, perm []Permissions) error {
+	return ErrInvalidFileSystem
+}
+
+func (InvalidFileSystem) MakeAllDirs(dirPath string, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
 

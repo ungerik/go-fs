@@ -108,7 +108,7 @@ func (f *SFTPFileSystem) JoinCleanPath(uriParts ...string) string {
 }
 
 func (f *SFTPFileSystem) SplitPath(filePath string) []string {
-	return strings.Split(strings.TrimPrefix(filePath, Prefix), Separator)
+	return fsimpl.SplitPath(filePath, f.Prefix(), Separator)
 }
 
 func (f *SFTPFileSystem) Separator() string { return Separator }

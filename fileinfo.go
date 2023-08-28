@@ -22,7 +22,7 @@ type FileInfo struct {
 }
 
 // NewFileInfo returns a FileInfo using the
-// data from an os.FileInfo as snapshot
+// data from an io/fs.FileInfo as snapshot
 // of an existing file.
 // Use NewNonExistingFileInfo to get
 // a FileInfo for non existing file.

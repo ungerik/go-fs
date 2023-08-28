@@ -114,7 +114,9 @@ func JoinCleanPath(uriParts []string, trimPrefix, separator string) string {
 
 func SplitPath(filePath, prefix, separator string) []string {
 	filePath = strings.TrimPrefix(filePath, prefix)
-	filePath = strings.TrimPrefix(filePath, separator)
-	filePath = strings.TrimSuffix(filePath, separator)
+	filePath = strings.Trim(filePath, separator)
+	if filePath == "" {
+		return nil
+	}
 	return strings.Split(filePath, separator)
 }

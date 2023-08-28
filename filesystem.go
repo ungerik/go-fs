@@ -106,6 +106,7 @@ type fullyFeaturedFileSystem interface {
 	VolumeNameFileSystem
 	WatchFileSystem
 	TouchFileSystem
+	MakeAllDirsFileSystem
 	ReadAllFileSystem
 	WriteAllFileSystem
 	AppendFileSystem
@@ -258,4 +259,10 @@ type PermissionsFileSystem interface {
 	FileSystem
 
 	SetPermissions(filePath string, perm Permissions) error
+}
+
+type MakeAllDirsFileSystem interface {
+	FileSystem
+
+	MakeAllDirs(dirPath string, perm []Permissions) error
 }

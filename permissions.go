@@ -88,7 +88,7 @@ func (perm Permissions) CanAllWrite() bool     { return perm.Can(AllWrite) }
 func (perm Permissions) CanAllExecute() bool   { return perm.Can(AllExecute) }
 func (perm Permissions) CanAllReadWrite() bool { return perm.Can(AllReadWrite) }
 
-func CombinePermissions(perms []Permissions, defaultPerm Permissions) (result Permissions) {
+func JoinPermissions(perms []Permissions, defaultPerm Permissions) (result Permissions) {
 	if len(perms) == 0 {
 		return defaultPerm
 	}

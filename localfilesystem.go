@@ -135,8 +135,10 @@ func (local *LocalFileSystem) JoinCleanPath(uriParts ...string) string {
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
 	filePath = strings.TrimPrefix(filePath, LocalPrefix)
 	filePath = expandTilde(filePath)
-	filePath = strings.TrimPrefix(filePath, Separator)
-	filePath = strings.TrimSuffix(filePath, Separator)
+	filePath = strings.Trim(filePath, Separator)
+	if filePath == "" {
+		return nil
+	}
 	return strings.Split(filePath, Separator)
 }
 
@@ -450,7 +452,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 		now := time.Now()
 		return os.Chtimes(filePath, now, now)
 	}
-	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
+	p := JoinPermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_CREATE, p.FileMode(false))
 	if err != nil {
 		return err
@@ -463,7 +465,7 @@ func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error 
 		return ErrEmptyPath
 	}
 	dirPath = expandTilde(dirPath)
-	p := CombinePermissions(perm, Local.DefaultCreateDirPermissions) | extraDirPermissions
+	p := JoinPermissions(perm, Local.DefaultCreateDirPermissions) | extraDirPermissions
 	err := wrapOSErr(dirPath, os.Mkdir(dirPath, p.FileMode(true)))
 	if err != nil {
 		return err
@@ -474,6 +476,32 @@ func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error 
 		err = os.Chmod(dirPath, p.FileMode(true))
 		if err != nil {
 			return fmt.Errorf("LocalFileSystem.MakeDir(%#v): can't chmod to %0o: %w", dirPath, p, err)
+		}
+	}
+
+	return nil
+}
+
+func (local *LocalFileSystem) MakeAllDirs(dirPath string, perm []Permissions) error {
+	if dirPath == "" {
+		return ErrEmptyPath
+	}
+	dirPath = expandTilde(dirPath)
+	p := JoinPermissions(perm, Local.DefaultCreateDirPermissions) | extraDirPermissions
+	err := wrapOSErr(dirPath, os.MkdirAll(dirPath, p.FileMode(true)))
+	if err != nil {
+		return err
+	}
+
+	if extraDirPermissions != 0 && p&OthersWrite != 0 {
+		parts := local.SplitPath(dirPath)
+		for i := range parts {
+			// On Linux need additional chmod because os.Mkdir does not set OthersWrite bit
+			subPath := local.JoinCleanPath(parts[0 : i+1]...)
+			err = os.Chmod(subPath, p.FileMode(true))
+			if err != nil {
+				return fmt.Errorf("LocalFileSystem.MakeAllDirs(%#v): can't chmod to %0o: %w", subPath, p, err)
+			}
 		}
 	}
 
@@ -502,7 +530,7 @@ func (local *LocalFileSystem) WriteAll(ctx context.Context, filePath string, dat
 		return ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
+	p := JoinPermissions(perm, Local.DefaultCreatePermissions)
 	return wrapOSErr(filePath, os.WriteFile(filePath, data, p.FileMode(false)))
 }
 
@@ -537,7 +565,7 @@ func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (i
 		return nil, ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
+	p := JoinPermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, p.FileMode(false)) //#nosec G304
 	return f, wrapOSErr(filePath, err)
 }
@@ -547,7 +575,7 @@ func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissio
 		return nil, ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
+	p := JoinPermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, p.FileMode(false)) //#nosec G304
 	return f, wrapOSErr(filePath, err)
 }
@@ -557,7 +585,7 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions
 		return nil, ErrEmptyPath
 	}
 	filePath = expandTilde(filePath)
-	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
+	p := JoinPermissions(perm, Local.DefaultCreatePermissions)
 	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, p.FileMode(false)) //#nosec G304
 	return f, wrapOSErr(filePath, err)
 }

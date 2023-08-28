@@ -74,7 +74,7 @@ func (f *HTTPFileSystem) JoinCleanPath(uriParts ...string) string {
 }
 
 func (f *HTTPFileSystem) SplitPath(filePath string) []string {
-	return strings.Split(strings.TrimPrefix(filePath, f.prefix), Separator)
+	return fsimpl.SplitPath(filePath, f.Prefix(), f.Separator())
 }
 
 func (f *HTTPFileSystem) Separator() string { return Separator }

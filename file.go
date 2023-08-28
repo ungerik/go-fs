@@ -636,6 +636,8 @@ func (file File) Touch(perm ...Permissions) error {
 	return w.Close()
 }
 
+// MakeDir creates a directory if it does not exist yet.
+// No error is returned if the directory already exists.
 func (file File) MakeDir(perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -643,7 +645,6 @@ func (file File) MakeDir(perm ...Permissions) error {
 	if file.IsDir() {
 		return nil
 	}
-
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.MakeDir(path, perm)
 }
@@ -654,18 +655,19 @@ func (file File) MakeAllDirs(perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	if info, err := file.Stat(); err == nil {
+	if info, e := file.Stat(); e == nil {
 		// File exists
 		if !info.IsDir() {
 			return NewErrIsNotDirectory(file)
 		}
-		return nil
+		return nil // File is already a directory
 	}
 
 	dir, name := file.DirAndName()
 	if name != "" {
 		// if name != "" then dir is not the root
 		// so we can attempt to make the dir
+		// by recursively calling MakeAllDirs
 		err := dir.MakeAllDirs(perm...)
 		if err != nil {
 			return err
