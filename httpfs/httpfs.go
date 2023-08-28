@@ -7,7 +7,6 @@ package httpfs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	iofs "io/fs"
@@ -169,15 +168,15 @@ func (f *HTTPFileSystem) IsHidden(filePath string) bool       { return false }
 func (f *HTTPFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
 func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("HTTPFileSystem.ListDirInfo: %w", errors.ErrUnsupported)
+	return fs.NewErrUnsupported(f, "ListDirInfo")
 }
 
 func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("HTTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
+	return fs.NewErrUnsupported(f, "ListDirInfoRecursive")
 }
 
 func (f *HTTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]fs.File, error) {
-	return nil, fmt.Errorf("HTTPFileSystem.ListDirMax: %w", errors.ErrUnsupported)
+	return nil, fs.NewErrUnsupported(f, "ListDirMax")
 }
 
 func (f *HTTPFileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {

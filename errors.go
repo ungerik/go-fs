@@ -209,3 +209,24 @@ func (err ErrIsNotDirectory) Error() string {
 func (err ErrIsNotDirectory) File() File {
 	return err.file
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// ErrUnsupported
+
+type ErrUnsupported struct {
+	fs FileSystem
+	op string
+}
+
+// NewErrUnsupported returns a new ErrUnsupported
+func NewErrUnsupported(fileSystem FileSystem, operation string) ErrUnsupported {
+	return ErrUnsupported{fileSystem, operation}
+}
+
+func (err ErrUnsupported) Error() string {
+	return fmt.Sprintf("%s %s at %s", errors.ErrUnsupported, err.op, err.fs)
+}
+
+func (ErrUnsupported) Unwrap() error {
+	return errors.ErrUnsupported
+}

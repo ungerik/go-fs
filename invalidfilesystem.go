@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+// var _ fullyFeaturedFileSystem = InvalidFileSystem{} // TODO implement all FileSystem extensions ?
+
 // InvalidFileSystem is a file system where all operations are invalid.
 // A File with an empty path defaults to this FS.
 type InvalidFileSystem struct{}
@@ -122,22 +124,6 @@ func (invalid InvalidFileSystem) SetPermissions(filePath string, perm Permission
 	return ErrInvalidFileSystem
 }
 
-func (invalid InvalidFileSystem) User(filePath string) string {
-	return ""
-}
-
-func (invalid InvalidFileSystem) SetUser(filePath string, user string) error {
-	return ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) Group(filePath string) string {
-	return ""
-}
-
-func (invalid InvalidFileSystem) SetGroup(filePath string, group string) error {
-	return ErrInvalidFileSystem
-}
-
 func (invalid InvalidFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	return ErrInvalidFileSystem
 }
@@ -147,10 +133,6 @@ func (invalid InvalidFileSystem) OpenReader(filePath string) (fs.File, error) {
 }
 
 func (invalid InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
-	return nil, ErrInvalidFileSystem
-}
-
-func (invalid InvalidFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 

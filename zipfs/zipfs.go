@@ -3,8 +3,6 @@ package zipfs
 import (
 	"archive/zip"
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	iofs "io/fs"
 	"path"
@@ -316,14 +314,6 @@ func (zipfs *ZipFileSystem) ListDirMax(ctx context.Context, dirPath string, max 
 	})
 }
 
-func (*ZipFileSystem) User(filePath string) string {
-	return ""
-}
-
-func (*ZipFileSystem) Group(filePath string) string {
-	return ""
-}
-
 func (zipfs *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if zipfs.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
@@ -341,18 +331,6 @@ func (zipfs *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
 		return nil, err
 	}
 	return f.(iofs.File), nil
-}
-
-func (zipfs *ZipFileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
-	return nil
-}
-
-func (zipfs *ZipFileSystem) SetUser(filePath string, user string) error {
-	return nil
-}
-
-func (zipfs *ZipFileSystem) SetGroup(filePath string, group string) error {
-	return nil
 }
 
 func (zipfs *ZipFileSystem) Touch(filePath string, perm []fs.Permissions) error {
@@ -383,10 +361,6 @@ func (zipfs *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (
 	return nopCloser{writer}, nil
 }
 
-func (zipfs *ZipFileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-	return zipfs.OpenWriter(filePath, perm)
-}
-
 func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
 	if zipfs.zipWriter == nil {
 		return nil, fs.ErrReadOnlyFileSystem
@@ -397,12 +371,12 @@ func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permission
 	// return nil, fs.ErrReadOnlyFileSystem
 }
 
-func (*ZipFileSystem) Truncate(filePath string, size int64) error {
-	return fmt.Errorf("%w: ZipFileSystem.Truncate", errors.ErrUnsupported)
+func (zipfs *ZipFileSystem) Truncate(filePath string, size int64) error {
+	return fs.NewErrUnsupported(zipfs, "Truncate")
 }
 
-func (*ZipFileSystem) Remove(filePath string) error {
-	return fmt.Errorf("%w: ZipFileSystem.Remove", errors.ErrUnsupported)
+func (zipfs *ZipFileSystem) Remove(filePath string) error {
+	return fs.NewErrUnsupported(zipfs, "Remove")
 }
 
 type nopCloser struct {

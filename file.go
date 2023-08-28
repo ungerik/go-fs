@@ -237,7 +237,11 @@ func (file File) Info() FileInfo {
 // Exists returns a file or directory with the path of File exists.
 func (file File) Exists() bool {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Exists(path)
+	if fs, ok := fileSystem.(ExistsFileSystem); ok {
+		return fs.Exists(path)
+	}
+	_, err := fileSystem.Stat(path)
+	return err == nil
 }
 
 // CheckExists return an ErrDoesNotExist error
@@ -388,7 +392,10 @@ func (file File) SetPermissions(perm Permissions) error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.SetPermissions(path, perm)
+	if fs, ok := fileSystem.(PermissionsFileSystem); ok {
+		return fs.SetPermissions(path, perm)
+	}
+	return NewErrUnsupported(fileSystem, "SetPermissions")
 }
 
 // ListDir calls the passed callback function for every file and directory in dirPath.
@@ -579,7 +586,10 @@ func (file File) ListDirRecursiveChan(cancel <-chan error, patterns ...string) (
 
 func (file File) User() string {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.User(path)
+	if fs, ok := fileSystem.(UserFileSystem); ok {
+		return fs.User(path)
+	}
+	return ""
 }
 
 func (file File) SetUser(user string) error {
@@ -587,12 +597,18 @@ func (file File) SetUser(user string) error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.SetUser(path, user)
+	if fs, ok := fileSystem.(UserFileSystem); ok {
+		return fs.SetUser(path, user)
+	}
+	return NewErrUnsupported(fileSystem, "SetUser")
 }
 
 func (file File) Group() string {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Group(path)
+	if fs, ok := fileSystem.(GroupFileSystem); ok {
+		return fs.Group(path)
+	}
+	return ""
 }
 
 func (file File) SetGroup(group string) error {
@@ -600,7 +616,10 @@ func (file File) SetGroup(group string) error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.SetGroup(path, group)
+	if fs, ok := fileSystem.(GroupFileSystem); ok {
+		return fs.SetGroup(path, group)
+	}
+	return NewErrUnsupported(fileSystem, "SetGroup")
 }
 
 func (file File) Touch(perm ...Permissions) error {
@@ -733,7 +752,22 @@ func (file File) OpenAppendWriter(perm ...Permissions) (io.WriteCloser, error) {
 		return nil, ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.OpenAppendWriter(path, perm)
+	if fs, ok := fileSystem.(AppendWriterFileSystem); ok {
+		return fs.OpenAppendWriter(path, perm)
+	}
+	// Emulate append writer by reading file into
+	// a buffer first and write everything back to
+	// the file on closing that buffer.
+	current, err := file.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	var fileBuffer *fsimpl.FileBuffer
+	fileBuffer = fsimpl.NewFileBufferWithClose(current, func() error {
+		return file.WriteAll(fileBuffer.Bytes(), perm...)
+	})
+	return fileBuffer, nil
+
 }
 
 func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error) {
@@ -833,12 +867,22 @@ func (file File) Append(ctx context.Context, data []byte, perm ...Permissions) e
 	if fs, ok := fileSystem.(AppendFileSystem); ok {
 		return fs.Append(ctx, path, data, perm)
 	}
-	w, err := fileSystem.OpenAppendWriter(path, perm)
+	if fs, ok := fileSystem.(AppendWriterFileSystem); ok {
+		w, err := fs.OpenAppendWriter(path, perm)
+		if err != nil {
+			return err
+		}
+		defer w.Close()
+		return WriteAllContext(ctx, w, data)
+	}
+	// Emulate append by first reading all file
+	// content and then writing the file with
+	// appended data.
+	current, err := file.ReadAllContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer w.Close()
-	return WriteAllContext(ctx, w, data)
+	return file.WriteAllContext(ctx, append(current, data...))
 }
 
 func (file File) AppendString(ctx context.Context, str string, perm ...Permissions) error {
@@ -865,7 +909,7 @@ func (file File) Watch(onEvent func(File, Event)) (cancel func() error, err erro
 	if fs, ok := fileSystem.(WatchFileSystem); ok {
 		return fs.Watch(path, onEvent)
 	}
-	return nil, fmt.Errorf("%w: %s Watch", errors.ErrUnsupported, fileSystem.Name())
+	return nil, NewErrUnsupported(fileSystem, "Watch")
 }
 
 func (file File) Truncate(size int64) error {

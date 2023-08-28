@@ -293,26 +293,6 @@ func (dbfs *DropboxFileSystem) ListDirMax(ctx context.Context, dirPath string, m
 	})
 }
 
-func (dbfs *DropboxFileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
-	return errors.New("SetPermissions not possible on Dropbox")
-}
-
-func (dbfs *DropboxFileSystem) User(filePath string) string {
-	return ""
-}
-
-func (dbfs *DropboxFileSystem) SetUser(filePath string, user string) error {
-	return errors.New("SetUser not possible on Dropbox")
-}
-
-func (dbfs *DropboxFileSystem) Group(filePath string) string {
-	return ""
-}
-
-func (dbfs *DropboxFileSystem) SetGroup(filePath string, group string) error {
-	return errors.New("SetGroup not possible on Dropbox")
-}
-
 func (dbfs *DropboxFileSystem) Touch(filePath string, perm []fs.Permissions) error {
 	if dbfs.info(filePath).Exists {
 		return errors.New("Touch can't change time on Dropbox")
@@ -353,22 +333,6 @@ func (dbfs *DropboxFileSystem) WriteAll(ctx context.Context, filePath string, da
 	return dbfs.wrapErrNotExist(filePath, err)
 }
 
-func (dbfs *DropboxFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	writer, err := dbfs.OpenAppendWriter(filePath, perm)
-	if err != nil {
-		return err
-	}
-	defer writer.Close()
-	n, err := writer.Write(data)
-	if err == nil && n < len(data) {
-		return io.ErrShortWrite
-	}
-	return err
-}
-
 func (dbfs *DropboxFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	info, err := dbfs.Stat(filePath)
 	if err != nil {
@@ -390,15 +354,6 @@ func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions
 		return dbfs.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), nil)
 	})
 	return fileBuffer, nil
-}
-
-func (dbfs *DropboxFileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-	writer, err := dbfs.OpenReadWriter(filePath, perm)
-	if err != nil {
-		return nil, err
-	}
-	_, err = writer.Seek(0, io.SeekEnd)
-	return writer, err
 }
 
 func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {

@@ -61,12 +61,6 @@ type FileSystem interface {
 
 	Stat(filePath string) (fs.FileInfo, error)
 
-	// Exists returns if a file exists and is accessible.
-	// Depending on the FileSystem implementation,
-	// this could be faster than using Stat.
-	// Note that a file could exist but might not be accessible.
-	Exists(filePath string) bool
-
 	// IsHidden returns if a file is hidden depending
 	// on the definition of hidden files of the file system,
 	// but it will always return true if the name of the file starts with a dot.
@@ -94,25 +88,34 @@ type FileSystem interface {
 	// at least one of the patterns are returned.
 	ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error)
 
-	SetPermissions(filePath string, perm Permissions) error // TODO
-
-	User(filePath string) string                // TODO
-	SetUser(filePath string, user string) error // TODO
-
-	Group(filePath string) string                 // TODO
-	SetGroup(filePath string, group string) error // TODO
-
 	MakeDir(dirPath string, perm []Permissions) error
 
 	OpenReader(filePath string) (fs.File, error)
 	OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
-	OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
 	OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error)
 
-	Truncate(filePath string, size int64) error
+	Truncate(filePath string, size int64) error // TODO
 
 	// Remove deletes the file.
 	Remove(filePath string) error
+}
+
+type fullyFeaturedFileSystem interface {
+	FileSystem
+	CopyFileSystem
+	MoveFileSystem
+	RenameFileSystem
+	VolumeNameFileSystem
+	WatchFileSystem
+	TouchFileSystem
+	ReadAllFileSystem
+	WriteAllFileSystem
+	AppendFileSystem
+	AppendWriterFileSystem
+	ExistsFileSystem
+	UserFileSystem
+	GroupFileSystem
+	PermissionsFileSystem
 }
 
 // CopyFileSystem can be implemented by file systems
@@ -210,4 +213,40 @@ type AppendFileSystem interface {
 	FileSystem
 
 	Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error
+}
+
+type AppendWriterFileSystem interface {
+	FileSystem
+
+	OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
+}
+
+type ExistsFileSystem interface {
+	FileSystem
+
+	// Exists returns if a file exists and is accessible.
+	// Depending on the FileSystem implementation,
+	// this could be faster than using Stat.
+	// Note that a file could exist but might not be accessible.
+	Exists(filePath string) bool
+}
+
+type UserFileSystem interface {
+	FileSystem
+
+	User(filePath string) string
+	SetUser(filePath string, user string) error
+}
+
+type GroupFileSystem interface {
+	FileSystem
+
+	Group(filePath string) string
+	SetGroup(filePath string, group string) error
+}
+
+type PermissionsFileSystem interface {
+	FileSystem
+
+	SetPermissions(filePath string, perm Permissions) error
 }

@@ -62,6 +62,14 @@ func New(addr string, conn *ssh.Client) (*SFTPFileSystem, error) {
 	return fileSystem, nil
 }
 
+func (f *SFTPFileSystem) IsReadOnly() bool {
+	return false // TODO
+}
+
+func (f *SFTPFileSystem) IsWriteOnly() bool {
+	return false
+}
+
 func (f *SFTPFileSystem) Close() error {
 	fs.Unregister(f)
 	return f.client.Close()
@@ -120,26 +128,8 @@ func (f *SFTPFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
-func (f *SFTPFileSystem) info(filePath string) fs.FileInfo {
-
-	return fs.FileInfo{
-		Exists: true,
-		// Name:     path.Base(request.URL.Path),
-		// Size:     size,
-		// Modified: modified,
-	}
-}
-
 func (f *SFTPFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
-	info := f.info(filePath)
-	if !info.Exists {
-		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
-	}
-	return info.StdFileInfo(), nil
-}
-
-func (f *SFTPFileSystem) Exists(filePath string) bool {
-	return f.info(filePath).Exists
+	return f.client.Stat(filePath)
 }
 
 func (f *SFTPFileSystem) IsHidden(filePath string) bool       { return false }
@@ -174,52 +164,47 @@ func (f *SFTPFileSystem) OpenReader(filePath string) (reader iofs.File, err erro
 	return f.client.Open(filePath)
 }
 
-func (f *SFTPFileSystem) IsReadOnly() bool {
-	return false
-}
-
-func (f *SFTPFileSystem) IsWriteOnly() bool {
-	return false
-}
-
 func (f *SFTPFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
 	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
-func (f *SFTPFileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
-	return fs.ErrReadOnlyFileSystem
-}
-
-func (f *SFTPFileSystem) User(filePath string) string { return "" }
-
-func (f *SFTPFileSystem) SetUser(filePath string, user string) error {
-	return fs.ErrReadOnlyFileSystem
-}
-
-func (f *SFTPFileSystem) Group(filePath string) string { return "" }
-
-func (f *SFTPFileSystem) SetGroup(filePath string, group string) error {
-	return fs.ErrReadOnlyFileSystem
-}
-
 func (f *SFTPFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
-	return fs.ErrReadOnlyFileSystem
+	return f.client.Mkdir(dirPath)
 }
 
 func (f *SFTPFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-	return nil, fs.ErrReadOnlyFileSystem
+	return f.client.Open(filePath)
 }
 
 func (f *SFTPFileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-	return nil, fs.ErrReadOnlyFileSystem
+	file, err := f.client.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	_, err = file.Seek(info.Size(), io.SeekStart)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
 }
 
 func (f *SFTPFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	return nil, fs.ErrReadOnlyFileSystem
+	return f.client.Open(filePath)
 }
 
 func (f *SFTPFileSystem) Truncate(filePath string, size int64) error {
-	return fs.ErrReadOnlyFileSystem
+	file, err := f.client.Open(filePath)
+	if err != nil {
+		return err
+	}
+	return errors.Join(
+		file.Truncate(size),
+		file.Close(),
+	)
 }
 
 func (f *SFTPFileSystem) Move(filePath string, destPath string) error {

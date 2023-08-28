@@ -203,7 +203,7 @@ func (s *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return errors.ErrUnsupported
+	return fs.NewErrUnsupported(s, "listDirInfo")
 
 	// if len(dirPath) > 1 && strings.HasPrefix(dirPath, "/") {
 	// 	dirPath = dirPath[1:]
@@ -288,29 +288,9 @@ func (s *S3FileSystem) ListDirMax(ctx context.Context, dirPath string, max int, 
 	})
 }
 
-func (s *S3FileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
-	return errors.ErrUnsupported
-}
-
-func (s *S3FileSystem) User(filePath string) string {
-	return ""
-}
-
-func (s *S3FileSystem) SetUser(filePath string, user string) error {
-	return errors.ErrUnsupported
-}
-
-func (s *S3FileSystem) Group(filePath string) string {
-	return ""
-}
-
-func (s *S3FileSystem) SetGroup(filePath string, group string) error {
-	return errors.ErrUnsupported
-}
-
 func (s *S3FileSystem) Touch(filePath string, perm []fs.Permissions) error {
 	if s.Exists(filePath) {
-		return nil
+		return nil // TODO is this OK, can we change the modified time?
 	}
 	return s.WriteAll(context.Background(), filePath, make([]byte, 0), perm)
 }
@@ -429,10 +409,6 @@ func (s *S3FileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.Wr
 		return s.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), perm)
 	})
 	return fileBuffer, nil
-}
-
-func (s *S3FileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
-	return s.openFileBuffer(filePath)
 }
 
 func (s *S3FileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {

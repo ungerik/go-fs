@@ -192,7 +192,21 @@ func (mpfs *MultipartFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 }
 
 func (mpfs *MultipartFileSystem) Exists(filePath string) bool {
-	return mpfs.info(filePath).Exists
+	parts := mpfs.SplitPath(filePath)
+	switch len(parts) {
+	case 1:
+		dir := parts[0]
+		return len(mpfs.Form.File[dir]) > 0
+	case 2:
+		dir, filename := parts[0], parts[1]
+		ff, _ := mpfs.Form.File[dir]
+		for _, f := range ff {
+			if f.Filename == filename {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {

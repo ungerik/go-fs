@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"context"
 	"io"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -48,19 +47,7 @@ func (*ReadOnlyBase) MakeDir(dirPath string, perm []Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-	return ErrReadOnlyFileSystem
-}
-
-func (*ReadOnlyBase) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-	return ErrReadOnlyFileSystem
-}
-
 func (*ReadOnlyBase) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
-	return nil, ErrReadOnlyFileSystem
-}
-
-func (*ReadOnlyBase) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, ErrReadOnlyFileSystem
 }
 

@@ -191,11 +191,6 @@ func (local *LocalFileSystem) Stat(filePath string) (fs.FileInfo, error) {
 	return info, nil
 }
 
-func (local *LocalFileSystem) Exists(filePath string) bool {
-	_, err := os.Stat(expandTilde(filePath))
-	return err == nil
-}
-
 func (local *LocalFileSystem) IsHidden(filePath string) bool {
 	filePath = expandTilde(filePath)
 	name := filepath.Base(filePath)
@@ -450,13 +445,17 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-
 	filePath = expandTilde(filePath)
-	if local.Exists(filePath) {
+	if _, e := os.Stat(filePath); e == nil {
 		now := time.Now()
 		return os.Chtimes(filePath, now, now)
 	}
-	return local.WriteAll(context.Background(), filePath, nil, perm)
+	p := CombinePermissions(perm, Local.DefaultCreatePermissions)
+	f, err := os.OpenFile(filePath, os.O_CREATE, p.FileMode(false))
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
@@ -563,7 +562,7 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions
 	return f, wrapOSErr(filePath, err)
 }
 
-func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
+func (local *LocalFileSystem) Truncate(filePath string, newSize int64) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
@@ -575,10 +574,10 @@ func (local *LocalFileSystem) Truncate(filePath string, size int64) error {
 	if info.IsDir() {
 		return NewErrIsDirectory(File(filePath))
 	}
-	if info.Size() <= size {
+	if info.Size() == newSize {
 		return nil
 	}
-	return os.Truncate(filePath, size)
+	return os.Truncate(filePath, newSize)
 }
 
 func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, destFilePath string, buf *[]byte) error {
@@ -627,7 +626,7 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) (newPath s
 	if strings.ContainsAny(newName, local.Separator()) {
 		return "", fmt.Errorf("newName %#v for File.Rename contains path separator %s", newName, local.Separator())
 	}
-	if !local.Exists(filePath) {
+	if _, e := os.Stat(filePath); e != nil {
 		return "", NewErrDoesNotExist(File(filePath))
 	}
 	newPath = filepath.Join(filepath.Dir(filePath), newName)
@@ -666,7 +665,7 @@ func (local *LocalFileSystem) Watch(filePath string, onEvent func(File, Event)) 
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	if !local.Exists(filePath) {
+	if _, e := os.Stat(filePath); e != nil {
 		return nil, NewErrDoesNotExist(File(filePath))
 	}
 	filePath = expandTilde(filePath)
