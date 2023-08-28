@@ -1,5 +1,5 @@
-// Package ftpfs implements a (S)FTP client file system.
-package ftpfs
+// Package sftpfs implements a SFTP client file system.
+package sftpfs
 
 import (
 	"context"
@@ -32,13 +32,12 @@ type SFTPFileSystem struct {
 func Dial(addr, user, password string) (*SFTPFileSystem, error) {
 	addr = strings.TrimSuffix(strings.TrimPrefix(addr, "sftp://"), "/")
 
-	var hostKey ssh.PublicKey
 	config := &ssh.ClientConfig{
 		User: user,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
 		},
-		HostKeyCallback: ssh.FixedHostKey(hostKey),
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 	conn, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
