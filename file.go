@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
 	"strings"
 	"time"
 
@@ -1202,11 +1201,6 @@ func (file File) GobDecode(gobBytes []byte) error {
 		return fmt.Errorf("File.GobDecode: error writing file data: %w", err)
 	}
 	return nil
-}
-
-// HTTPFileSystem returns a http.FileSystem with the file as root.
-func (file File) HTTPFileSystem() http.FileSystem {
-	return httpFileSystem{root: file}
 }
 
 // StdFS wraps the file as a StdFS struct that
