@@ -368,29 +368,6 @@ func (dbfs *DropboxFileSystem) OpenReadWriter(filePath string, perm []fs.Permiss
 	return fileBuffer, nil
 }
 
-func (dbfs *DropboxFileSystem) Truncate(filePath string, size int64) error {
-	info := dbfs.info(filePath)
-	if !info.Exists {
-		return fs.NewErrDoesNotExist(dbfs.File(filePath))
-	}
-	if info.IsDir {
-		return fs.NewErrIsDirectory(dbfs.File(filePath))
-	}
-	if info.Size <= size {
-		return nil
-	}
-	data, err := dbfs.ReadAll(context.Background(), filePath)
-	// File size or existence could have changed in the meantime
-	// because this is a slow network FS, the
-	if err != nil {
-		return dbfs.wrapErrNotExist(filePath, err)
-	}
-	if int64(len(data)) <= size {
-		return nil
-	}
-	return dbfs.WriteAll(context.Background(), filePath, data[:size], []fs.Permissions{info.Permissions})
-}
-
 func (dbfs *DropboxFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
 	if ctx.Err() != nil {
 		return ctx.Err()

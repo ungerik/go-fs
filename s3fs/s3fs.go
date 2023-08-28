@@ -429,20 +429,6 @@ func (s *S3FileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileB
 	return fileBuffer, nil
 }
 
-func (s *S3FileSystem) Truncate(filePath string, size int64) error {
-	if s.readOnly {
-		return fs.ErrReadOnlyFileSystem
-	}
-	current, err := s.ReadAll(context.Background(), filePath)
-	if err != nil {
-		return err
-	}
-	if len(current) <= int(size) {
-		return nil
-	}
-	return s.WriteAll(context.Background(), filePath, current[:size], nil)
-}
-
 func (s *S3FileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
 	if s.readOnly {
 		return fs.ErrReadOnlyFileSystem

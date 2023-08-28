@@ -94,8 +94,6 @@ type FileSystem interface {
 	OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
 	OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error)
 
-	Truncate(filePath string, size int64) error // TODO
-
 	// Remove deletes the file.
 	Remove(filePath string) error
 }
@@ -112,6 +110,7 @@ type fullyFeaturedFileSystem interface {
 	WriteAllFileSystem
 	AppendFileSystem
 	AppendWriterFileSystem
+	TruncateFileSystem
 	ExistsFileSystem
 	UserFileSystem
 	GroupFileSystem
@@ -219,6 +218,16 @@ type AppendWriterFileSystem interface {
 	FileSystem
 
 	OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
+}
+
+type TruncateFileSystem interface {
+	FileSystem
+
+	// Truncate resizes a file by not only
+	// truncating to a smaller size but also
+	// appending zeros to a bigger size
+	// than the current one.
+	Truncate(filePath string, size int64) error
 }
 
 type ExistsFileSystem interface {

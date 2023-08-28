@@ -569,7 +569,7 @@ func (local *LocalFileSystem) Truncate(filePath string, newSize int64) error {
 	filePath = expandTilde(filePath)
 	info, err := local.Stat(filePath)
 	if err != nil {
-		return err
+		return NewErrDoesNotExist(File(filePath))
 	}
 	if info.IsDir() {
 		return NewErrIsDirectory(File(filePath))

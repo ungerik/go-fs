@@ -384,7 +384,7 @@ func (file File) Permissions() Permissions {
 	if err != nil {
 		return 0
 	}
-	return Permissions(stat.Mode().Perm())
+	return PermissionsFromStdFileInfo(stat)
 }
 
 func (file File) SetPermissions(perm Permissions) error {
@@ -912,12 +912,55 @@ func (file File) Watch(onEvent func(File, Event)) (cancel func() error, err erro
 	return nil, NewErrUnsupported(fileSystem, "Watch")
 }
 
-func (file File) Truncate(size int64) error {
+func (file File) Truncate(newSize int64) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
+	if newSize < 0 {
+		return fmt.Errorf("negative file size: %d", newSize)
+	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Truncate(path, size)
+	if fs, ok := fileSystem.(TruncateFileSystem); ok {
+		return fs.Truncate(path, newSize)
+	}
+	info, err := fileSystem.Stat(path)
+	if err != nil {
+		return NewErrDoesNotExist(file)
+	}
+	if info.IsDir() {
+		return NewErrIsDirectory(file)
+	}
+	if info.Size() == newSize {
+		return nil
+	}
+	if info.Size() < newSize {
+		// Append zeros if current file is smaller than newSize
+		zeros := make([]byte, newSize-info.Size())
+		return file.Append(context.Background(), zeros)
+	}
+	// Truncate be reading up to newSize and then rewriting the file
+	r, err := fileSystem.OpenReader(path)
+	if err != nil {
+		return err
+	}
+	data := make([]byte, newSize)
+	_, err = io.ReadFull(r, data)
+	err = errors.Join(err, r.Close())
+	if err != nil {
+		return err
+	}
+	w, err := fileSystem.OpenWriter(path, []Permissions{PermissionsFromStdFileInfo(info)})
+	if err != nil {
+		return err
+	}
+	n, err := w.Write(data)
+	if err != nil {
+		return errors.Join(err, w.Close())
+	}
+	if int64(n) < newSize {
+		return errors.Join(fmt.Errorf("%w from truncating file %s", io.ErrShortWrite, file), w.Close())
+	}
+	return w.Close()
 }
 
 // Rename changes the name of a file where newName is the name part after file.Dir().

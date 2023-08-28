@@ -371,10 +371,6 @@ func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permission
 	// return nil, fs.ErrReadOnlyFileSystem
 }
 
-func (zipfs *ZipFileSystem) Truncate(filePath string, size int64) error {
-	return fs.NewErrUnsupported(zipfs, "Truncate")
-}
-
 func (zipfs *ZipFileSystem) Remove(filePath string) error {
 	return fs.NewErrUnsupported(zipfs, "Remove")
 }

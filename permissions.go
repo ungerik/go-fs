@@ -1,6 +1,9 @@
 package fs
 
-import "os"
+import (
+	"io/fs"
+	"os"
+)
 
 var (
 	NoPermissions Permissions = 0
@@ -93,4 +96,8 @@ func CombinePermissions(perms []Permissions, defaultPerm Permissions) (result Pe
 		result |= p
 	}
 	return result
+}
+
+func PermissionsFromStdFileInfo(info fs.FileInfo) Permissions {
+	return Permissions(info.Mode().Perm())
 }

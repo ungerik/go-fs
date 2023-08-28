@@ -55,10 +55,6 @@ func (*ReadOnlyBase) OpenReadWriter(filePath string, perm []Permissions) (ReadWr
 	return nil, ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) Truncate(filePath string, size int64) error {
-	return ErrReadOnlyFileSystem
-}
-
 func (*ReadOnlyBase) Remove(filePath string) error {
 	return ErrReadOnlyFileSystem
 }
