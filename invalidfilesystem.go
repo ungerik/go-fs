@@ -2,8 +2,7 @@ package fs
 
 import (
 	"context"
-	"io"
-	"io/fs"
+	iofs "io/fs"
 	"net/url"
 	"path"
 	"strings"
@@ -94,7 +93,7 @@ func (InvalidFileSystem) VolumeName(filePath string) string {
 	return "invalid:"
 }
 
-func (InvalidFileSystem) Stat(filePath string) (fs.FileInfo, error) {
+func (InvalidFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	return nil, ErrInvalidFileSystem
 }
 
@@ -166,15 +165,15 @@ func (InvalidFileSystem) Append(ctx context.Context, filePath string, data []byt
 	return ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) OpenReader(filePath string) (fs.File, error) {
+func (InvalidFileSystem) OpenReader(filePath string) (ReadCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (InvalidFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 

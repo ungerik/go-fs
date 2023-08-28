@@ -1,7 +1,7 @@
 package fs
 
 import (
-	"io/fs"
+	iofs "io/fs"
 	"os"
 )
 
@@ -98,6 +98,6 @@ func JoinPermissions(perms []Permissions, defaultPerm Permissions) (result Permi
 	return result
 }
 
-func PermissionsFromStdFileInfo(info fs.FileInfo) Permissions {
+func PermissionsFromStdFileInfo(info iofs.FileInfo) Permissions {
 	return Permissions(info.Mode().Perm())
 }

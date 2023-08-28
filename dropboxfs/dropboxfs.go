@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	iofs "io/fs"
 	"path"
 	"strings"
@@ -345,7 +344,7 @@ func (dbfs *DropboxFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	return fsimpl.NewReadonlyFileBuffer(data, info), nil
 }
 
-func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
+func (dbfs *DropboxFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
 	if !dbfs.info(path.Dir(filePath)).IsDir {
 		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
 	}

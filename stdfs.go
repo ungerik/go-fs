@@ -3,19 +3,19 @@ package fs
 import (
 	"errors"
 	"fmt"
-	"io/fs"
+	iofs "io/fs"
 	"path"
 	"sort"
 	"strings"
 )
 
 var (
-	_ fs.FS         = StdFS{File("")}
-	_ fs.SubFS      = StdFS{File("")}
-	_ fs.StatFS     = StdFS{File("")}
-	_ fs.GlobFS     = StdFS{File("")}
-	_ fs.ReadDirFS  = StdFS{File("")}
-	_ fs.ReadFileFS = StdFS{File("")}
+	_ iofs.FS         = StdFS{File("")}
+	_ iofs.SubFS      = StdFS{File("")}
+	_ iofs.StatFS     = StdFS{File("")}
+	_ iofs.GlobFS     = StdFS{File("")}
+	_ iofs.ReadDirFS  = StdFS{File("")}
+	_ iofs.ReadFileFS = StdFS{File("")}
 )
 
 // StdFS implements the io/fs.FS interface
@@ -35,21 +35,21 @@ type StdFS struct {
 // Stat returns a io/fs.FileInfo describing the file.
 //
 // This method implements the io/fs.StatFS interface.
-func (f StdFS) Stat(name string) (fs.FileInfo, error) {
+func (f StdFS) Stat(name string) (iofs.FileInfo, error) {
 	return f.File.Join(name).Stat()
 }
 
 // Sub returns an io/fs.FS corresponding to the subtree rooted at dir.
 //
 // This method implements the io/fs.SubFS interface.
-func (f StdFS) Sub(dir string) (fs.FS, error) {
+func (f StdFS) Sub(dir string) (iofs.FS, error) {
 	return f.File.Join(dir).StdFS(), nil
 }
 
 // Open opens the named file.
 //
 // This method implements the io/fs.FS interface.
-func (f StdFS) Open(name string) (fs.File, error) {
+func (f StdFS) Open(name string) (iofs.File, error) {
 	if err := checkStdFSName(name); err != nil {
 		return nil, err
 	}
@@ -70,11 +70,11 @@ func (f StdFS) ReadFile(name string) ([]byte, error) {
 // and returns a list of directory entries sorted by filename.
 //
 // This method implements the io/fs.ReadDirFS interface.
-func (f StdFS) ReadDir(name string) ([]fs.DirEntry, error) {
+func (f StdFS) ReadDir(name string) ([]iofs.DirEntry, error) {
 	if err := checkStdFSName(name); err != nil {
 		return nil, err
 	}
-	var entries []fs.DirEntry
+	var entries []iofs.DirEntry
 	err := f.File.Join(name).ListDir(func(file File) error {
 		entries = append(entries, file.StdDirEntry())
 		return nil

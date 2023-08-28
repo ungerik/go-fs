@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	iofs "io/fs"
 	"net/url"
 	"path"
@@ -555,11 +554,11 @@ func (fs *MemFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	return nil, nil
 }
 
-func (fs *MemFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (fs *MemFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	return nil, nil
 }
 
-func (fs *MemFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (fs *MemFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	return nil, nil
 }
 

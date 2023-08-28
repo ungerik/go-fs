@@ -1,7 +1,7 @@
 package fs
 
 import (
-	"io/fs"
+	iofs "io/fs"
 	"os"
 	"time"
 )
@@ -26,7 +26,7 @@ type FileInfo struct {
 // of an existing file.
 // Use NewNonExistingFileInfo to get
 // a FileInfo for non existing file.
-func NewFileInfo(file File, info fs.FileInfo, hidden bool) FileInfo {
+func NewFileInfo(file File, info iofs.FileInfo, hidden bool) FileInfo {
 	mode := info.Mode()
 	return FileInfo{
 		File:        file,
@@ -58,7 +58,7 @@ func NewNonExistingFileInfo(file File) FileInfo {
 
 // StdFileInfo returns an io/fs.FileInfo wrapper
 // for the data stored in the FileInfo struct.
-func (i *FileInfo) StdFileInfo() fs.FileInfo { return fileInfo{i} }
+func (i *FileInfo) StdFileInfo() iofs.FileInfo { return fileInfo{i} }
 
 // fileInfo implements os.FileInfo and fs.FileInfo for a given FileInfo
 type fileInfo struct{ i *FileInfo }

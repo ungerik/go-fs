@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
+	iofs "io/fs"
 	"strings"
 	"time"
 
@@ -186,7 +186,7 @@ func (file File) Joinf(format string, args ...interface{}) File {
 }
 
 // Stat returns a standard library io/fs.FileInfo describing the file.
-func (file File) Stat() (fs.FileInfo, error) {
+func (file File) Stat() (iofs.FileInfo, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
@@ -693,7 +693,7 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	if file == "" {
 		return 0, ErrEmptyPath
 	}
-	var writer io.WriteCloser
+	var writer WriteCloser
 	existingPerm := file.Permissions()
 	if existingPerm != NoPermissions {
 		writer, err = file.OpenWriter(existingPerm)
@@ -708,7 +708,7 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 }
 
 // OpenReader opens the file and returns a io/fs.File that has to be closed after reading
-func (file File) OpenReader() (fs.File, error) {
+func (file File) OpenReader() (ReadCloser, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
@@ -740,7 +740,7 @@ func (file File) OpenReadSeeker() (ReadSeekCloser, error) {
 	return fsimpl.NewReadonlyFileBufferReadAll(readCloser, info)
 }
 
-func (file File) OpenWriter(perm ...Permissions) (io.WriteCloser, error) {
+func (file File) OpenWriter(perm ...Permissions) (WriteCloser, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
@@ -748,7 +748,7 @@ func (file File) OpenWriter(perm ...Permissions) (io.WriteCloser, error) {
 	return fileSystem.OpenWriter(path, perm)
 }
 
-func (file File) OpenAppendWriter(perm ...Permissions) (io.WriteCloser, error) {
+func (file File) OpenAppendWriter(perm ...Permissions) (WriteCloser, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}

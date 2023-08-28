@@ -8,7 +8,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"io/fs"
+	iofs "io/fs"
 	"strings"
 	"time"
 
@@ -231,7 +231,7 @@ func (f MemFile) WriteTo(writer io.Writer) (n int64, err error) {
 }
 
 // OpenReader opens the file and returns a io/fs.File that has to be closed after reading
-func (f MemFile) OpenReader() (fs.File, error) {
+func (f MemFile) OpenReader() (ReadCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
@@ -324,11 +324,11 @@ func (f *MemFile) Write(b []byte) (int, error) {
 }
 
 // Stat returns a io/fs.FileInfo describing the MemFile.
-func (f MemFile) Stat() (fs.FileInfo, error) {
+func (f MemFile) Stat() (iofs.FileInfo, error) {
 	return memFileInfo{f}, nil
 }
 
-var _ fs.FileInfo = memFileInfo{}
+var _ iofs.FileInfo = memFileInfo{}
 
 // memFileInfo implements io/fs.FileInfo for a MemFile.
 //
@@ -337,7 +337,7 @@ type memFileInfo struct {
 	MemFile
 }
 
-func (i memFileInfo) Mode() fs.FileMode  { return 0666 }
-func (i memFileInfo) ModTime() time.Time { return time.Now() }
-func (i memFileInfo) IsDir() bool        { return false }
-func (i memFileInfo) Sys() interface{}   { return nil }
+func (i memFileInfo) Mode() iofs.FileMode { return 0666 }
+func (i memFileInfo) ModTime() time.Time  { return time.Now() }
+func (i memFileInfo) IsDir() bool         { return false }
+func (i memFileInfo) Sys() interface{}    { return nil }

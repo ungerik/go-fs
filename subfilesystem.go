@@ -2,8 +2,7 @@ package fs
 
 import (
 	"context"
-	"io"
-	"io/fs"
+	iofs "io/fs"
 	"path/filepath"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -119,7 +118,7 @@ func (subfs *todoSubFileSystem) AbsPath(filePath string) string {
 	return subfs.Parent.AbsPath(filePath)
 }
 
-func (subfs *todoSubFileSystem) Stat(filePath string) (fs.FileInfo, error) {
+func (subfs *todoSubFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	return subfs.Parent.Stat(filePath)
 }
 
@@ -187,15 +186,15 @@ func (subfs *todoSubFileSystem) WriteAll(ctx context.Context, filePath string, d
 	panic("not implemented")
 }
 
-func (subfs *todoSubFileSystem) OpenReader(filePath string) (fs.File, error) {
+func (subfs *todoSubFileSystem) OpenReader(filePath string) (ReadCloser, error) {
 	panic("not implemented")
 }
 
-func (subfs *todoSubFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (subfs *todoSubFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	panic("not implemented")
 }
 
-func (subfs *todoSubFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (subfs *todoSubFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	panic("not implemented")
 }
 

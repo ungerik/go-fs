@@ -3,30 +3,31 @@ package fsimpl
 import (
 	"errors"
 	"io"
-	"io/fs"
+	iofs "io/fs"
 )
 
-var _ fs.File = new(ReadonlyFileBuffer)
+var _ iofs.File = new(ReadonlyFileBuffer)
 
 // ReadonlyFileBuffer is a memory buffer that implements ReadSeekCloser which combines the interfaces
-//   io/fs.File
-//   io.Reader
-//   io.ReaderAt
-//   io.Seeker
-//   io.Closer
+//
+//	io/fs.File
+//	io.Reader
+//	io.ReaderAt
+//	io.Seeker
+//	io.Closer
 type ReadonlyFileBuffer struct {
-	info  fs.FileInfo
+	info  iofs.FileInfo
 	data  []byte
 	pos   int64 // current reading index
 	close func() error
 }
 
 // NewReadonlyFileBuffer returns a new ReadonlyFileBuffer
-func NewReadonlyFileBuffer(data []byte, info fs.FileInfo) *ReadonlyFileBuffer {
+func NewReadonlyFileBuffer(data []byte, info iofs.FileInfo) *ReadonlyFileBuffer {
 	return &ReadonlyFileBuffer{data: data, info: info}
 }
 
-func NewReadonlyFileBufferReadAll(reader io.Reader, info fs.FileInfo) (*ReadonlyFileBuffer, error) {
+func NewReadonlyFileBufferReadAll(reader io.Reader, info iofs.FileInfo) (*ReadonlyFileBuffer, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
@@ -35,11 +36,11 @@ func NewReadonlyFileBufferReadAll(reader io.Reader, info fs.FileInfo) (*Readonly
 }
 
 // NewReadonlyFileBufferWithClose returns a new ReadonlyFileBuffer
-func NewReadonlyFileBufferWithClose(data []byte, info fs.FileInfo, close func() error) *ReadonlyFileBuffer {
+func NewReadonlyFileBufferWithClose(data []byte, info iofs.FileInfo, close func() error) *ReadonlyFileBuffer {
 	return &ReadonlyFileBuffer{data: data, info: info, close: close}
 }
 
-func (buf *ReadonlyFileBuffer) Stat() (fs.FileInfo, error) {
+func (buf *ReadonlyFileBuffer) Stat() (iofs.FileInfo, error) {
 	return buf.info, nil
 }
 

@@ -3,7 +3,12 @@ package fs
 import (
 	"context"
 	"io"
-	"io/fs"
+	iofs "io/fs"
+)
+
+type (
+	ReadCloser  = iofs.File
+	WriteCloser = io.WriteCloser
 )
 
 // FileSystem is an interface that has to be implemented for
@@ -59,7 +64,7 @@ type FileSystem interface {
 	// If filePath is the root of the file systeme, then an empty string will be returned for name.
 	SplitDirAndName(filePath string) (dir, name string)
 
-	Stat(filePath string) (fs.FileInfo, error)
+	Stat(filePath string) (iofs.FileInfo, error)
 
 	// IsHidden returns if a file is hidden depending
 	// on the definition of hidden files of the file system,
@@ -90,8 +95,8 @@ type FileSystem interface {
 
 	MakeDir(dirPath string, perm []Permissions) error
 
-	OpenReader(filePath string) (fs.File, error)
-	OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
+	OpenReader(filePath string) (ReadCloser, error)
+	OpenWriter(filePath string, perm []Permissions) (WriteCloser, error)
 	OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error)
 
 	// Remove deletes the file.
@@ -218,7 +223,7 @@ type AppendFileSystem interface {
 type AppendWriterFileSystem interface {
 	FileSystem
 
-	OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error)
+	OpenAppendWriter(filePath string, perm []Permissions) (WriteCloser, error)
 }
 
 type TruncateFileSystem interface {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	iofs "io/fs"
 	"path"
 	"strings"
@@ -397,7 +396,7 @@ func (s *S3FileSystem) OpenReader(filePath string) (iofs.File, error) {
 	return fsimpl.NewReadonlyFileBuffer(data, info), nil
 }
 
-func (s *S3FileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
+func (s *S3FileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}

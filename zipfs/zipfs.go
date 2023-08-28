@@ -346,7 +346,7 @@ func (zipfs *ZipFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error
 	return nil
 }
 
-func (zipfs *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
+func (zipfs *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
 	if zipfs.zipWriter == nil {
 		return nil, fs.ErrReadOnlyFileSystem
 	}

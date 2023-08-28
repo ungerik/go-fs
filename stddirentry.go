@@ -1,9 +1,9 @@
 package fs
 
-import "io/fs"
+import iofs "io/fs"
 
 var (
-	_ fs.DirEntry = StdDirEntry{File("")}
+	_ iofs.DirEntry = StdDirEntry{File("")}
 )
 
 // StdDirEntry implements the io/fs.DirEntry interface
@@ -26,7 +26,7 @@ func (de StdDirEntry) IsDir() bool {
 
 // Type returns the type bits for the entry.
 // The type bits are a subset of the usual FileMode bits, those returned by the FileMode.Type method.
-func (de StdDirEntry) Type() fs.FileMode {
+func (de StdDirEntry) Type() iofs.FileMode {
 	stat, err := de.File.Stat()
 	if err != nil {
 		return 0
@@ -40,6 +40,6 @@ func (de StdDirEntry) Type() fs.FileMode {
 // since the directory read, Info may return an error satisfying errors.Is(err, ErrNotExist).
 // If the entry denotes a symbolic link, Info reports the information about the link itself,
 // not the link's target.
-func (de StdDirEntry) Info() (fs.FileInfo, error) {
+func (de StdDirEntry) Info() (iofs.FileInfo, error) {
 	return de.File.Stat()
 }

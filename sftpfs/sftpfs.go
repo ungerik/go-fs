@@ -172,11 +172,11 @@ func (f *SFTPFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 	return f.client.Mkdir(dirPath)
 }
 
-func (f *SFTPFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
+func (f *SFTPFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
 	return f.client.Open(filePath)
 }
 
-func (f *SFTPFileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (io.WriteCloser, error) {
+func (f *SFTPFileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
 	file, err := f.client.Open(filePath)
 	if err != nil {
 		return nil, err

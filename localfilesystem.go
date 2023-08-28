@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
+	iofs "io/fs"
 	"net/url"
 	"os"
 	"os/user"
@@ -181,7 +181,7 @@ func (local *LocalFileSystem) VolumeName(filePath string) string {
 	return filepath.VolumeName(filePath)
 }
 
-func (local *LocalFileSystem) Stat(filePath string) (fs.FileInfo, error) {
+func (local *LocalFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	filePath = expandTilde(filePath)
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -551,7 +551,7 @@ func (local *LocalFileSystem) Append(ctx context.Context, filePath string, data 
 	return err
 }
 
-func (local *LocalFileSystem) OpenReader(filePath string) (fs.File, error) {
+func (local *LocalFileSystem) OpenReader(filePath string) (ReadCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
@@ -560,7 +560,7 @@ func (local *LocalFileSystem) OpenReader(filePath string) (fs.File, error) {
 	return f, wrapOSErr(filePath, err)
 }
 
-func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
@@ -570,7 +570,7 @@ func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (i
 	return f, wrapOSErr(filePath, err)
 }
 
-func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
