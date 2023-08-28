@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
+	iofs "io/fs"
 	"net/url"
 	"path"
 	"strings"
@@ -20,7 +20,7 @@ var (
 	_ fullyFeaturedFileSystem = new(MemFileSystem)
 
 	// memFileNode implements io/fs.FileInfo
-	_ fs.FileInfo = new(memFileInfo)
+	_ iofs.FileInfo = new(memFileInfo)
 )
 
 var memFileSystemDefaultPermissions = UserAndGroupReadWrite
@@ -37,7 +37,7 @@ func (n *memFileNode) IsDir() bool {
 	return n != nil && n.Dir != nil
 }
 
-func (n *memFileNode) Mode() fs.FileMode {
+func (n *memFileNode) Mode() iofs.FileMode {
 	return n.Permissions.FileMode(n.Dir != nil)
 }
 
@@ -237,14 +237,43 @@ func (*MemFileSystem) IsWriteOnly() bool {
 }
 
 func (fs *MemFileSystem) RootDir() File {
-	return File(fs.Prefix() + fs.sep)
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
+	return File(fs.prefix() + fs.sep)
 }
 
 func (fs *MemFileSystem) ID() (string, error) {
-	return "MemFileSystem_" + fs.id, nil
+	return fs.id, nil
+}
+
+// This method is not thread-safe!
+func (fs *MemFileSystem) WithID(id string) *MemFileSystem {
+	if id == "" {
+		panic("empty id")
+	}
+	Unregister(fs)
+	fs.id = id
+	Register(fs)
+	return fs
+}
+
+// This method is not thread-safe!
+func (fs *MemFileSystem) WithVolume(volume string) *MemFileSystem {
+	Unregister(fs)
+	fs.volume = volume
+	Register(fs)
+	return fs
 }
 
 func (fs *MemFileSystem) Prefix() string {
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
+	return fs.prefix()
+}
+
+func (fs *MemFileSystem) prefix() string {
 	if fs.volume != "" {
 		return "mem://" + fs.id + "/" + fs.volume
 	}
@@ -256,15 +285,27 @@ func (*MemFileSystem) Name() string {
 }
 
 func (fs *MemFileSystem) String() string {
-	return "MemFileSystem_" + fs.id
+	return fmt.Sprintf("MemFileSystem(%s)", fs.Prefix())
 }
 
 func (fs *MemFileSystem) JoinCleanFile(uri ...string) File {
-	return File(fs.Prefix() + fs.JoinCleanPath(uri...))
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
+	return File(fs.prefix() + fs.JoinCleanPath(uri...))
 }
 
-func (*MemFileSystem) IsAbsPath(filePath string) bool {
-	return path.IsAbs(filePath)
+func (fs *MemFileSystem) IsAbsPath(filePath string) bool {
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
+	if strings.HasPrefix(filePath, fs.sep) {
+		return true
+	}
+	if fs.volume != "" && strings.HasPrefix(filePath, fs.volume) {
+		return true
+	}
+	return false
 }
 
 func (fs *MemFileSystem) AbsPath(filePath string) string {
@@ -276,23 +317,32 @@ func (fs *MemFileSystem) URL(cleanPath string) string {
 }
 
 func (fs *MemFileSystem) JoinCleanPath(uriParts ...string) string {
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
 	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], fs.Prefix())
+		uriParts[0] = strings.TrimPrefix(uriParts[0], fs.prefix())
 	}
-	cleanPath := path.Join(uriParts...)
+	cleanPath := strings.Join(uriParts, fs.sep)
 	unescPath, err := url.PathUnescape(cleanPath)
 	if err == nil {
 		cleanPath = unescPath
 	}
-	cleanPath = path.Clean(cleanPath)
+	cleanPath = path.Clean(cleanPath) // TODO use sep
 	return cleanPath
 }
 
 func (fs *MemFileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, fs.Prefix(), fs.sep)
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
+	return fsimpl.SplitPath(filePath, fs.prefix(), fs.sep)
 }
 
 func (fs *MemFileSystem) Separator() string {
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
 	return fs.sep
 }
 
@@ -301,27 +351,30 @@ func (*MemFileSystem) MatchAnyPattern(name string, patterns []string) (bool, err
 }
 
 func (fs *MemFileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, fs.sep)
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
+	return fsimpl.SplitDirAndName(filePath, len(fs.volume), fs.sep)
 }
 
 func (fs *MemFileSystem) VolumeName(filePath string) string {
-	if filePath == "" {
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
+	if len(filePath) < len(fs.volume) {
 		return ""
 	}
+	return filePath[:len(fs.volume)]
+}
 
+func (fs *MemFileSystem) Volume() string {
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
 	return fs.volume
 }
 
-func (fs *MemFileSystem) SetVolume(volume string) {
-	fs.mtx.Lock()
-	fs.volume = volume
-	fs.mtx.Unlock()
-}
-
-func (fs *MemFileSystem) Stat(filePath string) (fs.FileInfo, error) {
+func (fs *MemFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
@@ -386,58 +439,178 @@ func (*MemFileSystem) SetGroup(filePath string, group string) error {
 	return nil
 }
 
-func (*MemFileSystem) Touch(filePath string, perm []Permissions) error {
+func (fs *MemFileSystem) Touch(filePath string, perm []Permissions) error {
+	if filePath == "" {
+		return ErrEmptyPath
+	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
+	if fs.readOnly {
+		return ErrReadOnlyFileSystem
+	}
+
+	node, parent := fs.pathNodeOrNil(filePath)
+	if node != nil {
+		node.Modified = time.Now()
+		return nil
+	}
+
+	parentDir, name := fsimpl.SplitDirAndName(filePath, len(fs.volume), fs.sep)
+	if parent == nil {
+		return NewErrDoesNotExist(fs.RootDir().Join(parentDir))
+	}
+	parent.Dir[name] = newMemFileNode(
+		MemFile{FileName: name},
+		time.Now(),
+		JoinPermissions(perm, memFileSystemDefaultPermissions),
+	)
 	return nil
 }
 
-func (*MemFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	return nil, nil
+func (fs *MemFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if filePath == "" {
+		return nil, ErrEmptyPath
+	}
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
+
+	node, _ := fs.pathNodeOrNil(filePath)
+	if node == nil {
+		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	}
+	return node.FileData, nil
 }
 
-func (*MemFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
+func (fs *MemFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if filePath == "" {
+		return ErrEmptyPath
+	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
+	if fs.readOnly {
+		return ErrReadOnlyFileSystem
+	}
+
+	node, parent := fs.pathNodeOrNil(filePath)
+	if node != nil {
+		node.FileData = data
+		node.Modified = time.Now()
+		return nil
+	}
+
+	parentDir, name := fsimpl.SplitDirAndName(filePath, len(fs.volume), fs.sep)
+	if parent == nil {
+		return NewErrDoesNotExist(fs.RootDir().Join(parentDir))
+	}
+	parent.Dir[name] = newMemFileNode(
+		MemFile{FileName: name, FileData: data},
+		time.Now(),
+		JoinPermissions(perm, memFileSystemDefaultPermissions),
+	)
 	return nil
 }
 
-func (*MemFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
+func (fs *MemFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if filePath == "" {
+		return ErrEmptyPath
+	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
+	if fs.readOnly {
+		return ErrReadOnlyFileSystem
+	}
+
+	node, parent := fs.pathNodeOrNil(filePath)
+	if node != nil {
+		node.FileData = append(node.FileData, data...)
+		node.Modified = time.Now()
+		return nil
+	}
+
+	parentDir, name := fsimpl.SplitDirAndName(filePath, len(fs.volume), fs.sep)
+	if parent == nil {
+		return NewErrDoesNotExist(fs.RootDir().Join(parentDir))
+	}
+	parent.Dir[name] = newMemFileNode(
+		MemFile{FileName: name, FileData: data},
+		time.Now(),
+		JoinPermissions(perm, memFileSystemDefaultPermissions),
+	)
 	return nil
 }
 
-func (*MemFileSystem) OpenReader(filePath string) (fs.File, error) {
+func (fs *MemFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	return nil, nil
 }
 
-func (*MemFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (fs *MemFileSystem) OpenWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, nil
 }
 
-func (*MemFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
+func (fs *MemFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (io.WriteCloser, error) {
 	return nil, nil
 }
 
-func (*MemFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
+func (fs *MemFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	return nil, nil
 }
 
-func (*MemFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
+func (fs *MemFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
 	return nil, nil
 }
 
-func (*MemFileSystem) Truncate(filePath string, size int64) error {
+func (fs *MemFileSystem) Truncate(filePath string, newSize int64) error {
+	if filePath == "" {
+		return ErrEmptyPath
+	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
+	if fs.readOnly {
+		return ErrReadOnlyFileSystem
+	}
+
+	node, _ := fs.pathNodeOrNil(filePath)
+	if node == nil {
+		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	}
+	currentSize := int64(len(node.FileData))
+	if currentSize == newSize {
+		return nil
+	}
+	if currentSize > newSize {
+		node.FileData = node.FileData[:newSize]
+	} else {
+		node.FileData = append(node.FileData, make([]byte, newSize-currentSize)...)
+	}
+	node.Modified = time.Now()
 	return nil
 }
 
-func (*MemFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+func (fs *MemFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
 	return nil
 }
 
-func (*MemFileSystem) Rename(filePath string, newName string) (string, error) {
+func (fs *MemFileSystem) Rename(filePath string, newName string) (string, error) {
 	return "", nil
 }
 
-func (*MemFileSystem) Move(filePath string, destPath string) error {
+func (fs *MemFileSystem) Move(filePath string, destPath string) error {
 	return nil
 }
 
-func (*MemFileSystem) Remove(filePath string) error {
+func (fs *MemFileSystem) Remove(filePath string) error {
 	return nil
 }

@@ -15,7 +15,7 @@ func TestNewMemFileSystem(t *testing.T) {
 		require.True(t, fs.RootDir().Exists(), "root dir exists")
 		require.True(t, fs.RootDir().IsDir(), "root is dir")
 
-		fs.SetVolume("C:")
+		fs = fs.WithVolume("C:")
 		require.True(t, strings.HasSuffix(fs.Prefix(), "C:"))
 		require.True(t, strings.HasSuffix(string(fs.RootDir()), "C:"+sep))
 
