@@ -4,5 +4,6 @@ use (
 	.
 	./dropboxfs
 	./sftpfs
+	./ftpfs
 	./s3fs
 )
