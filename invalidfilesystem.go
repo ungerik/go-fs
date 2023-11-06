@@ -10,11 +10,16 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-var _ fullyFeaturedFileSystem = InvalidFileSystem{}
+var _ fullyFeaturedFileSystem = InvalidFileSystem("")
 
 // InvalidFileSystem is a file system where all operations are invalid.
 // A File with an empty path defaults to this FS.
-type InvalidFileSystem struct{}
+//
+// The underlying string value is the optional name
+// of the file system and will be added to the URI prefix.
+// It can be used to register different dummy file systems
+// for debugging or testing purposes.
+type InvalidFileSystem string
 
 func (InvalidFileSystem) IsReadOnly() bool {
 	return true
@@ -28,41 +33,50 @@ func (InvalidFileSystem) RootDir() File {
 	return ""
 }
 
-func (InvalidFileSystem) ID() (string, error) {
-	return "invalid file system", nil
+func (fs InvalidFileSystem) ID() (string, error) {
+	return fs.String(), nil
 }
 
-func (InvalidFileSystem) Prefix() string {
-	return "invalid://"
+func (fs InvalidFileSystem) Prefix() string {
+	if fs == "" {
+		return "invalid://"
+	}
+	return "invalid://" + strings.Trim(string(fs), "/") + "/"
 }
 
-func (InvalidFileSystem) Name() string {
-	return "invalid file system"
+func (fs InvalidFileSystem) Name() string {
+	if fs == "" {
+		return "invalid file system"
+	}
+	return string(fs)
 }
 
-func (InvalidFileSystem) String() string {
-	return "invalid file system"
+func (fs InvalidFileSystem) String() string {
+	if fs == "" {
+		return "invalid file system"
+	}
+	return "invalid file system" + " " + string(fs)
 }
 
-func (invalid InvalidFileSystem) JoinCleanFile(uri ...string) File {
-	return File("invalid://" + invalid.JoinCleanPath(uri...))
+func (fs InvalidFileSystem) JoinCleanFile(uri ...string) File {
+	return File(fs.Prefix() + fs.JoinCleanPath(uri...))
 }
 
 func (InvalidFileSystem) IsAbsPath(filePath string) bool {
 	return path.IsAbs(filePath)
 }
 
-func (invalid InvalidFileSystem) AbsPath(filePath string) string {
-	return invalid.JoinCleanPath(filePath)
+func (fs InvalidFileSystem) AbsPath(filePath string) string {
+	return fs.JoinCleanPath(filePath)
 }
 
-func (InvalidFileSystem) URL(cleanPath string) string {
-	return "invalid://" + cleanPath
+func (fs InvalidFileSystem) URL(cleanPath string) string {
+	return fs.Prefix() + cleanPath
 }
 
-func (InvalidFileSystem) JoinCleanPath(uriParts ...string) string {
+func (fs InvalidFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], "invalid://")
+		uriParts[0] = strings.TrimPrefix(uriParts[0], fs.Prefix())
 	}
 	cleanPath := path.Join(uriParts...)
 	unescPath, err := url.PathUnescape(cleanPath)

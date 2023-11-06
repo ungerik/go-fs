@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
+	"net/url"
 	"strings"
 
 	"github.com/pkg/sftp"
@@ -20,16 +21,23 @@ const (
 	Separator = "/"
 )
 
-var (
-	_ fs.FileSystem = new(SFTPFileSystem)
-)
+func init() {
+	// Register with prefix sftp:// for URLs with
+	// sftp://username:password@host:port schema.
+	fs.Register(new(SFTPFileSystem))
+}
 
 type SFTPFileSystem struct {
 	client *sftp.Client
 	prefix string
 }
 
-func Dial(addr, user, password string) (*SFTPFileSystem, error) {
+// Dial a new SFTP connection and register it as file system.
+//
+// If hostKeyCallbackOrNil is not nil then it will be called
+// during the cryptographic handshake to validate the server's host key,
+// else any host key will be accepted.
+func Dial(addr, user, password string, hostKeyCallbackOrNil ssh.HostKeyCallback) (*SFTPFileSystem, error) {
 	addr = strings.TrimSuffix(strings.TrimPrefix(addr, "sftp://"), "/")
 
 	config := &ssh.ClientConfig{
@@ -37,8 +45,12 @@ func Dial(addr, user, password string) (*SFTPFileSystem, error) {
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallbackOrNil,
 	}
+	if config.HostKeyCallback == nil {
+		config.HostKeyCallback = ssh.InsecureIgnoreHostKey()
+	}
+
 	conn, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
 		return nil, err
@@ -61,7 +73,46 @@ func New(addr string, conn *ssh.Client) (*SFTPFileSystem, error) {
 	return fileSystem, nil
 }
 
+func nop() error { return nil }
+
+func (f *SFTPFileSystem) getClient(filePath string) (client *sftp.Client, clientPath string, release func() error, err error) {
+	if f.client != nil {
+		return f.client, filePath, nop, nil
+	}
+
+	// Dial with credentials from URL to create client on the fly for caller:
+	url, err := url.Parse("sftp://" + filePath)
+	if err != nil {
+		return nil, "", nop, err
+	}
+	username := url.User.Username()
+	if username == "" {
+		return nil, "", nop, fmt.Errorf("no username in SFTP URL: sftp://%s", filePath)
+	}
+	password, ok := url.User.Password()
+	if !ok {
+		return nil, "", nop, fmt.Errorf("no password in SFTP URL: sftp://%s", filePath)
+	}
+	config := &ssh.ClientConfig{
+		User: url.User.Username(),
+		Auth: []ssh.AuthMethod{
+			ssh.Password(password),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+	conn, err := ssh.Dial("tcp", url.Host, config)
+	if err != nil {
+		return nil, "", nop, err
+	}
+	client, err = sftp.NewClient(conn)
+	if err != nil {
+		return nil, "", func() error { return conn.Close() }, err
+	}
+	return client, url.Path, func() error { return client.Close() }, nil
+}
+
 func (f *SFTPFileSystem) IsReadOnly() bool {
+	// f.client.
 	return false // TODO
 }
 
@@ -83,6 +134,9 @@ func (f *SFTPFileSystem) ID() (string, error) {
 }
 
 func (f *SFTPFileSystem) Prefix() string {
+	if f.prefix == "" {
+		return Prefix
+	}
 	return f.prefix
 }
 
@@ -128,25 +182,37 @@ func (f *SFTPFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 }
 
 func (f *SFTPFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
-	return f.client.Stat(filePath)
+	client, filePath, release, err := f.getClient(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	return client.Stat(filePath)
 }
 
 func (f *SFTPFileSystem) IsHidden(filePath string) bool       { return false }
 func (f *SFTPFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
 func (f *SFTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("HTTPFileSystem.ListDirInfo: %w", errors.ErrUnsupported)
+	return fmt.Errorf("SFTPFileSystem.ListDirInfo: %w", errors.ErrUnsupported)
 }
 
 func (f *SFTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("HTTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
+	return fmt.Errorf("SFTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
 }
 
 func (f *SFTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
 	if max == 0 {
 		return nil, nil
 	}
-	infos, err := f.client.ReadDir(dirPath)
+	client, dirPath, release, err := f.getClient(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	infos, err := client.ReadDir(dirPath)
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +225,29 @@ func (f *SFTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int
 	return files, nil
 }
 
+type sftpFile struct {
+	*sftp.File
+	release func() error
+}
+
+func (f *sftpFile) Close() error {
+	return errors.Join(f.File.Close(), f.release())
+}
+
+func (f *SFTPFileSystem) openFile(filePath string) (*sftpFile, error) {
+	client, filePath, release, err := f.getClient(filePath)
+	if err != nil {
+		return nil, err
+	}
+	file, err := client.Open(filePath)
+	if err != nil {
+		return nil, errors.Join(err, release())
+	}
+	return &sftpFile{file, release}, nil
+}
+
 func (f *SFTPFileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
-	return f.client.Open(filePath)
+	return f.openFile(filePath)
 }
 
 func (f *SFTPFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
@@ -168,35 +255,41 @@ func (f *SFTPFileSystem) MatchAnyPattern(name string, patterns []string) (bool, 
 }
 
 func (f *SFTPFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
-	return f.client.Mkdir(dirPath)
+	client, dirPath, release, err := f.getClient(dirPath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return client.Mkdir(dirPath)
 }
 
 func (f *SFTPFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	return f.client.Open(filePath)
+	return f.openFile(filePath)
 }
 
 func (f *SFTPFileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	file, err := f.client.Open(filePath)
+	file, err := f.openFile(filePath)
 	if err != nil {
 		return nil, err
 	}
 	info, err := file.Stat()
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, file.Close())
 	}
 	_, err = file.Seek(info.Size(), io.SeekStart)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, file.Close())
 	}
 	return file, nil
 }
 
 func (f *SFTPFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	return f.client.Open(filePath)
+	return f.openFile(filePath)
 }
 
 func (f *SFTPFileSystem) Truncate(filePath string, size int64) error {
-	file, err := f.client.Open(filePath)
+	file, err := f.openFile(filePath)
 	if err != nil {
 		return err
 	}
@@ -207,9 +300,21 @@ func (f *SFTPFileSystem) Truncate(filePath string, size int64) error {
 }
 
 func (f *SFTPFileSystem) Move(filePath string, destPath string) error {
-	return f.client.Rename(filePath, destPath)
+	client, filePath, release, err := f.getClient(filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return client.Rename(filePath, destPath)
 }
 
 func (f *SFTPFileSystem) Remove(filePath string) error {
-	return f.client.Remove(filePath)
+	client, filePath, release, err := f.getClient(filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return client.Remove(filePath)
 }

@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 )
@@ -28,18 +29,28 @@ var (
 
 // Register adds fs to the Registry of file systems.
 func Register(fs FileSystem) {
+	prefix := fs.Prefix()
+	if prefix == "" {
+		panic(fmt.Sprintf("file system with empty prefix: %#v", fs))
+	}
+
 	registryMtx.Lock()
 	defer registryMtx.Unlock()
 
-	Registry[fs.Prefix()] = fs
+	Registry[prefix] = fs
 }
 
 // Unregister removes fs from the Registry of file systems.
 func Unregister(fs FileSystem) {
+	prefix := fs.Prefix()
+	if prefix == "" {
+		panic(fmt.Sprintf("file system with empty prefix: %#v", fs))
+	}
+
 	registryMtx.Lock()
 	defer registryMtx.Unlock()
 
-	delete(Registry, fs.Prefix())
+	delete(Registry, prefix)
 }
 
 // GetFileSystem returns a FileSystem for the passed URI.
@@ -59,27 +70,23 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	if uri == "" {
 		return Invalid, ""
 	}
+	registryMtx.RLock()
+	defer registryMtx.RUnlock()
 
-	i := strings.Index(uri, PrefixSeparator)
-	if i > 0 {
-		// i += len(PrefixSeparator)
-		// prefix := uri[:i]
-
-		registryMtx.RLock()
-		defer registryMtx.RUnlock()
-
-		for prefix, fs := range Registry {
-			if strings.HasPrefix(uri, prefix) {
-				return fs, uri[len(prefix):]
+	// Find fs with longest matching prefix
+	for prefix, regFS := range Registry {
+		if strings.HasPrefix(uri, prefix) {
+			path := uri[len(prefix):]
+			if fs == nil || len(prefix) > len(fs.Prefix()) {
+				fs = regFS
+				fsPath = path
 			}
 		}
-
-		// if fs, ok := Registry[prefix]; ok {
-		// 	return fs, uri[i:]
-		// } else {
-		// 	return Invalid, ""
-		// }
 	}
 
-	return Local, uri
+	if fs == nil {
+		// No file system found, assume uri is for the local file system
+		return Local, uri
+	}
+	return fs, fsPath
 }

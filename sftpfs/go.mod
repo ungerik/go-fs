@@ -2,6 +2,8 @@ module github.com/ungerik/go-fs/sftpfs
 
 go 1.21.0
 
+replace github.com/ungerik/go-fs => ../
+
 require (
 	github.com/pkg/sftp v1.13.6
 	github.com/stretchr/testify v1.8.4
