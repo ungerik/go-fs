@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -199,4 +200,27 @@ func TestFile_Watch(t *testing.T) {
 
 	err = cancel()
 	assert.NoError(t, err, "cancel watch")
+}
+
+func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
+	type args struct {
+		ctx      context.Context
+		callback func(*FileInfo) error
+		patterns []string
+	}
+	tests := []struct {
+		name    string
+		file    File
+		args    args
+		wantErr bool
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.file.ListDirInfoRecursiveContext(tt.args.ctx, tt.args.callback, tt.args.patterns...); (err != nil) != tt.wantErr {
+				t.Errorf("File.ListDirInfoRecursiveContext() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
 }

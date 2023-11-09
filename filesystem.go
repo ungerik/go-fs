@@ -79,20 +79,6 @@ type FileSystem interface {
 	// at least one of the patterns are returned.
 	ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error
 
-	// TODO
-	// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
-	// recursing into all sub-directories.
-	// If any patterns are passed, then only files (not directories) with a name that matches
-	// at least one of the patterns are returned.
-	ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error
-
-	// TODO
-	// ListDirMax returns at most max files and directories in dirPath.
-	// A max value of -1 returns all files.
-	// If any patterns are passed, then only files or directories with a name that matches
-	// at least one of the patterns are returned.
-	ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error)
-
 	MakeDir(dirPath string, perm []Permissions) error
 
 	OpenReader(filePath string) (ReadCloser, error)
@@ -270,4 +256,20 @@ type MakeAllDirsFileSystem interface {
 	FileSystem
 
 	MakeAllDirs(dirPath string, perm []Permissions) error
+}
+
+type ListDirMaxFileSystem interface {
+	// ListDirMax returns at most max files and directories in dirPath.
+	// A max value of -1 returns all files.
+	// If any patterns are passed, then only files or directories with a name that matches
+	// at least one of the patterns are returned.
+	ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error)
+}
+
+type ListDirRecursiveFileSystem interface {
+	// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
+	// recursing into all sub-directories.
+	// If any patterns are passed, then only files (not directories) with a name that matches
+	// at least one of the patterns are returned.
+	ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error
 }

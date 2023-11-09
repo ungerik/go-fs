@@ -321,15 +321,6 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 	return nil
 }
 
-func (local *LocalFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
-	if dirPath == "" {
-		return ErrEmptyPath
-	}
-	dirPath = filepath.Clean(dirPath)
-	dirPath = expandTilde(dirPath)
-	return ListDirInfoRecursiveImpl(ctx, local, dirPath, callback, patterns)
-}
-
 func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []File, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()

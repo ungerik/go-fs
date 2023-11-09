@@ -281,12 +281,6 @@ func (s *S3FileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string,
 	return s.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 
-func (s *S3FileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return s.ListDirInfo(ctx, dirPath, fs.FileInfoCallback(callback), patterns)
-	})
-}
-
 func (s *S3FileSystem) Touch(filePath string, perm []fs.Permissions) error {
 	if s.Exists(filePath) {
 		return nil // TODO is this OK, can we change the modified time?

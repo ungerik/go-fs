@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestListDirMaxImpl(t *testing.T) {
+func Test_listDirMaxImpl(t *testing.T) {
 	bg := context.Background()
 	errCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -47,7 +47,7 @@ func TestListDirMaxImpl(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotFiles, err := ListDirMaxImpl(tt.args.ctx, tt.args.max, tt.args.listDir)
+			gotFiles, err := listDirMaxImpl(tt.args.ctx, tt.args.max, tt.args.listDir)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ListDirMaxImpl() error = %v, wantErr %v", err, tt.wantErr)
 				return

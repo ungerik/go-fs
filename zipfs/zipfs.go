@@ -305,15 +305,6 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 	return listRecursive(rootNode)
 }
 
-func (zipfs *ZipFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	if zipfs.zipReader == nil {
-		return nil, fs.ErrWriteOnlyFileSystem
-	}
-	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return zipfs.ListDirInfo(ctx, dirPath, fs.FileInfoCallback(callback), patterns)
-	})
-}
-
 func (zipfs *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if zipfs.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem

@@ -59,10 +59,10 @@ func StringsToFileReaders(fileURIs []string) []FileReader {
 	return fileReaders
 }
 
-// FileInfoCallback converts a File callback function
+// FileInfoToFileCallback converts a File callback function
 // into a FileInfo callback function that is calling
 // the passed fileCallback with the FileInfo.File.
-func FileInfoCallback(fileCallback func(File) error) func(*FileInfo) error {
+func FileInfoToFileCallback(fileCallback func(File) error) func(*FileInfo) error {
 	return func(info *FileInfo) error {
 		return fileCallback(info.File)
 	}

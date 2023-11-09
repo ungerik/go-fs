@@ -401,11 +401,7 @@ func (file File) SetPermissions(perm Permissions) error {
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
 func (file File) ListDir(callback func(File) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(context.Background(), path, FileInfoCallback(callback), patterns)
+	return file.ListDirContext(context.Background(), callback, patterns...)
 }
 
 // ListDirContext calls the passed callback function for every file and directory in dirPath.
@@ -416,18 +412,14 @@ func (file File) ListDirContext(ctx context.Context, callback func(File) error, 
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(ctx, path, FileInfoCallback(callback), patterns)
+	return fileSystem.ListDirInfo(ctx, path, FileInfoToFileCallback(callback), patterns)
 }
 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
 func (file File) ListDirInfo(callback func(*FileInfo) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(context.Background(), path, callback, patterns)
+	return file.ListDirInfoContext(context.Background(), callback, patterns...)
 }
 
 // ListDirInfoContext calls the passed callback function for every file and directory in dirPath.
@@ -444,21 +436,13 @@ func (file File) ListDirInfoContext(ctx context.Context, callback func(*FileInfo
 // ListDirRecursive returns only files.
 // patterns are only applied to files, not to directories
 func (file File) ListDirRecursive(callback func(File) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(context.Background(), path, FileInfoCallback(callback), patterns)
+	return file.ListDirInfoRecursiveContext(context.Background(), FileInfoToFileCallback(callback), patterns...)
 }
 
 // ListDirRecursiveContext returns only files.
 // patterns are only applied to files, not to directories
 func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(ctx, path, FileInfoCallback(callback), patterns)
+	return file.ListDirInfoRecursiveContext(ctx, FileInfoToFileCallback(callback), patterns...)
 }
 
 // ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
@@ -466,15 +450,11 @@ func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
 func (file File) ListDirInfoRecursive(callback func(*FileInfo) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(context.Background(), path, callback, patterns)
+	return file.ListDirInfoRecursiveContext(context.Background(), callback, patterns...)
 }
 
-// ListDirInfoRecursiveContext calls the passed callback function for every file (not directory) in dirPath
-// recursing into all sub-directories.
+// ListDirInfoRecursiveContext calls the passed callback function for every file
+// (not directory) in dirPath recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
 func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
@@ -482,7 +462,25 @@ func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfoRecursive(ctx, path, callback, patterns)
+	if fs, ok := fileSystem.(ListDirRecursiveFileSystem); ok {
+		return fs.ListDirInfoRecursive(ctx, path, callback, patterns)
+	}
+	return fileSystem.ListDirInfo(ctx, path,
+		func(info *FileInfo) error {
+			if info.IsDir {
+				// Not returning directories, but recursing into them
+				err := info.File.ListDirInfoRecursiveContext(ctx, callback, patterns...)
+				// Don't mind files that have been deleted while iterating
+				return RemoveErrDoesNotExist(err)
+			}
+			match, err := fileSystem.MatchAnyPattern(info.Name, patterns)
+			if !match || err != nil {
+				return err
+			}
+			return callback(info)
+		},
+		nil, // No patterns
+	)
 }
 
 // ListDirMax returns at most max files and directories in dirPath.
@@ -490,11 +488,7 @@ func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(
 // If any patterns are passed, then only files or directories with a name that matches
 // at least one of the patterns are returned.
 func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirMax(context.Background(), path, max, patterns)
+	return file.ListDirMaxContext(context.Background(), max, patterns...)
 }
 
 // ListDirMaxContext returns at most max files and directories in dirPath.
@@ -505,24 +499,44 @@ func (file File) ListDirMaxContext(ctx context.Context, max int, patterns ...str
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
+	if max == 0 {
+		return nil, nil
+	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirMax(ctx, path, max, patterns)
+	if fs, ok := fileSystem.(ListDirMaxFileSystem); ok {
+		return fs.ListDirMax(ctx, path, max, patterns)
+	}
+	done := errors.New("done") // used as an internal flag, won't be returned
+	err = fileSystem.ListDirInfo(ctx, path, func(info *FileInfo) error {
+		if max >= 0 && len(files) >= max {
+			return done
+		}
+		if files == nil {
+			// Reserve space for files
+			capacity := max
+			if capacity < 0 {
+				capacity = 64
+			}
+			files = make([]File, 0, capacity)
+		}
+		files = append(files, info.File)
+		return nil
+	}, patterns)
+	if err != nil && !errors.Is(err, done) {
+		return nil, err
+	}
+	return files, nil
 }
 
 func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	return ListDirMaxImpl(context.Background(), max, func(ctx context.Context, callback func(File) error) error {
-		return file.ListDirRecursiveContext(ctx, callback, patterns...)
-	})
+	return file.ListDirRecursiveMaxContext(context.Background(), max, patterns...)
 }
 
 func (file File) ListDirRecursiveMaxContext(ctx context.Context, max int, patterns ...string) (files []File, err error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
-	return ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
+	return listDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
 		return file.ListDirRecursiveContext(ctx, callback, patterns...)
 	})
 }

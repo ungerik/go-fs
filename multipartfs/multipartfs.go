@@ -254,16 +254,6 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 	return err
 }
 
-func (mpfs *MultipartFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	return fs.ListDirInfoRecursiveImpl(ctx, mpfs, dirPath, callback, patterns)
-}
-
-func (mpfs *MultipartFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return mpfs.ListDirInfo(ctx, dirPath, fs.FileInfoCallback(callback), patterns)
-	})
-}
-
 func (mpfs *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()

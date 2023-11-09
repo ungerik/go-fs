@@ -290,12 +290,6 @@ func (dbfs *DropboxFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath
 	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 
-func (dbfs *DropboxFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	return fs.ListDirMaxImpl(ctx, max, func(ctx context.Context, callback func(fs.File) error) error {
-		return dbfs.ListDirInfo(ctx, dirPath, fs.FileInfoCallback(callback), patterns)
-	})
-}
-
 func (dbfs *DropboxFileSystem) Touch(filePath string, perm []fs.Permissions) error {
 	if dbfs.info(filePath).Exists {
 		return errors.New("Touch can't change time on Dropbox")
