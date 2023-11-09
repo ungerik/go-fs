@@ -59,11 +59,11 @@ func ListDirMaxImpl(ctx context.Context, max int, listDir func(ctx context.Conte
 // ListDirInfoRecursiveImpl can be used by FileSystem implementations to
 // implement FileSystem.ListDirRecursive if it doesn't have an internal
 // optimzed implementation for it.
-func ListDirInfoRecursiveImpl(ctx context.Context, fs FileSystem, dirPath string, callback func(FileInfo) error, patterns []string) error {
+func ListDirInfoRecursiveImpl(ctx context.Context, fs FileSystem, dirPath string, callback func(*FileInfo) error, patterns []string) error {
 	return fs.ListDirInfo(
 		ctx,
 		dirPath,
-		func(info FileInfo) error {
+		func(info *FileInfo) error {
 			if info.IsDir {
 				err := info.File.ListDirInfoRecursiveContext(ctx, callback, patterns...)
 				// Don't mind files that have been deleted while iterating

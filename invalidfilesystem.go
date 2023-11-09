@@ -123,11 +123,11 @@ func (InvalidFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (InvalidFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
+func (InvalidFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
+func (InvalidFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
 	return ErrInvalidFileSystem
 }
 

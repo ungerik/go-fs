@@ -195,7 +195,7 @@ func (s *S3FileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (s *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+func (s *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string, recursive bool) (err error) {
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -273,11 +273,11 @@ func (s *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback
 	// return nil
 }
 
-func (s *S3FileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) (err error) {
+func (s *S3FileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	return s.listDirInfo(ctx, dirPath, callback, patterns, false)
 }
 
-func (s *S3FileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) (err error) {
+func (s *S3FileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	return s.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 

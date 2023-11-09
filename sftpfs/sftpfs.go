@@ -209,11 +209,27 @@ func (f *SFTPFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 func (f *SFTPFileSystem) IsHidden(filePath string) bool       { return false }
 func (f *SFTPFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (f *SFTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("SFTPFileSystem.ListDirInfo: %w", errors.ErrUnsupported)
+func (f *SFTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+	client, dirPath, release, err := f.getClient(dirPath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	infos, err := client.ReadDir(dirPath)
+	if err != nil {
+		return err
+	}
+	for _, info := range infos {
+		err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, info.Name()), info, false))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (f *SFTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
+func (f *SFTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	return fmt.Errorf("SFTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
 }
 

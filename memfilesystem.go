@@ -406,11 +406,11 @@ func (*MemFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (*MemFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
+func (*MemFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
 	return nil
 }
 
-func (*MemFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
+func (*MemFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
 	return nil
 }
 

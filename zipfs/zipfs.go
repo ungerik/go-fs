@@ -239,7 +239,7 @@ func (zipfs *ZipFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) (err error) {
+func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	if zipfs.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
 	}
@@ -247,7 +247,7 @@ func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, cal
 	panic("not implemented")
 }
 
-func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
+func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -257,7 +257,7 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 	}
 
 	rootNode := &node{
-		FileInfo: fs.FileInfo{
+		FileInfo: &fs.FileInfo{
 			IsDir: true,
 		},
 		children: make(map[string]*node),

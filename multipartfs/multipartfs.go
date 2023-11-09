@@ -150,7 +150,8 @@ func (mpfs *MultipartFileSystem) AbsPath(filePath string) string {
 	return path.Clean(filePath)
 }
 
-func (mpfs *MultipartFileSystem) info(filePath string) (info fs.FileInfo) {
+func (mpfs *MultipartFileSystem) info(filePath string) *fs.FileInfo {
+	var info fs.FileInfo
 	parts := mpfs.SplitPath(filePath)
 	switch len(parts) {
 	case 1:
@@ -180,7 +181,7 @@ func (mpfs *MultipartFileSystem) info(filePath string) (info fs.FileInfo) {
 		info.Modified = time.Now()
 		info.Permissions = fs.AllRead
 	}
-	return info
+	return &info
 }
 
 func (mpfs *MultipartFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
@@ -215,7 +216,7 @@ func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
 
 func (mpfs *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) (err error) {
+func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -253,7 +254,7 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 	return err
 }
 
-func (mpfs *MultipartFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
+func (mpfs *MultipartFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	return fs.ListDirInfoRecursiveImpl(ctx, mpfs, dirPath, callback, patterns)
 }
 

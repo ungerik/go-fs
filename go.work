@@ -3,7 +3,7 @@ go 1.21.0
 use (
 	.
 	./dropboxfs
-	./sftpfs
 	./ftpfs
 	./s3fs
+	./sftpfs
 )

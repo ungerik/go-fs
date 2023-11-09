@@ -142,7 +142,8 @@ func (dbfs *DropboxFileSystem) AbsPath(filePath string) string {
 	return path.Clean(filePath)
 }
 
-func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
+func metadataToFileInfo(meta *dropbox.Metadata) *fs.FileInfo {
+	var info fs.FileInfo
 	info.Name = meta.Name
 	info.Exists = true
 	info.IsRegular = true
@@ -156,23 +157,26 @@ func metadataToFileInfo(meta *dropbox.Metadata) (info fs.FileInfo) {
 		info.Permissions = DefaultPermissions
 	}
 	// info.ContentHash = meta.ContentHash
-	return info
+	return &info
 }
 
 // info returns FileInfo
-func (dbfs *DropboxFileSystem) info(filePath string) (info fs.FileInfo) {
+func (dbfs *DropboxFileSystem) info(filePath string) *fs.FileInfo {
+
 	// The root folder is unsupported by the API
 	if filePath == "/" {
-		// info.Name = ""
-		info.Exists = true
-		info.IsRegular = true
-		info.IsDir = true
-		info.Permissions = DefaultDirPermissions
-		return info
+
+		return &fs.FileInfo{
+			Name:        "",
+			Exists:      true,
+			IsRegular:   true,
+			IsDir:       true,
+			Permissions: DefaultDirPermissions,
+		}
 	}
 
 	if cachedInfo, ok := dbfs.fileInfoCache.Get(filePath); ok {
-		return *cachedInfo
+		return cachedInfo
 	}
 
 	meta, err := dbfs.client.Files.GetMetadata(
@@ -183,11 +187,11 @@ func (dbfs *DropboxFileSystem) info(filePath string) (info fs.FileInfo) {
 	if err != nil {
 		dbfs.fileInfoCache.Delete(filePath)
 		// fmt.Println(meta, err)
-		return fs.FileInfo{}
+		return new(fs.FileInfo)
 	}
-	info = metadataToFileInfo(&meta.Metadata)
+	info := metadataToFileInfo(&meta.Metadata)
 	if dbfs.fileInfoCache != nil {
-		dbfs.fileInfoCache.Put(filePath, &info)
+		dbfs.fileInfoCache.Put(filePath, info)
 	}
 	return info
 }
@@ -213,7 +217,7 @@ func (dbfs *DropboxFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string, recursive bool) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -261,7 +265,7 @@ func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, 
 			if match {
 				info := metadataToFileInfo(entry)
 				if dbfs.fileInfoCache != nil {
-					dbfs.fileInfoCache.Put(entry.PathDisplay, &info)
+					dbfs.fileInfoCache.Put(entry.PathDisplay, info)
 				}
 				// file := dbfs.File(entry.PathDisplay)
 				err = callback(info)
@@ -278,11 +282,11 @@ func (dbfs *DropboxFileSystem) listDirInfo(ctx context.Context, dirPath string, 
 	return nil
 }
 
-func (dbfs *DropboxFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) (err error) {
+func (dbfs *DropboxFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 
-func (dbfs *DropboxFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) (err error) {
+func (dbfs *DropboxFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 

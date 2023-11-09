@@ -197,7 +197,7 @@ func (file File) Stat() (iofs.FileInfo, error) {
 // Info returns FileInfo.
 //
 // Use File.Stat to get a standard library io/fs.FileInfo.
-func (file File) Info() FileInfo {
+func (file File) Info() *FileInfo {
 	fileSystem, path := file.ParseRawURI()
 	info, err := fileSystem.Stat(path)
 	if err != nil {
@@ -422,7 +422,7 @@ func (file File) ListDirContext(ctx context.Context, callback func(File) error, 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfo(callback func(FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfo(callback func(*FileInfo) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -433,7 +433,7 @@ func (file File) ListDirInfo(callback func(FileInfo) error, patterns ...string) 
 // ListDirInfoContext calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfoContext(ctx context.Context, callback func(FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfoContext(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -465,7 +465,7 @@ func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File
 // recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfoRecursive(callback func(FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfoRecursive(callback func(*FileInfo) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -477,7 +477,7 @@ func (file File) ListDirInfoRecursive(callback func(FileInfo) error, patterns ..
 // recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}

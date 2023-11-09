@@ -189,8 +189,8 @@ func (i fileInfo) ModTime() time.Time  { return i.entry.Time }
 func (i fileInfo) IsDir() bool         { return i.entry.Type == ftp.EntryTypeFolder }
 func (i fileInfo) Sys() any            { return nil }
 
-func entryToFileInfo(entry *ftp.Entry, file fs.File) fs.FileInfo {
-	return fs.FileInfo{
+func entryToFileInfo(entry *ftp.Entry, file fs.File) *fs.FileInfo {
+	return &fs.FileInfo{
 		File:        file,
 		Name:        entry.Name,
 		Exists:      true,
@@ -233,7 +233,7 @@ func (f *FTPFileSystem) IsSymbolicLink(filePath string) bool {
 	return entry.Type == ftp.EntryTypeLink
 }
 
-func (f *FTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
+func (f *FTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	conn, dirPath, release, err := f.getConn(dirPath)
 	if err != nil {
 		return err
@@ -253,7 +253,7 @@ func (f *FTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callbac
 	return nil
 }
 
-func (f *FTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
+func (f *FTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	return fmt.Errorf("FTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
 }
 

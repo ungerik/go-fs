@@ -247,7 +247,7 @@ func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err erro
 	return File(linkedPath), nil
 }
 
-func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) (err error) {
+func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -321,7 +321,7 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 	return nil
 }
 
-func (local *LocalFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
+func (local *LocalFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
 	if dirPath == "" {
 		return ErrEmptyPath
 	}

@@ -11,8 +11,8 @@ replace github.com/ungerik/go-fs => ../
 require github.com/tj/go-dropbox v0.0.0-20171107035848-42dd2be3662d
 
 require (
-	github.com/fsnotify/fsnotify v1.6.0 // indirect
+	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/segmentio/go-env v1.1.0 // indirect
 	github.com/ungerik/go-dry v0.0.0-20230805093253-df9da4cd3437 // indirect
-	golang.org/x/sys v0.11.0 // indirect
+	golang.org/x/sys v0.14.0 // indirect
 )

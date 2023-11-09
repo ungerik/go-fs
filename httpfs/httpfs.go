@@ -167,11 +167,11 @@ func (f *HTTPFileSystem) Exists(filePath string) bool {
 func (f *HTTPFileSystem) IsHidden(filePath string) bool       { return false }
 func (f *HTTPFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
+func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	return fs.NewErrUnsupported(f, "ListDirInfo")
 }
 
-func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(fs.FileInfo) error, patterns []string) error {
+func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	return fs.NewErrUnsupported(f, "ListDirInfoRecursive")
 }
 

@@ -85,8 +85,8 @@ func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) 
 		return true, nil
 	}
 
-	fileInfosA := make(map[string]FileInfo)
-	err = dirA.ListDirInfoContext(ctx, func(info FileInfo) error {
+	fileInfosA := make(map[string]*FileInfo)
+	err = dirA.ListDirInfoContext(ctx, func(info *FileInfo) error {
 		if !info.IsDir || recursive {
 			fileInfosA[info.Name] = info
 		}
@@ -96,9 +96,9 @@ func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) 
 		return false, fmt.Errorf("IdenticalDirContents: error listing dirA %q: %w", dirA, err)
 	}
 
-	fileInfosB := make(map[string]FileInfo, len(fileInfosA))
+	fileInfosB := make(map[string]*FileInfo, len(fileInfosA))
 	hasDiff := errors.New("hasDiff")
-	err = dirB.ListDirInfoContext(ctx, func(info FileInfo) error {
+	err = dirB.ListDirInfoContext(ctx, func(info *FileInfo) error {
 		if !info.IsDir || recursive {
 			infoA, found := fileInfosA[info.Name]
 			if !found || info.Size != infoA.Size || info.IsDir != infoA.IsDir {

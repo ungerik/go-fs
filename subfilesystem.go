@@ -138,11 +138,11 @@ func (subfs *todoSubFileSystem) IsSymbolicLink(filePath string) bool {
 	return subfs.Parent.IsSymbolicLink(filePath)
 }
 
-func (subfs *todoSubFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
+func (subfs *todoSubFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }
 
-func (subfs *todoSubFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error {
+func (subfs *todoSubFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
 	panic("not implemented")
 }
 

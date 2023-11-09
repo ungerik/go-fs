@@ -77,14 +77,14 @@ type FileSystem interface {
 	// ListDirInfo calls the passed callback function for every file and directory in dirPath.
 	// If any patterns are passed, then only files or directores with a name that matches
 	// at least one of the patterns are returned.
-	ListDirInfo(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error
+	ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error
 
 	// TODO
 	// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
 	// recursing into all sub-directories.
 	// If any patterns are passed, then only files (not directories) with a name that matches
 	// at least one of the patterns are returned.
-	ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(FileInfo) error, patterns []string) error
+	ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error
 
 	// TODO
 	// ListDirMax returns at most max files and directories in dirPath.
