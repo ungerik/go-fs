@@ -1,0 +1,3 @@
+#!/bin/bash
+
+go list -f '{{.Dir}}' -m | xargs -I {} go test {}/...
