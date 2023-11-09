@@ -245,39 +245,22 @@ func (f *FTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callbac
 		return err
 	}
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		match, err := fsimpl.MatchAnyPattern(entry.Name, patterns)
+		if err != nil {
+			return err
+		}
+		if !match {
+			continue
+		}
 		err = callback(entryToFileInfo(entry, f.JoinCleanFile(dirPath, entry.Name)))
 		if err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (f *FTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("FTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
-}
-
-func (f *FTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	if max == 0 {
-		return nil, nil
-	}
-	conn, dirPath, release, err := f.getConn(dirPath)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
-	names, err := conn.NameList(dirPath)
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range names {
-		files = append(files, f.JoinCleanFile(dirPath, name))
-		if max > 0 && len(files) == max {
-			break
-		}
-	}
-	return files, nil
 }
 
 func (f *FTPFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {

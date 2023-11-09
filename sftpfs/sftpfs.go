@@ -221,39 +221,22 @@ func (f *SFTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callba
 		return err
 	}
 	for _, info := range infos {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		match, err := fsimpl.MatchAnyPattern(info.Name(), patterns)
+		if err != nil {
+			return err
+		}
+		if !match {
+			continue
+		}
 		err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, info.Name()), info, false))
 		if err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (f *SFTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	return fmt.Errorf("SFTPFileSystem.ListDirInfoRecursive: %w", errors.ErrUnsupported)
-}
-
-func (f *SFTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []fs.File, err error) {
-	if max == 0 {
-		return nil, nil
-	}
-	client, dirPath, release, err := f.getClient(dirPath)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
-	infos, err := client.ReadDir(dirPath)
-	if err != nil {
-		return nil, err
-	}
-	for _, info := range infos {
-		files = append(files, f.JoinCleanFile(dirPath, info.Name()))
-		if max > 0 && len(files) == max {
-			break
-		}
-	}
-	return files, nil
 }
 
 type sftpFile struct {
