@@ -597,12 +597,15 @@ func (file File) ListDirRecursiveChan(cancel <-chan error, patterns ...string) (
 	return files, errs
 }
 
-func (file File) User() string {
+func (file File) User() (string, error) {
+	if file == "" {
+		return "", ErrEmptyPath
+	}
 	fileSystem, path := file.ParseRawURI()
 	if fs, ok := fileSystem.(UserFileSystem); ok {
 		return fs.User(path)
 	}
-	return ""
+	return "", NewErrUnsupported(fileSystem, "User")
 }
 
 func (file File) SetUser(user string) error {
@@ -616,12 +619,15 @@ func (file File) SetUser(user string) error {
 	return NewErrUnsupported(fileSystem, "SetUser")
 }
 
-func (file File) Group() string {
+func (file File) Group() (string, error) {
+	if file == "" {
+		return "", ErrEmptyPath
+	}
 	fileSystem, path := file.ParseRawURI()
 	if fs, ok := fileSystem.(GroupFileSystem); ok {
 		return fs.Group(path)
 	}
-	return ""
+	return "", NewErrUnsupported(fileSystem, "Group")
 }
 
 func (file File) SetGroup(group string) error {

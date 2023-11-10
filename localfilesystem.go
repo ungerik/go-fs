@@ -410,30 +410,6 @@ func (local *LocalFileSystem) SetPermissions(filePath string, perm Permissions) 
 	return os.Chmod(filePath, mode)
 }
 
-func (local *LocalFileSystem) User(filePath string) string {
-	filePath = expandTilde(filePath)
-
-	panic("not implemented")
-}
-
-func (local *LocalFileSystem) SetUser(filePath string, user string) error {
-	filePath = expandTilde(filePath)
-
-	panic("not implemented")
-}
-
-func (local *LocalFileSystem) Group(filePath string) string {
-	filePath = expandTilde(filePath)
-
-	panic("not implemented")
-}
-
-func (local *LocalFileSystem) SetGroup(filePath string, group string) error {
-	filePath = expandTilde(filePath)
-
-	panic("not implemented")
-}
-
 func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath

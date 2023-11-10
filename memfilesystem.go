@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	_ fullyFeaturedFileSystem = new(MemFileSystem)
+	_ FileSystem = new(MemFileSystem)
 
 	// memFileNode implements io/fs.FileInfo
 	_ iofs.FileInfo = new(memFileInfo)
@@ -217,8 +217,7 @@ func (fs *MemFileSystem) MakeAllDirs(dirPath string, perm []Permissions) error {
 	// }
 	// parentDir.Dir[pathParts[len(pathParts)-1]] = fs.newMemFileInfo(f, modified)
 
-	panic("todo")
-
+	panic("TODO")
 }
 
 func (fs *MemFileSystem) IsReadOnly() bool {
@@ -410,28 +409,20 @@ func (*MemFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback 
 	return nil
 }
 
-func (*MemFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
-	return nil
-}
-
-func (*MemFileSystem) ListDirMax(ctx context.Context, dirPath string, n int, patterns []string) (files []File, err error) {
-	return nil, nil
-}
-
 func (*MemFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	return nil
 }
 
-func (*MemFileSystem) User(filePath string) string {
-	return ""
+func (*MemFileSystem) User(filePath string) (string, error) {
+	return "", nil
 }
 
 func (*MemFileSystem) SetUser(filePath string, user string) error {
 	return nil
 }
 
-func (*MemFileSystem) Group(filePath string) string {
-	return ""
+func (*MemFileSystem) Group(filePath string) (string, error) {
+	return "", nil
 }
 
 func (*MemFileSystem) SetGroup(filePath string, group string) error {

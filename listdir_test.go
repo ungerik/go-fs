@@ -7,7 +7,7 @@ import (
 )
 
 func Test_listDirMaxImpl(t *testing.T) {
-	bg := context.Background()
+	ctx := context.Background()
 	errCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -37,11 +37,11 @@ func Test_listDirMaxImpl(t *testing.T) {
 		wantFiles []File
 		wantErr   bool
 	}{
-		{name: "-1", args: args{ctx: bg, max: -1, listDir: list("1", "2", "3")}, wantFiles: []File{"1", "2", "3"}},
-		{name: "-1 no files", args: args{ctx: bg, max: -1, listDir: list()}, wantFiles: nil},
-		{name: "0", args: args{ctx: bg, max: 0, listDir: list("1", "2", "3")}, wantFiles: nil},
-		{name: "1", args: args{ctx: bg, max: 1, listDir: list("1", "2", "3")}, wantFiles: []File{"1"}},
-		{name: "2", args: args{ctx: bg, max: 2, listDir: list("1", "2", "3")}, wantFiles: []File{"1", "2"}},
+		{name: "-1", args: args{ctx: ctx, max: -1, listDir: list("1", "2", "3")}, wantFiles: []File{"1", "2", "3"}},
+		{name: "-1 no files", args: args{ctx: ctx, max: -1, listDir: list()}, wantFiles: nil},
+		{name: "0", args: args{ctx: ctx, max: 0, listDir: list("1", "2", "3")}, wantFiles: nil},
+		{name: "1", args: args{ctx: ctx, max: 1, listDir: list("1", "2", "3")}, wantFiles: []File{"1"}},
+		{name: "2", args: args{ctx: ctx, max: 2, listDir: list("1", "2", "3")}, wantFiles: []File{"1", "2"}},
 
 		{name: "context error", args: args{ctx: errCtx, max: -1, listDir: list("1", "2", "3")}, wantErr: true},
 	}

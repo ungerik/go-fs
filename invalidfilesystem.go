@@ -139,16 +139,16 @@ func (InvalidFileSystem) SetPermissions(filePath string, perm Permissions) error
 	return ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) User(filePath string) string {
-	return ""
+func (InvalidFileSystem) User(filePath string) (string, error) {
+	return "", ErrInvalidFileSystem
 }
 
 func (InvalidFileSystem) SetUser(filePath string, user string) error {
 	return ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) Group(filePath string) string {
-	return ""
+func (InvalidFileSystem) Group(filePath string) (string, error) {
+	return "", ErrInvalidFileSystem
 }
 
 func (InvalidFileSystem) SetGroup(filePath string, group string) error {

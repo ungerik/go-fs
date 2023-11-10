@@ -244,7 +244,7 @@ func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, cal
 		return fs.ErrWriteOnlyFileSystem
 	}
 
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {

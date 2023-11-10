@@ -235,14 +235,14 @@ type ExistsFileSystem interface {
 type UserFileSystem interface {
 	FileSystem
 
-	User(filePath string) string
+	User(filePath string) (string, error)
 	SetUser(filePath string, user string) error
 }
 
 type GroupFileSystem interface {
 	FileSystem
 
-	Group(filePath string) string
+	Group(filePath string) (string, error)
 	SetGroup(filePath string, group string) error
 }
 

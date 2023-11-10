@@ -100,7 +100,7 @@ func (subfs *todoSubFileSystem) MatchAnyPattern(name string, patterns []string) 
 }
 
 func (subfs *todoSubFileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) VolumeName(filePath string) string {
@@ -139,73 +139,73 @@ func (subfs *todoSubFileSystem) IsSymbolicLink(filePath string) bool {
 }
 
 func (subfs *todoSubFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []File, err error) {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) SetPermissions(filePath string, perm Permissions) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
-func (subfs *todoSubFileSystem) User(filePath string) string {
-	panic("not implemented")
+func (subfs *todoSubFileSystem) User(filePath string) (string, error) {
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) SetUser(filePath string, user string) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
-func (subfs *todoSubFileSystem) Group(filePath string) string {
-	panic("not implemented")
+func (subfs *todoSubFileSystem) Group(filePath string) (string, error) {
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) SetGroup(filePath string, group string) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) Touch(filePath string, perm []Permissions) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) MakeDir(filePath string, perm []Permissions) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) OpenReader(filePath string) (ReadCloser, error) {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteCloser, error) {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (WriteCloser, error) {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) Truncate(filePath string, size int64) error {
-	panic("not implemented")
+	panic("TODO")
 }
 
 func (subfs *todoSubFileSystem) Remove(filePath string) error {
-	panic("not implemented")
+	panic("TODO")
 }

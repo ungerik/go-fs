@@ -29,13 +29,9 @@ func (*ReadOnlyBase) SetPermissions(filePath string, perm Permissions) error {
 	return ErrReadOnlyFileSystem
 }
 
-func (*ReadOnlyBase) User(filePath string) string { return "" }
-
 func (*ReadOnlyBase) SetUser(filePath string, user string) error {
 	return ErrReadOnlyFileSystem
 }
-
-func (*ReadOnlyBase) Group(filePath string) string { return "" }
 
 func (*ReadOnlyBase) SetGroup(filePath string, group string) error {
 	return ErrReadOnlyFileSystem

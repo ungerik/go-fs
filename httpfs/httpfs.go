@@ -171,14 +171,6 @@ func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callba
 	return fs.NewErrUnsupported(f, "ListDirInfo")
 }
 
-func (f *HTTPFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	return fs.NewErrUnsupported(f, "ListDirInfoRecursive")
-}
-
-func (f *HTTPFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]fs.File, error) {
-	return nil, fs.NewErrUnsupported(f, "ListDirMax")
-}
-
 func (f *HTTPFileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
