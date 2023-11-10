@@ -218,3 +218,7 @@ func (InvalidFileSystem) Move(filePath string, destPath string) error {
 func (InvalidFileSystem) Remove(filePath string) error {
 	return ErrInvalidFileSystem
 }
+
+func (InvalidFileSystem) Close() error {
+	return ErrInvalidFileSystem
+}

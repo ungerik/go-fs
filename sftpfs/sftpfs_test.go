@@ -1,6 +1,7 @@
 package sftpfs
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,10 +23,11 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 func TestDial(t *testing.T) {
 	// https://www.sftp.net/public-online-sftp-servers
 	{
-		sftpFS, err := Dial("test.rebex.net:22", "demo", "password", nil)
+		sftpFS, err := DialAndRegister(context.Background(), "test.rebex.net:22", "demo", "password", nil)
 		require.NoError(t, err, "Dial")
+		require.Equal(t, "sftp://demo@test.rebex.net:22", sftpFS.Prefix())
 
-		f := fs.File("sftp://test.rebex.net:22/readme.txt")
+		f := fs.File("sftp://demo@test.rebex.net:22/readme.txt")
 		assert.Equal(t, "readme.txt", f.Name())
 		data := checkAndReadFile(t, f)
 		assert.True(t, len(data) > 0)
@@ -39,10 +41,11 @@ func TestDial(t *testing.T) {
 	}
 	{
 		// http://demo.wftpserver.com/main.html
-		sftpFS, err := Dial("demo.wftpserver.com:2222", "demo", "demo", nil)
+		sftpFS, err := DialAndRegister(context.Background(), "demo.wftpserver.com:2222", "demo", "demo", nil)
 		require.NoError(t, err, "Dial")
+		require.Equal(t, "sftp://demo@demo.wftpserver.com:2222", sftpFS.Prefix())
 
-		f := fs.File("sftp://demo.wftpserver.com:2222/download/version.txt")
+		f := fs.File("sftp://demo@demo.wftpserver.com:2222/download/version.txt")
 		assert.Equal(t, "version.txt", f.Name())
 		data := checkAndReadFile(t, f)
 		assert.True(t, len(data) > 0)

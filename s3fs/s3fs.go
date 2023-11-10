@@ -34,21 +34,20 @@ var (
 	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllReadWrite
 
 	// Make sure S3FileSystem implements fs.FileSystem
-	_ fs.FileSystem = new(S3FileSystem)
+	_ fs.FileSystem = new(fileSystem)
 )
 
-// // S3FileSystem implements fs.FileSystem for an S3 bucket.
-type S3FileSystem struct {
+type fileSystem struct {
 	client     *s3.Client
 	bucketName string
 	prefix     string
 	readOnly   bool
 }
 
-// New initializes a new S3 instance + session and returns an S3FileSystem
-// instance that contains the required settings to work with an S3 bucket.
-func New(client *s3.Client, bucketName string, readOnly bool) *S3FileSystem {
-	s3fs := &S3FileSystem{
+// NewAndRegister initializes a new S3 instance + session and returns a fs.FileSystem
+// implementation that contains the required settings to work with an S3 bucket.
+func NewAndRegister(client *s3.Client, bucketName string, readOnly bool) fs.FileSystem {
+	s3fs := &fileSystem{
 		client:     client,
 		bucketName: bucketName,
 		prefix:     Prefix + bucketName,
@@ -58,92 +57,87 @@ func New(client *s3.Client, bucketName string, readOnly bool) *S3FileSystem {
 	return s3fs
 }
 
-func NewLoadDefaultConfig(ctx context.Context, bucketName string, readOnly bool) (*S3FileSystem, error) {
+func NewLoadDefaultConfig(ctx context.Context, bucketName string, readOnly bool) (fs.FileSystem, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 	client := s3.NewFromConfig(cfg)
-	return New(client, bucketName, readOnly), nil
+	return NewAndRegister(client, bucketName, readOnly), nil
 }
 
-func (s *S3FileSystem) Close() error {
-	fs.Unregister(s)
-	return nil
-}
-
-func (s *S3FileSystem) IsReadOnly() bool {
+func (s *fileSystem) IsReadOnly() bool {
 	return s.readOnly
 }
 
-func (s *S3FileSystem) IsWriteOnly() bool {
+func (s *fileSystem) IsWriteOnly() bool {
 	return false
 }
 
-func (s *S3FileSystem) RootDir() fs.File {
+func (s *fileSystem) RootDir() fs.File {
 	return fs.File(s.prefix + Separator)
 }
 
-func (s *S3FileSystem) ID() (string, error) {
+func (s *fileSystem) ID() (string, error) {
 	return s.bucketName, nil
 }
 
-func (s *S3FileSystem) Prefix() string {
+func (s *fileSystem) Prefix() string {
 	return s.prefix
 }
 
-func (s *S3FileSystem) Name() string {
+func (s *fileSystem) Name() string {
 	return "S3 file system for bucket: s.bucketName"
 }
 
-func (s *S3FileSystem) String() string {
+func (s *fileSystem) String() string {
 	return s.Name() + " with prefix " + s.prefix
 }
 
-func (s *S3FileSystem) URL(cleanPath string) string {
+func (s *fileSystem) URL(cleanPath string) string {
 	return s.prefix + cleanPath
 }
 
-func (s *S3FileSystem) JoinCleanFile(uriParts ...string) fs.File {
+func (s *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(s.prefix + s.JoinCleanPath(uriParts...))
 }
 
-func (s *S3FileSystem) JoinCleanPath(uriParts ...string) string {
+func (s *fileSystem) JoinCleanPath(uriParts ...string) string {
 	return fsimpl.JoinCleanPath(uriParts, s.prefix, Separator)
 }
 
-func (s *S3FileSystem) SplitPath(filePath string) []string {
+func (s *fileSystem) SplitPath(filePath string) []string {
 	return fsimpl.SplitPath(filePath, s.prefix, Separator)
 }
 
-func (s *S3FileSystem) Separator() string {
+func (s *fileSystem) Separator() string {
 	return Separator
 }
 
-func (s *S3FileSystem) IsAbsPath(filePath string) bool {
+func (s *fileSystem) IsAbsPath(filePath string) bool {
 	return path.IsAbs(filePath)
 }
 
-func (s *S3FileSystem) AbsPath(filePath string) string {
+func (s *fileSystem) AbsPath(filePath string) string {
 	if path.IsAbs(filePath) {
 		return filePath
 	}
 	return Separator + filePath
 }
 
-func (s *S3FileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+func (s *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
 	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
-func (s *S3FileSystem) SplitDirAndName(filePath string) (dir, name string) {
+func (s *fileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
-func (s *S3FileSystem) VolumeName(filePath string) string {
+func (s *fileSystem) VolumeName(filePath string) string {
 	return s.bucketName
 }
 
-func (s *S3FileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -168,7 +162,7 @@ func (s *S3FileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	}, nil
 }
 
-func (s *S3FileSystem) Exists(filePath string) bool {
+func (s *fileSystem) Exists(filePath string) bool {
 	if filePath == "" || filePath == "/" {
 		return false
 	}
@@ -186,16 +180,16 @@ func (s *S3FileSystem) Exists(filePath string) bool {
 // dot. There are no real "hidden" files in S3 buckets, but since dot prefixes
 // are the general convention to determine which directories/files are hidden
 // and which are not, the function behaves this way.
-func (s *S3FileSystem) IsHidden(filePath string) bool {
+func (s *fileSystem) IsHidden(filePath string) bool {
 	name := path.Base(filePath)
 	return len(name) > 0 && name[0] == '.'
 }
 
-func (s *S3FileSystem) IsSymbolicLink(filePath string) bool {
+func (s *fileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (s *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string, recursive bool) (err error) {
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -273,22 +267,22 @@ func (s *S3FileSystem) listDirInfo(ctx context.Context, dirPath string, callback
 	// return nil
 }
 
-func (s *S3FileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+func (s *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	return s.listDirInfo(ctx, dirPath, callback, patterns, false)
 }
 
-func (s *S3FileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+func (s *fileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	return s.listDirInfo(ctx, dirPath, callback, patterns, true)
 }
 
-func (s *S3FileSystem) Touch(filePath string, perm []fs.Permissions) error {
+func (s *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
 	if s.Exists(filePath) {
 		return nil // TODO is this OK, can we change the modified time?
 	}
 	return s.WriteAll(context.Background(), filePath, make([]byte, 0), perm)
 }
 
-func (s *S3FileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+func (s *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -304,7 +298,7 @@ func (s *S3FileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 	return s.Touch(dirPath, perm)
 }
 
-func (s *S3FileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -335,7 +329,7 @@ func (s *S3FileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, er
 	return data, nil
 }
 
-func (s *S3FileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -353,7 +347,7 @@ func (s *S3FileSystem) WriteAll(ctx context.Context, filePath string, data []byt
 	return err
 }
 
-func (s *S3FileSystem) OpenReader(filePath string) (iofs.File, error) {
+func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -390,7 +384,7 @@ func (s *S3FileSystem) OpenReader(filePath string) (iofs.File, error) {
 	return fsimpl.NewReadonlyFileBuffer(data, info), nil
 }
 
-func (s *S3FileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (s *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -404,11 +398,11 @@ func (s *S3FileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Wr
 	return fileBuffer, nil
 }
 
-func (s *S3FileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+func (s *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
 	return s.openFileBuffer(filePath)
 }
 
-func (s *S3FileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileBuffer, err error) {
+func (s *fileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileBuffer, err error) {
 	if s.readOnly {
 		return nil, fs.ErrReadOnlyFileSystem
 	}
@@ -422,7 +416,7 @@ func (s *S3FileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileB
 	return fileBuffer, nil
 }
 
-func (s *S3FileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
 	if s.readOnly {
 		return fs.ErrReadOnlyFileSystem
 	}
@@ -444,7 +438,7 @@ func (s *S3FileSystem) CopyFile(ctx context.Context, srcFile string, destFile st
 	return err
 }
 
-func (s *S3FileSystem) Remove(filePath string) error {
+func (s *fileSystem) Remove(filePath string) error {
 	if s.readOnly {
 		return fs.ErrReadOnlyFileSystem
 	}
@@ -460,7 +454,7 @@ func (s *S3FileSystem) Remove(filePath string) error {
 	return err
 }
 
-func (s *S3FileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
+func (s *fileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
 	// https://stackoverflow.com/questions/18049717/waituntilobjectexists-amazon-s3-php-sdk-method-exactly-how-does-it-work
 	// s.client.WaitUntilObjectExists
 	// s.client.WaitUntilObjectNotExists
@@ -478,4 +472,9 @@ func (s *S3FileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (
 	}()*/
 	//return retChan, nil
 	return nil, errors.ErrUnsupported
+}
+
+func (s *fileSystem) Close() error {
+	fs.Unregister(s)
+	return nil
 }

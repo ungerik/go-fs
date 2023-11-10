@@ -31,70 +31,70 @@ const (
 )
 
 var (
-	FileSystem    = &HTTPFileSystem{prefix: Prefix}
-	FileSystemTLS = &HTTPFileSystem{prefix: PrefixTLS}
+	FileSystem    = &fileSystem{prefix: Prefix}
+	FileSystemTLS = &fileSystem{prefix: PrefixTLS}
 )
 
-type HTTPFileSystem struct {
+type fileSystem struct {
 	fs.ReadOnlyBase
 
 	prefix string
 }
 
-func (*HTTPFileSystem) RootDir() fs.File {
+func (*fileSystem) RootDir() fs.File {
 	return fs.InvalidFile
 }
 
-func (f *HTTPFileSystem) ID() (string, error) {
+func (f *fileSystem) ID() (string, error) {
 	return strings.TrimSuffix(f.prefix, "://"), nil
 }
 
-func (f *HTTPFileSystem) Prefix() string {
+func (f *fileSystem) Prefix() string {
 	return f.prefix
 }
 
-func (f *HTTPFileSystem) Name() string {
+func (f *fileSystem) Name() string {
 	return strings.ToUpper(strings.TrimSuffix(f.prefix, "://"))
 }
 
-func (f *HTTPFileSystem) String() string {
+func (f *fileSystem) String() string {
 	return f.Name() + " read-only file system"
 }
 
-func (f *HTTPFileSystem) URL(cleanPath string) string {
+func (f *fileSystem) URL(cleanPath string) string {
 	return f.prefix + cleanPath
 }
 
-func (f *HTTPFileSystem) JoinCleanFile(uriParts ...string) fs.File {
+func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
 }
 
-func (f *HTTPFileSystem) JoinCleanPath(uriParts ...string) string {
+func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
 	return fsimpl.JoinCleanPath(uriParts, f.prefix, Separator)
 }
 
-func (f *HTTPFileSystem) SplitPath(filePath string) []string {
+func (f *fileSystem) SplitPath(filePath string) []string {
 	return fsimpl.SplitPath(filePath, f.Prefix(), f.Separator())
 }
 
-func (f *HTTPFileSystem) Separator() string { return Separator }
+func (f *fileSystem) Separator() string { return Separator }
 
-func (f *HTTPFileSystem) IsAbsPath(filePath string) bool {
+func (f *fileSystem) IsAbsPath(filePath string) bool {
 	return strings.HasPrefix(filePath, f.prefix)
 }
 
-func (f *HTTPFileSystem) AbsPath(filePath string) string {
+func (f *fileSystem) AbsPath(filePath string) string {
 	if f.IsAbsPath(filePath) {
 		return filePath
 	}
 	return f.prefix + strings.TrimPrefix(filePath, Separator)
 }
 
-func (f *HTTPFileSystem) SplitDirAndName(filePath string) (dir, name string) {
+func (f *fileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
-func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
+func (f *fileSystem) info(filePath string) fs.FileInfo {
 	// First try fast HEAD request
 	request, err := http.NewRequest("HEAD", f.URL(filePath), nil)
 	if err != nil {
@@ -152,7 +152,7 @@ func (f *HTTPFileSystem) info(filePath string) fs.FileInfo {
 	}
 }
 
-func (f *HTTPFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	info := f.info(filePath)
 	if !info.Exists {
 		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
@@ -160,18 +160,18 @@ func (f *HTTPFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	return info.StdFileInfo(), nil
 }
 
-func (f *HTTPFileSystem) Exists(filePath string) bool {
+func (f *fileSystem) Exists(filePath string) bool {
 	return f.info(filePath).Exists
 }
 
-func (f *HTTPFileSystem) IsHidden(filePath string) bool       { return false }
-func (f *HTTPFileSystem) IsSymbolicLink(filePath string) bool { return false }
+func (f *fileSystem) IsHidden(filePath string) bool       { return false }
+func (f *fileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (f *HTTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	return fs.NewErrUnsupported(f, "ListDirInfo")
 }
 
-func (f *HTTPFileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
+func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -189,7 +189,7 @@ func (f *HTTPFileSystem) ReadAll(ctx context.Context, filePath string) (data []b
 	return data, nil
 }
 
-func (f *HTTPFileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
+func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
 	info, err := f.Stat(filePath)
 	if err != nil {
 		return nil, err
@@ -203,4 +203,8 @@ func (f *HTTPFileSystem) OpenReader(filePath string) (reader iofs.File, err erro
 	}
 	defer response.Body.Close()
 	return fsimpl.NewReadonlyFileBufferReadAll(response.Body, info)
+}
+
+func (f *fileSystem) Close() error {
+	return nil
 }

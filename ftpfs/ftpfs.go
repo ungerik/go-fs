@@ -28,25 +28,26 @@ const (
 func init() {
 	// Register with prefix ftp:// and ftps:// for URLs with
 	// ftp(s)://username:password@host:port schema.
-	fs.Register(&FTPFileSystem{secure: false})
-	fs.Register(&FTPFileSystem{secure: true})
+	fs.Register(&fileSystem{secure: false})
+	fs.Register(&fileSystem{secure: true})
 }
 
-type FTPFileSystem struct {
+type fileSystem struct {
 	conn   *ftp.ServerConn
 	prefix string
 	secure bool
 }
 
-// Dial a new FTP connection and register it as file system.
+// DialAndRegister dials a new FTP connection and registers it as file system.
 //
 // If hostKeyCallbackOrNil is not nil then it will be called
 // during the cryptographic handshake to validate the server's host key,
 // else any host key will be accepted.
-func Dial(ctx context.Context, addr, user, password string) (f *FTPFileSystem, err error) {
+func DialAndRegister(ctx context.Context, addr, user, password string) (fs.FileSystem, error) {
 	addr = strings.TrimSuffix(addr, "/")
 
-	f = &FTPFileSystem{
+	var err error
+	f := &fileSystem{
 		prefix: addr,
 		secure: strings.HasPrefix(addr, "ftps://"),
 	}
@@ -76,7 +77,7 @@ func Dial(ctx context.Context, addr, user, password string) (f *FTPFileSystem, e
 
 func nop() error { return nil }
 
-func (f *FTPFileSystem) getConn(filePath string) (conn *ftp.ServerConn, clientPath string, release func() error, err error) {
+func (f *fileSystem) getConn(filePath string) (conn *ftp.ServerConn, clientPath string, release func() error, err error) {
 	if f.conn != nil {
 		return f.conn, filePath, nop, nil
 	}
@@ -94,87 +95,82 @@ func (f *FTPFileSystem) getConn(filePath string) (conn *ftp.ServerConn, clientPa
 	if !ok {
 		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
 	}
-	panic("todo" + password)
+	panic("TODO" + password)
 }
 
-func (f *FTPFileSystem) IsReadOnly() bool {
+func (f *fileSystem) IsReadOnly() bool {
 	return false
 }
 
-func (f *FTPFileSystem) IsWriteOnly() bool {
+func (f *fileSystem) IsWriteOnly() bool {
 	return false
 }
 
-func (f *FTPFileSystem) Close() error {
-	fs.Unregister(f)
-	return f.conn.Quit()
-}
-
-func (f *FTPFileSystem) RootDir() fs.File {
+func (f *fileSystem) RootDir() fs.File {
 	return fs.File(f.prefix + Separator)
 }
 
-func (f *FTPFileSystem) ID() (string, error) {
+func (f *fileSystem) ID() (string, error) {
 	return f.prefix, nil
 }
 
-func (f *FTPFileSystem) Prefix() string {
+func (f *fileSystem) Prefix() string {
 	if f.prefix == "" {
 		return Prefix
 	}
 	return f.prefix
 }
 
-func (f *FTPFileSystem) Name() string {
+func (f *fileSystem) Name() string {
 	if f.secure {
 		return "FTPS"
 	}
 	return "FTP"
 }
 
-func (f *FTPFileSystem) String() string {
+func (f *fileSystem) String() string {
 	return f.prefix + " file system"
 }
 
-func (f *FTPFileSystem) URL(cleanPath string) string {
+func (f *fileSystem) URL(cleanPath string) string {
 	if f.secure {
 		return PrefixTLS + cleanPath
 	}
 	return Prefix + cleanPath
 }
 
-func (f *FTPFileSystem) JoinCleanFile(uriParts ...string) fs.File {
+func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	if f.secure {
 		return fs.File(PrefixTLS + f.JoinCleanPath(uriParts...))
 	}
 	return fs.File(Prefix + f.JoinCleanPath(uriParts...))
 }
 
-func (f *FTPFileSystem) JoinCleanPath(uriParts ...string) string {
+func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
 	if f.secure {
 		return fsimpl.JoinCleanPath(uriParts, PrefixTLS, Separator)
 	}
 	return fsimpl.JoinCleanPath(uriParts, Prefix, Separator)
 }
 
-func (f *FTPFileSystem) SplitPath(filePath string) []string {
+func (f *fileSystem) SplitPath(filePath string) []string {
 	return fsimpl.SplitPath(filePath, f.Prefix(), Separator)
 }
 
-func (f *FTPFileSystem) Separator() string { return Separator }
+func (f *fileSystem) Separator() string { return Separator }
 
-func (f *FTPFileSystem) IsAbsPath(filePath string) bool {
+func (f *fileSystem) IsAbsPath(filePath string) bool {
 	return strings.HasPrefix(filePath, Prefix)
 }
 
-func (f *FTPFileSystem) AbsPath(filePath string) string {
+func (f *fileSystem) AbsPath(filePath string) string {
 	if f.IsAbsPath(filePath) {
 		return filePath
 	}
 	return Prefix + strings.TrimPrefix(filePath, Separator)
 }
 
-func (f *FTPFileSystem) SplitDirAndName(filePath string) (dir, name string) {
+func (f *fileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
@@ -203,7 +199,7 @@ func entryToFileInfo(entry *ftp.Entry, file fs.File) *fs.FileInfo {
 	}
 }
 
-func (f *FTPFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	conn, filePath, release, err := f.getConn(filePath)
 	if err != nil {
 		return nil, err
@@ -217,9 +213,9 @@ func (f *FTPFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	return fileInfo{entry}, nil
 }
 
-func (f *FTPFileSystem) IsHidden(filePath string) bool { return false }
+func (f *fileSystem) IsHidden(filePath string) bool { return false }
 
-func (f *FTPFileSystem) IsSymbolicLink(filePath string) bool {
+func (f *fileSystem) IsSymbolicLink(filePath string) bool {
 	conn, filePath, release, err := f.getConn(filePath)
 	if err != nil {
 		return false
@@ -233,13 +229,16 @@ func (f *FTPFileSystem) IsSymbolicLink(filePath string) bool {
 	return entry.Type == ftp.EntryTypeLink
 }
 
-func (f *FTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	conn, dirPath, release, err := f.getConn(dirPath)
 	if err != nil {
 		return err
 	}
 	defer release()
 
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	entries, err := conn.List(dirPath)
 	if err != nil {
 		return err
@@ -263,11 +262,11 @@ func (f *FTPFileSystem) ListDirInfo(ctx context.Context, dirPath string, callbac
 	return nil
 }
 
-func (f *FTPFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
 	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
-func (f *FTPFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 	conn, dirPath, release, err := f.getConn(dirPath)
 	if err != nil {
 		return err
@@ -300,7 +299,7 @@ func (f *fileReader) Close() error {
 	return errors.Join(f.response.Close(), f.release())
 }
 
-func (f *FTPFileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
+func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
 	conn, filePath, release, err := f.getConn(filePath)
 	if err != nil {
 		return nil, err
@@ -319,7 +318,7 @@ func (f *FTPFileSystem) OpenReader(filePath string) (reader iofs.File, err error
 	}, nil
 }
 
-func (f *FTPFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
 	return f.OpenReadWriter(filePath, perm)
 }
 
@@ -376,7 +375,7 @@ func (f *file) Close() error {
 	return f.release()
 }
 
-func (f *FTPFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
 	conn, filePath, release, err := f.getConn(filePath)
 	if err != nil {
 		return nil, err
@@ -388,7 +387,7 @@ func (f *FTPFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (
 	}, nil
 }
 
-func (f *FTPFileSystem) Move(filePath string, destPath string) error {
+func (f *fileSystem) Move(filePath string, destPath string) error {
 	conn, filePath, release, err := f.getConn(filePath)
 	if err != nil {
 		return err
@@ -398,7 +397,7 @@ func (f *FTPFileSystem) Move(filePath string, destPath string) error {
 	return conn.Rename(filePath, destPath)
 }
 
-func (f *FTPFileSystem) Remove(filePath string) error {
+func (f *fileSystem) Remove(filePath string) error {
 	conn, filePath, release, err := f.getConn(filePath)
 	if err != nil {
 		return err
@@ -413,4 +412,9 @@ func (f *FTPFileSystem) Remove(filePath string) error {
 		return conn.RemoveDir(filePath)
 	}
 	return conn.Delete(filePath)
+}
+
+func (f *fileSystem) Close() error {
+	fs.Unregister(f)
+	return f.conn.Quit()
 }

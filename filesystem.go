@@ -87,6 +87,9 @@ type FileSystem interface {
 
 	// Remove deletes the file.
 	Remove(filePath string) error
+
+	// Close the file system or do nothing if it is not closable
+	Close() error
 }
 
 type fullyFeaturedFileSystem interface {

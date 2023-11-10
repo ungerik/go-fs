@@ -209,3 +209,7 @@ func (subfs *todoSubFileSystem) Truncate(filePath string, size int64) error {
 func (subfs *todoSubFileSystem) Remove(filePath string) error {
 	panic("TODO")
 }
+
+func (subfs *todoSubFileSystem) Close() error {
+	panic("TODO")
+}

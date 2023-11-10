@@ -753,3 +753,7 @@ func (local *LocalFileSystem) watchEventCallback(event fsnotify.Event, callback 
 	}()
 	callback(File(event.Name), Event(event.Op))
 }
+
+func (*LocalFileSystem) Close() error {
+	return nil
+}
