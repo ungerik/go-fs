@@ -69,59 +69,64 @@ func NewWriterFileSystem(file fs.File) (zipfs *ZipFileSystem, err error) {
 	return zipfs, err
 }
 
-func (zipfs *ZipFileSystem) Close() error {
-	fs.Unregister(zipfs)
-	return zipfs.closer.Close()
+func (f *ZipFileSystem) Close() error {
+	if f.closer == nil {
+		return nil // already closed
+	}
+	fs.Unregister(f)
+	err := f.closer.Close()
+	f.closer = nil
+	return err
 }
 
-func (zipfs *ZipFileSystem) IsReadOnly() bool {
-	return zipfs.zipReader != nil
+func (f *ZipFileSystem) IsReadOnly() bool {
+	return f.zipReader != nil
 }
 
-func (zipfs *ZipFileSystem) IsWriteOnly() bool {
-	return zipfs.zipWriter != nil
+func (f *ZipFileSystem) IsWriteOnly() bool {
+	return f.zipWriter != nil
 }
 
-func (zipfs *ZipFileSystem) RootDir() fs.File {
-	return fs.File(zipfs.prefix + Separator)
+func (f *ZipFileSystem) RootDir() fs.File {
+	return fs.File(f.prefix + Separator)
 }
 
-func (zipfs *ZipFileSystem) ID() (string, error) {
-	return zipfs.prefix, nil
+func (f *ZipFileSystem) ID() (string, error) {
+	return f.prefix, nil
 }
 
 // Prefix for the ZipFileSystem
-func (zipfs *ZipFileSystem) Prefix() string {
-	return zipfs.prefix
+func (f *ZipFileSystem) Prefix() string {
+	return f.prefix
 }
 
-func (zipfs *ZipFileSystem) Name() string {
-	return "Zip reader filesystem " + path.Base(zipfs.prefix)
+func (f *ZipFileSystem) Name() string {
+	return "Zip reader filesystem " + path.Base(f.prefix)
 }
 
 // String implements the fmt.Stringer interface.
-func (zipfs *ZipFileSystem) String() string {
-	return zipfs.Name() + " with prefix " + zipfs.Prefix()
+func (f *ZipFileSystem) String() string {
+	return f.Name() + " with prefix " + f.Prefix()
 }
 
-func (zipfs *ZipFileSystem) File(filePath string) fs.File {
-	return zipfs.JoinCleanFile(filePath)
+func (f *ZipFileSystem) File(filePath string) fs.File {
+	return f.JoinCleanFile(filePath)
 }
 
-func (zipfs *ZipFileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(zipfs.prefix + zipfs.JoinCleanPath(uriParts...))
+func (f *ZipFileSystem) JoinCleanFile(uriParts ...string) fs.File {
+	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
 }
 
-func (zipfs *ZipFileSystem) URL(cleanPath string) string {
-	return zipfs.prefix + cleanPath
+func (f *ZipFileSystem) URL(cleanPath string) string {
+	return f.prefix + cleanPath
 }
 
-func (zipfs *ZipFileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, zipfs.prefix, Separator)
+func (f *ZipFileSystem) JoinCleanPath(uriParts ...string) string {
+	return fsimpl.JoinCleanPath(uriParts, f.prefix, Separator)
 }
 
-func (zipfs *ZipFileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, zipfs.prefix, Separator)
+func (f *ZipFileSystem) SplitPath(filePath string) []string {
+	return fsimpl.SplitPath(filePath, f.prefix, Separator)
 }
 
 func (*ZipFileSystem) Separator() string {
@@ -139,20 +144,20 @@ func (*ZipFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
-func (zipfs *ZipFileSystem) IsAbsPath(filePath string) bool {
+func (f *ZipFileSystem) IsAbsPath(filePath string) bool {
 	return path.IsAbs(filePath)
 }
 
-func (zipfs *ZipFileSystem) AbsPath(filePath string) string {
+func (f *ZipFileSystem) AbsPath(filePath string) string {
 	if !path.IsAbs(filePath) {
 		filePath = Separator + filePath
 	}
 	return path.Clean(filePath)
 }
 
-// func (zipfs *ZipFileSystem) findFile(filePath string) *zip.File {
+// func (f *ZipFileSystem) findFile(filePath string) *zip.File {
 // 	filePath = strings.TrimPrefix(filePath, Separator)
-// 	for _, zipFile := range zipfs.zipReader.File {
+// 	for _, zipFile := range f.zipReader.File {
 // 		if zipFile.Name == filePath {
 // 			return zipFile
 // 		}
@@ -160,12 +165,12 @@ func (zipfs *ZipFileSystem) AbsPath(filePath string) string {
 // 	return nil
 // }
 
-// func (zipfs *ZipFileSystem) findDir(filePath string) bool {
+// func (f *ZipFileSystem) findDir(filePath string) bool {
 // 	filePath = strings.TrimPrefix(filePath, Separator)
 // 	if !strings.HasSuffix(filePath, Separator) {
 // 		filePath += Separator
 // 	}
-// 	for _, zipFile := range zipfs.zipReader.File {
+// 	for _, zipFile := range f.zipReader.File {
 // 		if strings.HasPrefix(zipFile.Name, filePath) {
 // 			return true
 // 		}
@@ -173,9 +178,9 @@ func (zipfs *ZipFileSystem) AbsPath(filePath string) string {
 // 	return false
 // }
 
-func (zipfs *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir bool) {
+func (f *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir bool) {
 	filePath = strings.TrimPrefix(filePath, Separator)
-	for _, zipFile := range zipfs.zipReader.File {
+	for _, zipFile := range f.zipReader.File {
 		if zipFile.Name == filePath {
 			return zipFile, false
 		}
@@ -183,7 +188,7 @@ func (zipfs *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir 
 	if !strings.HasSuffix(filePath, Separator) {
 		filePath += Separator
 	}
-	for _, zipFile := range zipfs.zipReader.File {
+	for _, zipFile := range f.zipReader.File {
 		if strings.HasPrefix(zipFile.Name, filePath) {
 			return zipFile, true
 		}
@@ -191,9 +196,9 @@ func (zipfs *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir 
 	return nil, false
 }
 
-func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (iofs.FileInfo, error) {
+func (f *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (iofs.FileInfo, error) {
 	if zipFile == nil {
-		return nil, fs.NewErrDoesNotExist(zipfs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
 
 	name := path.Base(filePath)
@@ -214,45 +219,45 @@ func (zipfs *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool)
 	return info.StdFileInfo(), nil
 }
 
-func (zipfs *ZipFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
-	if zipfs.zipReader == nil {
+func (f *ZipFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+	if f.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
 	}
-	zipFile, isDir := zipfs.findFile(filePath)
-	return zipfs.stat(filePath, zipFile, isDir)
+	zipFile, isDir := f.findFile(filePath)
+	return f.stat(filePath, zipFile, isDir)
 }
 
-func (zipfs *ZipFileSystem) Exists(filePath string) bool {
-	if zipfs.zipReader == nil {
+func (f *ZipFileSystem) Exists(filePath string) bool {
+	if f.zipReader == nil {
 		return false
 	}
-	zipFile, _ := zipfs.findFile(filePath)
+	zipFile, _ := f.findFile(filePath)
 	return zipFile != nil
 }
 
-func (zipfs *ZipFileSystem) IsHidden(filePath string) bool {
+func (f *ZipFileSystem) IsHidden(filePath string) bool {
 	name := path.Base(filePath)
 	return len(name) > 0 && name[0] == '.'
 }
 
-func (zipfs *ZipFileSystem) IsSymbolicLink(filePath string) bool {
+func (f *ZipFileSystem) IsSymbolicLink(filePath string) bool {
 	return false
 }
 
-func (zipfs *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
-	if zipfs.zipReader == nil {
+func (f *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+	if f.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
 	}
 
 	panic("TODO")
 }
 
-func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 
-	if zipfs.zipReader == nil {
+	if f.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
 	}
 
@@ -262,7 +267,7 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 		},
 		children: make(map[string]*node),
 	}
-	for _, file := range zipfs.zipReader.File {
+	for _, file := range f.zipReader.File {
 		currentDir := rootNode
 		parts := strings.Split(file.Name, Separator)
 		lastIndex := len(parts) - 1
@@ -278,7 +283,7 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 	}
 
 	if !rootNode.IsDir {
-		return fs.NewErrIsNotDirectory(zipfs.File(dirPath))
+		return fs.NewErrIsNotDirectory(f.File(dirPath))
 	}
 
 	var listRecursive func(parent *node) error
@@ -305,46 +310,46 @@ func (zipfs *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath st
 	return listRecursive(rootNode)
 }
 
-func (zipfs *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
-	if zipfs.zipReader == nil {
+func (f *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
+	if f.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
 	}
 
-	zipFile, isDir := zipfs.findFile(filePath)
+	zipFile, isDir := f.findFile(filePath)
 	if isDir {
-		return nil, fs.NewErrIsDirectory(zipfs.File(filePath))
+		return nil, fs.NewErrIsDirectory(f.File(filePath))
 	}
 	if zipFile == nil {
-		return nil, fs.NewErrDoesNotExist(zipfs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
-	f, err := zipFile.Open()
+	file, err := zipFile.Open()
 	if err != nil {
 		return nil, err
 	}
-	return f.(iofs.File), nil
+	return file.(iofs.File), nil
 }
 
-func (zipfs *ZipFileSystem) Touch(filePath string, perm []fs.Permissions) error {
-	if zipfs.zipWriter == nil {
+func (f *ZipFileSystem) Touch(filePath string, perm []fs.Permissions) error {
+	if f.zipWriter == nil {
 		return fs.ErrReadOnlyFileSystem
 	}
 	filePath = strings.TrimPrefix(filePath, Separator)
-	_, err := zipfs.zipWriter.Create(filePath)
+	_, err := f.zipWriter.Create(filePath)
 	return err
 }
 
-func (zipfs *ZipFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+func (f *ZipFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 	return nil
 }
 
-func (zipfs *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	if zipfs.zipWriter == nil {
+func (f *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+	if f.zipWriter == nil {
 		return nil, fs.ErrReadOnlyFileSystem
 	}
 
 	filePath = strings.TrimPrefix(filePath, Separator)
 
-	writer, err := zipfs.zipWriter.Create(filePath)
+	writer, err := f.zipWriter.Create(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -352,8 +357,8 @@ func (zipfs *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (
 	return nopCloser{writer}, nil
 }
 
-func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	if zipfs.zipWriter == nil {
+func (f *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+	if f.zipWriter == nil {
 		return nil, fs.ErrReadOnlyFileSystem
 	}
 
@@ -362,8 +367,8 @@ func (zipfs *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permission
 	// return nil, fs.ErrReadOnlyFileSystem
 }
 
-func (zipfs *ZipFileSystem) Remove(filePath string) error {
-	return fs.NewErrUnsupported(zipfs, "Remove")
+func (f *ZipFileSystem) Remove(filePath string) error {
+	return fs.NewErrUnsupported(f, "Remove")
 }
 
 type nopCloser struct {

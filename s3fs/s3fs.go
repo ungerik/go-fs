@@ -475,6 +475,10 @@ func (s *fileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (ca
 }
 
 func (s *fileSystem) Close() error {
+	if s.client == nil {
+		return nil // already closed
+	}
 	fs.Unregister(s)
+	s.client = nil
 	return nil
 }

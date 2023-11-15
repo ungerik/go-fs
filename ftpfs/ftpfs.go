@@ -415,6 +415,11 @@ func (f *fileSystem) Remove(filePath string) error {
 }
 
 func (f *fileSystem) Close() error {
+	if f.conn == nil {
+		return nil // already closed
+	}
 	fs.Unregister(f)
-	return f.conn.Quit()
+	err := f.conn.Quit()
+	f.conn = nil
+	return err
 }

@@ -90,8 +90,15 @@ func NewMemFileSystem(separator string, rootFiles ...MemFile) (*MemFileSystem, e
 }
 
 func (fs *MemFileSystem) Close() error {
+	fs.mtx.Lock()
+	if fs.id == "" {
+		fs.mtx.Unlock()
+		return nil // already closed
+	}
+	fs.id = ""
+	clear(fs.root.Dir)
+	fs.mtx.Unlock() // Unlock before Unregister to avoid deadlock
 	Unregister(fs)
-	fs.Clear()
 	return nil
 }
 
@@ -250,17 +257,23 @@ func (fs *MemFileSystem) WithID(id string) *MemFileSystem {
 	if id == "" {
 		panic("empty id")
 	}
-	Unregister(fs)
-	fs.id = id
-	Register(fs)
+	if id != fs.id {
+		if fs.id != "" {
+			Unregister(fs)
+		}
+		fs.id = id
+		Register(fs)
+	}
 	return fs
 }
 
 // This method is not thread-safe!
 func (fs *MemFileSystem) WithVolume(volume string) *MemFileSystem {
-	Unregister(fs)
-	fs.volume = volume
-	Register(fs)
+	if volume != fs.volume {
+		Unregister(fs)
+		fs.volume = volume
+		Register(fs)
+	}
 	return fs
 }
 

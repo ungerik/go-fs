@@ -396,6 +396,10 @@ func (f *fileSystem) Remove(filePath string) error {
 }
 
 func (f *fileSystem) Close() error {
+	if f.client == nil {
+		return nil // already closed
+	}
 	fs.Unregister(f)
-	return f.client.Close()
+	f.client = nil
+	return nil
 }

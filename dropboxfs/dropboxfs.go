@@ -392,6 +392,10 @@ func (dbfs *fileSystem) Remove(filePath string) error {
 }
 
 func (dbfs *fileSystem) Close() error {
+	if dbfs.id == "" {
+		return nil // already closed
+	}
 	fs.Unregister(dbfs)
+	dbfs.id = ""
 	return nil
 }
