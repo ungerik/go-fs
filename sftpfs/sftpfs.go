@@ -114,6 +114,12 @@ func Dial(ctx context.Context, address string, passwordCallback UsernamePassword
 	if err != nil {
 		return nil, err
 	}
+	if username == "" {
+		return nil, fmt.Errorf("missing SFTP username for: %s", address)
+	}
+	if password == "" {
+		return nil, fmt.Errorf("missing SFTP password for: %s", address)
+	}
 	client, err := dial(ctx, u.Host, username, password, hostKeyCallbackOrNil)
 	if err != nil {
 		return nil, err
