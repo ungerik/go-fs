@@ -23,9 +23,17 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 func TestDialAndRegister(t *testing.T) {
 	// https://www.sftp.net/public-online-sftp-servers
 	{
-		sftpFS, err := DialAndRegister(context.Background(), "demo@test.rebex.net:22", Password("password"), nil)
+		sftpFS, err := DialAndRegister(context.Background(), "demo@test.rebex.net:22", Password("password"), AcceptAnyHostKey)
 		require.NoError(t, err, "Dial")
+
 		require.Equal(t, "sftp://demo@test.rebex.net:22", sftpFS.Prefix())
+		id, err := sftpFS.ID()
+		require.NoError(t, err)
+		require.Equal(t, "sftp://demo@test.rebex.net:22", id)
+		require.Equal(t, "sftp://demo@test.rebex.net:22 file system", sftpFS.String())
+		require.Equal(t, "SFTP", sftpFS.Name())
+		require.Equal(t, "/a/b", sftpFS.JoinCleanPath("a", "skip", "..", "/", "b", "/"))
+		require.Equal(t, fs.File("sftp://demo@test.rebex.net:22/a/b"), sftpFS.JoinCleanFile("a", "skip", "..", "/", "b", "/"))
 
 		f := fs.File("sftp://demo@test.rebex.net:22/readme.txt")
 		assert.Equal(t, "readme.txt", f.Name())
@@ -41,7 +49,7 @@ func TestDialAndRegister(t *testing.T) {
 	}
 	{
 		// http://demo.wftpserver.com/main.html
-		sftpFS, err := DialAndRegister(context.Background(), "demo.wftpserver.com:2222", UsernameAndPassword("demo", "demo"), nil)
+		sftpFS, err := DialAndRegister(context.Background(), "demo.wftpserver.com:2222", UsernameAndPassword("demo", "demo"), AcceptAnyHostKey)
 		require.NoError(t, err, "Dial")
 		require.Equal(t, "sftp://demo@demo.wftpserver.com:2222", sftpFS.Prefix())
 

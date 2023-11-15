@@ -40,97 +40,92 @@ func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSyst
 	if err != nil {
 		return nil, err
 	}
-	mpfs := &MultipartFileSystem{
+	f := &MultipartFileSystem{
 		prefix: Prefix + fsimpl.RandomString(),
 		Form:   request.MultipartForm,
 	}
-	fs.Register(mpfs)
-	return mpfs, err
-}
-
-func (mpfs *MultipartFileSystem) Close() error {
-	fs.Unregister(mpfs)
-	return mpfs.Form.RemoveAll()
+	fs.Register(f)
+	return f, err
 }
 
 // FormFile returns the first file uploaded under name
 // or ErrDoesNotExist if there is no file under name.
-func (mpfs *MultipartFileSystem) FormFile(name string) (fs.File, error) {
-	ff, _ := mpfs.Form.File[name]
-	if len(ff) == 0 {
-		return "", fs.NewErrDoesNotExist(mpfs.File(name))
+func (f *MultipartFileSystem) FormFile(name string) (fs.File, error) {
+	formFiles, _ := f.Form.File[name]
+	if len(formFiles) == 0 {
+		return "", fs.NewErrDoesNotExist(f.File(name))
 	}
-	return mpfs.JoinCleanFile(name, ff[0].Filename), nil
+	return f.JoinCleanFile(name, formFiles[0].Filename), nil
 }
 
 // FormFiles returns the uploaded files under name.
-func (mpfs *MultipartFileSystem) FormFiles(name string) (files []fs.File) {
-	ff, _ := mpfs.Form.File[name]
-	if len(ff) == 0 {
+func (f *MultipartFileSystem) FormFiles(name string) (files []fs.File) {
+	formFiles, _ := f.Form.File[name]
+	if len(formFiles) == 0 {
 		return nil
 	}
-	files = make([]fs.File, len(ff))
-	for i, f := range ff {
-		files[i] = mpfs.JoinCleanFile(name, f.Filename)
+	files = make([]fs.File, len(formFiles))
+	for i, formFile := range formFiles {
+		files[i] = f.JoinCleanFile(name, formFile.Filename)
 	}
 	return files
 }
 
-func (mpfs *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multipart.FileHeader, error) {
-	parts := mpfs.SplitPath(filePath)
+func (f *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multipart.FileHeader, error) {
+	parts := f.SplitPath(filePath)
 	if len(parts) != 2 {
-		return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
 	dir, filename := parts[0], parts[1]
-	ff, _ := mpfs.Form.File[dir]
-	for _, f := range ff {
-		if f.Filename == filename {
-			return f, nil
+	formFiles, _ := f.Form.File[dir]
+	for _, formFile := range formFiles {
+		if formFile.Filename == filename {
+			return formFile, nil
 		}
 	}
-	return nil, fs.NewErrDoesNotExist(mpfs.File(filePath))
+	return nil, fs.NewErrDoesNotExist(f.File(filePath))
 }
 
-func (mpfs *MultipartFileSystem) RootDir() fs.File {
-	return fs.File(mpfs.prefix + Separator)
+func (f *MultipartFileSystem) RootDir() fs.File {
+	return fs.File(f.prefix + Separator)
 }
 
-func (mpfs *MultipartFileSystem) ID() (string, error) {
-	return mpfs.prefix, nil
+func (f *MultipartFileSystem) ID() (string, error) {
+	return f.prefix, nil
 }
 
 // Prefix for the MultipartFileSystem
-func (mpfs *MultipartFileSystem) Prefix() string {
-	return mpfs.prefix
+func (f *MultipartFileSystem) Prefix() string {
+	return f.prefix
 }
 
-func (mpfs *MultipartFileSystem) Name() string {
-	return "multipart file system " + path.Base(mpfs.prefix)
+func (f *MultipartFileSystem) Name() string {
+	return "multipart file system " + path.Base(f.prefix)
 }
 
 // String implements the fmt.Stringer interface.
-func (mpfs *MultipartFileSystem) String() string {
-	return mpfs.Name() + " with prefix " + mpfs.Prefix()
+func (f *MultipartFileSystem) String() string {
+	return f.Name() + " with prefix " + f.Prefix()
 }
 
-func (mpfs *MultipartFileSystem) File(filePath string) fs.File {
-	return mpfs.JoinCleanFile(filePath)
+func (f *MultipartFileSystem) File(filePath string) fs.File {
+	return f.JoinCleanFile(filePath)
 }
 
-func (mpfs *MultipartFileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(mpfs.prefix + mpfs.JoinCleanPath(uriParts...))
+func (f *MultipartFileSystem) JoinCleanFile(uriParts ...string) fs.File {
+	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
 }
 
-func (mpfs *MultipartFileSystem) URL(cleanPath string) string {
-	return mpfs.prefix + cleanPath
+func (f *MultipartFileSystem) URL(cleanPath string) string {
+	return f.prefix + cleanPath
 }
 
-func (mpfs *MultipartFileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, mpfs.prefix, Separator)
+func (f *MultipartFileSystem) JoinCleanPath(uriParts ...string) string {
+	return fsimpl.JoinCleanPath(uriParts, f.prefix, Separator)
 }
 
-func (mpfs *MultipartFileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, mpfs.prefix, Separator)
+func (f *MultipartFileSystem) SplitPath(filePath string) []string {
+	return fsimpl.SplitPath(filePath, f.prefix, Separator)
 }
 
 func (*MultipartFileSystem) Separator() string { return Separator }
@@ -139,24 +134,24 @@ func (*MultipartFileSystem) SplitDirAndName(filePath string) (dir, name string) 
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 
-func (mpfs *MultipartFileSystem) IsAbsPath(filePath string) bool {
+func (f *MultipartFileSystem) IsAbsPath(filePath string) bool {
 	return path.IsAbs(filePath)
 }
 
-func (mpfs *MultipartFileSystem) AbsPath(filePath string) string {
+func (f *MultipartFileSystem) AbsPath(filePath string) string {
 	if !path.IsAbs(filePath) {
 		filePath = Separator + filePath
 	}
 	return path.Clean(filePath)
 }
 
-func (mpfs *MultipartFileSystem) info(filePath string) *fs.FileInfo {
+func (f *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 	var info fs.FileInfo
-	parts := mpfs.SplitPath(filePath)
+	parts := f.SplitPath(filePath)
 	switch len(parts) {
 	case 1:
 		dir := parts[0]
-		exists := len(mpfs.Form.File[dir]) > 0
+		exists := len(f.Form.File[dir]) > 0
 		if exists {
 			info.Name = dir
 			info.Exists = true
@@ -164,9 +159,9 @@ func (mpfs *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 		}
 	case 2:
 		dir, filename := parts[0], parts[1]
-		ff, _ := mpfs.Form.File[dir]
-		for _, f := range ff {
-			if f.Filename == filename {
+		formFiles, _ := f.Form.File[dir]
+		for _, formFile := range formFiles {
+			if formFile.Filename == filename {
 				info.Name = filename
 				info.Exists = true
 				break
@@ -184,25 +179,25 @@ func (mpfs *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 	return &info
 }
 
-func (mpfs *MultipartFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
-	info := mpfs.info(filePath)
+func (f *MultipartFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+	info := f.info(filePath)
 	if !info.Exists {
 		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
 	}
 	return info.StdFileInfo(), nil
 }
 
-func (mpfs *MultipartFileSystem) Exists(filePath string) bool {
-	parts := mpfs.SplitPath(filePath)
+func (f *MultipartFileSystem) Exists(filePath string) bool {
+	parts := f.SplitPath(filePath)
 	switch len(parts) {
 	case 1:
 		dir := parts[0]
-		return len(mpfs.Form.File[dir]) > 0
+		return len(f.Form.File[dir]) > 0
 	case 2:
 		dir, filename := parts[0], parts[1]
-		ff, _ := mpfs.Form.File[dir]
-		for _, f := range ff {
-			if f.Filename == filename {
+		formFiles, _ := f.Form.File[dir]
+		for _, formFile := range formFiles {
+			if formFile.Filename == filename {
 				return true
 			}
 		}
@@ -210,22 +205,22 @@ func (mpfs *MultipartFileSystem) Exists(filePath string) bool {
 	return false
 }
 
-func (mpfs *MultipartFileSystem) IsHidden(filePath string) bool {
+func (f *MultipartFileSystem) IsHidden(filePath string) bool {
 	return strings.HasPrefix(path.Base(filePath), ".")
 }
 
-func (mpfs *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }
+func (f *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }
 
-func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+func (f *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 
-	parts := mpfs.SplitPath(dirPath)
+	parts := f.SplitPath(dirPath)
 	switch len(parts) {
 	case 0:
-		for fileDir := range mpfs.Form.File {
-			info := mpfs.info(fileDir)
+		for fileDir := range f.Form.File {
+			info := f.info(fileDir)
 			err = callback(info)
 			if err != nil {
 				return err
@@ -233,32 +228,32 @@ func (mpfs *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string
 		}
 	case 1:
 		dir := parts[0]
-		ff, _ := mpfs.Form.File[dir]
-		if len(ff) > 0 {
-			for _, f := range ff {
-				filePath := path.Join(dir, f.Filename)
-				info := mpfs.info(filePath)
+		formFiles, _ := f.Form.File[dir]
+		if len(formFiles) > 0 {
+			for _, formFile := range formFiles {
+				filePath := path.Join(dir, formFile.Filename)
+				info := f.info(filePath)
 				err = callback(info)
 				if err != nil {
 					return err
 				}
 			}
 		} else {
-			err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
+			err = fs.NewErrDoesNotExist(f.File(dirPath))
 		}
 	case 2:
-		err = fs.NewErrIsNotDirectory(mpfs.File(dirPath))
+		err = fs.NewErrIsNotDirectory(f.File(dirPath))
 	default:
-		err = fs.NewErrDoesNotExist(mpfs.File(dirPath))
+		err = fs.NewErrDoesNotExist(f.File(dirPath))
 	}
 	return err
 }
 
-func (mpfs *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	file, err := mpfs.OpenReader(filePath)
+	file, err := f.OpenReader(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -267,12 +262,12 @@ func (mpfs *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) (
 	return fs.ReadAllContext(ctx, file)
 }
 
-func (mpfs *MultipartFileSystem) OpenReader(filePath string) (iofs.File, error) {
+func (f *MultipartFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	filePath, err := EscapePath(filePath)
 	if err != nil {
 		return nil, err
 	}
-	header, err := mpfs.GetMultipartFileHeader(filePath)
+	header, err := f.GetMultipartFileHeader(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -281,6 +276,11 @@ func (mpfs *MultipartFileSystem) OpenReader(filePath string) (iofs.File, error) 
 		return nil, err
 	}
 	return multipartFile{File: file, header: header}, nil
+}
+
+func (f *MultipartFileSystem) Close() error {
+	fs.Unregister(f)
+	return f.Form.RemoveAll()
 }
 
 type multipartFile struct {

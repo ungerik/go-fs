@@ -89,27 +89,6 @@ func NewMemFileSystem(separator string, rootFiles ...MemFile) (*MemFileSystem, e
 	return fs, nil
 }
 
-func (fs *MemFileSystem) Close() error {
-	fs.mtx.Lock()
-	if fs.id == "" {
-		fs.mtx.Unlock()
-		return nil // already closed
-	}
-	fs.id = ""
-	clear(fs.root.Dir)
-	fs.mtx.Unlock() // Unlock before Unregister to avoid deadlock
-	Unregister(fs)
-	return nil
-}
-
-func (fs *MemFileSystem) Clear() {
-	fs.mtx.Lock()
-	defer fs.mtx.Unlock()
-
-	clear(fs.root.Dir)
-	fs.root.Modified = time.Now()
-}
-
 func newMemDirNode(name string, modified time.Time, perm ...Permissions) *memFileNode {
 	if name == "" {
 		panic("empty dir name")
@@ -616,4 +595,24 @@ func (fs *MemFileSystem) Move(filePath string, destPath string) error {
 
 func (fs *MemFileSystem) Remove(filePath string) error {
 	return nil
+}
+
+func (fs *MemFileSystem) Close() error {
+	fs.mtx.Lock()
+	if fs.root.Dir == nil {
+		fs.mtx.Unlock()
+		return nil // already closed
+	}
+	fs.root.Dir = nil
+	fs.mtx.Unlock() // Unlock before Unregister to avoid deadlock
+	Unregister(fs)
+	return nil
+}
+
+func (fs *MemFileSystem) Clear() {
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
+	clear(fs.root.Dir)
+	fs.root.Modified = time.Now()
 }

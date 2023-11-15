@@ -143,7 +143,7 @@ func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	if f.secure {
 		return fs.File(PrefixTLS + f.JoinCleanPath(uriParts...))
 	}
-	return fs.File(Prefix + f.JoinCleanPath(uriParts...))
+	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
 }
 
 func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
