@@ -20,10 +20,10 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 	return data
 }
 
-func TestDial(t *testing.T) {
+func TestDialAndRegister(t *testing.T) {
 	// https://www.sftp.net/public-online-sftp-servers
 	{
-		sftpFS, err := DialAndRegister(context.Background(), "test.rebex.net:22", "demo", "password", nil)
+		sftpFS, err := DialAndRegister(context.Background(), "demo@test.rebex.net:22", Password("password"), nil)
 		require.NoError(t, err, "Dial")
 		require.Equal(t, "sftp://demo@test.rebex.net:22", sftpFS.Prefix())
 
@@ -41,7 +41,7 @@ func TestDial(t *testing.T) {
 	}
 	{
 		// http://demo.wftpserver.com/main.html
-		sftpFS, err := DialAndRegister(context.Background(), "demo.wftpserver.com:2222", "demo", "demo", nil)
+		sftpFS, err := DialAndRegister(context.Background(), "demo.wftpserver.com:2222", UsernameAndPassword("demo", "demo"), nil)
 		require.NoError(t, err, "Dial")
 		require.Equal(t, "sftp://demo@demo.wftpserver.com:2222", sftpFS.Prefix())
 
