@@ -2,6 +2,8 @@ package fs
 
 import (
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -16,32 +18,28 @@ var (
 	}
 
 	Invalid InvalidFileSystem
-
-	// Registry contains all registerred file systems.
-	// Contains the local file system by default.
-	Registry = map[string]FileSystem{
-		Local.Prefix():   Local,   // file://
-		Invalid.Prefix(): Invalid, // invalid://
-	}
-
-	registryMtx sync.RWMutex
 )
 
-// Register adds fs to the Registry of file systems.
-func Register(fs FileSystem) {
-	prefix := fs.Prefix()
-	if prefix == "" {
-		panic(fmt.Sprintf("file system with empty prefix: %#v", fs))
-	}
-
-	registryMtx.Lock()
-	defer registryMtx.Unlock()
-
-	Registry[prefix] = fs
+type fsCount struct {
+	fs    FileSystem
+	count int
 }
 
-// Unregister removes fs from the Registry of file systems.
-func Unregister(fs FileSystem) {
+var (
+	registry       = make(map[string]*fsCount, 2)
+	registrySorted = make([]FileSystem, 0, 2)
+	registryMtx    sync.RWMutex
+)
+
+func init() {
+	Register(Local)
+	Register(Invalid)
+}
+
+// Register adds a file system or increments its reference count
+// if it is already registered.
+// The function returns the reference file system's reference count.
+func Register(fs FileSystem) int {
 	prefix := fs.Prefix()
 	if prefix == "" {
 		panic(fmt.Sprintf("file system with empty prefix: %#v", fs))
@@ -50,7 +48,50 @@ func Unregister(fs FileSystem) {
 	registryMtx.Lock()
 	defer registryMtx.Unlock()
 
-	delete(Registry, prefix)
+	if regFS, ok := registry[prefix]; ok {
+		regFS.count++
+		return regFS.count
+	}
+
+	registry[prefix] = &fsCount{fs, 1}
+	registrySorted = append(registrySorted, fs)
+	sort.Slice(registrySorted, func(i, j int) bool { return registrySorted[i].Prefix() < registrySorted[j].Prefix() })
+	return 1
+}
+
+// Unregister a file system decrements its reference count
+// and removes it when the reference count reaches 0.
+// If the file system is not registered, -1 is returned.
+func Unregister(fs FileSystem) int {
+	prefix := fs.Prefix()
+	if prefix == "" {
+		panic(fmt.Sprintf("file system with empty prefix: %#v", fs))
+	}
+
+	registryMtx.Lock()
+	defer registryMtx.Unlock()
+
+	regFS, ok := registry[prefix]
+	if !ok {
+		return -1
+	}
+	if regFS.count <= 1 {
+		delete(registry, prefix)
+		registrySorted = slices.DeleteFunc(registrySorted, func(f FileSystem) bool { return f == regFS.fs })
+		return 0
+	}
+
+	regFS.count--
+	return regFS.count
+}
+
+// RegisteredFileSystems returns the registered file systems
+// sorted by their prefix.
+func RegisteredFileSystems() []FileSystem {
+	registryMtx.Lock()
+	defer registryMtx.Unlock()
+
+	return slices.Clone(registrySorted)
 }
 
 // GetFileSystem returns a FileSystem for the passed URI.
@@ -74,19 +115,15 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	defer registryMtx.RUnlock()
 
 	// Find fs with longest matching prefix
-	for prefix, regFS := range Registry {
-		if strings.HasPrefix(uri, prefix) {
-			path := uri[len(prefix):]
-			if fs == nil || len(prefix) > len(fs.Prefix()) {
-				fs = regFS
-				fsPath = path
-			}
+	// by iterating in reverse order of sorted registry
+	for i := len(registrySorted) - 1; i >= 0; i-- {
+		fs = registrySorted[i]
+		path, found := strings.CutPrefix(uri, fs.Prefix())
+		if found {
+			return fs, path
 		}
 	}
 
-	if fs == nil {
-		// No file system found, assume uri is for the local file system
-		return Local, uri
-	}
-	return fs, fsPath
+	// No file system found, assume uri is for the local file system
+	return Local, uri
 }

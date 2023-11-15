@@ -73,6 +73,24 @@ func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err erro
 // during the cryptographic handshake to validate the server's host key,
 // else any host key will be accepted.
 func DialAndRegister(ctx context.Context, address string, passwordCallback UsernamePasswordCallback, hostKeyCallbackOrNil ssh.HostKeyCallback) (fs.FileSystem, error) {
+	fileSystem, err := Dial(ctx, address, passwordCallback, hostKeyCallbackOrNil)
+	if err != nil {
+		return nil, err
+	}
+	fs.Register(fileSystem)
+	return fileSystem, nil
+}
+
+// Dial dials a new SFTP connection without registering it as file system.
+//
+// The passed address can be a URL with scheme sftp:// or just a host name.
+// If no port is provided in the address, then port 22 will be used.
+// The address can contain a username
+//
+// If hostKeyCallbackOrNil is not nil then it will be called
+// during the cryptographic handshake to validate the server's host key,
+// else any host key will be accepted.
+func Dial(ctx context.Context, address string, passwordCallback UsernamePasswordCallback, hostKeyCallbackOrNil ssh.HostKeyCallback) (fs.FileSystem, error) {
 	if !strings.HasPrefix(address, "sftp://") {
 		if strings.Contains(address, "://") {
 			return nil, fmt.Errorf("URL must start with sftp:// but got %s", address)
@@ -96,11 +114,20 @@ func DialAndRegister(ctx context.Context, address string, passwordCallback Usern
 	if err != nil {
 		return nil, err
 	}
+	client, err := dial(ctx, u.Host, username, password, hostKeyCallbackOrNil)
+	if err != nil {
+		return nil, err
+	}
+	return &fileSystem{
+		client: client,
+		prefix: "sftp://" + url.User(username).String() + "@" + u.Host,
+	}, nil
 
-	prefix := "sftp://" + url.User(username).String() + "@" + u.Host
+}
 
+func dial(ctx context.Context, host, user, password string, hostKeyCallbackOrNil ssh.HostKeyCallback) (*sftp.Client, error) {
 	config := &ssh.ClientConfig{
-		User: username,
+		User: user,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
 		},
@@ -109,26 +136,16 @@ func DialAndRegister(ctx context.Context, address string, passwordCallback Usern
 	if config.HostKeyCallback == nil {
 		config.HostKeyCallback = ssh.InsecureIgnoreHostKey()
 	}
-
 	d := net.Dialer{}
-	conn, err := d.DialContext(ctx, "tcp", u.Host)
+	conn, err := d.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return nil, err
 	}
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, u.Host, config)
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, host, config)
 	if err != nil {
 		return nil, err
 	}
-	client, err := sftp.NewClient(ssh.NewClient(sshConn, chans, reqs))
-	if err != nil {
-		return nil, err
-	}
-	fileSystem := &fileSystem{
-		client: client,
-		prefix: prefix,
-	}
-	fs.Register(fileSystem)
-	return fileSystem, nil
+	return sftp.NewClient(ssh.NewClient(sshConn, chans, reqs))
 }
 
 // func NewFileSystem(addr string, conn *ssh.Client) (*FileSystem, error) {
@@ -166,20 +183,9 @@ func (f *fileSystem) getClient(filePath string) (client *sftp.Client, clientPath
 	if !ok {
 		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
 	}
-	config := &ssh.ClientConfig{
-		User: url.User.Username(),
-		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
-		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-	}
-	conn, err := ssh.Dial("tcp", url.Host, config)
+	client, err = dial(context.Background(), url.Host, username, password, nil)
 	if err != nil {
 		return nil, "", nop, err
-	}
-	client, err = sftp.NewClient(conn)
-	if err != nil {
-		return nil, "", func() error { return conn.Close() }, err
 	}
 	return client, url.Path, func() error { return client.Close() }, nil
 }
