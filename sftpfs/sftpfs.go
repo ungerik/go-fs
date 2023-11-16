@@ -5,10 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	iofs "io/fs"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/pkg/sftp"
@@ -93,7 +93,7 @@ func Dial(ctx context.Context, address string, loginCallback LoginCallback, host
 		return nil, err
 	}
 	if u.Scheme != "sftp" {
-		return nil, fmt.Errorf("URL scheme must be sftp:// but got %s", u.Scheme)
+		return nil, fmt.Errorf("URL scheme must be sftp:// but got %s://", u.Scheme)
 	}
 	if u.Port() == "" {
 		u.Host += ":22"
@@ -330,12 +330,12 @@ func (f *sftpFile) Close() error {
 	return errors.Join(f.File.Close(), f.release())
 }
 
-func (f *fileSystem) openFile(filePath string) (*sftpFile, error) {
+func (f *fileSystem) openFile(filePath string, flags int) (*sftpFile, error) {
 	client, filePath, release, err := f.getClient(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
-	file, err := client.Open(filePath)
+	file, err := client.OpenFile(filePath, flags)
 	if err != nil {
 		return nil, errors.Join(err, release())
 	}
@@ -343,35 +343,35 @@ func (f *fileSystem) openFile(filePath string) (*sftpFile, error) {
 }
 
 func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
-	return f.openFile(filePath)
+	return f.openFile(filePath, os.O_RDONLY)
 }
 
 func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	return f.openFile(filePath)
+	return f.openFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 }
 
 func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	file, err := f.openFile(filePath)
+	file, err := f.openFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return nil, errors.Join(err, file.Close())
-	}
-	_, err = file.Seek(info.Size(), io.SeekStart)
-	if err != nil {
-		return nil, errors.Join(err, file.Close())
-	}
+	// info, err := file.Stat()
+	// if err != nil {
+	// 	return nil, errors.Join(err, file.Close())
+	// }
+	// _, err = file.Seek(info.Size(), io.SeekStart)
+	// if err != nil {
+	// 	return nil, errors.Join(err, file.Close())
+	// }
 	return file, nil
 }
 
 func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	return f.openFile(filePath)
+	return f.openFile(filePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC)
 }
 
 func (f *fileSystem) Truncate(filePath string, size int64) error {
-	file, err := f.openFile(filePath)
+	file, err := f.openFile(filePath, os.O_RDWR)
 	if err != nil {
 		return err
 	}
