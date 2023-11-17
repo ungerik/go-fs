@@ -27,12 +27,8 @@ func todoNewSubFileSystem(parent FileSystem, basePath string) *todoSubFileSystem
 	return subfs
 }
 
-func (subfs *todoSubFileSystem) IsReadOnly() bool {
-	return subfs.Parent.IsReadOnly()
-}
-
-func (subfs *todoSubFileSystem) IsWriteOnly() bool {
-	return subfs.Parent.IsWriteOnly()
+func (subfs *todoSubFileSystem) ReadableWritable() (readable, writable bool) {
+	return subfs.Parent.ReadableWritable()
 }
 
 func (subfs *todoSubFileSystem) RootDir() File {

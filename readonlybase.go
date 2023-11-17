@@ -10,12 +10,8 @@ import (
 // so that only the read methods have to be implemented.
 type ReadOnlyBase struct{}
 
-func (*ReadOnlyBase) IsReadOnly() bool {
-	return true
-}
-
-func (*ReadOnlyBase) IsWriteOnly() bool {
-	return false
+func (*ReadOnlyBase) ReadableWritable() (readable, writable bool) {
+	return true, false
 }
 
 // MatchAnyPattern returns true if name matches any of patterns,

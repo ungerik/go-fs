@@ -68,12 +68,8 @@ func expandTilde(path string) string {
 	return filepath.Join(currentUser.HomeDir, path[1:])
 }
 
-func (local *LocalFileSystem) IsReadOnly() bool {
-	return false
-}
-
-func (local *LocalFileSystem) IsWriteOnly() bool {
-	return false
+func (local *LocalFileSystem) ReadableWritable() (readable, writable bool) {
+	return true, true
 }
 
 func (local *LocalFileSystem) RootDir() File {

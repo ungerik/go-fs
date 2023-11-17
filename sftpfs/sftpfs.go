@@ -199,13 +199,8 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 	return client, url.Path, func() error { return client.Close() }, nil
 }
 
-func (f *fileSystem) IsReadOnly() bool {
-	// f.client.
-	return false // TODO
-}
-
-func (f *fileSystem) IsWriteOnly() bool {
-	return false
+func (f *fileSystem) ReadableWritable() (readable, writable bool) {
+	return true, true
 }
 
 func (f *fileSystem) RootDir() fs.File {

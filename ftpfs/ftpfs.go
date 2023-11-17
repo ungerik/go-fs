@@ -98,12 +98,8 @@ func (f *fileSystem) getConn(filePath string) (conn *ftp.ServerConn, clientPath 
 	panic("TODO" + password)
 }
 
-func (f *fileSystem) IsReadOnly() bool {
-	return false
-}
-
-func (f *fileSystem) IsWriteOnly() bool {
-	return false
+func (f *fileSystem) ReadableWritable() (readable, writable bool) {
+	return true, true
 }
 
 func (f *fileSystem) RootDir() fs.File {

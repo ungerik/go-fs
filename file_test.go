@@ -12,6 +12,10 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
+func X(t *testing.T) {
+	t.Log("X")
+}
+
 func TestInvalidFile(t *testing.T) {
 	assert.False(t, InvalidFile.IsDir(), "InvalidFile does not exist")
 

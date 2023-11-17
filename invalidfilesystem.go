@@ -21,12 +21,8 @@ var _ fullyFeaturedFileSystem = InvalidFileSystem("")
 // for debugging or testing purposes.
 type InvalidFileSystem string
 
-func (InvalidFileSystem) IsReadOnly() bool {
-	return true
-}
-
-func (InvalidFileSystem) IsWriteOnly() bool {
-	return false
+func (InvalidFileSystem) ReadableWritable() (readable, writable bool) {
+	return false, false
 }
 
 func (InvalidFileSystem) RootDir() File {

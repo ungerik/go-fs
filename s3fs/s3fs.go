@@ -66,12 +66,8 @@ func NewLoadDefaultConfig(ctx context.Context, bucketName string, readOnly bool)
 	return NewAndRegister(client, bucketName, readOnly), nil
 }
 
-func (s *fileSystem) IsReadOnly() bool {
-	return s.readOnly
-}
-
-func (s *fileSystem) IsWriteOnly() bool {
-	return false
+func (s *fileSystem) ReadableWritable() (readable, writable bool) {
+	return true, !s.readOnly
 }
 
 func (s *fileSystem) RootDir() fs.File {

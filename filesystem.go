@@ -14,8 +14,7 @@ type (
 // FileSystem is an interface that has to be implemented for
 // a file system to be accessable via this package.
 type FileSystem interface {
-	IsReadOnly() bool
-	IsWriteOnly() bool
+	ReadableWritable() (readable, writable bool)
 
 	// RootDir returns the file system root directory
 	RootDir() File

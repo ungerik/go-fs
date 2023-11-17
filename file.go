@@ -185,6 +185,46 @@ func (file File) Joinf(format string, args ...interface{}) File {
 	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
 }
 
+// IsReadable returns if the file exists and is readable.
+func (file File) IsReadable() bool {
+	if file == "" {
+		return false
+	}
+	fileSystem, filePath := file.ParseRawURI()
+	if readFS, _ := fileSystem.ReadableWritable(); !readFS {
+		return false
+	}
+	info, err := fileSystem.Stat(filePath)
+	if err != nil {
+		return false
+	}
+	return (info.Mode().IsDir() || info.Mode().IsRegular()) && (info.Mode()&0400 != 0)
+}
+
+// IsWriteable returns if the file exists and is writeable
+// or in case it doesn't exist,
+// if the parent directory exists and is writeable.
+func (file File) IsWriteable() bool {
+	if file == "" {
+		return false
+	}
+	fileSystem, pathFile := file.ParseRawURI()
+	if _, writeFS := fileSystem.ReadableWritable(); !writeFS {
+		return false
+	}
+	info, err := fileSystem.Stat(pathFile)
+	if err == nil {
+		return info.Mode().IsRegular() && (info.Mode()&0200 != 0)
+	}
+	// File does not exist, check if parent directory is writeable
+	parentDir, _ := fileSystem.SplitDirAndName(pathFile)
+	info, err = fileSystem.Stat(parentDir)
+	if err != nil {
+		return false // Parent directory does not exist
+	}
+	return info.Mode().IsDir() && (info.Mode()&0200 != 0)
+}
+
 // Stat returns a standard library io/fs.FileInfo describing the file.
 func (file File) Stat() (iofs.FileInfo, error) {
 	if file == "" {

@@ -59,12 +59,8 @@ func (dbfs *fileSystem) wrapErrNotExist(filePath string, err error) error {
 	return err
 }
 
-func (dbfs *fileSystem) IsReadOnly() bool {
-	return false
-}
-
-func (dbfs *fileSystem) IsWriteOnly() bool {
-	return false
+func (dbfs *fileSystem) ReadableWritable() (readable, writable bool) {
+	return true, true
 }
 
 func (dbfs *fileSystem) RootDir() fs.File {
