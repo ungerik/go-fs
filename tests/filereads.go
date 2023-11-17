@@ -6,6 +6,8 @@ import (
 	"encoding/gob"
 	"errors"
 	"io"
+	"path"
+	"strings"
 	"testing"
 
 	"github.com/ungerik/go-fs"
@@ -144,4 +146,79 @@ func TestFileReads(t *testing.T, expectedContent []byte, file fs.File) {
 
 		require.Equal(t, expected.Bytes(), encoded)
 	}
+}
+
+func TestFileMetadata(t *testing.T, expected fs.FileInfo, file fs.File) {
+	t.Helper()
+
+	assert.Equal(t, expected.File, file)
+
+	// Info
+	info := file.Info()
+	require.Equal(t, expected, *info)
+
+	// Stat
+	stat, err := file.Stat()
+	if expected.Exists {
+		require.NoError(t, err)
+		require.Equal(t, expected.Name, stat.Name())
+		require.Equal(t, expected.Size, stat.Size())
+		require.Equal(t, expected.Modified, stat.ModTime())
+		require.Equal(t, expected.IsDir, stat.IsDir())
+		require.Equal(t, expected.IsRegular, stat.Mode().IsRegular())
+		require.Equal(t, expected.Permissions, fs.Permissions(stat.Mode().Perm()))
+	} else {
+		require.Error(t, err)
+		require.Nil(t, stat)
+	}
+
+	// FileSystem
+	fileSystem := file.FileSystem()
+	require.NotNil(t, fileSystem)
+	require.Equal(t, info.File.FileSystem(), fileSystem)
+
+	// String
+	require.NotEmpty(t, file.String())
+
+	// RawURI
+	require.Equal(t, string(file), file.RawURI())
+
+	// URL
+	require.Equal(t, info.File.URL(), file.URL())
+
+	// Path
+	require.Equal(t, info.File.Path(), file.Path())
+
+	// PathWithSlashes
+	require.Equal(t, info.File.PathWithSlashes(), file.PathWithSlashes())
+
+	// Name
+	require.Equal(t, info.Name, file.Name())
+
+	// DirAndName
+	dir, name := file.DirAndName()
+	require.Equal(t, info.Name, name)
+	require.Equal(t, info.File.Dir(), dir)
+
+	// VolumeName
+	require.Equal(t, info.File.VolumeName(), file.VolumeName())
+
+	// Ext
+	require.Equal(t, path.Ext(info.Name), file.Ext())
+
+	// ExtLower
+	require.Equal(t, strings.ToLower(path.Ext(info.Name)), file.ExtLower())
+
+	// TrimExt
+	require.Equal(t, strings.TrimSuffix(info.Name, path.Ext(info.Name)), file.TrimExt().Name())
+
+	// IsReadable
+	require.Equal(t, info.Exists, file.IsReadable())
+
+	// Other info
+	require.Equal(t, expected.Size, file.Size())
+	require.Equal(t, expected.Modified, file.Modified())
+	require.Equal(t, expected.IsDir, file.IsDir())
+	require.Equal(t, expected.IsRegular, file.IsRegular())
+	require.Equal(t, expected.Permissions, file.Permissions())
 }
