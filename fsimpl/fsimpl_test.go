@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_DirAndName(t *testing.T) {
@@ -130,4 +131,8 @@ func TestJoinCleanPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRandomString(t *testing.T) {
+	require.Len(t, RandomString(), 20, "RandomString length should be 20")
 }

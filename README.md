@@ -4,28 +4,26 @@ go-fs: A unified file system for Go
 [![Go Reference](https://pkg.go.dev/badge/github.com/ungerik/go-fs.svg)](https://pkg.go.dev/github.com/ungerik/go-fs)
 
 The package is built around a `File` type that is a string underneath
-and interprets its value as local file-system path or as URI.
+and interprets its value as a local file system path or as a URI.
+
+TODO
+----
+
+- [ ] MemFileSystem
+- [ ] ZipFileSystem
+
+Introduction
+------------
 
 `FileSystem` implementations can be registered with their
 URI qualifiers like `file://` or `http://`.
 
 The methods of `File` parse their string value for a qualifier
 and look up a `FileSystem` in the `Registry`.
-They only special rule is, that if no qualifier is present,
-then the string value is interpreted as local file path.
+The only special rule is, that if no qualifier is present,
+then the string value is interpreted as a local file path.
 
-The `LocalFileSystem` is registered by default
-in simplified for like this:
-
-```go
-var Local = &LocalFileSystem{
-	// Config default file permissions
-}
-
-var Registry = map[string]FileSystem{
-	Local.Prefix(): Local, // file://
-}
-```
+The `LocalFileSystem` is registered by default.
 
 Work with `Local` directly:
 
@@ -35,7 +33,7 @@ fs.Local.Separator() // Either `/` or `\`
 fs.Local.IsSymbolicLink("~/file") // Tilde expands to user home dir
 ```
 
-For example create a `FileSystem` from a multi-part
+For example, create a `FileSystem` from a multi-part
 HTTP form request that contains an uploaded file: 
 
 ```go
@@ -62,7 +60,7 @@ fs.File
 type File string
 ```
 
-As a string type it's easy to assign string literals and it can be const
+As a string-type it's easy to assign string literals and it can be const
 which would be impossible if `File` was an interface or struct:
 
 ```go
@@ -88,7 +86,7 @@ readFile("https://example.com/file-via-uri.txt")
 ```
 
 As a string type `File` naturally marshals/unmarshals as string path/URI
-without having to implementing marshalling interfaces.
+without having to implement marshaling interfaces.
 
 But it implements `fmt.Stringer` to add the name of the path/URI filesystem
 as debug information and `gob.GobEncoder`, `gob.GobDecoder` to
@@ -167,7 +165,7 @@ fs.FileReader
 
 For cases where a file should be passed only for reading,
 it's recommended to use the interface type `FileReader`.
-It has all the read related methods of `File`, so a `File` can be assigned
+It has all the read-related methods of `File`, so a `File` can be assigned
 or passed as `FileReader`:
 
 ```go
@@ -188,7 +186,7 @@ fs.MemFile
 `MemFile` combines the buffered in-memory data of a file
 with a filename to implement fs.FileReader.
 It exposes `FileName` and `FileData` as exported struct fields to emphasize
-its simple nature as just an wrapper of a name and some bytes.
+its simple nature as just a wrapper of a name and some bytes.
 
 ```go
 type MemFile struct {
@@ -215,7 +213,7 @@ memFile, err := fs.ReadAllMemFile(cxt, r, "in-mem-file.txt")
 ```
 
 Note that `MemFile` is not a `File` because it doesn't have a path or URI.
-The in-memory `FileName` is not interpreted as path and should not contain
+The in-memory `FileName` is not interpreted as a path and should not contain
 path separators.
 
 Listing directories
@@ -242,7 +240,7 @@ files, err := dir.ListDirMax(-1)
 files, err := dir.ListDirMaxContext(ctx, 100, "*.jpg", "*.jpeg")
 ```
 
-Watching the local file-system
+Watching the local file system
 ------------------------------
 
 TODO description

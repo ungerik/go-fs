@@ -3,12 +3,13 @@ package zipfs
 import (
 	"archive/zip"
 	"context"
+	"fmt"
 	"io"
 	iofs "io/fs"
 	"path"
 	"strings"
 
-	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -27,16 +28,13 @@ var (
 
 // ZipFileSystem
 type ZipFileSystem struct {
-	fs.ReadOnlyBase
-
-	prefix string
-
-	closer    io.Closer
+	prefix    string
+	closer    io.Closer // will be nil after Close()
 	zipReader *zip.Reader
 	zipWriter *zip.Writer
 }
 
-func NewReaderFileSystem(file fs.File) (zipfs *ZipFileSystem, err error) {
+func NewReaderFileSystem(file fs.FileReader) (zipfs *ZipFileSystem, err error) {
 	fileReader, err := file.OpenReadSeeker()
 	if err != nil {
 		return nil, err
@@ -69,22 +67,8 @@ func NewWriterFileSystem(file fs.File) (zipfs *ZipFileSystem, err error) {
 	return zipfs, err
 }
 
-func (f *ZipFileSystem) Close() error {
-	if f.closer == nil {
-		return nil // already closed
-	}
-	fs.Unregister(f)
-	err := f.closer.Close()
-	f.closer = nil
-	return err
-}
-
-func (f *ZipFileSystem) IsReadOnly() bool {
-	return f.zipReader != nil
-}
-
-func (f *ZipFileSystem) IsWriteOnly() bool {
-	return f.zipWriter != nil
+func (f *ZipFileSystem) ReadableWritable() (readable, writable bool) {
+	return f.zipReader != nil, f.zipWriter != nil
 }
 
 func (f *ZipFileSystem) RootDir() fs.File {
@@ -179,6 +163,9 @@ func (f *ZipFileSystem) AbsPath(filePath string) string {
 // }
 
 func (f *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir bool) {
+	if f.closer == nil {
+		return nil, false
+	}
 	filePath = strings.TrimPrefix(filePath, Separator)
 	for _, zipFile := range f.zipReader.File {
 		if zipFile.Name == filePath {
@@ -248,6 +235,9 @@ func (f *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callbac
 	if f.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
 	}
+	if f.closer == nil {
+		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+	}
 
 	panic("TODO")
 }
@@ -256,9 +246,11 @@ func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-
 	if f.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
+	}
+	if f.closer == nil {
+		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
 	}
 
 	rootNode := &node{
@@ -314,6 +306,9 @@ func (f *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if f.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
 	}
+	if f.closer == nil {
+		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+	}
 
 	zipFile, isDir := f.findFile(filePath)
 	if isDir {
@@ -331,8 +326,12 @@ func (f *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
 
 func (f *ZipFileSystem) Touch(filePath string, perm []fs.Permissions) error {
 	if f.zipWriter == nil {
-		return fs.ErrReadOnlyFileSystem
+		return fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
 	}
+	if f.closer == nil {
+		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+	}
+
 	filePath = strings.TrimPrefix(filePath, Separator)
 	_, err := f.zipWriter.Create(filePath)
 	return err
@@ -344,7 +343,10 @@ func (f *ZipFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 
 func (f *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
 	if f.zipWriter == nil {
-		return nil, fs.ErrReadOnlyFileSystem
+		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
+	}
+	if f.closer == nil {
+		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
 	}
 
 	filePath = strings.TrimPrefix(filePath, Separator)
@@ -359,16 +361,29 @@ func (f *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.W
 
 func (f *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
 	if f.zipWriter == nil {
-		return nil, fs.ErrReadOnlyFileSystem
+		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
+	}
+	if f.closer == nil {
+		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
 	}
 
 	panic("TODO buffered impl")
 
-	// return nil, fs.ErrReadOnlyFileSystem
+	// return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
 }
 
 func (f *ZipFileSystem) Remove(filePath string) error {
 	return fs.NewErrUnsupported(f, "Remove")
+}
+
+func (f *ZipFileSystem) Close() error {
+	if f.closer == nil {
+		return nil // already closed
+	}
+	fs.Unregister(f)
+	err := f.closer.Close()
+	f.closer = nil
+	return err
 }
 
 type nopCloser struct {

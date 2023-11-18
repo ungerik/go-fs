@@ -23,6 +23,9 @@ const (
 
 	// ErrInvalidFileSystem indicates an invalid file system
 	ErrInvalidFileSystem SentinelError = "invalid file system"
+
+	// ErrFileSystemClosed is returned after a file system Close method was called
+	ErrFileSystemClosed SentinelError = "file system is closed"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
