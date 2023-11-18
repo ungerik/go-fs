@@ -11,6 +11,12 @@ TODO
 
 - [ ] MemFileSystem
 - [ ] ZipFileSystem
+- [ ] Return ErrFileSystemClosed from all closable FS
+- [ ] S3
+- [ ] Test dropboxfs
+- [ ] Test fptfs
+- [ ] TestFileReads and TestFileMetaData for all FS
+- [ ] add TestFileWrites
 
 Introduction
 ------------
