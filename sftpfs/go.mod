@@ -5,10 +5,10 @@ go 1.21.0
 replace github.com/ungerik/go-fs => ../
 
 require (
-	github.com/pkg/sftp v1.13.6
+	github.com/pkg/sftp v1.13.7-0.20231120085349-5bdc2b0e679d
 	github.com/stretchr/testify v1.8.4
-	github.com/ungerik/go-fs v0.0.0-20230828210517-6ca798932ba7
-	golang.org/x/crypto v0.14.0
+	github.com/ungerik/go-fs v0.0.0-20231118104034-e3470c063fed
+	golang.org/x/crypto v0.15.0
 )
 
 require (

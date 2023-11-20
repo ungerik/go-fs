@@ -293,7 +293,7 @@ func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback f
 	}
 	defer release()
 
-	infos, err := client.ReadDir(dirPath)
+	infos, err := client.ReadDirContext(ctx, dirPath)
 	if err != nil {
 		return err
 	}
