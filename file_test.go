@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,10 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs/fsimpl"
 )
-
-func X(t *testing.T) {
-	t.Log("X")
-}
 
 func TestInvalidFile(t *testing.T) {
 	assert.False(t, InvalidFile.IsDir(), "InvalidFile does not exist")
@@ -227,4 +224,9 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFile_String(t *testing.T) {
+	path := filepath.Join("dir", "file.ext")
+	require.Equal(t, "local file system: "+path, File(path).String())
 }
