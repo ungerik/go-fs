@@ -94,6 +94,19 @@ func RegisteredFileSystems() []FileSystem {
 	return slices.Clone(registrySorted)
 }
 
+// IsRegistered returns true if the file system is registered.
+func IsRegistered(fs FileSystem) bool {
+	if fs == nil {
+		return false
+	}
+
+	registryMtx.Lock()
+	defer registryMtx.Unlock()
+
+	_, ok := registry[fs.Prefix()]
+	return ok
+}
+
 // GetFileSystem returns a FileSystem for the passed URI.
 // Returns the local file system if no other file system could be identified.
 // The URI can be passed as parts that will be joined according to the file system.
