@@ -147,7 +147,7 @@ func DialAndRegister(ctx context.Context, address string, loginCallback LoginCal
 // is already registered. If not, then a new connection is dialed and registered.
 // The returned free function has to be called to decrease the file system's
 // reference count and close it when the reference count reaches 0.
-func EnsureRegistered(ctx context.Context, address string, loginCallback LoginCallback, hostKeyCallback ssh.HostKeyCallback) (free func(), err error) {
+func EnsureRegistered(ctx context.Context, address string, loginCallback LoginCallback, hostKeyCallback ssh.HostKeyCallback) (free func() error, err error) {
 	u, username, password, prefix, err := prepareDial(address, loginCallback, hostKeyCallback)
 	if err != nil {
 		return nil, err
@@ -155,7 +155,7 @@ func EnsureRegistered(ctx context.Context, address string, loginCallback LoginCa
 	f := fs.GetFileSystemByPrefixOrNil(prefix)
 	if f != nil {
 		fs.Register(f) // Increase ref count
-		return func() { fs.Unregister(f) }, nil
+		return func() error { fs.Unregister(f); return nil }, nil
 	}
 
 	client, err := dial(ctx, u.Host, username, password, hostKeyCallback)
@@ -167,7 +167,7 @@ func EnsureRegistered(ctx context.Context, address string, loginCallback LoginCa
 		prefix: prefix,
 	}
 	fs.Register(f)
-	return func() { fs.Unregister(f) }, nil
+	return func() error { return f.Close() }, nil
 }
 
 func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback) (*sftp.Client, error) {
@@ -436,7 +436,11 @@ func (f *fileSystem) Close() error {
 	if f.client == nil {
 		return nil // already closed
 	}
-	fs.Unregister(f)
+	count := fs.Unregister(f)
+	if count > 1 {
+		return nil // still referenced
+	}
+	err := f.client.Close()
 	f.client = nil
-	return nil
+	return err
 }

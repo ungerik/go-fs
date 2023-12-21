@@ -414,7 +414,10 @@ func (f *fileSystem) Close() error {
 	if f.conn == nil {
 		return nil // already closed
 	}
-	fs.Unregister(f)
+	count := fs.Unregister(f)
+	if count > 1 {
+		return nil // still referenced
+	}
 	err := f.conn.Quit()
 	f.conn = nil
 	return err
