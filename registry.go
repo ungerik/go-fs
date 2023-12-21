@@ -94,7 +94,8 @@ func RegisteredFileSystems() []FileSystem {
 	return slices.Clone(registrySorted)
 }
 
-// IsRegistered returns true if the file system is registered.
+// IsRegistered returns true if the file system is registered
+// with its prefix.
 func IsRegistered(fs FileSystem) bool {
 	if fs == nil {
 		return false
@@ -105,6 +106,19 @@ func IsRegistered(fs FileSystem) bool {
 
 	_, ok := registry[fs.Prefix()]
 	return ok
+}
+
+// GetFileSystemByPrefixOrNil returns the file system registered
+// with the passed prefix, or nil if it can't be found.
+func GetFileSystemByPrefixOrNil(prefix string) FileSystem {
+	registryMtx.Lock()
+	defer registryMtx.Unlock()
+
+	f, ok := registry[prefix]
+	if !ok {
+		return nil
+	}
+	return f.fs
 }
 
 // GetFileSystem returns a FileSystem for the passed URI.
