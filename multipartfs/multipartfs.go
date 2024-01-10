@@ -302,7 +302,7 @@ func (f multipartFileInfo) Size() int64         { return f.header.Size }
 func (f multipartFileInfo) Mode() iofs.FileMode { return 0666 }
 func (f multipartFileInfo) ModTime() time.Time  { return time.Now() }
 func (f multipartFileInfo) IsDir() bool         { return false }
-func (f multipartFileInfo) Sys() interface{}    { return nil }
+func (f multipartFileInfo) Sys() any            { return nil }
 
 func EscapePath(filePath string) (string, error) {
 	// TODO: properly escape paths

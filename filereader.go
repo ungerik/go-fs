@@ -66,10 +66,10 @@ type FileReader interface {
 	OpenReadSeeker() (ReadSeekCloser, error)
 
 	// ReadJSON reads and unmarshalles the JSON content of the file to output.
-	ReadJSON(ctx context.Context, output interface{}) error
+	ReadJSON(ctx context.Context, output any) error
 
 	// ReadXML reads and unmarshalles the XML content of the file to output.
-	ReadXML(ctx context.Context, output interface{}) error
+	ReadXML(ctx context.Context, output any) error
 
 	// GobEncode reads and gob encodes the file name and content,
 	// implementing encoding/gob.GobEncoder.

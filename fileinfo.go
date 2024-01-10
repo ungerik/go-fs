@@ -80,7 +80,7 @@ func (f fileInfo) Size() int64        { return f.i.Size }
 func (f fileInfo) Mode() os.FileMode  { return f.i.Permissions.FileMode(f.i.IsDir) }
 func (f fileInfo) ModTime() time.Time { return f.i.Modified }
 func (f fileInfo) IsDir() bool        { return f.i.IsDir }
-func (f fileInfo) Sys() interface{}   { return nil }
+func (f fileInfo) Sys() any           { return nil }
 
 // type NameSizeProvider interface {
 // 	Name() string
@@ -100,4 +100,4 @@ func (f fileInfo) Sys() interface{}   { return nil }
 // func (nameSizeInfo) Mode() os.FileMode  { return 0666 }
 // func (nameSizeInfo) ModTime() time.Time { return time.Now() }
 // func (nameSizeInfo) IsDir() bool        { return false }
-// func (nameSizeInfo) Sys() interface{}   { return nil }
+// func (nameSizeInfo) Sys() any   { return nil }

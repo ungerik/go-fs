@@ -6,7 +6,7 @@ import (
 )
 
 // Filef is a shortcut for File(fmt.Sprintf(format, args...))
-func Filef(format string, args ...interface{}) File {
+func Filef(format string, args ...any) File {
 	return File(fmt.Sprintf(format, args...))
 }
 

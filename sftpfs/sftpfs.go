@@ -166,7 +166,7 @@ func EnsureRegistered(ctx context.Context, address string, loginCallback LoginCa
 		client: client,
 		prefix: prefix,
 	}
-	fs.Register(f)
+	fs.Register(f) // TODO somone else might have registered, so free should not close it
 	return func() error { return f.Close() }, nil
 }
 

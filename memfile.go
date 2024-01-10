@@ -243,7 +243,7 @@ func (f MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
-func (f MemFile) ReadJSON(ctx context.Context, output interface{}) error {
+func (f MemFile) ReadJSON(ctx context.Context, output any) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -251,7 +251,7 @@ func (f MemFile) ReadJSON(ctx context.Context, output interface{}) error {
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
-func (f MemFile) ReadXML(ctx context.Context, output interface{}) error {
+func (f MemFile) ReadXML(ctx context.Context, output any) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -340,4 +340,4 @@ type memFileInfo struct {
 func (i memFileInfo) Mode() iofs.FileMode { return 0666 }
 func (i memFileInfo) ModTime() time.Time  { return time.Now() }
 func (i memFileInfo) IsDir() bool         { return false }
-func (i memFileInfo) Sys() interface{}    { return nil }
+func (i memFileInfo) Sys() any            { return nil }

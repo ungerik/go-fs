@@ -180,7 +180,7 @@ func (file File) Join(pathParts ...string) File {
 
 // Joinf returns a new File with smf.Sprintf(format, args...) cleaned and joined to the current File's URI.
 // The resulting URI path will be cleaned, removing relative directory names like "..".
-func (file File) Joinf(format string, args ...interface{}) File {
+func (file File) Joinf(format string, args ...any) File {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
 }
@@ -1068,7 +1068,7 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 // is the name part after file.Dir().
 // Note: this does not move the file like in other rename implementations,
 // it only changes the name of the file within its directdory.
-func (file File) Renamef(newNameFormat string, args ...interface{}) (renamedFile File, err error) {
+func (file File) Renamef(newNameFormat string, args ...any) (renamedFile File, err error) {
 	return file.Rename(fmt.Sprintf(newNameFormat, args...))
 }
 
@@ -1159,7 +1159,7 @@ func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...strin
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
-func (file File) ReadJSON(ctx context.Context, output interface{}) error {
+func (file File) ReadJSON(ctx context.Context, output any) error {
 	data, err := file.ReadAllContext(ctx)
 	if err != nil {
 		return err
@@ -1169,7 +1169,7 @@ func (file File) ReadJSON(ctx context.Context, output interface{}) error {
 
 // WriteJSON mashalles input to JSON and writes it as the file.
 // Any indent arguments will be concanated and used as JSON line indentation.
-func (file File) WriteJSON(ctx context.Context, input interface{}, indent ...string) (err error) {
+func (file File) WriteJSON(ctx context.Context, input any, indent ...string) (err error) {
 	if file == "" {
 		return ErrEmptyPath
 	}
@@ -1186,7 +1186,7 @@ func (file File) WriteJSON(ctx context.Context, input interface{}, indent ...str
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
-func (file File) ReadXML(ctx context.Context, output interface{}) error {
+func (file File) ReadXML(ctx context.Context, output any) error {
 	data, err := file.ReadAllContext(ctx)
 	if err != nil {
 		return err
@@ -1196,7 +1196,7 @@ func (file File) ReadXML(ctx context.Context, output interface{}) error {
 
 // WriteXML mashalles input to XML and writes it as the file.
 // Any indent arguments will be concanated and used as XML line indentation.
-func (file File) WriteXML(ctx context.Context, input interface{}, indent ...string) (err error) {
+func (file File) WriteXML(ctx context.Context, input any, indent ...string) (err error) {
 	if file == "" {
 		return ErrEmptyPath
 	}
