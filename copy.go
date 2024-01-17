@@ -132,7 +132,7 @@ func copyRecursive(ctx context.Context, src, dest File, patterns []string, buf *
 	}
 
 	if dest.Exists() && !dest.IsDir() {
-		return fmt.Errorf("Can't copy a directory (%s) over a file (%s)", src.URL(), dest.URL())
+		return fmt.Errorf("can not copy a directory (%s) over a file (%s)", src.URL(), dest.URL())
 	}
 
 	// TODO better check
