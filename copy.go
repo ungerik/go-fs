@@ -10,7 +10,7 @@ import (
 const copyBufferSize = 1024 * 1024 * 4
 
 // CopyFile copies a single file between different file systems.
-// If dest has a path that does not exist, then the directories
+// If dest has a path that does not exist, then all directories
 // up to that path will be created.
 // If dest is an existing directory, then a file with the base name
 // of src will be created there.
@@ -20,7 +20,7 @@ func CopyFile(ctx context.Context, src FileReader, dest File, perm ...Permission
 }
 
 // CopyFileBuf copies a single file between different file systems.
-// If dest has a path that does not exist, then the directories
+// If dest has a path that does not exist, then all directories
 // up to that path will be created.
 // If dest is an existing directory, then a file with the base name
 // of src will be created there.
@@ -41,7 +41,7 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 	if dest.IsDir() {
 		dest = dest.Join(src.Name())
 	} else {
-		err := dest.Dir().MakeDir()
+		err := dest.Dir().MakeAllDirs()
 		if err != nil {
 			return fmt.Errorf("CopyFileBuf: can't make directory %q: %w", dest.Dir(), err)
 		}
