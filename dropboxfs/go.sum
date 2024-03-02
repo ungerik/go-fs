@@ -1,6 +1,7 @@
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nosvA=
+github.com/fsnotify/fsnotify v1.7.0/go.mod h1:40Bi/Hjc2AVfZrqy+aj+yEI+/bRxZnMJyTJwOpGvigM=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/segmentio/go-env v1.1.0 h1:AGJ7OnCx9M5NWpkYPGYELS6III/pFSnAs1GvKWStiEo=
@@ -11,6 +12,11 @@ github.com/tj/go-dropbox v0.0.0-20171107035848-42dd2be3662d h1:kc+jLVc4Ivy9I77bY
 github.com/tj/go-dropbox v0.0.0-20171107035848-42dd2be3662d/go.mod h1:+zP9ykDCb5wHDCWHCuLZ2YhDAiy42yV+HAmI2BIocBI=
 github.com/ungerik/go-dry v0.0.0-20230805093253-df9da4cd3437 h1:dQYWi16lkE/DZeZxJzyfQlgLzXJQ2cChrty8VZjmoIc=
 github.com/ungerik/go-dry v0.0.0-20230805093253-df9da4cd3437/go.mod h1:g61b/Pvp64yQ4oYVbcdA7qqzn1RcQIHZQuhWOVG1VHk=
-golang.org/x/sys v0.14.0 h1:Vz7Qs629MkJkGyHxUlRHizWJRG2j8fbQKjELVSNhy7Q=
+github.com/ungerik/go-dry v0.0.0-20231011182423-d9a07fd18c5f h1:E3yCdqCqIGLij7oti0hhLQGpABevY3ex+1UAPhDqMuc=
+github.com/ungerik/go-dry v0.0.0-20231011182423-d9a07fd18c5f/go.mod h1:g61b/Pvp64yQ4oYVbcdA7qqzn1RcQIHZQuhWOVG1VHk=
+golang.org/x/sys v0.15.0 h1:h48lPFYpsTvQJZF4EKyI4aLHaev3CxivZmv7yZig9pc=
+golang.org/x/sys v0.15.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+golang.org/x/sys v0.17.0 h1:25cE3gD+tdBA7lp7QfhuV+rJiE9YXTcS3VG1SqssI/Y=
+golang.org/x/sys v0.17.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
