@@ -14,17 +14,17 @@ import (
 )
 
 func TestInvalidFile(t *testing.T) {
-	assert.False(t, InvalidFile.IsDir(), "InvalidFile does not exist")
+	require.False(t, InvalidFile.IsDir(), "InvalidFile does not exist")
 
-	assert.Equal(t, InvalidFile, InvalidFile.Dir(), "dir of InvalidFile is still an InvalidFile")
+	require.Equal(t, InvalidFile, InvalidFile.Dir(), "dir of InvalidFile is still an InvalidFile")
 	dir, name := InvalidFile.DirAndName()
-	assert.Equal(t, InvalidFile, dir, "dir of InvalidFile is still an InvalidFile")
-	assert.Equal(t, "", name, "name of InvalidFile is empty string")
+	require.Equal(t, InvalidFile, dir, "dir of InvalidFile is still an InvalidFile")
+	require.Equal(t, "", name, "name of InvalidFile is empty string")
 
-	assert.Equal(t, InvalidFileSystem(""), InvalidFile.FileSystem(), "InvalidFile has an InvalidFileSystem")
+	require.Equal(t, InvalidFileSystem(""), InvalidFile.FileSystem(), "InvalidFile has an InvalidFileSystem")
 
 	_, err := InvalidFile.OpenReader()
-	assert.Equal(t, ErrEmptyPath, err, "can't open InvalidFile")
+	require.Equal(t, ErrEmptyPath, err, "can't open InvalidFile")
 }
 
 func TestFileMakeAllDirs(t *testing.T) {

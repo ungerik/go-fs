@@ -26,7 +26,7 @@ func (InvalidFileSystem) ReadableWritable() (readable, writable bool) {
 }
 
 func (InvalidFileSystem) RootDir() File {
-	return ""
+	return "" // InvalidFile
 }
 
 func (fs InvalidFileSystem) ID() (string, error) {
@@ -55,6 +55,9 @@ func (fs InvalidFileSystem) String() string {
 }
 
 func (fs InvalidFileSystem) JoinCleanFile(uri ...string) File {
+	if fs == "" && strings.Join(uri, "") == "" {
+		return "" // InvalidFile
+	}
 	return File(fs.Prefix() + fs.JoinCleanPath(uri...))
 }
 
@@ -95,8 +98,11 @@ func (InvalidFileSystem) MatchAnyPattern(name string, patterns []string) (bool, 
 	return false, ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, "/")
+func (fs InvalidFileSystem) SplitDirAndName(filePath string) (dir, name string) {
+	if fs == "" {
+		return "", ""
+	}
+	return fsimpl.SplitDirAndName(filePath, 0, fs.Separator())
 }
 
 func (InvalidFileSystem) VolumeName(filePath string) string {
