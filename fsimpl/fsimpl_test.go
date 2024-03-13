@@ -105,6 +105,26 @@ func TestJoinCleanPath(t *testing.T) {
 			want: `.`,
 		},
 		{
+			name: `. with sep`,
+			args: args{uriParts: []string{`.`}, trimPrefix: ``, separator: `/`},
+			want: `/`,
+		},
+		{
+			name: `. without sep`,
+			args: args{uriParts: []string{`.`}, trimPrefix: ``, separator: ``},
+			want: `.`,
+		},
+		{
+			name: `relative no sep`,
+			args: args{uriParts: []string{`relative`}, trimPrefix: ``, separator: ``},
+			want: `relative`,
+		},
+		{
+			name: `relative with sep`,
+			args: args{uriParts: []string{`relative`}, trimPrefix: ``, separator: `/`},
+			want: `/relative`,
+		},
+		{
 			name: `C:`,
 			args: args{uriParts: nil, trimPrefix: `C:`, separator: `\`},
 			want: `\`,
@@ -123,6 +143,11 @@ func TestJoinCleanPath(t *testing.T) {
 			name: `weird C:\ with / sep`,
 			args: args{uriParts: nil, trimPrefix: `C:\`, separator: `/`},
 			want: `/`,
+		},
+		{
+			name: `ftp://example.com/dir/subdir/`,
+			args: args{uriParts: []string{`ftp://example.com/dir/`, `./subdir/`}, trimPrefix: `ftp://`, separator: `/`},
+			want: `/example.com/dir/subdir`,
 		},
 	}
 	for _, tt := range tests {

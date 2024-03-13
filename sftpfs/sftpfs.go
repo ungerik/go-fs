@@ -26,7 +26,7 @@ const (
 func init() {
 	// Register with prefix sftp:// for URLs with
 	// sftp://username:password@host:port schema.
-	fs.Register(new(fileSystem))
+	fs.Register(&fileSystem{prefix: Prefix})
 }
 
 // LoginCallback is called by Dial to get the username and password for a SFTP connection.
@@ -248,9 +248,6 @@ func (f *fileSystem) ID() (string, error) {
 }
 
 func (f *fileSystem) Prefix() string {
-	if f.prefix == "" {
-		return Prefix
-	}
 	return f.prefix
 }
 
@@ -263,20 +260,26 @@ func (f *fileSystem) String() string {
 }
 
 func (*fileSystem) URL(cleanPath string) string {
+	// Prefix was trimmed from cleanPath in JoinCleanPath
 	return Prefix + cleanPath
-}
-
-func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	println("sftpfs.JoinCleanFile", f.prefix, f.JoinCleanPath(uriParts...))
-	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
 }
 
 func (*fileSystem) JoinCleanPath(uriParts ...string) string {
 	return fsimpl.JoinCleanPath(uriParts, Prefix, Separator)
 }
 
+func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
+	path := f.JoinCleanPath(uriParts...)
+	if strings.HasSuffix(f.prefix, Separator) && strings.HasPrefix(path, Separator) {
+		// For example: "sftp://" + "/example.com/absolute/path"
+		// should not result in "sftp:///example.com/absolute/path"
+		path = path[len(Separator):]
+	}
+	return fs.File(f.prefix + path)
+}
+
 func (f *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.Prefix(), Separator)
+	return fsimpl.SplitPath(filePath, f.prefix, Separator)
 }
 
 func (f *fileSystem) Separator() string { return Separator }
