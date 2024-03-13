@@ -9,35 +9,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_DirAndName(t *testing.T) {
+func TestSplitDirAndName(t *testing.T) {
 	refTable := map[string][2]string{
-		"/":  {"/", ""},
-		"./": {".", "."},
-		".":  {".", "."},
-		// "/.":            {"/", ""},
-		"hello":         {".", "hello"},
-		"./hello":       {".", "hello"},
-		"hello/":        {".", "hello"},
-		"./hello/":      {".", "hello"},
-		"/hello/world":  {"/hello", "world"},
-		"hello/world":   {"hello", "world"},
-		"/hello/world/": {"/hello", "world"},
-		"hello/world/":  {"hello", "world"},
+		"/":                             {"/", ""},
+		"./":                            {".", "."},
+		".":                             {".", "."},
+		"/.":                            {"/", "."},
+		"hello":                         {".", "hello"},
+		"./hello":                       {".", "hello"},
+		"hello/":                        {".", "hello"},
+		"./hello/":                      {".", "hello"},
+		"/hello/world":                  {"/hello", "world"},
+		"hello/world":                   {"hello", "world"},
+		"/hello/world/":                 {"/hello", "world"},
+		"hello/world/":                  {"hello", "world"},
+		"http://example.com/dir":        {"http://example.com", "dir"},
+		"sftp://example.com/dir/subdir": {"sftp://example.com/dir", "subdir"},
 	}
 
 	for filePath, dirAndName := range refTable {
 		dir, name := SplitDirAndName(filePath, 0, "/")
-		assert.Equal(t, dir, dirAndName[0], "filePath(%#v): %#v, %#v", filePath, dir, name)
-		assert.Equal(t, name, dirAndName[1], "filePath(%#v): %#v, %#v", filePath, dir, name)
+		assert.Equalf(t, dirAndName[0], dir, "SplitDirAndName(%#v) = %#v, %#v", filePath, dir, name)
+		assert.Equalf(t, dirAndName[1], name, "SplitDirAndName(%#v) = %#v, %#v", filePath, dir, name)
 	}
 }
 
-func Test_RandomString(t *testing.T) {
-	str := RandomString()
-	assert.Equal(t, 20, len(str))
+func TestRandomString(t *testing.T) {
+	require.Len(t, RandomString(), 20, "RandomString length should be 20")
 }
 
-func Test_ReadonlyFileBuffer(t *testing.T) {
+func TestReadonlyFileBuffer(t *testing.T) {
 	out := make([]byte, 0)
 	b := NewReadonlyFileBuffer(nil, nil)
 	n, err := b.Read(out)
@@ -131,8 +132,4 @@ func TestJoinCleanPath(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestRandomString(t *testing.T) {
-	require.Len(t, RandomString(), 20, "RandomString length should be 20")
 }

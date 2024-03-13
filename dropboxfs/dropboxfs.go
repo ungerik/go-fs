@@ -119,7 +119,7 @@ func (*fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error)
 	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
-func (dbfs *fileSystem) SplitDirAndName(filePath string) (dir, name string) {
+func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 

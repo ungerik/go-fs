@@ -166,7 +166,7 @@ func (f *fileSystem) AbsPath(filePath string) string {
 	return Prefix + strings.TrimPrefix(filePath, Separator)
 }
 
-func (f *fileSystem) SplitDirAndName(filePath string) (dir, name string) {
+func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 

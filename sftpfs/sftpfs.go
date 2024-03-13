@@ -267,6 +267,7 @@ func (*fileSystem) URL(cleanPath string) string {
 }
 
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
+	println("sftpfs.JoinCleanFile", f.prefix, f.JoinCleanPath(uriParts...))
 	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
 }
 
@@ -291,7 +292,7 @@ func (f *fileSystem) AbsPath(filePath string) string {
 	return Prefix + strings.TrimPrefix(filePath, Separator)
 }
 
-func (f *fileSystem) SplitDirAndName(filePath string) (dir, name string) {
+func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	return fsimpl.SplitDirAndName(filePath, 0, Separator)
 }
 

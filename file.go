@@ -126,7 +126,7 @@ func (file File) Dir() File {
 func (file File) DirAndName() (dir File, name string) {
 	fileSystem, path := file.ParseRawURI()
 	dirPath, name := fileSystem.SplitDirAndName(path)
-	return File(dirPath), name
+	return fileSystem.JoinCleanFile(dirPath), name
 }
 
 // VolumeName returns the name of the volume at the beginning of the file path,

@@ -167,7 +167,7 @@ func (local *LocalFileSystem) MatchAnyPattern(name string, patterns []string) (b
 	return false, nil
 }
 
-func (local *LocalFileSystem) SplitDirAndName(filePath string) (dir, name string) {
+func (*LocalFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	filePath = expandTilde(filePath)
 	return fsimpl.SplitDirAndName(filePath, len(filepath.VolumeName(filePath)), Separator)
 }

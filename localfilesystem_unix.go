@@ -15,7 +15,7 @@ const localRoot = `/`
 
 var extraDirPermissions Permissions = AllExecute
 
-func hasLocalFileAttributeHidden(path string) (bool, error) {
+func hasLocalFileAttributeHidden(string) (bool, error) {
 	return false, nil
 }
 

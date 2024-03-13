@@ -205,7 +205,7 @@ func (fs *MemFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	return fs.makeDir(dirPath, perm)
 }
 
-func (fs *MemFileSystem) makeDir(dirPath string, perm []Permissions) error {
+func (fs *MemFileSystem) makeDir(dirPath string, _ []Permissions) error {
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
@@ -235,7 +235,7 @@ func (fs *MemFileSystem) MakeAllDirs(dirPath string, perm []Permissions) error {
 	return fs.makeAllDirs(dirPath, perm)
 }
 
-func (fs *MemFileSystem) makeAllDirs(dirPath string, perm []Permissions) error {
+func (fs *MemFileSystem) makeAllDirs(dirPath string, _ []Permissions) error {
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
@@ -341,7 +341,7 @@ func (*MemFileSystem) MatchAnyPattern(name string, patterns []string) (bool, err
 }
 
 func (fs *MemFileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fs.SplitDirAndName(filePath)
+	return fsimpl.SplitDirAndName(filePath, 0, "/")
 }
 
 func (fs *MemFileSystem) VolumeName(filePath string) string {
