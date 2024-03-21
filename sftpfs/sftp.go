@@ -29,27 +29,27 @@ func init() {
 	fs.Register(&fileSystem{prefix: Prefix})
 }
 
-// LoginCallback is called by Dial to get the username and password for a SFTP connection.
-type LoginCallback func(*url.URL) (username, password string, err error)
+// CredentialsCallback is called by Dial to get the username and password for a SFTP connection.
+type CredentialsCallback func(*url.URL) (username, password string, err error)
 
-// Password returns a LoginCallback that always returns
+// Password returns a CredentialsCallback that always returns
 // the provided password together with the username
 // from the URL that is passed to the callback.
-func Password(password string) LoginCallback {
+func Password(password string) CredentialsCallback {
 	return func(u *url.URL) (string, string, error) {
 		return u.User.String(), password, nil
 	}
 }
 
-// UsernameAndPassword returns a LoginCallback that always returns
+// UsernameAndPassword returns a CredentialsCallback that always returns
 // the provided username and password.
-func UsernameAndPassword(username, password string) LoginCallback {
+func UsernameAndPassword(username, password string) CredentialsCallback {
 	return func(u *url.URL) (string, string, error) {
 		return username, password, nil
 	}
 }
 
-// UsernameAndPasswordFromURL is a LoginCallback that returns
+// UsernameAndPasswordFromURL is a CredentialsCallback that returns
 // the username and password encoded in the passed URL.
 func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
 	password, ok := u.User.Password()
@@ -75,8 +75,8 @@ type fileSystem struct {
 // The passed address can be a URL with scheme `sftp:` or just a host name.
 // If no port is provided in the address, then port 22 will be used.
 // The address can contain a username or a username and password.
-func Dial(ctx context.Context, address string, loginCallback LoginCallback, hostKeyCallback ssh.HostKeyCallback) (fs.FileSystem, error) {
-	u, username, password, prefix, err := prepareDial(address, loginCallback, hostKeyCallback)
+func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (fs.FileSystem, error) {
+	u, username, password, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
 	if err != nil {
 		return nil, err
 	}
@@ -90,31 +90,31 @@ func Dial(ctx context.Context, address string, loginCallback LoginCallback, host
 	}, nil
 }
 
-func prepareDial(address string, loginCallback LoginCallback, hostKeyCallback ssh.HostKeyCallback) (u *url.URL, username, password, prefix string, err error) {
+func prepareDial(address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (u *url.URL, username, password, prefix string, err error) {
 	if !strings.HasPrefix(address, "sftp://") {
 		if strings.Contains(address, "://") {
-			return nil, "", "", "", fmt.Errorf("missing SFTP password for: %s", address)
+			return nil, "", "", "", fmt.Errorf("not an SFTP URL scheme: %s", address)
 		}
 		address = "sftp://" + address
 	}
-	if loginCallback == nil {
-		return nil, "", "", "", fmt.Errorf("missing SFTP password for: %s", address)
+	if credentialsCallback == nil {
+		return nil, "", "", "", errors.New("nil credentialsCall")
 	}
 	if hostKeyCallback == nil {
-		return nil, "", "", "", fmt.Errorf("missing SFTP password for: %s", address)
+		return nil, "", "", "", errors.New("nil hostKeyCallback")
 	}
 	u, err = url.Parse(address)
 	if err != nil {
-		return nil, "", "", "", fmt.Errorf("missing SFTP password for: %s", address)
+		return nil, "", "", "", err
 	}
 	if u.Scheme != "sftp" {
-		return nil, "", "", "", fmt.Errorf("missing SFTP password for: %s", address)
+		return nil, "", "", "", fmt.Errorf("not an SFTP URL scheme: %s", address)
 	}
 	if u.Port() == "" {
 		u.Host += ":22"
 	}
 
-	username, password, err = loginCallback(u)
+	username, password, err = credentialsCallback(u)
 	if err != nil {
 		return nil, "", "", "", err
 	}
@@ -134,8 +134,8 @@ func prepareDial(address string, loginCallback LoginCallback, hostKeyCallback ss
 // The passed address can be a URL with scheme `sftp:` or just a host name.
 // If no port is provided in the address, then port 22 will be used.
 // The address can contain a username or a username and password.
-func DialAndRegister(ctx context.Context, address string, loginCallback LoginCallback, hostKeyCallback ssh.HostKeyCallback) (fs.FileSystem, error) {
-	fileSystem, err := Dial(ctx, address, loginCallback, hostKeyCallback)
+func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (fs.FileSystem, error) {
+	fileSystem, err := Dial(ctx, address, credentialsCallback, hostKeyCallback)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +147,8 @@ func DialAndRegister(ctx context.Context, address string, loginCallback LoginCal
 // is already registered. If not, then a new connection is dialed and registered.
 // The returned free function has to be called to decrease the file system's
 // reference count and close it when the reference count reaches 0.
-func EnsureRegistered(ctx context.Context, address string, loginCallback LoginCallback, hostKeyCallback ssh.HostKeyCallback) (free func() error, err error) {
-	u, username, password, prefix, err := prepareDial(address, loginCallback, hostKeyCallback)
+func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (free func() error, err error) {
+	u, username, password, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +251,8 @@ func (f *fileSystem) Prefix() string {
 	return f.prefix
 }
 
+func (f *fileSystem) Separator() string { return Separator }
+
 func (f *fileSystem) Name() string {
 	return "SFTP"
 }
@@ -259,7 +261,7 @@ func (f *fileSystem) String() string {
 	return f.prefix + " file system"
 }
 
-func (*fileSystem) URL(cleanPath string) string {
+func (f *fileSystem) URL(cleanPath string) string {
 	// Prefix was trimmed from cleanPath in JoinCleanPath
 	return Prefix + cleanPath
 }
@@ -272,7 +274,7 @@ func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	path := f.JoinCleanPath(uriParts...)
 	if strings.HasSuffix(f.prefix, Separator) && strings.HasPrefix(path, Separator) {
 		// For example: "sftp://" + "/example.com/absolute/path"
-		// should not result in "sftp:///example.com/absolute/path"
+		// should not result in 3 slashes: "sftp:///example.com/absolute/path"
 		path = path[len(Separator):]
 	}
 	return fs.File(f.prefix + path)
@@ -281,8 +283,6 @@ func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 func (f *fileSystem) SplitPath(filePath string) []string {
 	return fsimpl.SplitPath(filePath, f.prefix, Separator)
 }
-
-func (f *fileSystem) Separator() string { return Separator }
 
 func (f *fileSystem) IsAbsPath(filePath string) bool {
 	return strings.HasPrefix(filePath, Prefix)

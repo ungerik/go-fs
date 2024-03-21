@@ -28,8 +28,38 @@ const (
 func init() {
 	// Register with prefix ftp:// and ftps:// for URLs with
 	// ftp(s)://username:password@host:port schema.
-	fs.Register(&fileSystem{secure: false})
-	fs.Register(&fileSystem{secure: true})
+	fs.Register(&fileSystem{secure: false, prefix: Prefix})
+	fs.Register(&fileSystem{secure: true, prefix: PrefixTLS})
+}
+
+// CredentialsCallback is called by Dial to get the username and password for a SFTP connection.
+type CredentialsCallback func(*url.URL) (username, password string, err error)
+
+// Password returns a CredentialsCallback that always returns
+// the provided password together with the username
+// from the URL that is passed to the callback.
+func Password(password string) CredentialsCallback {
+	return func(u *url.URL) (string, string, error) {
+		return u.User.String(), password, nil
+	}
+}
+
+// UsernameAndPassword returns a CredentialsCallback that always returns
+// the provided username and password.
+func UsernameAndPassword(username, password string) CredentialsCallback {
+	return func(u *url.URL) (string, string, error) {
+		return username, password, nil
+	}
+}
+
+// UsernameAndPasswordFromURL is a CredentialsCallback that returns
+// the username and password encoded in the passed URL.
+func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
+	password, ok := u.User.Password()
+	if !ok {
+		return "", "", fmt.Errorf("no password in URL: %s", u.String())
+	}
+	return u.User.Username(), password, nil
 }
 
 type fileSystem struct {
@@ -38,41 +68,95 @@ type fileSystem struct {
 	secure bool
 }
 
-// DialAndRegister dials a new FTP connection and registers it as file system.
+// Dial a new FTP or FTPS connection and registers it as file system.
 //
-// If hostKeyCallbackOrNil is not nil then it will be called
-// during the cryptographic handshake to validate the server's host key,
-// else any host key will be accepted.
-func DialAndRegister(ctx context.Context, addr, user, password string) (fs.FileSystem, error) {
-	addr = strings.TrimSuffix(addr, "/")
-
-	var err error
-	f := &fileSystem{
-		prefix: addr,
-		secure: strings.HasPrefix(addr, "ftps://"),
+// The passed address can be a URL with scheme `ftp:` or `ftps:`.
+func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback) (fs.FileSystem, error) {
+	u, username, password, prefix, secure, err := prepareDial(address, credentialsCallback)
+	if err != nil {
+		return nil, err
 	}
-	if f.secure {
-		f.conn, err = ftp.Dial(
-			strings.TrimPrefix(addr, "ftps://"),
+	conn, err := dial(ctx, u.Host, username, password, secure)
+	if err != nil {
+		return nil, err
+	}
+	return &fileSystem{
+		conn:   conn,
+		prefix: prefix,
+		secure: secure,
+	}, nil
+}
+
+func dial(ctx context.Context, address, username, password string, secure bool) (conn *ftp.ServerConn, err error) {
+	if secure {
+		conn, err = ftp.Dial(
+			address,
 			ftp.DialWithContext(ctx),
-			ftp.DialWithTLS(&tls.Config{InsecureSkipVerify: true}),
+			ftp.DialWithTLS(&tls.Config{InsecureSkipVerify: true}), // DialWithExplicitTLS also possible
 		)
 	} else {
-		f.conn, err = ftp.Dial(
-			strings.TrimPrefix(addr, "ftp://"),
+		conn, err = ftp.Dial(
+			address,
 			ftp.DialWithContext(ctx),
 		)
 	}
 	if err != nil {
 		return nil, err
 	}
-	err = f.conn.Login(user, password)
+	err = conn.Login(username, password)
 	if err != nil {
-		return nil, errors.Join(err, f.conn.Quit())
+		return nil, errors.Join(err, conn.Quit())
+	}
+	return conn, nil
+}
+
+// DialAndRegister dials a new FTP or FTPS connection and register it as file system.
+//
+// The passed address can be a URL with scheme `ftp:` or `ftps:`.
+func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback) (fs.FileSystem, error) {
+	fileSystem, err := Dial(ctx, address, credentialsCallback)
+	if err != nil {
+		return nil, err
+	}
+	fs.Register(fileSystem)
+	return fileSystem, nil
+}
+
+func prepareDial(address string, credentialsCallback CredentialsCallback) (u *url.URL, username, password, prefix string, secure bool, err error) {
+	if !strings.HasPrefix(address, "ftp://") && !strings.HasPrefix(address, "ftps://") {
+		if strings.Contains(address, "://") {
+			return nil, "", "", "", false, fmt.Errorf("not an FTP or FTPS URL scheme: %s", address)
+		}
+		address = "ftp://" + address
+	}
+	if credentialsCallback == nil {
+		return nil, "", "", "", false, errors.New("nil credentialsCall")
+	}
+	u, err = url.Parse(address)
+	if err != nil {
+		return nil, "", "", "", false, err
+	}
+	if u.Scheme != "ftp" && u.Scheme != "ftps" {
+		return nil, "", "", "", false, fmt.Errorf("not an FTP or FTPS URL scheme: %s", address)
+	}
+	if u.Port() == "" {
+		u.Host += ":21"
 	}
 
-	fs.Register(f)
-	return f, nil
+	username, password, err = credentialsCallback(u)
+	if err != nil {
+		return nil, "", "", "", false, err
+	}
+	if username == "" {
+		return nil, "", "", "", false, fmt.Errorf("missing FTP username for: %s", address)
+	}
+	if password == "" {
+		return nil, "", "", "", false, fmt.Errorf("missing FTP password for: %s", address)
+	}
+	prefix = fmt.Sprintf("%s://%s@%s", u.Scheme, url.User(username), u.Host)
+	secure = u.Scheme == "ftps"
+
+	return u, username, password, prefix, secure, nil
 }
 
 func nop() error { return nil }
@@ -111,11 +195,10 @@ func (f *fileSystem) ID() (string, error) {
 }
 
 func (f *fileSystem) Prefix() string {
-	if f.prefix == "" {
-		return Prefix
-	}
 	return f.prefix
 }
+
+func (f *fileSystem) Separator() string { return Separator }
 
 func (f *fileSystem) Name() string {
 	if f.secure {
@@ -135,13 +218,6 @@ func (f *fileSystem) URL(cleanPath string) string {
 	return Prefix + cleanPath
 }
 
-func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	if f.secure {
-		return fs.File(PrefixTLS + f.JoinCleanPath(uriParts...))
-	}
-	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
-}
-
 func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
 	if f.secure {
 		return fsimpl.JoinCleanPath(uriParts, PrefixTLS, Separator)
@@ -149,13 +225,24 @@ func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
 	return fsimpl.JoinCleanPath(uriParts, Prefix, Separator)
 }
 
-func (f *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.Prefix(), Separator)
+func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
+	path := f.JoinCleanPath(uriParts...)
+	if strings.HasSuffix(f.prefix, Separator) && strings.HasPrefix(path, Separator) {
+		// For example: "sftp://" + "/example.com/absolute/path"
+		// should not result in 3 slashes: "sftp:///example.com/absolute/path"
+		path = path[len(Separator):]
+	}
+	return fs.File(f.prefix + path)
 }
 
-func (f *fileSystem) Separator() string { return Separator }
+func (f *fileSystem) SplitPath(filePath string) []string {
+	return fsimpl.SplitPath(filePath, f.prefix, Separator)
+}
 
 func (f *fileSystem) IsAbsPath(filePath string) bool {
+	if f.secure {
+		return strings.HasPrefix(filePath, PrefixTLS)
+	}
 	return strings.HasPrefix(filePath, Prefix)
 }
 
