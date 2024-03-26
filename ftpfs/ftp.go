@@ -122,6 +122,35 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 	return fileSystem, nil
 }
 
+// EnsureRegistered first checks if a FTP(S) file system with the passed address
+// is already registered. If not, then a new connection is dialed and registered.
+// The returned free function has to be called to decrease the file system's
+// reference count and close it when the reference count reaches 0.
+// The returned free function will never be nil.
+func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback) (free func() error, err error) {
+	u, username, password, prefix, secure, err := prepareDial(address, credentialsCallback)
+	if err != nil {
+		return nop, err
+	}
+	f := fs.GetFileSystemByPrefixOrNil(prefix)
+	if f != nil {
+		fs.Register(f) // Increase ref count
+		return func() error { fs.Unregister(f); return nil }, nil
+	}
+
+	conn, err := dial(ctx, u.Host, username, password, secure)
+	if err != nil {
+		return nop, err
+	}
+	f = &fileSystem{
+		conn:   conn,
+		prefix: prefix,
+		secure: secure,
+	}
+	fs.Register(f) // TODO somone else might have registered, so free should not close it
+	return func() error { return f.Close() }, nil
+}
+
 func prepareDial(address string, credentialsCallback CredentialsCallback) (u *url.URL, username, password, prefix string, secure bool, err error) {
 	if !strings.HasPrefix(address, "ftp://") && !strings.HasPrefix(address, "ftps://") {
 		if strings.Contains(address, "://") {

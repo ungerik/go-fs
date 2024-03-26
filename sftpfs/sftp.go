@@ -147,10 +147,11 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 // is already registered. If not, then a new connection is dialed and registered.
 // The returned free function has to be called to decrease the file system's
 // reference count and close it when the reference count reaches 0.
+// The returned free function will never be nil.
 func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (free func() error, err error) {
 	u, username, password, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
 	if err != nil {
-		return nil, err
+		return nop, err
 	}
 	f := fs.GetFileSystemByPrefixOrNil(prefix)
 	if f != nil {
@@ -160,7 +161,7 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 
 	client, err := dial(ctx, u.Host, username, password, hostKeyCallback)
 	if err != nil {
-		return nil, err
+		return nop, err
 	}
 	f = &fileSystem{
 		client: client,
