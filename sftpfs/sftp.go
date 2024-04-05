@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/pkg/sftp"
@@ -110,9 +111,8 @@ func prepareDial(address string, credentialsCallback CredentialsCallback, hostKe
 	if u.Scheme != "sftp" {
 		return nil, "", "", "", fmt.Errorf("not an SFTP URL scheme: %s", address)
 	}
-	if u.Port() == "" {
-		u.Host += ":22"
-	}
+	// Trim default port number
+	u.Host = strings.TrimSuffix(u.Host, ":22")
 
 	username, password, err = credentialsCallback(u)
 	if err != nil {
@@ -180,6 +180,9 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 		HostKeyCallback: hostKeyCallback,
 	}
 	d := net.Dialer{}
+	if !strings.ContainsRune(host, ':') {
+		host += ":22"
+	}
 	conn, err := d.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return nil, err
@@ -263,8 +266,16 @@ func (f *fileSystem) String() string {
 }
 
 func (f *fileSystem) URL(cleanPath string) string {
-	// Prefix was trimmed from cleanPath in JoinCleanPath
-	return Prefix + cleanPath
+	return f.prefix + cleanPath
+}
+
+func (f *fileSystem) CleanPathFromURI(uri string) string {
+	return path.Clean(
+		strings.TrimPrefix(
+			strings.TrimPrefix(uri, f.prefix),
+			":22", // In case f.prefix has no port number and url has the default port number
+		),
+	)
 }
 
 func (*fileSystem) JoinCleanPath(uriParts ...string) string {

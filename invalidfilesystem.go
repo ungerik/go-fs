@@ -73,6 +73,10 @@ func (fs InvalidFileSystem) URL(cleanPath string) string {
 	return fs.Prefix() + cleanPath
 }
 
+func (fs InvalidFileSystem) CleanPathFromURI(uri string) string {
+	return path.Clean(strings.TrimPrefix(uri, fs.Prefix()))
+}
+
 func (fs InvalidFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], fs.Prefix())

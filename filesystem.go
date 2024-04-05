@@ -30,8 +30,15 @@ type FileSystem interface {
 	// String returns a descriptive string for the FileSystem implementation
 	String() string
 
-	// URL returns a full URL wich is Prefix() + cleanPath
+	// URL returns a full URL wich is Prefix() + cleanPath.
+	// Note that the passed cleanPath will not be cleaned
+	// by the FileSystem implementation.
 	URL(cleanPath string) string
+
+	// CleanPathFromURI returns the clean path part of an URI
+	// specific to the implementation of the FileSystem.
+	// It's the inverse of the URL method.
+	CleanPathFromURI(uri string) string
 
 	// JoinCleanFile joins the file system prefix with uriParts
 	// into a File with clean path and prefix

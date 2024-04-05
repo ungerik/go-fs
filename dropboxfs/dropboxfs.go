@@ -103,6 +103,10 @@ func (dbfs *fileSystem) URL(cleanPath string) string {
 	return dbfs.prefix + cleanPath
 }
 
+func (dbfs *fileSystem) CleanPathFromURI(uri string) string {
+	return strings.TrimPrefix(uri, dbfs.prefix)
+}
+
 func (dbfs *fileSystem) JoinCleanPath(uriParts ...string) string {
 	return fsimpl.JoinCleanPath(uriParts, dbfs.prefix, Separator)
 }

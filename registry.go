@@ -1,9 +1,9 @@
 package fs
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 )
@@ -55,7 +55,7 @@ func Register(fs FileSystem) int {
 
 	registry[prefix] = &fsCount{fs, 1}
 	registrySorted = append(registrySorted, fs)
-	sort.Slice(registrySorted, func(i, j int) bool { return registrySorted[i].Prefix() < registrySorted[j].Prefix() })
+	slices.SortFunc(registrySorted, func(a, b FileSystem) int { return cmp.Compare(a.Prefix(), b.Prefix()) })
 	return 1
 }
 
@@ -145,9 +145,8 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	// by iterating in reverse order of sorted registry
 	for i := len(registrySorted) - 1; i >= 0; i-- {
 		fs = registrySorted[i]
-		path, found := strings.CutPrefix(uri, fs.Prefix())
-		if found {
-			return fs, path
+		if strings.HasPrefix(uri, fs.Prefix()) {
+			return fs, fs.CleanPathFromURI(uri)
 		}
 	}
 

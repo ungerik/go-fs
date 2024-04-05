@@ -4,6 +4,7 @@ import (
 	"context"
 	iofs "io/fs"
 	"path/filepath"
+	"strings"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -73,7 +74,11 @@ func (subfs *todoSubFileSystem) URN(filePath string) string {
 }
 
 func (subfs *todoSubFileSystem) URL(filePath string) string {
-	return LocalPrefix + subfs.URN(filePath)
+	return subfs.prefix + subfs.URN(filePath)
+}
+
+func (subfs *todoSubFileSystem) CleanPathFromURI(uri string) string {
+	return strings.TrimPrefix(uri, subfs.prefix)
 }
 
 func (subfs *todoSubFileSystem) JoinCleanPath(uri ...string) string {

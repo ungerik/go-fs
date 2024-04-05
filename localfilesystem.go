@@ -114,6 +114,16 @@ func (local *LocalFileSystem) URL(cleanPath string) string {
 	return LocalPrefix + filepath.ToSlash(local.AbsPath(cleanPath))
 }
 
+func (local *LocalFileSystem) CleanPathFromURI(uri string) string {
+	cleanPath := strings.TrimPrefix(uri, LocalPrefix)
+	if cleanPath != "" && !strings.HasPrefix(cleanPath, Separator) {
+		cleanPath = Separator + cleanPath
+	}
+	cleanPath = filepath.Clean(cleanPath)
+	cleanPath = expandTilde(cleanPath)
+	return cleanPath
+}
+
 func (local *LocalFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], LocalPrefix)

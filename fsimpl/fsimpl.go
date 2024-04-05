@@ -109,7 +109,18 @@ func JoinCleanPath(uriParts []string, trimPrefix, separator string) string {
 	if !strings.HasPrefix(cleanPath, separator) {
 		cleanPath = separator + cleanPath
 	}
-	return path.Clean(cleanPath)
+	return path.Clean(cleanPath) // TODO works only when separator is "/"
+}
+
+func CleanPath(p, separator string) string {
+	unescPath, err := url.PathUnescape(p)
+	if err == nil {
+		p = unescPath
+	}
+	if !strings.HasPrefix(p, separator) {
+		p = separator + p
+	}
+	return path.Clean(p) // TODO works only when separator is "/"
 }
 
 func SplitPath(filePath, prefix, separator string) []string {

@@ -83,12 +83,12 @@ func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
 		b = b[:len(b)+n]
 		if err != nil {
 			if err == io.EOF {
-				err = nil
+				return b, nil
 			}
 			return b, err
 		}
 	}
-	return nil, ctx.Err()
+	return b, ctx.Err()
 }
 
 // WriteAllContext writes all data wo the to w

@@ -65,6 +65,10 @@ func (f *fileSystem) URL(cleanPath string) string {
 	return f.prefix + cleanPath
 }
 
+func (f *fileSystem) CleanPathFromURI(uri string) string {
+	return path.Clean(strings.TrimPrefix(uri, f.prefix))
+}
+
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
 }

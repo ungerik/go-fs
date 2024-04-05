@@ -105,6 +105,10 @@ func (f *ZipFileSystem) URL(cleanPath string) string {
 	return f.prefix + cleanPath
 }
 
+func (f *ZipFileSystem) CleanPathFromURI(uri string) string {
+	return path.Clean(strings.TrimPrefix(uri, f.prefix))
+}
+
 func (f *ZipFileSystem) JoinCleanPath(uriParts ...string) string {
 	return fsimpl.JoinCleanPath(uriParts, f.prefix, Separator)
 }

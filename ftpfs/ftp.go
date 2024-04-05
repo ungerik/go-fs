@@ -10,6 +10,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -87,16 +88,22 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 	}, nil
 }
 
-func dial(ctx context.Context, address, username, password string, secure bool) (conn *ftp.ServerConn, err error) {
+func dial(ctx context.Context, host, username, password string, secure bool) (conn *ftp.ServerConn, err error) {
 	if secure {
+		if !strings.ContainsRune(host, ':') {
+			host += ":990"
+		}
 		conn, err = ftp.Dial(
-			address,
+			host,
 			ftp.DialWithContext(ctx),
 			ftp.DialWithTLS(&tls.Config{InsecureSkipVerify: true}), // DialWithExplicitTLS also possible
 		)
 	} else {
+		if !strings.ContainsRune(host, ':') {
+			host += ":21"
+		}
 		conn, err = ftp.Dial(
-			address,
+			host,
 			ftp.DialWithContext(ctx),
 		)
 	}
@@ -168,8 +175,12 @@ func prepareDial(address string, credentialsCallback CredentialsCallback) (u *ur
 	if u.Scheme != "ftp" && u.Scheme != "ftps" {
 		return nil, "", "", "", false, fmt.Errorf("not an FTP or FTPS URL scheme: %s", address)
 	}
-	if u.Port() == "" {
-		u.Host += ":21"
+	// Trim default port number
+	switch u.Scheme {
+	case "ftp":
+		u.Host = strings.TrimSuffix(u.Host, ":21")
+	case "ftps":
+		u.Host = strings.TrimSuffix(u.Host, ":990")
 	}
 
 	username, password, err = credentialsCallback(u)
@@ -241,10 +252,20 @@ func (f *fileSystem) String() string {
 }
 
 func (f *fileSystem) URL(cleanPath string) string {
+	return f.prefix + cleanPath
+}
+
+func (f *fileSystem) CleanPathFromURI(uri string) string {
+	port := ":21"
 	if f.secure {
-		return PrefixTLS + cleanPath
+		port = ":990"
 	}
-	return Prefix + cleanPath
+	return path.Clean(
+		strings.TrimPrefix(
+			strings.TrimPrefix(uri, f.prefix),
+			port, // In case f.prefix has no port number and url has the default port number
+		),
+	)
 }
 
 func (f *fileSystem) JoinCleanPath(uriParts ...string) string {

@@ -315,6 +315,10 @@ func (fs *MemFileSystem) URL(cleanPath string) string {
 	return fs.prefix + cleanPath
 }
 
+func (fs *MemFileSystem) CleanPathFromURI(uri string) string {
+	return strings.TrimPrefix(uri, fs.prefix)
+}
+
 func (fs *MemFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], fs.prefix)

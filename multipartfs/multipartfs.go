@@ -120,6 +120,10 @@ func (f *MultipartFileSystem) URL(cleanPath string) string {
 	return f.prefix + cleanPath
 }
 
+func (f *MultipartFileSystem) CleanPathFromURI(uri string) string {
+	return strings.TrimPrefix(uri, f.prefix)
+}
+
 func (f *MultipartFileSystem) JoinCleanPath(uriParts ...string) string {
 	return fsimpl.JoinCleanPath(uriParts, f.prefix, Separator)
 }
