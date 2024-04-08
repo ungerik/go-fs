@@ -157,7 +157,7 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	}
 	return &fileInfo{
 		name: path.Base(filePath),
-		size: out.ContentLength,
+		size: *out.ContentLength,
 		time: *out.LastModified,
 	}, nil
 }
@@ -318,12 +318,12 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 	}
 	defer out.Body.Close()
 
-	data := make([]byte, int(out.ContentLength))
+	data := make([]byte, int(*out.ContentLength))
 	n, err := out.Body.Read(data)
 	if err != nil {
 		return nil, err
 	}
-	if n < int(out.ContentLength) {
+	if n < int(*out.ContentLength) {
 		return nil, fmt.Errorf("read %d bytes from body but content-length is %d", n, out.ContentLength)
 	}
 	return data, nil
@@ -367,18 +367,18 @@ func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 	}
 	defer out.Body.Close()
 
-	data := make([]byte, int(out.ContentLength))
+	data := make([]byte, int(*out.ContentLength))
 	n, err := out.Body.Read(data)
 	if err != nil {
 		return nil, err
 	}
-	if n < int(out.ContentLength) {
+	if n < int(*out.ContentLength) {
 		return nil, fmt.Errorf("read %d bytes from body but content-length is %d", n, out.ContentLength)
 	}
 
 	info := &fileInfo{
 		name: path.Base(filePath),
-		size: out.ContentLength,
+		size: *out.ContentLength,
 		time: *out.LastModified,
 	}
 	return fsimpl.NewReadonlyFileBuffer(data, info), nil
