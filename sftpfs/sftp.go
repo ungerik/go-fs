@@ -50,15 +50,15 @@ func UsernameAndPassword(username, password string) CredentialsCallback {
 	}
 }
 
-// UsernameAndPasswordFromURL is a CredentialsCallback that returns
-// the username and password encoded in the passed URL.
-func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
-	password, ok := u.User.Password()
-	if !ok {
-		return "", "", fmt.Errorf("no password in URL: %s", u.String())
-	}
-	return u.User.Username(), password, nil
-}
+// // UsernameAndPasswordFromURL is a CredentialsCallback that returns
+// // the username and password encoded in the passed URL.
+// func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
+// 	password, ok := u.User.Password()
+// 	if !ok {
+// 		return "", "", fmt.Errorf("no password in URL: %s", u.String())
+// 	}
+// 	return u.User.Username(), password, nil
+// }
 
 // AcceptAnyHostKey can be passed as hostKeyCallback to Dial
 // to accept any SSH public key from a remote host.
@@ -219,24 +219,25 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 		return f.client, filePath, nop, nil
 	}
 
-	// Dial with credentials from URL to create client on the fly for caller:
-	url, err := url.Parse(f.URL(filePath))
+	// fmt.Printf("%s file system not registered, trying to dial with credentials from URL: %s", f.Name(), f.URL(filePath))
+
+	u, err := url.Parse(f.URL(filePath))
 	if err != nil {
 		return nil, "", nop, err
 	}
-	username := url.User.Username()
+	username := u.User.Username()
 	if username == "" {
 		return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
 	}
-	password, ok := url.User.Password()
+	password, ok := u.User.Password()
 	if !ok {
 		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
 	}
-	client, err = dial(ctx, url.Host, username, password, AcceptAnyHostKey)
+	client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey)
 	if err != nil {
 		return nil, "", nop, err
 	}
-	return client, url.Path, func() error { return client.Close() }, nil
+	return client, u.Path, func() error { return client.Close() }, nil
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {

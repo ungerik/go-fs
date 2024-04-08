@@ -53,15 +53,15 @@ func UsernameAndPassword(username, password string) CredentialsCallback {
 	}
 }
 
-// UsernameAndPasswordFromURL is a CredentialsCallback that returns
-// the username and password encoded in the passed URL.
-func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
-	password, ok := u.User.Password()
-	if !ok {
-		return "", "", fmt.Errorf("no password in URL: %s", u.String())
-	}
-	return u.User.Username(), password, nil
-}
+// // UsernameAndPasswordFromURL is a CredentialsCallback that returns
+// // the username and password encoded in the passed URL.
+// func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
+// 	password, ok := u.User.Password()
+// 	if !ok {
+// 		return "", "", fmt.Errorf("no password in URL: %s", u.String())
+// 	}
+// 	return u.User.Username(), password, nil
+// }
 
 type fileSystem struct {
 	conn   *ftp.ServerConn
@@ -201,25 +201,34 @@ func prepareDial(address string, credentialsCallback CredentialsCallback) (u *ur
 
 func nop() error { return nil }
 
-func (f *fileSystem) getConn(filePath string) (conn *ftp.ServerConn, clientPath string, release func() error, err error) {
+func (f *fileSystem) getConn(ctx context.Context, filePath string) (conn *ftp.ServerConn, clientPath string, release func() error, err error) {
+	if err = ctx.Err(); err != nil {
+		return nil, "", nop, err
+	}
 	if f.conn != nil {
 		return f.conn, filePath, nop, nil
 	}
 
-	// Dial with credentials from URL to create client on the fly for caller:
-	url, err := url.Parse(f.URL(filePath))
+	// fmt.Printf("%s file system not registered, trying to dial with credentials from URL: %s", f.Name(), f.URL(filePath))
+
+	u, err := url.Parse(f.URL(filePath))
 	if err != nil {
 		return nil, "", nop, err
 	}
-	username := url.User.Username()
+	username := u.User.Username()
 	if username == "" {
 		return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
 	}
-	password, ok := url.User.Password()
+	password, ok := u.User.Password()
 	if !ok {
 		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
 	}
-	panic("TODO" + password)
+
+	conn, err = dial(ctx, u.Host, username, password, f.secure)
+	if err != nil {
+		return nil, "", nop, err
+	}
+	return conn, u.Path, func() error { return conn.Quit() }, nil
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
@@ -333,7 +342,7 @@ func entryToFileInfo(entry *ftp.Entry, file fs.File) *fs.FileInfo {
 }
 
 func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
-	conn, filePath, release, err := f.getConn(filePath)
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +358,7 @@ func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 func (f *fileSystem) IsHidden(filePath string) bool { return false }
 
 func (f *fileSystem) IsSymbolicLink(filePath string) bool {
-	conn, filePath, release, err := f.getConn(filePath)
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return false
 	}
@@ -363,7 +372,7 @@ func (f *fileSystem) IsSymbolicLink(filePath string) bool {
 }
 
 func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	conn, dirPath, release, err := f.getConn(dirPath)
+	conn, dirPath, release, err := f.getConn(ctx, dirPath)
 	if err != nil {
 		return err
 	}
@@ -400,7 +409,7 @@ func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, erro
 }
 
 func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
-	conn, dirPath, release, err := f.getConn(dirPath)
+	conn, dirPath, release, err := f.getConn(context.Background(), dirPath)
 	if err != nil {
 		return err
 	}
@@ -433,7 +442,7 @@ func (f *fileReader) Close() error {
 }
 
 func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
-	conn, filePath, release, err := f.getConn(filePath)
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +518,7 @@ func (f *file) Close() error {
 }
 
 func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	conn, filePath, release, err := f.getConn(filePath)
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +530,7 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.
 }
 
 func (f *fileSystem) Move(filePath string, destPath string) error {
-	conn, filePath, release, err := f.getConn(filePath)
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return err
 	}
@@ -531,7 +540,7 @@ func (f *fileSystem) Move(filePath string, destPath string) error {
 }
 
 func (f *fileSystem) Remove(filePath string) error {
-	conn, filePath, release, err := f.getConn(filePath)
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return err
 	}
