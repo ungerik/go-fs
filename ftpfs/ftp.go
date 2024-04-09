@@ -72,12 +72,12 @@ type fileSystem struct {
 // Dial a new FTP or FTPS connection and registers it as file system.
 //
 // The passed address can be a URL with scheme `ftp:` or `ftps:`.
-func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback) (fs.FileSystem, error) {
+func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback, debugOut io.Writer) (fs.FileSystem, error) {
 	u, username, password, prefix, secure, err := prepareDial(address, credentialsCallback)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := dial(ctx, u.Host, username, password, secure)
+	conn, err := dial(ctx, u.Host, username, password, secure, debugOut)
 	if err != nil {
 		return nil, err
 	}
@@ -88,25 +88,22 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 	}, nil
 }
 
-func dial(ctx context.Context, host, username, password string, secure bool) (conn *ftp.ServerConn, err error) {
+func dial(ctx context.Context, host, username, password string, secure bool, debugOut io.Writer) (conn *ftp.ServerConn, err error) {
+	dialOptions := []ftp.DialOption{
+		ftp.DialWithContext(ctx),
+		ftp.DialWithDebugOutput(debugOut),
+	}
 	if secure {
 		if !strings.ContainsRune(host, ':') {
 			host += ":990"
 		}
-		conn, err = ftp.Dial(
-			host,
-			ftp.DialWithContext(ctx),
-			ftp.DialWithTLS(&tls.Config{InsecureSkipVerify: true}), // DialWithExplicitTLS also possible
-		)
+		dialOptions = append(dialOptions, ftp.DialWithExplicitTLS(&tls.Config{InsecureSkipVerify: true}))
 	} else {
 		if !strings.ContainsRune(host, ':') {
 			host += ":21"
 		}
-		conn, err = ftp.Dial(
-			host,
-			ftp.DialWithContext(ctx),
-		)
 	}
+	conn, err = ftp.Dial(host, dialOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -120,8 +117,8 @@ func dial(ctx context.Context, host, username, password string, secure bool) (co
 // DialAndRegister dials a new FTP or FTPS connection and register it as file system.
 //
 // The passed address can be a URL with scheme `ftp:` or `ftps:`.
-func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback) (fs.FileSystem, error) {
-	fileSystem, err := Dial(ctx, address, credentialsCallback)
+func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback, debugOut io.Writer) (fs.FileSystem, error) {
+	fileSystem, err := Dial(ctx, address, credentialsCallback, debugOut)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +131,7 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 // The returned free function has to be called to decrease the file system's
 // reference count and close it when the reference count reaches 0.
 // The returned free function will never be nil.
-func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback) (free func() error, err error) {
+func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, debugOut io.Writer) (free func() error, err error) {
 	u, username, password, prefix, secure, err := prepareDial(address, credentialsCallback)
 	if err != nil {
 		return nop, err
@@ -145,7 +142,7 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return func() error { fs.Unregister(f); return nil }, nil
 	}
 
-	conn, err := dial(ctx, u.Host, username, password, secure)
+	conn, err := dial(ctx, u.Host, username, password, secure, debugOut)
 	if err != nil {
 		return nop, err
 	}
@@ -224,7 +221,7 @@ func (f *fileSystem) getConn(ctx context.Context, filePath string) (conn *ftp.Se
 		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
 	}
 
-	conn, err = dial(ctx, u.Host, username, password, f.secure)
+	conn, err = dial(ctx, u.Host, username, password, f.secure, nil)
 	if err != nil {
 		return nil, "", nop, err
 	}
