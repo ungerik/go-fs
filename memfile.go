@@ -251,12 +251,44 @@ func (f MemFile) ReadJSON(ctx context.Context, output any) error {
 	return json.Unmarshal(f.FileData, output)
 }
 
+// WriteJSON mashalles input to JSON and writes it as the file.
+// Any indent arguments will be concanated and used as JSON line indentation.
+func (f *MemFile) WriteJSON(ctx context.Context, input any, indent ...string) (err error) {
+	var data []byte
+	if len(indent) == 0 {
+		data, err = json.Marshal(input)
+	} else {
+		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
+	}
+	if err != nil {
+		return err
+	}
+	f.FileData = data
+	return nil
+}
+
 // ReadXML reads and unmarshalles the XML content of the file to output.
 func (f MemFile) ReadXML(ctx context.Context, output any) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return xml.Unmarshal(f.FileData, output)
+}
+
+// WriteXML mashalles input to XML and writes it as the file.
+// Any indent arguments will be concanated and used as XML line indentation.
+func (f *MemFile) WriteXML(ctx context.Context, input any, indent ...string) (err error) {
+	var data []byte
+	if len(indent) == 0 {
+		data, err = xml.Marshal(input)
+	} else {
+		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
+	}
+	if err != nil {
+		return err
+	}
+	f.FileData = append([]byte(xml.Header), data...)
+	return nil
 }
 
 // // MarshalJSON implements the json.Marshaler interface

@@ -228,5 +228,5 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 func TestFile_String(t *testing.T) {
 	path := filepath.Join("dir", "file.ext")
-	require.Equal(t, "local file system: "+path, File(path).String())
+	require.Equal(t, path+" (local file system)", File(path).String())
 }
