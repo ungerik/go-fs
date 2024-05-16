@@ -245,8 +245,9 @@ func (f MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
 func (f MemFile) ReadJSON(ctx context.Context, output any) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
+	// Context is passed for identical call signature as other types
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return json.Unmarshal(f.FileData, output)
 }
@@ -254,6 +255,10 @@ func (f MemFile) ReadJSON(ctx context.Context, output any) error {
 // WriteJSON mashalles input to JSON and writes it as the file.
 // Any indent arguments will be concanated and used as JSON line indentation.
 func (f *MemFile) WriteJSON(ctx context.Context, input any, indent ...string) (err error) {
+	// Context is passed for identical call signature as other types
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	var data []byte
 	if len(indent) == 0 {
 		data, err = json.Marshal(input)
@@ -269,8 +274,9 @@ func (f *MemFile) WriteJSON(ctx context.Context, input any, indent ...string) (e
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
 func (f MemFile) ReadXML(ctx context.Context, output any) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
+	// Context is passed for identical call signature as other types
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return xml.Unmarshal(f.FileData, output)
 }
@@ -278,6 +284,10 @@ func (f MemFile) ReadXML(ctx context.Context, output any) error {
 // WriteXML mashalles input to XML and writes it as the file.
 // Any indent arguments will be concanated and used as XML line indentation.
 func (f *MemFile) WriteXML(ctx context.Context, input any, indent ...string) (err error) {
+	// Context is passed for identical call signature as other types
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	var data []byte
 	if len(indent) == 0 {
 		data, err = xml.Marshal(input)
