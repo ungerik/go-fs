@@ -60,6 +60,42 @@ func NewMemFile(name string, data []byte) MemFile {
 	return MemFile{FileName: name, FileData: data}
 }
 
+// NewMemFileWriteJSON returns a new MemFile with the input mashalled to JSON as FileData.
+// Any indent arguments will be concanated and used as JSON line indentation.
+func NewMemFileWriteJSON(name string, input any, indent ...string) (MemFile, error) {
+	var (
+		data []byte
+		err  error
+	)
+	if len(indent) == 0 {
+		data, err = json.Marshal(input)
+	} else {
+		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
+	}
+	if err != nil {
+		return MemFile{}, err
+	}
+	return MemFile{FileName: name, FileData: data}, nil
+}
+
+// NewMemFileWriteXML returns a new MemFile with the input mashalled to XML as FileData.
+// Any indent arguments will be concanated and used as XML line indentation.
+func NewMemFileWriteXML(name string, input any, indent ...string) (MemFile, error) {
+	var (
+		data []byte
+		err  error
+	)
+	if len(indent) == 0 {
+		data, err = xml.Marshal(input)
+	} else {
+		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
+	}
+	if err != nil {
+		return MemFile{}, err
+	}
+	return MemFile{FileName: name, FileData: append([]byte(xml.Header), data...)}, nil
+}
+
 // ReadMemFile returns a new MemFile with name and data from fileReader.
 // If the passed fileReader is a MemFile then
 // its FileData is used directly without copying it.
