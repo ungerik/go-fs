@@ -98,6 +98,18 @@ func NewMemFileSystem(separator string, initialFiles ...MemFile) (*MemFileSystem
 	return memFS, nil
 }
 
+// NewSingleMemFileSystem creates and registers a new MemFileSystem
+// containing a single MemFile that is returned as a File
+// that can be used to access the file without knowing the file system.
+// Closing the file system will make the File invalid.
+func NewSingleMemFileSystem(file MemFile) (*MemFileSystem, File, error) {
+	fs, err := NewMemFileSystem("/", file)
+	if err != nil {
+		return nil, "", err
+	}
+	return fs, fs.JoinCleanFile("/", file.FileName), nil
+}
+
 func newMemDirNode(name string, modified time.Time, perm ...Permissions) *memFileNode {
 	if name == "" {
 		panic("empty dir name")
