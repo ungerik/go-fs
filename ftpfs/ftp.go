@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
+	"net/textproto"
 	"net/url"
 	"path"
 	"strings"
@@ -338,7 +339,9 @@ func entryToFileInfo(entry *ftp.Entry, file fs.File) *fs.FileInfo {
 	}
 }
 
-func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (f *fileSystem) Stat(filePath string) (info iofs.FileInfo, err error) {
+	defer f.convertResultError(&err, filePath)
+
 	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return nil, err
@@ -368,7 +371,9 @@ func (f *fileSystem) IsSymbolicLink(filePath string) bool {
 	return entry.Type == ftp.EntryTypeLink
 }
 
-func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+	defer f.convertResultError(&err, dirPath)
+
 	conn, dirPath, release, err := f.getConn(ctx, dirPath)
 	if err != nil {
 		return err
@@ -405,7 +410,9 @@ func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, erro
 	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
-func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) (err error) {
+	defer f.convertResultError(&err, dirPath)
+
 	conn, dirPath, release, err := f.getConn(context.Background(), dirPath)
 	if err != nil {
 		return err
@@ -465,7 +472,67 @@ func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Writ
 
 // }
 
+func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (rw fs.ReadWriteSeekCloser, err error) {
+	defer f.convertResultError(&err, filePath)
+
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+	if err != nil {
+		return nil, err
+	}
+	return &file{
+		// fs:      f,
+		path:    filePath,
+		conn:    conn,
+		release: release,
+	}, nil
+}
+
+func (f *fileSystem) Move(filePath string, destPath string) (err error) {
+	defer f.convertResultError(&err, filePath)
+
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return conn.Rename(filePath, destPath)
+}
+
+func (f *fileSystem) Remove(filePath string) (err error) {
+	defer f.convertResultError(&err, filePath)
+
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	entry, err := conn.GetEntry(filePath)
+	if err != nil {
+		return err
+	}
+	if entry.Type == ftp.EntryTypeFolder {
+		return conn.RemoveDir(filePath)
+	}
+	return conn.Delete(filePath)
+}
+
+func (f *fileSystem) Close() error {
+	if f.conn == nil {
+		return nil // already closed
+	}
+	count := fs.Unregister(f)
+	if count > 1 {
+		return nil // still referenced
+	}
+	err := f.conn.Quit()
+	f.conn = nil
+	return err
+}
+
 type file struct {
+	// fs      *fileSystem
 	path    string
 	offset  int64
 	conn    *ftp.ServerConn
@@ -514,54 +581,20 @@ func (f *file) Close() error {
 	return f.release()
 }
 
-func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
-		return nil, err
+func (f *fileSystem) convertResultError(err *error, path string) {
+	if err == nil || *err == nil {
+		return
 	}
-	return &file{
-		path:    filePath,
-		conn:    conn,
-		release: release,
-	}, nil
-}
-
-func (f *fileSystem) Move(filePath string, destPath string) error {
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
-		return err
+	var e *textproto.Error
+	if errors.As(*err, &e) {
+		if e.Code == ftp.StatusFileUnavailable {
+			*err = fs.NewErrDoesNotExist(f.JoinCleanFile(path))
+			return
+		}
+		if e.Msg == "" {
+			e.Msg = ftp.StatusText(e.Code)
+			*err = e
+			return
+		}
 	}
-	defer release()
-
-	return conn.Rename(filePath, destPath)
-}
-
-func (f *fileSystem) Remove(filePath string) error {
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	entry, err := conn.GetEntry(filePath)
-	if err != nil {
-		return err
-	}
-	if entry.Type == ftp.EntryTypeFolder {
-		return conn.RemoveDir(filePath)
-	}
-	return conn.Delete(filePath)
-}
-
-func (f *fileSystem) Close() error {
-	if f.conn == nil {
-		return nil // already closed
-	}
-	count := fs.Unregister(f)
-	if count > 1 {
-		return nil // still referenced
-	}
-	err := f.conn.Quit()
-	f.conn = nil
-	return err
 }

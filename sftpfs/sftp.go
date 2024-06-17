@@ -348,6 +348,10 @@ func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback f
 
 	infos, err := client.ReadDirContext(ctx, dirPath)
 	if err != nil {
+		// Should we replace alls os.ErrNotExist errors with fs.ErrDoesNotExist?
+		// if errors.Is(err, os.ErrNotExist) {
+		// 	return fs.NewErrDoesNotExist(f.JoinCleanFile(dirPath))
+		// }
 		return err
 	}
 	for _, info := range infos {
