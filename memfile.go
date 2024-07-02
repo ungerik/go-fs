@@ -142,10 +142,16 @@ func MemFilesAsFileReaders(memFiles []MemFile) []FileReader {
 	return fileReaders
 }
 
-// String returns the name and meta information for the FileReader.
+// String returns the metadata of the file formatted as a string.
 // String implements the fmt.Stringer interface.
 func (f MemFile) String() string {
 	return fmt.Sprintf("MemFile{name: `%s`, size: %d}", f.FileName, len(f.FileData))
+}
+
+// PrintForCallStack prints the metadata of the file
+// for call stack errors.
+func (f MemFile) PrintForCallStack(w io.Writer) {
+	_, _ = io.WriteString(w, f.String())
 }
 
 // Name returns the name of the file.
