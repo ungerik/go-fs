@@ -3,7 +3,25 @@ package fs
 import (
 	"context"
 	"errors"
+	"os"
+	"os/user"
 )
+
+// HomeDir returns the home directory of the current user.
+func HomeDir() File {
+	u, err := user.Current()
+	if err != nil {
+		return InvalidFile
+	}
+	return File(u.HomeDir)
+}
+
+// CurrentWorkingDir returns the current working directory of the process.
+// In case of an erorr, Exists() of the result File will return false.
+func CurrentWorkingDir() File {
+	cwd, _ := os.Getwd()
+	return File(cwd)
+}
 
 // listDirMaxImpl implements the ListDirMax method functionality by calling listDir.
 // It returns the passed max number of files or an unlimited number if max is < 0.

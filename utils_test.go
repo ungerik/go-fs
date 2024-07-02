@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 type failContext struct {
@@ -67,4 +69,8 @@ func Test_writeAllContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCurrentProcessExecutable(t *testing.T) {
+	require.True(t, CurrentProcessExecutable().Exists(), "executable file for current process exists")
 }

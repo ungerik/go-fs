@@ -4,7 +4,13 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestHomeDir(t *testing.T) {
+	require.True(t, HomeDir().IsDir(), "home directory exists")
+}
 
 func Test_listDirMaxImpl(t *testing.T) {
 	ctx := context.Background()

@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"io"
+	"os"
 )
 
 // FilesToURLs returns the URLs of a slice of Files.
@@ -110,4 +111,14 @@ func writeAllContext(ctx context.Context, w io.Writer, data []byte, chunkSize in
 		data = data[n:]
 	}
 	return nil
+}
+
+// CurrentProcessExecutable returns a File for the executable that started the current process.
+// It wraps os.Executable, see https://golang.org/pkg/os/#CurrentProcessExecutable
+func CurrentProcessExecutable() File {
+	exe, err := os.Executable()
+	if err != nil {
+		return InvalidFile
+	}
+	return File(exe)
 }

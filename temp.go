@@ -4,28 +4,12 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
-	"os/user"
+	"path"
 	"strings"
 	"time"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
-
-// HomeDir returns the home directory of the current user.
-func HomeDir() File {
-	u, err := user.Current()
-	if err != nil {
-		return InvalidFile
-	}
-	return File(u.HomeDir)
-}
-
-// CurrentWorkingDir returns the current working directory of the process.
-// In case of an erorr, Exists() of the result File will return false.
-func CurrentWorkingDir() File {
-	cwd, _ := os.Getwd()
-	return File(cwd)
-}
 
 // TempDir returns the temp directory of the operating system
 func TempDir() File {
@@ -41,12 +25,13 @@ func TempFile(ext ...string) File {
 
 // MakeTempDir makes and returns a new randomly named sub directory in TempDir().
 // Example:
-//   tempDir, err := fs.MakeTempDir()
-//   if err != nil {
-//       return err
-//   }
-//   defer tempDir.RemoveRecursive()
-//   doThingsWith(tempDir)
+//
+//	tempDir, err := fs.MakeTempDir()
+//	if err != nil {
+//	    return err
+//	}
+//	defer tempDir.RemoveRecursive()
+//	doThingsWith(tempDir)
 func MakeTempDir() (File, error) {
 	name, err := tempDirName()
 	if err != nil {
@@ -63,9 +48,10 @@ func MakeTempDir() (File, error) {
 // MustMakeTempDir makes and returns a new randomly named sub directory in TempDir().
 // It panics on errors.
 // Example:
-//   tempDir := fs.MustMakeTempDir()
-//   defer tempDir.RemoveRecursive()
-//   doThingsWith(tempDir)
+//
+//	tempDir := fs.MustMakeTempDir()
+//	defer tempDir.RemoveRecursive()
+//	doThingsWith(tempDir)
 func MustMakeTempDir() File {
 	dir, err := MakeTempDir()
 	if err != nil {
@@ -83,12 +69,14 @@ func tempDirName() (string, error) {
 	return fmt.Sprintf("%s_%X", time.Now().Format("20060102-150405"), randomBytes), nil
 }
 
-// Executable returns a File for the executable that started the current process.
-// It wraps os.Executable, see https://golang.org/pkg/os/#Executable
-func Executable() File {
-	exe, err := os.Executable()
+// TempFileCopy copies the provided source file
+// to the temp directory of the operating system
+// using a random filename with the extension of the source file.
+func TempFileCopy(source FileReader) (File, error) {
+	data, err := source.ReadAll()
 	if err != nil {
-		return InvalidFile
+		return InvalidFile, err
 	}
-	return File(exe)
+	f := TempFile(path.Ext(source.Name()))
+	return f, f.WriteAll(data)
 }
