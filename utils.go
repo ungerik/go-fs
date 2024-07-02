@@ -6,8 +6,8 @@ import (
 	"os"
 )
 
-// FilesToURLs returns the URLs of a slice of Files.
-func FilesToURLs(files []File) []string {
+// FileURLs returns the URLs of the passed files
+func FileURLs(files []File) []string {
 	fileURLs := make([]string, len(files))
 	for i, file := range files {
 		fileURLs[i] = file.URL()
@@ -15,8 +15,8 @@ func FilesToURLs(files []File) []string {
 	return fileURLs
 }
 
-// FilesToPaths returns the FileSystem specific paths of a slice of Files.
-func FilesToPaths(files []File) []string {
+// FilePaths returns the FileSystem specific paths the passed files
+func FilePaths(files []File) []string {
 	paths := make([]string, len(files))
 	for i, file := range files {
 		paths[i] = file.Path()
@@ -24,8 +24,8 @@ func FilesToPaths(files []File) []string {
 	return paths
 }
 
-// FilesToNames returns a string slice with the names pars from the files
-func FilesToNames(files []File) []string {
+// FileNames returns the names of the passed files
+func FileNames[T FileReader](files []T) []string {
 	names := make([]string, len(files))
 	for i, file := range files {
 		names[i] = file.Name()
@@ -33,8 +33,8 @@ func FilesToNames(files []File) []string {
 	return names
 }
 
-// FilesToFileReaders converts a slice of File to a slice of FileReader
-func FilesToFileReaders(files []File) []FileReader {
+// FilesAsFileReaders converts a slice of File to a slice of FileReader
+func FilesAsFileReaders(files []File) []FileReader {
 	fileReaders := make([]FileReader, len(files))
 	for i, file := range files {
 		fileReaders[i] = file
@@ -42,8 +42,8 @@ func FilesToFileReaders(files []File) []FileReader {
 	return fileReaders
 }
 
-// StringsToFiles returns Files for the given fileURIs.
-func StringsToFiles(fileURIs []string) []File {
+// FilesFromStrings returns Files for the given fileURIs.
+func FilesFromStrings(fileURIs []string) []File {
 	files := make([]File, len(fileURIs))
 	for i := range fileURIs {
 		files[i] = File(fileURIs[i])
@@ -51,8 +51,8 @@ func StringsToFiles(fileURIs []string) []File {
 	return files
 }
 
-// StringsToFileReaders returns FileReaders for the given fileURIs.
-func StringsToFileReaders(fileURIs []string) []FileReader {
+// FileReadersFromStrings returns FileReaders for the given fileURIs.
+func FileReadersFromStrings(fileURIs []string) []FileReader {
 	fileReaders := make([]FileReader, len(fileURIs))
 	for i := range fileURIs {
 		fileReaders[i] = File(fileURIs[i])
