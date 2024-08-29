@@ -520,6 +520,41 @@ func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File
 	return file.ListDirInfoRecursiveContext(ctx, FileInfoToFileCallback(callback), patterns...)
 }
 
+// ListDirRecursiveIter returns an iterator that yields every file and directory
+// recursively in the directory and sub-directories.
+// If any patterns are passed, then only files with a name that matches
+// at least one of the patterns are returned.
+// In case of an error, the iterator will yield InvalidFile and the error
+// as last key and value and then stop the iteration.
+func (file File) ListDirRecursiveIter(patterns ...string) iter.Seq2[File, error] {
+	return file.ListDirRecursiveIterContext(context.Background(), patterns...)
+}
+
+// ListDirRecursiveIterContext returns an iterator that yields every file and directory
+// recursively in the directory and sub-directories.
+// If any patterns are passed, then only files with a name that matches
+// at least one of the patterns are returned.
+// In case of an error, the iterator will yield InvalidFile and the error
+// as last key and value and then stop the iteration.
+// Canceling the context will stop the iteration and yield the context error.
+func (file File) ListDirRecursiveIterContext(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
+	return func(yield func(File, error) bool) {
+		const cancel SentinelError = "cancel"
+		err := file.ListDirRecursiveContext(ctx,
+			func(listedFile File) error {
+				if !yield(listedFile, nil) {
+					return cancel
+				}
+				return nil
+			},
+			patterns...,
+		)
+		if err != nil && !errors.Is(err, cancel) {
+			yield(InvalidFile, err)
+		}
+	}
+}
+
 // ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
 // recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
