@@ -41,7 +41,7 @@ func RemoveErrDoesNotExist(err error) error {
 }
 
 // ErrEmptyPath indications an empty file path
-var ErrEmptyPath = NewErrDoesNotExist("")
+var ErrEmptyPath = NewErrDoesNotExist(InvalidFile)
 
 // ErrDoesNotExist is returned when a file does not exist
 // and wraps os.ErrNotExist.

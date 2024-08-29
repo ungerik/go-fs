@@ -83,6 +83,8 @@ type FileSystem interface {
 	// ListDirInfo calls the passed callback function for every file and directory in dirPath.
 	// If any patterns are passed, then only files or directores with a name that matches
 	// at least one of the patterns are returned.
+	// Canceling the context or returning an error from the callback
+	// will stop the listing and return the context or callback error.
 	ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error
 
 	MakeDir(dirPath string, perm []Permissions) error

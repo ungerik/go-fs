@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -203,27 +202,81 @@ func TestFile_Watch(t *testing.T) {
 	assert.NoError(t, err, "cancel watch")
 }
 
-func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
-	type args struct {
-		ctx      context.Context
-		callback func(*FileInfo) error
-		patterns []string
+// func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
+// 	type args struct {
+// 		ctx      context.Context
+// 		callback func(*FileInfo) error
+// 		patterns []string
+// 	}
+// 	tests := []struct {
+// 		name    string
+// 		file    File
+// 		args    args
+// 		wantErr bool
+// 	}{
+// 		// TODO: Add test cases.
+// 	}
+// 	for _, tt := range tests {
+// 		t.Run(tt.name, func(t *testing.T) {
+// 			if err := tt.file.ListDirInfoRecursiveContext(tt.args.ctx, tt.args.callback, tt.args.patterns...); (err != nil) != tt.wantErr {
+// 				t.Errorf("File.ListDirInfoRecursiveContext() error = %v, wantErr %v", err, tt.wantErr)
+// 			}
+// 		})
+// 	}
+// }
+
+func TestFile_ListDir(t *testing.T) {
+	dir, err := MakeTempDir()
+	require.NoError(t, err, "MakeTempDir")
+	t.Cleanup(func() { dir.RemoveRecursive() })
+
+	files := map[File]bool{
+		dir.Join("a"): true,
+		dir.Join("b"): true,
+		dir.Join("c"): true,
 	}
-	tests := []struct {
-		name    string
-		file    File
-		args    args
-		wantErr bool
-	}{
-		// TODO: Add test cases.
+
+	for file := range files {
+		err := file.Touch()
+		require.NoError(t, err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.file.ListDirInfoRecursiveContext(tt.args.ctx, tt.args.callback, tt.args.patterns...); (err != nil) != tt.wantErr {
-				t.Errorf("File.ListDirInfoRecursiveContext() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+
+	err = dir.ListDir(func(file File) error {
+		if !files[file] {
+			t.Errorf("unexpected file: %s", file)
+		}
+		delete(files, file)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Empty(t, files, "not all files listed")
+}
+
+func TestFile_ListDirIter(t *testing.T) {
+	dir, err := MakeTempDir()
+	require.NoError(t, err, "MakeTempDir")
+	t.Cleanup(func() { dir.RemoveRecursive() })
+
+	files := map[File]bool{
+		dir.Join("a"): true,
+		dir.Join("b"): true,
+		dir.Join("c"): true,
 	}
+
+	for file := range files {
+		err := file.Touch()
+		require.NoError(t, err)
+	}
+
+	for file, err := range dir.ListDirIter() {
+		require.NoError(t, err, "ListDirIter should not return an error")
+		if !files[file] {
+			t.Errorf("unexpected file: %s", file)
+		}
+		delete(files, file)
+	}
+	require.NoError(t, err)
+	require.Empty(t, files, "not all files listed")
 }
 
 func TestFile_String(t *testing.T) {

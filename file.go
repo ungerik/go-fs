@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
+	"iter"
 	"strings"
 	"time"
 
@@ -436,22 +437,57 @@ func (file File) SetPermissions(perm Permissions) error {
 	return NewErrUnsupported(fileSystem, "SetPermissions")
 }
 
-// ListDir calls the passed callback function for every file and directory in dirPath.
+// ListDir calls the passed callback function for every file and directory.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
 func (file File) ListDir(callback func(File) error, patterns ...string) error {
 	return file.ListDirContext(context.Background(), callback, patterns...)
 }
 
-// ListDirContext calls the passed callback function for every file and directory in dirPath.
+// ListDirContext calls the passed callback function for every file and directory in the directory.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
+// Canceling the context or returning an error from the callback
+// will stop the listing and return the context or callback error.
 func (file File) ListDirContext(ctx context.Context, callback func(File) error, patterns ...string) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.ListDirInfo(ctx, path, FileInfoToFileCallback(callback), patterns)
+}
+
+// ListDirIter returns an iterator that yields every file and directory in the directory.
+// If any patterns are passed, then only files with a name that matches
+// at least one of the patterns are returned.
+// In case of an error, the iterator will yield InvalidFile and the error
+// as last key and value and then stop the iteration.
+func (file File) ListDirIter(patterns ...string) iter.Seq2[File, error] {
+	return file.ListDirIterContext(context.Background(), patterns...)
+}
+
+// ListDirIterContext returns an iterator that yields every file and directory in the directory.
+// If any patterns are passed, then only files with a name that matches
+// at least one of the patterns are returned.
+// In case of an error, the iterator will yield InvalidFile and the error
+// as last key and value and then stop the iteration.
+// Canceling the context will stop the iteration and yield the context error.
+func (file File) ListDirIterContext(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
+	return func(yield func(File, error) bool) {
+		const cancel SentinelError = "cancel"
+		err := file.ListDirContext(ctx,
+			func(listedFile File) error {
+				if !yield(listedFile, nil) {
+					return cancel
+				}
+				return nil
+			},
+			patterns...,
+		)
+		if err != nil && !errors.Is(err, cancel) {
+			yield(InvalidFile, err)
+		}
+	}
 }
 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
