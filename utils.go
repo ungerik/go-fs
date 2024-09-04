@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"runtime"
 )
 
 // FileURLs returns the URLs of the passed files
@@ -113,12 +114,20 @@ func writeAllContext(ctx context.Context, w io.Writer, data []byte, chunkSize in
 	return nil
 }
 
-// CurrentProcessExecutable returns a File for the executable that started the current process.
-// It wraps os.Executable, see https://golang.org/pkg/os/#CurrentProcessExecutable
-func CurrentProcessExecutable() File {
+// ExecutableFile returns a File for the executable that started the current process.
+// It wraps os.ExecutableFile, see https://golang.org/pkg/os/#ExecutableFile
+func ExecutableFile() File {
 	exe, err := os.Executable()
 	if err != nil {
 		return InvalidFile
 	}
 	return File(exe)
+}
+
+func SourceFile() File {
+	_, file, _, ok := runtime.Caller(1)
+	if !ok {
+		return InvalidFile
+	}
+	return File(file)
 }

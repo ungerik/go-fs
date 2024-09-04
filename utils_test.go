@@ -71,6 +71,11 @@ func Test_writeAllContext(t *testing.T) {
 	}
 }
 
-func TestCurrentProcessExecutable(t *testing.T) {
-	require.True(t, CurrentProcessExecutable().Exists(), "executable file for current process exists")
+func TestExecutableFile(t *testing.T) {
+	require.True(t, ExecutableFile().Exists(), "executable file for current process exists")
+}
+
+func TestSourceFile(t *testing.T) {
+	require.True(t, SourceFile().Exists(), "source file for the call exists")
+	require.Equal(t, "utils_test.go", SourceFile().Name(), "source file is that of the test")
 }
