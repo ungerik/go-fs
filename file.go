@@ -496,10 +496,11 @@ func (file File) ListDirIterContext(ctx context.Context, patterns ...string) ite
 // matching a pattern.
 //
 // The yielded path segments are the strings necessary
-// to substitute wildcard containing path segments in the pattern
-// to form a valid path leading up to the yielded files.
-// Non wildcard segments and yielded files with wildcards
-// in their name pattern are not included.
+// to substitute all wildcard containing path segments
+// in the pattern to form a valid path for a yielded file.
+// This includes the name of the yielded file itself
+// if the pattern contains wildcards for the last segment.
+// Non wildcard segments are not included.
 //
 // The syntax of patterns is the same as in [path.Match].
 // It always uses slash '/' as path segment separator
@@ -519,10 +520,11 @@ func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
 // matching a pattern.
 //
 // The yielded path segments are the strings necessary
-// to substitute wildcard containing path segments in the pattern
-// to form a valid path leading up to the yielded files.
-// Non wildcard segments and yielded files with wildcards
-// in their name pattern are not included.
+// to substitute all wildcard containing path segments
+// in the pattern to form a valid path for a yielded file.
+// This includes the name of the yielded file itself
+// if the pattern contains wildcards for the last segment.
+// Non wildcard segments are not included.
 //
 // The syntax of patterns is the same as in [path.Match].
 // It always uses slash '/' as path segment separator
@@ -549,17 +551,12 @@ func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
 			return nil, fmt.Errorf("%w, must not contain '..': %s", path.ErrBadPattern, pattern)
 		}
 	}
-	i := slices.IndexFunc(pSegments, containsWildcard)
-	if i == -1 {
+	switch i := slices.IndexFunc(pSegments, containsWildcard); {
+	case i < 0:
 		// No wildcard in pattern, join path and yield file if it exists
 		file = file.Join(pSegments...)
-		return func(yield func(File, []string) bool) {
-			if dirOnly && file.IsDir() || !dirOnly && file.Exists() {
-				yield(file, nil)
-			}
-		}, nil
-	}
-	if i > 0 {
+		pSegments = nil
+	case i > 0:
 		// Join non wildcard path before first wildcard
 		file = file.Join(pSegments[:i]...)
 		pSegments = pSegments[i:]
@@ -588,7 +585,7 @@ func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, [
 					if dirOnly && !f.IsDir() || !dirOnly && !f.Exists() {
 						continue
 					}
-					if !yield(f, values) {
+					if !yield(f, append(values, f.Name())) {
 						return
 					}
 				}

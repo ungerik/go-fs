@@ -293,7 +293,7 @@ func TestFile_Glob(t *testing.T) {
 	yDir := dir.Join("a", "b", "c", "Hello", "World", "y")
 	require.NoError(t, xDir.MakeAllDirs())
 	require.NoError(t, yDir.MakeAllDirs())
-	cFile := dir.Join("a", "b", "c", "file.txt")
+	cFile := dir.Join("a", "b", "c", "cFile")
 	require.NoError(t, cFile.Touch())
 	xFile1 := xDir.Join("file1.txt")
 	require.NoError(t, xFile1.Touch())
@@ -347,7 +347,7 @@ func TestFile_Glob(t *testing.T) {
 			file:    dir,
 			pattern: "*",
 			want: []result{
-				{dir.Join("a"), nil},
+				{dir.Join("a"), []string{"a"}},
 			},
 		},
 		{
@@ -355,7 +355,7 @@ func TestFile_Glob(t *testing.T) {
 			file:    dir,
 			pattern: "*/",
 			want: []result{
-				{dir.Join("a"), nil},
+				{dir.Join("a"), []string{"a"}},
 			},
 		},
 		{
@@ -363,8 +363,8 @@ func TestFile_Glob(t *testing.T) {
 			file:    dir,
 			pattern: "./a/b/c/*",
 			want: []result{
-				{dir.Join("a", "b", "c", "Hello"), nil},
-				{cFile, nil},
+				{dir.Join("a", "b", "c", "Hello"), []string{"Hello"}},
+				{cFile, []string{"cFile"}},
 			},
 		},
 		{
@@ -372,7 +372,7 @@ func TestFile_Glob(t *testing.T) {
 			file:    dir,
 			pattern: "./a/b/c/*/",
 			want: []result{
-				{dir.Join("a", "b", "c", "Hello"), nil},
+				{dir.Join("a", "b", "c", "Hello"), []string{"Hello"}},
 			},
 		},
 		{
@@ -380,9 +380,15 @@ func TestFile_Glob(t *testing.T) {
 			file:    dir,
 			pattern: "*/b/c/*/W???d/x/file[1-2].txt",
 			want: []result{
-				{xFile1, []string{"a", "Hello", "World"}},
-				{xFile2, []string{"a", "Hello", "World"}},
+				{xFile1, []string{"a", "Hello", "World", "file1.txt"}},
+				{xFile2, []string{"a", "Hello", "World", "file1.txt"}},
 			},
+		},
+		{
+			name:    "malformed pattern",
+			file:    dir,
+			pattern: "a/b/c/Hello/World/x/[file1.txt",
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -390,9 +396,9 @@ func TestFile_Glob(t *testing.T) {
 			gotIter, err := tt.file.Glob(tt.pattern)
 			if tt.wantErr {
 				require.Error(t, err, "File.Glob")
-			} else {
-				require.NoError(t, err, "File.Glob")
+				return
 			}
+			require.NoError(t, err, "File.Glob")
 			var got []result
 			for file, values := range gotIter {
 				require.Truef(t, file.Exists(), "file %s does not exist", file)
