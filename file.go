@@ -11,6 +11,8 @@ import (
 	"io"
 	iofs "io/fs"
 	"iter"
+	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -474,7 +476,7 @@ func (file File) ListDirIter(patterns ...string) iter.Seq2[File, error] {
 // Canceling the context will stop the iteration and yield the context error.
 func (file File) ListDirIterContext(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
 	return func(yield func(File, error) bool) {
-		const cancel SentinelError = "cancel"
+		var cancel SentinelError
 		err := file.ListDirContext(ctx,
 			func(listedFile File) error {
 				if !yield(listedFile, nil) {
@@ -486,6 +488,136 @@ func (file File) ListDirIterContext(ctx context.Context, patterns ...string) ite
 		)
 		if err != nil && !errors.Is(err, cancel) {
 			yield(InvalidFile, err)
+		}
+	}
+}
+
+// MustGlob yields files and wildcard substituting path segments
+// matching a pattern.
+//
+// The yielded path segments are the strings necessary
+// to substitute wildcard containing path segments in the pattern
+// to form a valid path leading up to the yielded files.
+// Non wildcard segments and yielded files with wildcards
+// in their name pattern are not included.
+//
+// The syntax of patterns is the same as in [path.Match].
+// It always uses slash '/' as path segment separator
+// independently of the file's file system.
+//
+// MustGlob ignores file system errors such as I/O errors reading directories.
+// The only possible panic is in case of a malformed pattern.
+func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
+	iterator, err := file.Glob(pattern)
+	if err != nil {
+		panic(err)
+	}
+	return iterator
+}
+
+// Glob yields files and wildcard substituting path segments
+// matching a pattern.
+//
+// The yielded path segments are the strings necessary
+// to substitute wildcard containing path segments in the pattern
+// to form a valid path leading up to the yielded files.
+// Non wildcard segments and yielded files with wildcards
+// in their name pattern are not included.
+//
+// The syntax of patterns is the same as in [path.Match].
+// It always uses slash '/' as path segment separator
+// independently of the file's file system.
+//
+// A pattern ending with a slash '/' will match only directories.
+//
+// Glob ignores file system errors such as I/O errors reading directories.
+// The only possible returned error is [path.ErrBadPattern],
+// reporting that the pattern is malformed.
+func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
+	dirOnly := strings.HasSuffix(pattern, "/")
+	pattern = strings.Trim(pattern, "/")
+	// Check if the pattern is valid
+	if _, err := path.Match(pattern, ""); err != nil {
+		return nil, fmt.Errorf("%w: %s", err, pattern)
+	}
+	pSegments := strings.Split(pattern, "/")
+	pSegments = slices.DeleteFunc(pSegments, func(s string) bool {
+		return s == "" || s == "."
+	})
+	for _, seg := range pSegments {
+		if seg == ".." {
+			return nil, fmt.Errorf("%w, must not contain '..': %s", path.ErrBadPattern, pattern)
+		}
+	}
+	i := slices.IndexFunc(pSegments, containsWildcard)
+	if i == -1 {
+		// No wildcard in pattern, join path and yield file if it exists
+		file = file.Join(pSegments...)
+		return func(yield func(File, []string) bool) {
+			if dirOnly && file.IsDir() || !dirOnly && file.Exists() {
+				yield(file, nil)
+			}
+		}, nil
+	}
+	if i > 0 {
+		// Join non wildcard path before first wildcard
+		file = file.Join(pSegments[:i]...)
+		pSegments = pSegments[i:]
+	}
+	return file.glob(dirOnly, pSegments, nil), nil
+}
+
+func containsWildcard(pattern string) bool {
+	return strings.ContainsAny(pattern, `*?[\`)
+}
+
+func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, []string] {
+	return func(yield func(File, []string) bool) {
+		switch len(segments) {
+		case 0:
+			// No more segments, yield the file itself
+			if dirOnly && file.IsDir() || !dirOnly && file.Exists() {
+				yield(file, values)
+			}
+
+		case 1:
+			// Last segment, yield all matching files
+			if pattern := segments[0]; containsWildcard(pattern) {
+				// Wildcard in last segment, list directory with segment as pattern
+				for f := range file.ListDirIter(pattern) {
+					if dirOnly && !f.IsDir() || !dirOnly && !f.Exists() {
+						continue
+					}
+					if !yield(f, values) {
+						return
+					}
+				}
+			} else {
+				// No wildcard in last segment, join path and yield file if it exists
+				f := file.Join(pattern)
+				if dirOnly && f.IsDir() || !dirOnly && f.Exists() {
+					yield(f, values)
+				}
+			}
+
+		default:
+			if pattern := segments[0]; containsWildcard(pattern) {
+				// Wildcard in segment, list directory with segment as pattern
+				for matchedFile := range file.ListDirIter(pattern) {
+					for f, v := range matchedFile.glob(dirOnly, segments[1:], append(values, matchedFile.Name())) {
+						if !yield(f, v) {
+							return
+						}
+					}
+				}
+			} else {
+				// No wildcard in segment, join path and recurse
+				for f, v := range file.Join(segments[0]).glob(dirOnly, segments[1:], values) {
+					if !yield(f, v) {
+						return
+					}
+				}
+			}
 		}
 	}
 }

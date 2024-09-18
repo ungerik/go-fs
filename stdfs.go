@@ -4,16 +4,15 @@ import (
 	"errors"
 	"fmt"
 	iofs "io/fs"
-	"path"
 	"sort"
 	"strings"
 )
 
 var (
-	_ iofs.FS         = StdFS{File("")}
-	_ iofs.SubFS      = StdFS{File("")}
-	_ iofs.StatFS     = StdFS{File("")}
-	_ iofs.GlobFS     = StdFS{File("")}
+	_ iofs.FS     = StdFS{File("")}
+	_ iofs.SubFS  = StdFS{File("")}
+	_ iofs.StatFS = StdFS{File("")}
+	// _ iofs.GlobFS     = StdFS{File("")}
 	_ iofs.ReadDirFS  = StdFS{File("")}
 	_ iofs.ReadFileFS = StdFS{File("")}
 )
@@ -91,40 +90,40 @@ func (f StdFS) ReadDir(name string) ([]iofs.DirEntry, error) {
 // Glob function.
 //
 // This method implements the io/fs.GlobFS interface.
-func (f StdFS) Glob(pattern string) (names []string, err error) {
-	// if pattern == `u[u][i-i][\d][\d-\d]i[r]/*e*` {
-	// 	fmt.Println(pattern)
-	// }
-	if strings.Contains(pattern, "//") || strings.Contains(pattern, "[]") {
-		return nil, fmt.Errorf("invalid glob pattern: %#v", pattern)
-	}
-	parentPattern, childPattern, cut := strings.Cut(pattern, "/")
-	err = f.File.ListDir(
-		func(file File) error {
-			names = append(names, file.Name())
-			return nil
-		},
-		parentPattern,
-	)
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(names)
-	if cut {
-		parentNames := names
-		names = nil // Don't include parents in final result
-		for _, parent := range parentNames {
-			children, err := f.File.Join(parent).StdFS().Glob(childPattern)
-			if err != nil {
-				return nil, err
-			}
-			for _, child := range children {
-				names = append(names, path.Join(parent, child))
-			}
-		}
-	}
-	return names, nil
-}
+// func (f StdFS) Glob(pattern string) (names []string, err error) {
+// 	// if pattern == `u[u][i-i][\d][\d-\d]i[r]/*e*` {
+// 	// 	fmt.Println(pattern)
+// 	// }
+// 	if strings.Contains(pattern, "//") || strings.Contains(pattern, "[]") {
+// 		return nil, fmt.Errorf("invalid glob pattern: %#v", pattern)
+// 	}
+// 	parentPattern, childPattern, cut := strings.Cut(pattern, "/")
+// 	err = f.File.ListDir(
+// 		func(file File) error {
+// 			names = append(names, file.Name())
+// 			return nil
+// 		},
+// 		parentPattern,
+// 	)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	sort.Strings(names)
+// 	if cut {
+// 		parentNames := names
+// 		names = nil // Don't include parents in final result
+// 		for _, parent := range parentNames {
+// 			children, err := f.File.Join(parent).StdFS().Glob(childPattern)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 			for _, child := range children {
+// 				names = append(names, path.Join(parent, child))
+// 			}
+// 		}
+// 	}
+// 	return names, nil
+// }
 
 func checkStdFSName(name string) error {
 	if name == "" {

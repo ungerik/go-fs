@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -282,4 +284,122 @@ func TestFile_ListDirIter(t *testing.T) {
 func TestFile_String(t *testing.T) {
 	path := filepath.Join("dir", "file.ext")
 	require.Equal(t, path+" (local file system)", File(path).String())
+}
+
+func TestFile_Glob(t *testing.T) {
+	dir := MustMakeTempDir()
+	t.Cleanup(func() { dir.RemoveRecursive() })
+	xDir := dir.Join("a", "b", "c", "Hello", "World", "x")
+	yDir := dir.Join("a", "b", "c", "Hello", "World", "y")
+	require.NoError(t, xDir.MakeAllDirs())
+	require.NoError(t, yDir.MakeAllDirs())
+	cFile := dir.Join("a", "b", "c", "file.txt")
+	require.NoError(t, cFile.Touch())
+	xFile1 := xDir.Join("file1.txt")
+	require.NoError(t, xFile1.Touch())
+	xFile2 := xDir.Join("file2.txt")
+	require.NoError(t, xFile2.Touch())
+	xFile3 := xDir.Join("file3.txt")
+	require.NoError(t, xFile3.Touch())
+
+	type result struct {
+		file   File
+		values []string
+	}
+
+	tests := []struct {
+		name    string
+		file    File
+		pattern string
+		want    []result
+		wantErr bool
+	}{
+		{
+			name:    "invalid file",
+			file:    "",
+			pattern: "",
+			want:    nil,
+		},
+		{
+			name:    "empty pattern",
+			file:    dir,
+			pattern: "",
+			want:    []result{{dir, nil}},
+		},
+		{
+			name:    "no wildcard pattern",
+			file:    dir,
+			pattern: "a/b/c/Hello/World/x/file1.txt",
+			want: []result{
+				{xFile1, nil},
+			},
+		},
+		{
+			name:    "no wildcard non-canonical pattern",
+			file:    dir,
+			pattern: "/./a/b//c/Hello/./././/World/x/file1.txt",
+			want: []result{
+				{xFile1, nil},
+			},
+		},
+		{
+			name:    "rooted files",
+			file:    dir,
+			pattern: "*",
+			want: []result{
+				{dir.Join("a"), nil},
+			},
+		},
+		{
+			name:    "rooted dirs",
+			file:    dir,
+			pattern: "*/",
+			want: []result{
+				{dir.Join("a"), nil},
+			},
+		},
+		{
+			name:    "file and dir",
+			file:    dir,
+			pattern: "./a/b/c/*",
+			want: []result{
+				{dir.Join("a", "b", "c", "Hello"), nil},
+				{cFile, nil},
+			},
+		},
+		{
+			name:    "directories only",
+			file:    dir,
+			pattern: "./a/b/c/*/",
+			want: []result{
+				{dir.Join("a", "b", "c", "Hello"), nil},
+			},
+		},
+		{
+			name:    "complexer pattern",
+			file:    dir,
+			pattern: "*/b/c/*/W???d/x/file[1-2].txt",
+			want: []result{
+				{xFile1, []string{"a", "Hello", "World"}},
+				{xFile2, []string{"a", "Hello", "World"}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIter, err := tt.file.Glob(tt.pattern)
+			if tt.wantErr {
+				require.Error(t, err, "File.Glob")
+			} else {
+				require.NoError(t, err, "File.Glob")
+			}
+			var got []result
+			for file, values := range gotIter {
+				require.Truef(t, file.Exists(), "file %s does not exist", file)
+				got = append(got, result{file, values})
+			}
+			sort.Slice(got, func(i, j int) bool { return got[i].file.LocalPath() < got[j].file.LocalPath() })
+			require.Equal(t, tt.want, got, "file path sorted results")
+		})
+	}
 }
