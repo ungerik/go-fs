@@ -343,7 +343,7 @@ func TestFile_Glob(t *testing.T) {
 			},
 		},
 		{
-			name:    "rooted files",
+			name:    "root files",
 			file:    dir,
 			pattern: "*",
 			want: []result{
@@ -351,7 +351,7 @@ func TestFile_Glob(t *testing.T) {
 			},
 		},
 		{
-			name:    "rooted dirs",
+			name:    "root dirs",
 			file:    dir,
 			pattern: "*/",
 			want: []result{
@@ -381,9 +381,26 @@ func TestFile_Glob(t *testing.T) {
 			pattern: "*/b/c/*/W???d/x/file[1-2].txt",
 			want: []result{
 				{xFile1, []string{"a", "Hello", "World", "file1.txt"}},
-				{xFile2, []string{"a", "Hello", "World", "file1.txt"}},
+				{xFile2, []string{"a", "Hello", "World", "file2.txt"}},
 			},
 		},
+		{
+			name:    "invalid empty path base file",
+			file:    "",
+			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/*",
+			want:    nil,
+		},
+		{
+			name:    "root dir base",
+			file:    "/",
+			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/*.txt",
+			want: []result{
+				{xFile1, []string{"file1.txt"}},
+				{xFile2, []string{"file2.txt"}},
+				{xFile3, []string{"file3.txt"}},
+			},
+		},
+		// Errors
 		{
 			name:    "malformed pattern",
 			file:    dir,

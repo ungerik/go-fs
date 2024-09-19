@@ -581,11 +581,15 @@ func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, [
 			// Last segment, yield all matching files
 			if pattern := segments[0]; containsWildcard(pattern) {
 				// Wildcard in last segment, list directory with segment as pattern
-				for f := range file.ListDirIter(pattern) {
+				for f, err := range file.ListDirIter(pattern) {
+					// If file is not a directory then ErrIsNotDirectory is expected
+					if err != nil {
+						return
+					}
 					if dirOnly && !f.IsDir() || !dirOnly && !f.Exists() {
 						continue
 					}
-					if !yield(f, append(values, f.Name())) {
+					if !yield(f, append(slices.Clone(values), f.Name())) {
 						return
 					}
 				}
@@ -600,8 +604,12 @@ func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, [
 		default:
 			if pattern := segments[0]; containsWildcard(pattern) {
 				// Wildcard in segment, list directory with segment as pattern
-				for matchedFile := range file.ListDirIter(pattern) {
-					for f, v := range matchedFile.glob(dirOnly, segments[1:], append(values, matchedFile.Name())) {
+				for matchedFile, err := range file.ListDirIter(pattern) {
+					// If file is not a directory then ErrIsNotDirectory is expected
+					if err != nil {
+						return
+					}
+					for f, v := range matchedFile.glob(dirOnly, segments[1:], append(slices.Clone(values), matchedFile.Name())) {
 						if !yield(f, v) {
 							return
 						}
