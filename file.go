@@ -493,7 +493,10 @@ func (file File) ListDirIterContext(ctx context.Context, patterns ...string) ite
 }
 
 // MustGlob yields files and wildcard substituting path segments
-// matching a pattern.
+// matching a path pattern.
+//
+// The pattern is appended to the current working directory
+// if it is not an absolute path.
 //
 // The yielded path segments are the strings necessary
 // to substitute all wildcard containing path segments
@@ -508,16 +511,82 @@ func (file File) ListDirIterContext(ctx context.Context, patterns ...string) ite
 //
 // MustGlob ignores file system errors such as I/O errors reading directories.
 // The only possible panic is in case of a malformed pattern.
-func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
-	iterator, err := file.Glob(pattern)
+func MustGlob(pattern string) iter.Seq2[File, []string] {
+	globIter, err := Glob(pattern)
 	if err != nil {
 		panic(err)
 	}
-	return iterator
+	return globIter
+}
+
+// MustGlob yields files and wildcard substituting path segments
+// matching a path pattern.
+//
+// The yielded path segments are the strings necessary
+// to substitute all wildcard containing path segments
+// in the pattern to form a valid path for a yielded file.
+// This includes the name of the yielded file itself
+// if the pattern contains wildcards for the last segment.
+// Non wildcard segments are not included.
+//
+// The syntax of patterns is the same as in [path.Match].
+// It always uses slash '/' as path segment separator
+// independently of the file's file system.
+//
+// A pattern ending with a slash '/' will match only directories.
+//
+// MustGlob ignores file system errors such as I/O errors reading directories.
+// The only possible panic is in case of a malformed pattern.
+func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
+	globIter, err := file.Glob(pattern)
+	if err != nil {
+		panic(err)
+	}
+	return globIter
 }
 
 // Glob yields files and wildcard substituting path segments
-// matching a pattern.
+// matching a path pattern.
+//
+// The pattern is appended to the current working directory
+// if it is not an absolute path.
+//
+// The yielded path segments are the strings necessary
+// to substitute all wildcard containing path segments
+// in the pattern to form a valid path for a yielded file.
+// This includes the name of the yielded file itself
+// if the pattern contains wildcards for the last segment.
+// Non wildcard segments are not included.
+//
+// The syntax of patterns is the same as in [path.Match].
+// It always uses slash '/' as path segment separator
+// independently of the file's file system.
+//
+// A pattern ending with a slash '/' will match only directories.
+//
+// Glob ignores file system errors such as I/O errors reading directories.
+// The only possible returned error is [path.ErrBadPattern],
+// reporting that the pattern is malformed.
+func Glob(pattern string) (iter.Seq2[File, []string], error) {
+	// Find the first wildcard
+	i := strings.IndexAny(pattern, `*?[\`)
+	if i == -1 {
+		// No wildcard in pattern, yield the pattern as File
+		return File(path.Clean(pattern)).Glob("")
+	}
+	// Find the last path separator before the first wildcard
+	i = strings.LastIndexByte(pattern[:i], '/')
+	if i == -1 {
+		// No path separator before the first wildcard
+		// means that the pattern is relative to the current directory
+		return CurrentWorkingDir().Glob(pattern)
+	}
+	// Split pattern into base directory and glob pattern
+	return File(pattern[:i+1]).Glob(pattern[i+1:])
+}
+
+// Glob yields files and wildcard substituting path segments
+// matching a path pattern.
 //
 // The yielded path segments are the strings necessary
 // to substitute all wildcard containing path segments
@@ -536,7 +605,7 @@ func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
 // The only possible returned error is [path.ErrBadPattern],
 // reporting that the pattern is malformed.
 func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
-	dirOnly := strings.HasSuffix(pattern, "/")
+	onlyDirs := strings.HasSuffix(pattern, "/")
 	pattern = strings.Trim(pattern, "/")
 	// Check if the pattern is valid
 	if _, err := path.Match(pattern, ""); err != nil {
@@ -546,10 +615,8 @@ func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
 	pSegments = slices.DeleteFunc(pSegments, func(s string) bool {
 		return s == "" || s == "."
 	})
-	for _, seg := range pSegments {
-		if seg == ".." {
-			return nil, fmt.Errorf("%w, must not contain '..': %s", path.ErrBadPattern, pattern)
-		}
+	if slices.Contains(pSegments, "..") {
+		return nil, fmt.Errorf("%w, must not contain '..': %s", path.ErrBadPattern, pattern)
 	}
 	switch i := slices.IndexFunc(pSegments, containsWildcard); {
 	case i < 0:
@@ -561,19 +628,20 @@ func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
 		file = file.Join(pSegments[:i]...)
 		pSegments = pSegments[i:]
 	}
-	return file.glob(dirOnly, pSegments, nil), nil
+	file.CheckIsDir()
+	return file.glob(onlyDirs, pSegments, nil), nil
 }
 
 func containsWildcard(pattern string) bool {
 	return strings.ContainsAny(pattern, `*?[\`)
 }
 
-func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, []string] {
+func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, []string] {
 	return func(yield func(File, []string) bool) {
 		switch len(segments) {
 		case 0:
 			// No more segments, yield the file itself
-			if dirOnly && file.IsDir() || !dirOnly && file.Exists() {
+			if onlyDirs && file.IsDir() || !onlyDirs && file.Exists() {
 				yield(file, values)
 			}
 
@@ -586,7 +654,7 @@ func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, [
 					if err != nil {
 						return
 					}
-					if dirOnly && !f.IsDir() || !dirOnly && !f.Exists() {
+					if onlyDirs && !f.IsDir() || !onlyDirs && !f.Exists() {
 						continue
 					}
 					if !yield(f, append(slices.Clone(values), f.Name())) {
@@ -596,7 +664,7 @@ func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, [
 			} else {
 				// No wildcard in last segment, join path and yield file if it exists
 				f := file.Join(pattern)
-				if dirOnly && f.IsDir() || !dirOnly && f.Exists() {
+				if onlyDirs && f.IsDir() || !onlyDirs && f.Exists() {
 					yield(f, values)
 				}
 			}
@@ -609,7 +677,7 @@ func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, [
 					if err != nil {
 						return
 					}
-					for f, v := range matchedFile.glob(dirOnly, segments[1:], append(slices.Clone(values), matchedFile.Name())) {
+					for f, v := range matchedFile.glob(onlyDirs, segments[1:], append(slices.Clone(values), matchedFile.Name())) {
 						if !yield(f, v) {
 							return
 						}
@@ -617,7 +685,7 @@ func (file File) glob(dirOnly bool, segments, values []string) iter.Seq2[File, [
 				}
 			} else {
 				// No wildcard in segment, join path and recurse
-				for f, v := range file.Join(segments[0]).glob(dirOnly, segments[1:], values) {
+				for f, v := range file.Join(segments[0]).glob(onlyDirs, segments[1:], values) {
 					if !yield(f, v) {
 						return
 					}

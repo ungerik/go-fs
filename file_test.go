@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -416,6 +415,124 @@ func TestFile_Glob(t *testing.T) {
 				return
 			}
 			require.NoError(t, err, "File.Glob")
+			var got []result
+			for file, values := range gotIter {
+				require.Truef(t, file.Exists(), "file %s does not exist", file)
+				got = append(got, result{file, values})
+			}
+			sort.Slice(got, func(i, j int) bool { return got[i].file.LocalPath() < got[j].file.LocalPath() })
+			require.Equal(t, tt.want, got, "file path sorted results")
+		})
+	}
+}
+
+func TestGlob(t *testing.T) {
+	dir := MustMakeTempDir()
+	t.Cleanup(func() { dir.RemoveRecursive() })
+	xDir := dir.Join("a", "b", "c", "Hello", "World", "x")
+	yDir := dir.Join("a", "b", "c", "Hello", "World", "y")
+	require.NoError(t, xDir.MakeAllDirs())
+	require.NoError(t, yDir.MakeAllDirs())
+	cFile := dir.Join("a", "b", "c", "cFile")
+	require.NoError(t, cFile.Touch())
+	xFile1 := xDir.Join("file1.txt")
+	require.NoError(t, xFile1.Touch())
+	xFile2 := xDir.Join("file2.txt")
+	require.NoError(t, xFile2.Touch())
+	xFile3 := xDir.Join("file3.txt")
+	require.NoError(t, xFile3.Touch())
+
+	type result struct {
+		file   File
+		values []string
+	}
+
+	tests := []struct {
+		name    string
+		pattern string
+		want    []result
+		wantErr bool
+	}{
+		{
+			name:    "empty pattern for current dir",
+			pattern: "",
+			want:    []result{{".", nil}},
+		},
+		{
+			name:    "no wildcard pattern",
+			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/file1.txt",
+			want: []result{
+				{xFile1, nil},
+			},
+		},
+		{
+			name:    "no wildcard non-canonical pattern",
+			pattern: dir.PathWithSlashes() + "/./a/b//c/Hello/./././/World/x/file1.txt",
+			want: []result{
+				{xFile1, nil},
+			},
+		},
+		{
+			name:    "root files",
+			pattern: dir.PathWithSlashes() + "/*",
+			want: []result{
+				{dir.Join("a"), []string{"a"}},
+			},
+		},
+		{
+			name:    "root dirs",
+			pattern: dir.PathWithSlashes() + "/*/",
+			want: []result{
+				{dir.Join("a"), []string{"a"}},
+			},
+		},
+		{
+			name:    "file and dir",
+			pattern: dir.PathWithSlashes() + "/a/b/c/*",
+			want: []result{
+				{dir.Join("a", "b", "c", "Hello"), []string{"Hello"}},
+				{cFile, []string{"cFile"}},
+			},
+		},
+		{
+			name:    "directories only",
+			pattern: dir.PathWithSlashes() + "/a/b/c/*/",
+			want: []result{
+				{dir.Join("a", "b", "c", "Hello"), []string{"Hello"}},
+			},
+		},
+		{
+			name:    "complexer pattern",
+			pattern: dir.PathWithSlashes() + "/*/b/c/*/W???d/x/file[1-2].txt",
+			want: []result{
+				{xFile1, []string{"a", "Hello", "World", "file1.txt"}},
+				{xFile2, []string{"a", "Hello", "World", "file2.txt"}},
+			},
+		},
+		{
+			name:    "*.txt",
+			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/*.txt",
+			want: []result{
+				{xFile1, []string{"file1.txt"}},
+				{xFile2, []string{"file2.txt"}},
+				{xFile3, []string{"file3.txt"}},
+			},
+		},
+		// Errors
+		{
+			name:    "malformed pattern",
+			pattern: "/a/b/c/Hello/World/x/[file1.txt",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIter, err := Glob(tt.pattern)
+			if tt.wantErr {
+				require.Error(t, err, "Glob")
+				return
+			}
+			require.NoError(t, err, "Glob")
 			var got []result
 			for file, values := range gotIter {
 				require.Truef(t, file.Exists(), "file %s does not exist", file)
