@@ -1434,16 +1434,24 @@ func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...strin
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
+//
+// Returns a wrapped ErrUnmarshalJSON when the unmarshalling failed.
 func (file File) ReadJSON(ctx context.Context, output any) error {
 	data, err := file.ReadAllContext(ctx)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, output)
+	err = json.Unmarshal(data, output)
+	if err != nil {
+		return fmt.Errorf("%w because: %w", ErrUnmarshalJSON, err)
+	}
+	return nil
 }
 
 // WriteJSON mashalles input to JSON and writes it as the file.
 // Any indent arguments will be concanated and used as JSON line indentation.
+//
+// Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func (file File) WriteJSON(ctx context.Context, input any, indent ...string) (err error) {
 	if file == "" {
 		return ErrEmptyPath
@@ -1455,22 +1463,30 @@ func (file File) WriteJSON(ctx context.Context, input any, indent ...string) (er
 		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	return file.WriteAllContext(ctx, data)
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
+//
+// Returns a wrapped ErrUnmarshalXML when the unmarshalling failed.
 func (file File) ReadXML(ctx context.Context, output any) error {
 	data, err := file.ReadAllContext(ctx)
 	if err != nil {
 		return err
 	}
-	return xml.Unmarshal(data, output)
+	err = xml.Unmarshal(data, output)
+	if err != nil {
+		return fmt.Errorf("%w because: %w", ErrUnmarshalXML, err)
+	}
+	return nil
 }
 
 // WriteXML mashalles input to XML and writes it as the file.
 // Any indent arguments will be concanated and used as XML line indentation.
+//
+// Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (file File) WriteXML(ctx context.Context, input any, indent ...string) (err error) {
 	if file == "" {
 		return ErrEmptyPath
@@ -1482,7 +1498,7 @@ func (file File) WriteXML(ctx context.Context, input any, indent ...string) (err
 		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
 	data = append([]byte(xml.Header), data...)
 	return file.WriteAllContext(ctx, data)

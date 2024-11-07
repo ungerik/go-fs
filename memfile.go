@@ -62,6 +62,8 @@ func NewMemFile(name string, data []byte) MemFile {
 
 // NewMemFileWriteJSON returns a new MemFile with the input mashalled to JSON as FileData.
 // Any indent arguments will be concanated and used as JSON line indentation.
+//
+// Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func NewMemFileWriteJSON(name string, input any, indent ...string) (MemFile, error) {
 	var (
 		data []byte
@@ -73,13 +75,15 @@ func NewMemFileWriteJSON(name string, input any, indent ...string) (MemFile, err
 		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
 	}
 	if err != nil {
-		return MemFile{}, err
+		return MemFile{}, fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	return MemFile{FileName: name, FileData: data}, nil
 }
 
 // NewMemFileWriteXML returns a new MemFile with the input mashalled to XML as FileData.
 // Any indent arguments will be concanated and used as XML line indentation.
+//
+// Returns a wrapped ErrMarshalXML when the marshalling failed.
 func NewMemFileWriteXML(name string, input any, indent ...string) (MemFile, error) {
 	var (
 		data []byte
@@ -91,7 +95,7 @@ func NewMemFileWriteXML(name string, input any, indent ...string) (MemFile, erro
 		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
 	}
 	if err != nil {
-		return MemFile{}, err
+		return MemFile{}, fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
 	return MemFile{FileName: name, FileData: append([]byte(xml.Header), data...)}, nil
 }
@@ -286,16 +290,24 @@ func (f MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
+//
+// Returns a wrapped ErrUnmarshalJSON when the unmarshalling failed.
 func (f MemFile) ReadJSON(ctx context.Context, output any) error {
 	// Context is passed for identical call signature as other types
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return json.Unmarshal(f.FileData, output)
+	err := json.Unmarshal(f.FileData, output)
+	if err != nil {
+		return fmt.Errorf("%w because: %w", ErrUnmarshalJSON, err)
+	}
+	return nil
 }
 
 // WriteJSON mashalles input to JSON and writes it as the file.
 // Any indent arguments will be concanated and used as JSON line indentation.
+//
+// Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func (f *MemFile) WriteJSON(ctx context.Context, input any, indent ...string) (err error) {
 	// Context is passed for identical call signature as other types
 	if err = ctx.Err(); err != nil {
@@ -308,23 +320,31 @@ func (f *MemFile) WriteJSON(ctx context.Context, input any, indent ...string) (e
 		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	f.FileData = data
 	return nil
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
+//
+// Returns a wrapped ErrUnmarshalXML when the unmarshalling failed.
 func (f MemFile) ReadXML(ctx context.Context, output any) error {
 	// Context is passed for identical call signature as other types
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return xml.Unmarshal(f.FileData, output)
+	err := xml.Unmarshal(f.FileData, output)
+	if err != nil {
+		return fmt.Errorf("%w because: %w", ErrUnmarshalXML, err)
+	}
+	return nil
 }
 
 // WriteXML mashalles input to XML and writes it as the file.
 // Any indent arguments will be concanated and used as XML line indentation.
+//
+// Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (f *MemFile) WriteXML(ctx context.Context, input any, indent ...string) (err error) {
 	// Context is passed for identical call signature as other types
 	if err = ctx.Err(); err != nil {
@@ -337,7 +357,7 @@ func (f *MemFile) WriteXML(ctx context.Context, input any, indent ...string) (er
 		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
 	f.FileData = append([]byte(xml.Header), data...)
 	return nil
@@ -346,6 +366,7 @@ func (f *MemFile) WriteXML(ctx context.Context, input any, indent ...string) (er
 // // MarshalJSON implements the json.Marshaler interface
 // func (f MemFile) MarshalJSON() ([]byte, error) {
 // 	encodedData := base64.RawURLEncoding.EncodeToString(f.FileData)
+//  // fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 // 	return json.Marshal(map[string]string{f.FileName: encodedData})
 // }
 

@@ -26,6 +26,12 @@ const (
 
 	// ErrFileSystemClosed is returned after a file system Close method was called
 	ErrFileSystemClosed SentinelError = "file system is closed"
+
+	ErrUnmarshalJSON SentinelError = "can't unmarshal JSON"
+	ErrMarshalJSON   SentinelError = "can't marshal JSON"
+
+	ErrUnmarshalXML SentinelError = "can't unmarshal XML"
+	ErrMarshalXML   SentinelError = "can't marshal XML"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
