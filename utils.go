@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"runtime"
@@ -68,6 +69,44 @@ func FileInfoToFileCallback(fileCallback func(File) error) func(*FileInfo) error
 	return func(info *FileInfo) error {
 		return fileCallback(info.File)
 	}
+}
+
+// ReadHeader reads up to maxNumBytes from the beginning of the passed FileReader.
+// If fr is a MemFile then a slice of its FileData is returned
+// without copying it.
+func ReadHeader(fr FileReader, maxNumBytes int) ([]byte, error) {
+	if maxNumBytes <= 0 {
+		return nil, nil
+	}
+
+	// Fast path for MemFile
+	if memFile, ok := fr.(MemFile); ok {
+		if len(memFile.FileData) <= maxNumBytes {
+			return memFile.FileData, nil
+		}
+		return memFile.FileData[:maxNumBytes], nil
+	}
+
+	// Generic case
+	r, err := fr.OpenReader()
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	data := make([]byte, maxNumBytes)
+	n, err := r.Read(data)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return data[:n], err
+	}
+	return data[:n], nil
+}
+
+// ReadHeaderString reads up to maxNumBytes as string from the beginning of the passed FileReader.
+// If fr is a MemFile then a slice of its FileData will be used as fast path.
+func ReadHeaderString(fr FileReader, maxNumBytes int) (string, error) {
+	data, err := ReadHeader(fr, maxNumBytes)
+	return string(data), err
 }
 
 // ReadAllContext reads all data from r until EOF is reached,
