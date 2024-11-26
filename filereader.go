@@ -76,6 +76,24 @@ type FileReader interface {
 	GobEncode() ([]byte, error)
 }
 
+// AsFileReaders converts the passed files to []FileReader.
+// If the passed files are already of type []FileReader
+// then they are returned as is.
+func AsFileReaders[F FileReader](files []F) []FileReader {
+	if len(files) == 0 {
+		return nil
+	}
+	fileReaders, ok := any(files).([]FileReader)
+	if ok {
+		return fileReaders
+	}
+	fileReaders = make([]FileReader, len(files))
+	for i, memFile := range files {
+		fileReaders[i] = memFile
+	}
+	return fileReaders
+}
+
 // FileReaderNameIndex returns the slice index of the first FileReader
 // with the passed filename returned from its Name method
 // or -1 in case of no match.

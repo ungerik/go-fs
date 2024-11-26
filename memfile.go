@@ -134,18 +134,6 @@ func ReadAllMemFile(ctx context.Context, r io.Reader, name string) (MemFile, err
 	return MemFile{FileName: name, FileData: data}, nil
 }
 
-// MemFilesAsFileReaders converts []MemFile to []FileReader
-func MemFilesAsFileReaders(memFiles []MemFile) []FileReader {
-	if len(memFiles) == 0 {
-		return nil
-	}
-	fileReaders := make([]FileReader, len(memFiles))
-	for i, memFile := range memFiles {
-		fileReaders[i] = memFile
-	}
-	return fileReaders
-}
-
 // String returns the metadata of the file formatted as a string.
 // String implements the fmt.Stringer interface.
 func (f MemFile) String() string {
