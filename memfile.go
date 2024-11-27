@@ -156,6 +156,18 @@ func (f MemFile) Name() string {
 	return f.FileName
 }
 
+// WithName returns a MemFile with the passed name
+// and the same shared data as the original MemFile.
+func (f MemFile) WithName(name string) MemFile {
+	return MemFile{FileName: name, FileData: f.FileData}
+}
+
+// WithData returns a MemFile with the passed data
+// and the same name as the original MemFile.
+func (f MemFile) WithData(data []byte) MemFile {
+	return MemFile{FileName: f.FileName, FileData: data}
+}
+
 // Ext returns the extension of file name including the point, or an empty string.
 func (f MemFile) Ext() string {
 	return fsimpl.Ext(f.FileName, "")
