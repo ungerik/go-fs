@@ -173,6 +173,11 @@ func (f MemFile) Ext() string {
 	return fsimpl.Ext(f.FileName, "")
 }
 
+// ExtLower returns the lower case extension of the FileName including the point, or an empty string.
+func (f MemFile) ExtLower() string {
+	return strings.ToLower(f.Ext())
+}
+
 // LocalPath always returns an empty string for a MemFile.
 func (MemFile) LocalPath() string {
 	return ""
