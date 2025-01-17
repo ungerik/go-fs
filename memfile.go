@@ -204,6 +204,16 @@ func (f MemFile) CheckExists() error {
 	return nil
 }
 
+// IsDir always returns false for a MemFile.
+func (MemFile) IsDir() bool {
+	return false
+}
+
+// CheckIsDir always returns ErrIsNotDirectory.
+func (f MemFile) CheckIsDir() error {
+	return NewErrIsNotDirectory(f)
+}
+
 // ContentHash returns the DefaultContentHash for the file.
 func (f MemFile) ContentHash() (string, error) {
 	return f.ContentHashContext(context.Background())

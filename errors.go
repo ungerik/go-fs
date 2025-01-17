@@ -79,11 +79,11 @@ func NewErrPathDoesNotExist(path string) ErrDoesNotExist {
 
 // Error implements the error interface
 func (err ErrDoesNotExist) Error() string {
-	path := fmt.Sprintf("%s", err.file)
-	if path == "" {
+	fileStr := fmt.Sprintf("%s", err.file)
+	if fileStr == "" {
 		return "empty file path"
 	}
-	return fmt.Sprintf("file does not exist: %s", path)
+	return fmt.Sprintf("file does not exist: %s", fileStr)
 }
 
 // Unwrap returns os.ErrNotExist
@@ -91,12 +91,17 @@ func (ErrDoesNotExist) Unwrap() error {
 	return os.ErrNotExist
 }
 
-// File returns the file that error concerns
+// File returns the File that error concerns
+// or false for ok if the error is not about a File
+// but another type.
 func (err ErrDoesNotExist) File() (file File, ok bool) {
 	file, ok = err.file.(File)
 	return file, ok
 }
 
+// FileReader returns the FileReader that error concerns
+// or false for ok if the error is not about a FileReader
+// but another type.
 func (err ErrDoesNotExist) FileReader() (file FileReader, ok bool) {
 	file, ok = err.file.(FileReader)
 	return file, ok
@@ -179,21 +184,36 @@ func (err ErrAlreadyExists) File() File {
 // ErrIsDirectory is returned when an operation is not possible because
 // a file is a directory.
 type ErrIsDirectory struct {
-	file File
+	file any
 }
 
 // NewErrIsDirectory returns a new ErrIsDirectory
-func NewErrIsDirectory(file File) ErrIsDirectory {
+func NewErrIsDirectory(file any) ErrIsDirectory {
 	return ErrIsDirectory{file}
 }
 
 func (err ErrIsDirectory) Error() string {
-	return fmt.Sprintf("file is a directory: %s", err.file)
+	fileStr := fmt.Sprintf("%s", err.file)
+	if fileStr == "" {
+		return "empty file path"
+	}
+	return fmt.Sprintf("file is a directory: %s", fileStr)
 }
 
-// File returns the file that error concerns
-func (err ErrIsDirectory) File() File {
-	return err.file
+// File returns the File that error concerns
+// or false for ok if the error is not about a File
+// but another type.
+func (err ErrIsDirectory) File() (file File, ok bool) {
+	file, ok = err.file.(File)
+	return file, ok
+}
+
+// FileReader returns the FileReader that error concerns
+// or false for ok if the error is not about a FileReader
+// but another type.
+func (err ErrIsDirectory) FileReader() (file FileReader, ok bool) {
+	file, ok = err.file.(FileReader)
+	return file, ok
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -202,21 +222,36 @@ func (err ErrIsDirectory) File() File {
 // ErrIsNotDirectory is returned when an operation is not possible
 // because a file is not a directory.
 type ErrIsNotDirectory struct {
-	file File
+	file any
 }
 
 // NewErrIsNotDirectory returns a new ErrIsNotDirectory
-func NewErrIsNotDirectory(file File) ErrIsNotDirectory {
+func NewErrIsNotDirectory(file any) ErrIsNotDirectory {
 	return ErrIsNotDirectory{file}
 }
 
 func (err ErrIsNotDirectory) Error() string {
-	return fmt.Sprintf("file is not a directory: %s", err.file)
+	fileStr := fmt.Sprintf("%s", err.file)
+	if fileStr == "" {
+		return "empty file path"
+	}
+	return fmt.Sprintf("file is not a directory: %s", fileStr)
 }
 
-// File returns the file that error concerns
-func (err ErrIsNotDirectory) File() File {
-	return err.file
+// File returns the File that error concerns
+// or false for ok if the error is not about a File
+// but another type.
+func (err ErrIsNotDirectory) File() (file File, ok bool) {
+	file, ok = err.file.(File)
+	return file, ok
+}
+
+// FileReader returns the FileReader that error concerns
+// or false for ok if the error is not about a FileReader
+// but another type.
+func (err ErrIsNotDirectory) FileReader() (file FileReader, ok bool) {
+	file, ok = err.file.(FileReader)
+	return file, ok
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -32,6 +32,16 @@ type FileReader interface {
 	// if the file does not exist.
 	CheckExists() error
 
+	// IsDir returns true if the file is a directory.
+	IsDir() bool
+
+	// CheckIsDir return an ErrDoesNotExist error
+	// if the file does not exist, ErrEmptyPath
+	// if the file path is empty, or ErrIsNotDirectory
+	// if a file exists, but is not a directory,
+	// or nil if the file is a directory.
+	CheckIsDir() error
+
 	// ContentHash returns the DefaultContentHash for the file.
 	ContentHash() (string, error)
 

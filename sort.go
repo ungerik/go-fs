@@ -1,8 +1,12 @@
 package fs
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+	"sort"
+)
 
-func compareDirsFirst(fi, fj File) (isLess, ok bool) {
+func compareDirsFirst(fi, fj FileReader) (isLess, ok bool) {
 	idir := fi.IsDir()
 	jdir := fj.IsDir()
 	if idir == jdir {
@@ -11,13 +15,13 @@ func compareDirsFirst(fi, fj File) (isLess, ok bool) {
 	return idir, true
 }
 
-func SortByName(files []File) {
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Name() < files[j].Name()
+func SortByName[F FileReader](files []F) {
+	slices.SortFunc(files, func(a, b F) int {
+		return cmp.Compare(a.Name(), b.Name())
 	})
 }
 
-func SortByNameDirsFirst(files []File) {
+func SortByNameDirsFirst[F FileReader](files []F) {
 	sort.Slice(files, func(i, j int) bool {
 		fi := files[i]
 		fj := files[j]
@@ -34,9 +38,15 @@ func SortByPath(files []File) {
 	})
 }
 
-func SortBySize(files []File) {
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Size() < files[j].Size()
+func SortByLocalPath[F FileReader](files []F) {
+	slices.SortFunc(files, func(a, b F) int {
+		return cmp.Compare(a.LocalPath(), b.LocalPath())
+	})
+}
+
+func SortBySize[F FileReader](files []F) {
+	slices.SortFunc(files, func(a, b F) int {
+		return cmp.Compare(a.Size(), b.Size())
 	})
 }
 
