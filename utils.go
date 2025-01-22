@@ -8,60 +8,6 @@ import (
 	"runtime"
 )
 
-// FileURLs returns the URLs of the passed files
-func FileURLs(files []File) []string {
-	fileURLs := make([]string, len(files))
-	for i, file := range files {
-		fileURLs[i] = file.URL()
-	}
-	return fileURLs
-}
-
-// FilePaths returns the FileSystem specific paths the passed files
-func FilePaths(files []File) []string {
-	paths := make([]string, len(files))
-	for i, file := range files {
-		paths[i] = file.Path()
-	}
-	return paths
-}
-
-// FileNames returns the names of the passed files
-func FileNames[T FileReader](files []T) []string {
-	names := make([]string, len(files))
-	for i, file := range files {
-		names[i] = file.Name()
-	}
-	return names
-}
-
-// FilesAsFileReaders converts a slice of File to a slice of FileReader
-func FilesAsFileReaders(files []File) []FileReader {
-	fileReaders := make([]FileReader, len(files))
-	for i, file := range files {
-		fileReaders[i] = file
-	}
-	return fileReaders
-}
-
-// FilesFromStrings returns Files for the given fileURIs.
-func FilesFromStrings(fileURIs []string) []File {
-	files := make([]File, len(fileURIs))
-	for i := range fileURIs {
-		files[i] = File(fileURIs[i])
-	}
-	return files
-}
-
-// FileReadersFromStrings returns FileReaders for the given fileURIs.
-func FileReadersFromStrings(fileURIs []string) []FileReader {
-	fileReaders := make([]FileReader, len(fileURIs))
-	for i := range fileURIs {
-		fileReaders[i] = File(fileURIs[i])
-	}
-	return fileReaders
-}
-
 // FileInfoToFileCallback converts a File callback function
 // into a FileInfo callback function that is calling
 // the passed fileCallback with the FileInfo.File.
@@ -163,6 +109,7 @@ func ExecutableFile() File {
 	return File(exe)
 }
 
+// SourceFile returns the file of the caller of the current function.
 func SourceFile() File {
 	_, file, _, ok := runtime.Caller(1)
 	if !ok {

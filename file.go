@@ -36,6 +36,18 @@ const InvalidFile = File("")
 // File implements FileReader.
 type File string
 
+// FilesFromStrings returns Files for the given fileURIs.
+func FilesFromStrings(fileURIs []string) []File {
+	if len(fileURIs) == 0 {
+		return nil
+	}
+	files := make([]File, len(fileURIs))
+	for i := range fileURIs {
+		files[i] = File(fileURIs[i])
+	}
+	return files
+}
+
 // FileSystem returns the FileSystem of the File.
 // Defaults to Local if not a complete URI,
 // or Invalid for an empty path.
