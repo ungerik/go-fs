@@ -20,6 +20,17 @@ func NameIndex[F interface{ Name() string }](files []F, filename string) int {
 	return -1
 }
 
+// ContainsName returns true if the passed filename
+// matches the result from the Name method of any of the files.
+func ContainsName[F interface{ Name() string }](files []F, filename string) bool {
+	for _, f := range files {
+		if f.Name() == filename {
+			return true
+		}
+	}
+	return false
+}
+
 // LocalPathIndex returns the slice index of the first file
 // where the passed localPath equals the result from the LocalPath method
 // or -1 in case of no match.
@@ -30,6 +41,17 @@ func LocalPathIndex[F interface{ LocalPath() string }](files []F, localPath stri
 		}
 	}
 	return -1
+}
+
+// ContainsLocalPath returns true if the passed localPath
+// matches the result from the LocalPath method of any of the files.
+func ContainsLocalPath[F interface{ LocalPath() string }](files []F, localPath string) bool {
+	for _, f := range files {
+		if f.LocalPath() == localPath {
+			return true
+		}
+	}
+	return false
 }
 
 // ContentHashIndex returns the slice index of the first file
@@ -53,13 +75,23 @@ func ContentHashIndex[F interface {
 // NotExistsIndex returns the slice index of the first FileReader
 // where the Exists method returned false
 // or -1 in case of no match.
-func NotExistsIndex[F interface{ Exists() bool }](files []F, filename string) int {
+func NotExistsIndex[F interface{ Exists() bool }](files []F) int {
 	for i, f := range files {
 		if !f.Exists() {
 			return i
 		}
 	}
 	return -1
+}
+
+// AllExist returns true if the Exists method of all files returned true
+func AllExist[F interface{ Exists() bool }](files []F) bool {
+	for _, f := range files {
+		if !f.Exists() {
+			return false
+		}
+	}
+	return true
 }
 
 // FileURLs returns the URLs of the passed files
