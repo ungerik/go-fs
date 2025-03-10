@@ -2,6 +2,7 @@ package zipfs
 
 import (
 	"archive/zip"
+	"compress/flate"
 	"context"
 	"fmt"
 	"io"
@@ -58,6 +59,9 @@ func NewWriterFileSystem(file fs.File) (zipfs *ZipFileSystem, err error) {
 		return nil, err
 	}
 	zipWriter := zip.NewWriter(fileWriter)
+	zipWriter.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(out, flate.BestCompression)
+	})
 	zipfs = &ZipFileSystem{
 		prefix:    Prefix + fsimpl.RandomString(),
 		closer:    zipWriter,
