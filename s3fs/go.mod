@@ -1,6 +1,6 @@
 module github.com/ungerik/go-fs/s3fs
 
-go 1.24
+go 1.23
 
 replace github.com/ungerik/go-fs => ..
 
