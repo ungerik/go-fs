@@ -11,6 +11,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"mime/multipart"
+	"net/http"
 	"strings"
 	"time"
 
@@ -500,9 +501,6 @@ func UnzipToMemFiles(ctx context.Context, zipFile FileReader) ([]MemFile, error)
 
 // ReadMultipartFormMemFiles reads the multipart form
 // and returns a map of form field name to MemFiles.
-//
-// Use request.ParseMultipartForm(maxMemory)
-// to parse the form from an http.Request.
 func ReadMultipartFormMemFiles(ctx context.Context, form *multipart.Form) (map[string][]MemFile, error) {
 	memFiles := make(map[string][]MemFile, len(form.File))
 	for fieldName, files := range form.File {
@@ -520,4 +518,14 @@ func ReadMultipartFormMemFiles(ctx context.Context, form *multipart.Form) (map[s
 		}
 	}
 	return memFiles, nil
+}
+
+// ParseRequestMultipartFormMemFiles parses the multipart form from the request
+// and returns a map of form field name to MemFiles.
+func ParseRequestMultipartFormMemFiles(request *http.Request, maxMemory int64) (map[string][]MemFile, error) {
+	err := request.ParseMultipartForm(maxMemory)
+	if err != nil {
+		return nil, err
+	}
+	return ReadMultipartFormMemFiles(request.Context(), request.MultipartForm)
 }
