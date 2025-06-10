@@ -1,5 +1,6 @@
 package fs
 
+/*
 import (
 	"context"
 	iofs "io/fs"
@@ -214,3 +215,4 @@ func (subfs *todoSubFileSystem) Remove(filePath string) error {
 func (subfs *todoSubFileSystem) Close() error {
 	panic("TODO")
 }
+*/
