@@ -52,7 +52,7 @@ func IdenticalFileContents(ctx context.Context, files ...FileReader) (identical 
 			if err != nil {
 				return false, err
 			}
-			if bytes.Compare(comp, ref) != 0 {
+			if !bytes.Equal(comp, ref) {
 				return false, nil
 			}
 		}

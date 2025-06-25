@@ -56,6 +56,35 @@ func Zip(ctx context.Context, files ...FileReader) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// ZipMemFiles zips the passed MemFiles using flate.BestCompression.
+func ZipMemFiles(files ...MemFile) ([]byte, error) {
+	buf := bytes.Buffer{}
+	zipWriter := zip.NewWriter(&buf)
+	zipWriter.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(out, flate.BestCompression)
+	})
+	for _, file := range files {
+		w, err := zipWriter.CreateHeader(
+			&zip.FileHeader{
+				Name:   file.FileName,
+				Method: zip.Deflate,
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create zip header for %s: %w", file.FileName, err)
+		}
+		_, err = w.Write(file.FileData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to write file %s: %w", file.FileName, err)
+		}
+	}
+	err := zipWriter.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to close zip writer: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // UnzipToMemFiles unzips the passed zipFile as MemFiles.
 func UnzipToMemFiles(ctx context.Context, zipFile FileReader) ([]MemFile, error) {
 	fileReader, err := zipFile.OpenReadSeeker()
