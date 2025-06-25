@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/gob"
@@ -464,40 +463,6 @@ func (i memFileInfo) Mode() iofs.FileMode { return 0666 }
 func (i memFileInfo) ModTime() time.Time  { return time.Now() }
 func (i memFileInfo) IsDir() bool         { return false }
 func (i memFileInfo) Sys() any            { return nil }
-
-// UnzipToMemFiles unzips the passed zipFile as MemFiles.
-func UnzipToMemFiles(ctx context.Context, zipFile FileReader) ([]MemFile, error) {
-	fileReader, err := zipFile.OpenReadSeeker()
-	if err != nil {
-		return nil, err
-	}
-	defer fileReader.Close()
-
-	zipReader, err := zip.NewReader(fileReader, zipFile.Size())
-	if err != nil {
-		return nil, err
-	}
-
-	memFiles := make([]MemFile, len(zipReader.File))
-	for i, zipFile := range zipReader.File {
-		if strings.HasSuffix(zipFile.Name, "/") {
-			continue
-		}
-		r, err := zipFile.Open()
-		if err != nil {
-			return nil, err
-		}
-		memFiles[i], err = ReadAllMemFile(ctx, r, zipFile.Name)
-		if err != nil {
-			return nil, err
-		}
-		err = r.Close()
-		if err != nil {
-			return nil, err
-		}
-	}
-	return memFiles, nil
-}
 
 // ReadMultipartFormMemFiles reads the multipart form
 // and returns a map of form field name to MemFiles.
