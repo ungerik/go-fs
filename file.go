@@ -66,10 +66,10 @@ func (file File) RawURI() string {
 	return string(file)
 }
 
-// String returns information about the File and its FileSystem.
-// String implements the fmt.Stringer interface.
+// String implements the fmt.Stringer interface
+// by returning the URL of the file.
 func (file File) String() string {
-	return fmt.Sprintf("%s (%s)", string(file), file.FileSystem().Name())
+	return file.URL()
 }
 
 // URL of the file
