@@ -689,19 +689,11 @@ func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, 
 					if err != nil {
 						return
 					}
-					for f, v := range matchedFile.glob(onlyDirs, segments[1:], append(slices.Clone(values), matchedFile.Name())) {
-						if !yield(f, v) {
-							return
-						}
-					}
+					matchedFile.glob(onlyDirs, segments[1:], append(slices.Clone(values), matchedFile.Name()))(yield)
 				}
 			} else {
 				// No wildcard in segment, join path and recurse
-				for f, v := range file.Join(segments[0]).glob(onlyDirs, segments[1:], values) {
-					if !yield(f, v) {
-						return
-					}
-				}
+				file.Join(segments[0]).glob(onlyDirs, segments[1:], values)(yield)
 			}
 		}
 	}

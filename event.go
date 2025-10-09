@@ -18,8 +18,8 @@ func (e Event) HasChmod() bool  { return fsnotify.Op(e).Has(fsnotify.Chmod) }
 // Used only for testing
 const (
 	eventCreate = Event(fsnotify.Create)
-	eventWrite  = Event(fsnotify.Write)
+	// eventWrite  = Event(fsnotify.Write)
 	eventRemove = Event(fsnotify.Remove)
 	eventRename = Event(fsnotify.Rename)
-	eventChmod  = Event(fsnotify.Chmod)
+	// eventChmod  = Event(fsnotify.Chmod)
 )
