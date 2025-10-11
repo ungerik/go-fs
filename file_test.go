@@ -3,13 +3,13 @@ package fs
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -278,11 +278,6 @@ func TestFile_ListDirIter(t *testing.T) {
 	}
 	require.NoError(t, err)
 	require.Empty(t, files, "not all files listed")
-}
-
-func TestFile_String(t *testing.T) {
-	path := filepath.Join("dir", "file.ext")
-	require.Equal(t, path+" (local file system)", File(path).String())
 }
 
 func TestFile_Glob(t *testing.T) {

@@ -9,12 +9,12 @@ and interprets its value as a local file system path or as a URI.
 TODO
 ----
 
-- [ ] MemFileSystem
+- [X] MemFileSystem
 - [ ] ZipFileSystem
 - [ ] Return ErrFileSystemClosed from all closable FS
 - [ ] S3
 - [ ] Test dropboxfs
-- [ ] Test fptfs
+- [ ] Test ftpfs
 - [ ] TestFileReads and TestFileMetaData for all FS
 - [ ] add TestFileWrites
 

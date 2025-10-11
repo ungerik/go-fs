@@ -1,10 +1,27 @@
 package fs
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestLocalFileSystem(t *testing.T) {
+	testDir := MustMakeTempDir()
+	t.Cleanup(func() {
+		assert.NoError(t, testDir.RemoveRecursive(), "testDir.RemoveRecursive() should not return an error")
+	})
+
+	RunFileSystemTests(
+		context.Background(),
+		t,
+		Local,               // fs
+		"local file system", // name
+		"file://",           // prefix
+		testDir.LocalPath(), // testDir
+	)
+}
 
 func Test_LocalFileSystem_MakeAllDirs(t *testing.T) {
 	const testDir = "TestDir"
