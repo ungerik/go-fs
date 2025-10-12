@@ -1,9 +1,11 @@
 package fs
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,4 +63,26 @@ func TestNewSingleMemFileSystem(t *testing.T) {
 	require.False(t, f.Exists(), "test.txt does not exist after close")
 	require.False(t, fs.RootDir().Exists(), "root dir does not exist after close")
 	require.False(t, fs.RootDir().IsDir(), "root dir does not exist after close")
+}
+
+func TestMemFileSystem(t *testing.T) {
+	memFS, err := NewMemFileSystem("/")
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		assert.NoError(t, memFS.Close())
+	})
+
+	testDir := "/test"
+	err = memFS.MakeDir(testDir, nil)
+	require.NoError(t, err, "Failed to create test directory")
+
+	RunFileSystemTests(
+		context.Background(),
+		t,
+		memFS,
+		"memory file system", // name
+		memFS.Prefix(),       // prefix
+		testDir,              // testDir
+	)
 }
