@@ -23,10 +23,13 @@ var (
 // except for the Name and String methods, which will return "MockFileSystem"
 // if the function pointer is nil.
 type MockFileSystem struct {
+	// MockPrefix is the prefix string returned by the Prefix() method.
+	// If empty, defaults to "mock://".
+	MockPrefix string
+
 	MockReadableWritable func() (readable, writable bool)
 	MockRootDir          func() File
 	MockID               func() (string, error)
-	MockPrefix           func() string
 	MockName             func() string
 	MockString           func() string
 	MockURL              func(cleanPath string) string
@@ -109,15 +112,17 @@ func (m *MockFileSystem) ID() (string, error) {
 	return m.MockID()
 }
 
-// Prefix implements FileSystem
+// Prefix implements FileSystem.
+// Returns the value of MockPrefix if not empty, otherwise returns "mock://".
 func (m *MockFileSystem) Prefix() string {
-	if m.MockPrefix == nil {
-		panic("MockFileSystem.MockPrefix is nil")
+	if m.MockPrefix == "" {
+		return "mock://"
 	}
-	return m.MockPrefix()
+	return m.MockPrefix
 }
 
-// Name implements FileSystem
+// Name implements FileSystem.
+// Calls MockName if not nil, otherwise returns "MockFileSystem".
 func (m *MockFileSystem) Name() string {
 	if m.MockName != nil {
 		return m.MockName()
@@ -125,7 +130,8 @@ func (m *MockFileSystem) Name() string {
 	return "MockFileSystem"
 }
 
-// String implements FileSystem
+// String implements FileSystem.
+// Calls MockString if not nil, otherwise returns "MockFileSystem".
 func (m *MockFileSystem) String() string {
 	if m.MockString != nil {
 		return m.MockString()
