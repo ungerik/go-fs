@@ -1611,3 +1611,27 @@ func (file File) StdFS() StdFS {
 func (file File) StdDirEntry() StdDirEntry {
 	return StdDirEntry{file}
 }
+
+// NewFileReadWriteAllSeekCloser creates a ReadWriteSeekCloser for a File
+// using only File.ReadAll and File.WriteAll.
+// The permissions parameter will be used for WriteAll operations.
+//
+// It uses fsimpl.NewReadWriteAllSeekCloser to implement ReadWriteSeekCloser by lazily reading
+// all data from a file when first needed, buffering modifications in memory, and writing
+// everything back to the file on Close().
+//
+// This is useful for file systems that don't support true random access writes,
+// such as ZIP archives, where files must be completely rewritten.
+//
+// The implementation:
+//  1. Lazily reads all file content into memory on first read/write operation
+//  2. Performs all read/write/seek operations in memory using a FileBuffer
+//  3. Writes the complete modified content back to the file on Close()
+func NewFileReadWriteAllSeekCloser(file File, permissions ...Permissions) ReadWriteSeekCloser {
+	return fsimpl.NewReadWriteAllSeekCloser(
+		file.ReadAll,
+		func(data []byte) error {
+			return file.WriteAll(data, permissions...)
+		},
+	)
+}

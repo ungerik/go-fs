@@ -163,7 +163,7 @@ func (buf *FileBuffer) Write(p []byte) (n int, err error) {
 // WriteAt must return a non-nil error if it returns n < len(p).
 func (buf *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 	numBytes := len(p)
-	pos := int(buf.pos)
+	pos := int(off)
 	writeEnd := pos + numBytes
 	if writeEnd > len(buf.data) {
 		newData := make([]byte, writeEnd)

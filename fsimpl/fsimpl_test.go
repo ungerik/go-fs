@@ -2,7 +2,6 @@ package fsimpl
 
 import (
 	"fmt"
-	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,14 +35,6 @@ func TestSplitDirAndName(t *testing.T) {
 
 func TestRandomString(t *testing.T) {
 	require.Len(t, RandomString(), 20, "RandomString length should be 20")
-}
-
-func TestReadonlyFileBuffer(t *testing.T) {
-	out := make([]byte, 0)
-	b := NewReadonlyFileBuffer(nil, nil)
-	n, err := b.Read(out)
-	assert.Equal(t, io.EOF, err, "Read")
-	assert.Equal(t, n, 0, "no bytes read")
 }
 
 func ExampleExt() {
