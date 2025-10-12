@@ -61,7 +61,7 @@ func (file File) ParseRawURI() (fs FileSystem, fsPath string) {
 	return ParseRawURI(string(file))
 }
 
-// RawURI rurns the string value of File.
+// RawURI returns the string value of File.
 func (file File) RawURI() string {
 	return string(file)
 }
@@ -72,7 +72,7 @@ func (file File) String() string {
 	return file.URL()
 }
 
-// URL of the file
+// URL returns the URL of the file.
 func (file File) URL() string {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.URL(path)
@@ -80,7 +80,7 @@ func (file File) URL() string {
 
 // Path returns the cleaned path of the file.
 // It may differ from the string value of File
-// because it will be cleaned depending on the FileSystem
+// because it will be cleaned depending on the FileSystem.
 func (file File) Path() string {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.JoinCleanPath(path)
@@ -89,7 +89,7 @@ func (file File) Path() string {
 // PathWithSlashes returns the cleaned path of the file
 // always using the slash '/' as separator.
 // It may differ from the string value of File
-// because it will be cleaned depending on the FileSystem
+// because it will be cleaned depending on the FileSystem.
 func (file File) PathWithSlashes() string {
 	fileSystem, path := file.ParseRawURI()
 	path = fileSystem.JoinCleanPath(path)
@@ -136,7 +136,7 @@ func (file File) Dir() File {
 }
 
 // DirAndName returns the parent directory of filePath and the name with that directory of the last filePath element.
-// If filePath is the root of the file systeme, then an empty string will be returned for name.
+// If filePath is the root of the file system, then an empty string will be returned for name.
 func (file File) DirAndName() (dir File, name string) {
 	fileSystem, path := file.ParseRawURI()
 	dirPath, name := fileSystem.SplitDirAndName(path)
@@ -145,7 +145,7 @@ func (file File) DirAndName() (dir File, name string) {
 
 // VolumeName returns the name of the volume at the beginning of the file path,
 // or an empty string if the path has no volume.
-// A volume is for example "C:" on Windows
+// A volume is for example "C:" on Windows.
 func (file File) VolumeName() string {
 	fileSystem, path := file.ParseRawURI()
 	if fs, ok := fileSystem.(VolumeNameFileSystem); ok {
@@ -192,7 +192,7 @@ func (file File) Join(pathParts ...string) File {
 	return fileSystem.JoinCleanFile(pathParts...)
 }
 
-// Joinf returns a new File with smf.Sprintf(format, args...) cleaned and joined to the current File's URI.
+// Joinf returns a new File with fmt.Sprintf(format, args...) cleaned and joined to the current File's URI.
 // The resulting URI path will be cleaned, removing relative directory names like "..".
 func (file File) Joinf(format string, args ...any) File {
 	fileSystem, path := file.ParseRawURI()
@@ -215,7 +215,7 @@ func (file File) IsReadable() bool {
 	return (info.Mode().IsDir() || info.Mode().IsRegular()) && (info.Mode()&0400 != 0)
 }
 
-// IsWriteable returns if the file exists and is writeable
+// IsWriteable returns if the file exists and is writeable,
 // or in case it doesn't exist,
 // if the parent directory exists and is writeable.
 func (file File) IsWriteable() bool {
@@ -287,7 +287,7 @@ func (file File) Info() *FileInfo {
 // 	return info, nil
 // }
 
-// Exists returns a file or directory with the path of File exists.
+// Exists returns if a file or directory with the path of File exists.
 func (file File) Exists() bool {
 	fileSystem, path := file.ParseRawURI()
 	if fs, ok := fileSystem.(ExistsFileSystem); ok {
@@ -297,7 +297,7 @@ func (file File) Exists() bool {
 	return err == nil
 }
 
-// CheckExists return an ErrDoesNotExist error
+// CheckExists returns an ErrDoesNotExist error
 // if the file does not exist or ErrEmptyPath
 // if the file path is empty.
 func (file File) CheckExists() error {
@@ -310,7 +310,7 @@ func (file File) CheckExists() error {
 	return nil
 }
 
-// IsDir returns a directory with the path of File exists.
+// IsDir returns if a directory with the path of File exists.
 func (file File) IsDir() bool {
 	stat, err := file.Stat()
 	if err != nil {
@@ -319,7 +319,7 @@ func (file File) IsDir() bool {
 	return stat.IsDir()
 }
 
-// CheckIsDir return an ErrDoesNotExist error
+// CheckIsDir returns an ErrDoesNotExist error
 // if the file does not exist, ErrEmptyPath
 // if the file path is empty, or ErrIsNotDirectory
 // if a file exists, but is not a directory,
@@ -343,14 +343,14 @@ func (file File) AbsPath() string {
 	return fileSystem.AbsPath(path)
 }
 
-// HasAbsPath returns wether the file has an absolute
+// HasAbsPath returns whether the file has an absolute
 // path depending on the file system.
 func (file File) HasAbsPath() bool {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.IsAbsPath(path)
 }
 
-// ToAbsPath returns the file with an absolute
+// ToAbsPath returns the File with an absolute
 // path depending on the file system.
 func (file File) ToAbsPath() File {
 	fileSystem, path := file.ParseRawURI()
@@ -380,7 +380,7 @@ func (file File) IsHidden() bool {
 	return fileSystem.IsHidden(path)
 }
 
-// IsSymbolicLink returns if the file is a symbolic link
+// IsSymbolicLink returns if the file is a symbolic link.
 // Use LocalFileSystem.CreateSymbolicLink and LocalFileSystem.ReadSymbolicLink
 // to handle symbolic links.
 func (file File) IsSymbolicLink() bool {
@@ -424,6 +424,8 @@ func (file File) ContentHashContext(ctx context.Context) (string, error) {
 	return DefaultContentHash(ctx, reader)
 }
 
+// Modified returns the modification time of the file,
+// or a zero time.Time if the file does not exist.
 func (file File) Modified() time.Time {
 	stat, err := file.Stat()
 	if err != nil {
@@ -432,6 +434,8 @@ func (file File) Modified() time.Time {
 	return stat.ModTime()
 }
 
+// Permissions returns the file permissions,
+// or NoPermissions if the file does not exist.
 func (file File) Permissions() Permissions {
 	stat, err := file.Stat()
 	if err != nil {
@@ -440,6 +444,7 @@ func (file File) Permissions() Permissions {
 	return PermissionsFromStdFileInfo(stat)
 }
 
+// SetPermissions sets the file permissions.
 func (file File) SetPermissions(perm Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -847,10 +852,18 @@ func (file File) ListDirMaxContext(ctx context.Context, max int, patterns ...str
 	return files, nil
 }
 
+// ListDirRecursiveMax returns at most max files from the directory and its sub-directories.
+// A max value of -1 returns all files.
+// If any patterns are passed, then only files with a name that matches
+// at least one of the patterns are returned.
 func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
 	return file.ListDirRecursiveMaxContext(context.Background(), max, patterns...)
 }
 
+// ListDirRecursiveMaxContext returns at most max files from the directory and its sub-directories.
+// A max value of -1 returns all files.
+// If any patterns are passed, then only files with a name that matches
+// at least one of the patterns are returned.
 func (file File) ListDirRecursiveMaxContext(ctx context.Context, max int, patterns ...string) (files []File, err error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -916,6 +929,7 @@ func (file File) ListDirRecursiveChan(cancel <-chan error, patterns ...string) (
 	return files, errs
 }
 
+// User returns the user owner of the file.
 func (file File) User() (string, error) {
 	if file == "" {
 		return "", ErrEmptyPath
@@ -927,6 +941,7 @@ func (file File) User() (string, error) {
 	return "", NewErrUnsupported(fileSystem, "User")
 }
 
+// SetUser sets the user owner of the file.
 func (file File) SetUser(user string) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -938,6 +953,7 @@ func (file File) SetUser(user string) error {
 	return NewErrUnsupported(fileSystem, "SetUser")
 }
 
+// Group returns the group owner of the file.
 func (file File) Group() (string, error) {
 	if file == "" {
 		return "", ErrEmptyPath
@@ -949,6 +965,7 @@ func (file File) Group() (string, error) {
 	return "", NewErrUnsupported(fileSystem, "Group")
 }
 
+// SetGroup sets the group owner of the file.
 func (file File) SetGroup(group string) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -960,6 +977,7 @@ func (file File) SetGroup(group string) error {
 	return NewErrUnsupported(fileSystem, "SetGroup")
 }
 
+// Touch creates an empty file or updates the modification time of an existing file.
 func (file File) Touch(perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -988,8 +1006,8 @@ func (file File) MakeDir(perm ...Permissions) error {
 	return fileSystem.MakeDir(path, perm)
 }
 
-// MakeAllDirs creates all directories up to this one,
-// does not return an error if the directories already exist
+// MakeAllDirs creates all directories up to this one.
+// It does not return an error if the directories already exist.
 func (file File) MakeAllDirs(perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -1025,8 +1043,8 @@ func (file File) WriteTo(writer io.Writer) (n int64, err error) {
 	return io.Copy(writer, reader)
 }
 
-// ReadFrom implements the io.ReaderFrom interface,
-// the file is writter with the existing permissions if it exists,
+// ReadFrom implements the io.ReaderFrom interface.
+// The file is written with the existing permissions if it exists,
 // or with the default write permissions if it does not exist yet.
 func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	if file == "" {
@@ -1046,7 +1064,7 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	return io.Copy(writer, reader)
 }
 
-// OpenReader opens the file and returns a io/fs.File that has to be closed after reading
+// OpenReader opens the file and returns a io/fs.File that has to be closed after reading.
 func (file File) OpenReader() (ReadCloser, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -1079,6 +1097,7 @@ func (file File) OpenReadSeeker() (ReadSeekCloser, error) {
 	return fsimpl.NewReadonlyFileBufferReadAll(readCloser, info)
 }
 
+// OpenWriter opens the file for writing and returns a WriteCloser that has to be closed after writing.
 func (file File) OpenWriter(perm ...Permissions) (WriteCloser, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -1087,6 +1106,7 @@ func (file File) OpenWriter(perm ...Permissions) (WriteCloser, error) {
 	return fileSystem.OpenWriter(path, perm)
 }
 
+// OpenAppendWriter opens the file for appending and returns a WriteCloser that has to be closed after writing.
 func (file File) OpenAppendWriter(perm ...Permissions) (WriteCloser, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -1110,6 +1130,7 @@ func (file File) OpenAppendWriter(perm ...Permissions) (WriteCloser, error) {
 
 }
 
+// OpenReadWriter opens the file for reading and writing and returns a ReadWriteSeekCloser that has to be closed.
 func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -1118,12 +1139,12 @@ func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error
 	return fileSystem.OpenReadWriter(path, perm)
 }
 
-// ReadAll reads and returns all bytes of the file
+// ReadAll reads and returns all bytes of the file.
 func (file File) ReadAll() (data []byte, err error) {
 	return file.ReadAllContext(context.Background())
 }
 
-// ReadAllContext reads and returns all bytes of the file
+// ReadAllContext reads and returns all bytes of the file.
 func (file File) ReadAllContext(ctx context.Context) (data []byte, err error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -1168,10 +1189,12 @@ func (file File) ReadAllStringContext(ctx context.Context) (string, error) {
 	return string(data), nil
 }
 
+// WriteAll writes all data to the file.
 func (file File) WriteAll(data []byte, perm ...Permissions) error {
 	return file.WriteAllContext(context.Background(), data, perm...)
 }
 
+// WriteAllContext writes all data to the file.
 func (file File) WriteAllContext(ctx context.Context, data []byte, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -1188,10 +1211,12 @@ func (file File) WriteAllContext(ctx context.Context, data []byte, perm ...Permi
 	return WriteAllContext(ctx, w, data)
 }
 
+// WriteAllString writes a string to the file.
 func (file File) WriteAllString(str string, perm ...Permissions) error {
 	return file.WriteAllStringContext(context.Background(), str, perm...)
 }
 
+// WriteAllStringContext writes a string to the file.
 func (file File) WriteAllStringContext(ctx context.Context, str string, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -1199,6 +1224,7 @@ func (file File) WriteAllStringContext(ctx context.Context, str string, perm ...
 	return file.WriteAllContext(ctx, []byte(str), perm...)
 }
 
+// Append appends data to the file.
 func (file File) Append(ctx context.Context, data []byte, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -1225,18 +1251,19 @@ func (file File) Append(ctx context.Context, data []byte, perm ...Permissions) e
 	return file.WriteAllContext(ctx, append(current, data...))
 }
 
+// AppendString appends a string to the file.
 func (file File) AppendString(ctx context.Context, str string, perm ...Permissions) error {
 	return file.Append(ctx, []byte(str), perm...)
 }
 
 // Watch a file or directory for changes.
-// If the file describes a directory then
+// If the file describes a directory, then
 // changes directly within it will be reported.
-// This does not apply changes in deeper
+// This does not apply to changes in deeper
 // recursive sub-directories.
 //
 // It is valid to watch a file with multiple
-// callbacks, calling the returned cancel function
+// callbacks. Calling the returned cancel function
 // will cancel a particular watch.
 func (file File) Watch(onEvent func(File, Event)) (cancel func() error, err error) {
 	if file == "" {
@@ -1252,6 +1279,9 @@ func (file File) Watch(onEvent func(File, Event)) (cancel func() error, err erro
 	return nil, NewErrUnsupported(fileSystem, "Watch")
 }
 
+// Truncate changes the size of the file.
+// If the file is larger than newSize, it is truncated.
+// If the file is smaller, it is extended with zeros.
 func (file File) Truncate(newSize int64) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -1305,7 +1335,7 @@ func (file File) Truncate(newSize int64) error {
 
 // Rename changes the name of a file where newName is the name part after file.Dir().
 // Note: this does not move the file like in other rename implementations,
-// it only changes the name of the file within its directdory.
+// it only changes the name of the file within its directory.
 func (file File) Rename(newName string) (renamedFile File, err error) {
 	if file == "" {
 		return "", ErrEmptyPath
@@ -1346,7 +1376,7 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 // Renamef changes the name of a file where fmt.Sprintf(newNameFormat, args...)
 // is the name part after file.Dir().
 // Note: this does not move the file like in other rename implementations,
-// it only changes the name of the file within its directdory.
+// it only changes the name of the file within its directory.
 func (file File) Renamef(newNameFormat string, args ...any) (renamedFile File, err error) {
 	return file.Rename(fmt.Sprintf(newNameFormat, args...))
 }
@@ -1452,7 +1482,7 @@ func (file File) ReadJSON(ctx context.Context, output any) error {
 	return nil
 }
 
-// WriteJSON mashalles input to JSON and writes it as the file.
+// WriteJSON marshals input to JSON and writes it as the file.
 // Any indent arguments will be concanated and used as JSON line indentation.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
@@ -1487,7 +1517,7 @@ func (file File) ReadXML(ctx context.Context, output any) error {
 	return nil
 }
 
-// WriteXML mashalles input to XML and writes it as the file.
+// WriteXML marshals input to XML and writes it as the file.
 // Any indent arguments will be concanated and used as XML line indentation.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
