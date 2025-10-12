@@ -419,7 +419,7 @@ func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (f
 }
 
 func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	return f.openFile(filePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC)
+	return f.openFile(filePath, os.O_RDWR|os.O_CREATE)
 }
 
 func (f *fileSystem) Truncate(filePath string, size int64) error {
