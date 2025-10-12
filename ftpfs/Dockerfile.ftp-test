@@ -1,0 +1,56 @@
+# Dockerfile for FTP/FTPS test server using vsftpd
+FROM alpine:3.22
+
+# Install vsftpd and openssl for SSL certificates
+RUN apk add --no-cache vsftpd openssl
+
+# Create test user with password "testpass"
+RUN adduser -D -s /bin/sh testuser && \
+    echo "testuser:testpass" | chpasswd
+
+# Create test directory with proper permissions
+RUN mkdir -p /home/testuser/testdata && \
+    chown -R testuser:testuser /home/testuser/testdata && \
+    chmod 755 /home/testuser/testdata
+
+# Create SSL directory and generate a simple certificate
+RUN mkdir -p /etc/ssl/private && \
+    openssl req -x509 -nodes -days 365 -newkey rsa:1024 \
+    -keyout /etc/ssl/private/vsftpd.pem \
+    -out /etc/ssl/private/vsftpd.pem \
+    -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+
+# Configure vsftpd for both FTP and FTPS with minimal SSL settings
+RUN echo "listen=YES" > /etc/vsftpd/vsftpd.conf && \
+    echo "anonymous_enable=NO" >> /etc/vsftpd/vsftpd.conf && \
+    echo "local_enable=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "write_enable=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "local_umask=022" >> /etc/vsftpd/vsftpd.conf && \
+    echo "dirmessage_enable=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "use_localtime=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "xferlog_enable=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "connect_from_port_20=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "secure_chroot_dir=/var/empty" >> /etc/vsftpd/vsftpd.conf && \
+    echo "pam_service_name=vsftpd" >> /etc/vsftpd/vsftpd.conf && \
+    echo "pasv_enable=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "pasv_min_port=21100" >> /etc/vsftpd/vsftpd.conf && \
+    echo "pasv_max_port=21110" >> /etc/vsftpd/vsftpd.conf && \
+    echo "pasv_address=127.0.0.1" >> /etc/vsftpd/vsftpd.conf && \
+    echo "userlist_enable=NO" >> /etc/vsftpd/vsftpd.conf && \
+    echo "allow_writeable_chroot=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "require_ssl_reuse=NO" >> /etc/vsftpd/vsftpd.conf && \
+    echo "ssl_enable=YES" >> /etc/vsftpd/vsftpd.conf && \
+    echo "rsa_cert_file=/etc/ssl/private/vsftpd.pem" >> /etc/vsftpd/vsftpd.conf && \
+    echo "allow_anon_ssl=NO" >> /etc/vsftpd/vsftpd.conf && \
+    echo "force_local_logins_ssl=NO" >> /etc/vsftpd/vsftpd.conf && \
+    echo "force_local_data_ssl=NO" >> /etc/vsftpd/vsftpd.conf
+
+# Create necessary directories
+RUN mkdir -p /var/empty
+
+# Expose FTP ports (21 for FTP/FTPS control, 21100-21110 for passive mode)
+EXPOSE 21 21100-21110
+
+# Start vsftpd
+CMD ["/usr/sbin/vsftpd", "/etc/vsftpd/vsftpd.conf"]

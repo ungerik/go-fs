@@ -76,13 +76,13 @@ func (n *memFileNode) Sys() any { return nil }
 // Useful as a mock file system for tests or for caching of slow file systems.
 // All data is lost when the file system is closed or the process terminates.
 type MemFileSystem struct {
-	id       string          // Unique identifier for this file system instance
-	sep      string          // Path separator ("/" or "\")
-	volume   string          // Optional volume name (e.g., "C:")
-	prefix   string          // URI prefix (e.g., "mem://1234567890")
-	readOnly bool            // If true, write operations return ErrReadOnlyFileSystem
-	root     memFileNode     // Root directory node
-	mtx      sync.RWMutex    // Protects all file system operations
+	id       string       // Unique identifier for this file system instance
+	sep      string       // Path separator ("/" or "\")
+	volume   string       // Optional volume name (e.g., "C:")
+	prefix   string       // URI prefix (e.g., "mem://1234567890")
+	readOnly bool         // If true, write operations return ErrReadOnlyFileSystem
+	root     memFileNode  // Root directory node
+	mtx      sync.RWMutex // Protects all file system operations
 }
 
 func NewMemFileSystem(separator string, initialFiles ...MemFile) (*MemFileSystem, error) {
@@ -310,7 +310,7 @@ func (fs *MemFileSystem) makeAllDirs(dirPath string, perm []Permissions) error {
 			currentNode.Dir[name] = childNode
 		} else if !childNode.IsDir() {
 			// Path component exists but is not a directory
-			return NewErrIsNotDirectory(fs.RootDir().Join(fs.JoinCleanPath(pathParts[:len(pathParts)]...)))
+			return NewErrIsNotDirectory(fs.RootDir().Join(fs.JoinCleanPath(pathParts...)))
 		}
 		currentNode = childNode
 	}

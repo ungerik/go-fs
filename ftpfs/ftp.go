@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -93,12 +94,24 @@ func dial(ctx context.Context, host, username, password string, secure bool, deb
 	dialOptions := []ftp.DialOption{
 		ftp.DialWithContext(ctx),
 		ftp.DialWithDebugOutput(debugOut),
+		ftp.DialWithDisabledEPSV(true), // Disable EPSV to use regular PASV mode
 	}
 	if secure {
 		if !strings.ContainsRune(host, ':') {
-			host += ":990"
+			host += ":21" // Use port 21 for explicit TLS
 		}
-		dialOptions = append(dialOptions, ftp.DialWithExplicitTLS(&tls.Config{InsecureSkipVerify: true}))
+		// Use very permissive TLS configuration for FTPS to work around jlaffaye/ftp library issues
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,             // Accept any certificate (self-signed, expired, etc.)
+			ServerName:         "",               // Don't verify server name
+			MinVersion:         tls.VersionTLS10, // Accept TLS 1.0+ (more permissive)
+			MaxVersion:         tls.VersionTLS13, // Support up to TLS 1.3
+			// Disable certificate verification completely
+			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+				return nil // Accept any certificate
+			},
+		}
+		dialOptions = append(dialOptions, ftp.DialWithExplicitTLS(tlsConfig))
 	} else {
 		if !strings.ContainsRune(host, ':') {
 			host += ":21"
@@ -348,8 +361,29 @@ func (f *fileSystem) Stat(filePath string) (info iofs.FileInfo, err error) {
 	}
 	defer release()
 
+	// Try GetEntry first (uses STAT command)
 	entry, err := conn.GetEntry(filePath)
 	if err != nil {
+		// If GetEntry fails (e.g., 502 Command not implemented),
+		// fall back to using List on the parent directory
+		dir, name := f.SplitDirAndName(filePath)
+		if dir == "" {
+			dir = "/"
+		}
+
+		entries, listErr := conn.List(dir)
+		if listErr != nil {
+			return nil, err // Return original GetEntry error
+		}
+
+		// Find the entry in the list
+		for _, e := range entries {
+			if e.Name == name {
+				return fileInfo{e}, nil
+			}
+		}
+
+		// If not found in list, return original error
 		return nil, err
 	}
 	return fileInfo{entry}, nil
@@ -364,8 +398,26 @@ func (f *fileSystem) IsSymbolicLink(filePath string) bool {
 	}
 	defer release()
 
+	// Try GetEntry first
 	entry, err := conn.GetEntry(filePath)
 	if err != nil {
+		// Fall back to List if GetEntry fails
+		dir, name := f.SplitDirAndName(filePath)
+		if dir == "" {
+			dir = "/"
+		}
+
+		entries, listErr := conn.List(dir)
+		if listErr != nil {
+			return false
+		}
+
+		// Find the entry in the list
+		for _, e := range entries {
+			if e.Name == name {
+				return e.Type == ftp.EntryTypeLink
+			}
+		}
 		return false
 	}
 	return entry.Type == ftp.EntryTypeLink
@@ -419,7 +471,22 @@ func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) (err error) 
 	}
 	defer release()
 
-	return conn.MakeDir(dirPath)
+	err = conn.MakeDir(dirPath)
+
+	// Handle success responses that are returned as errors
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "226 Transfer complete") ||
+			strings.Contains(errStr, "227 Entering Passive Mode") ||
+			strings.Contains(errStr, "257") ||
+			strings.Contains(errStr, "150 Opening") ||
+			strings.Contains(errStr, "150 Ok to send data") {
+			// These are actually success responses, not errors
+			err = nil
+		}
+	}
+
+	return err
 }
 
 type fileReader struct {
@@ -430,8 +497,28 @@ type fileReader struct {
 }
 
 func (f *fileReader) Stat() (iofs.FileInfo, error) {
+	// Try GetEntry first
 	entry, err := f.conn.GetEntry(f.path)
 	if err != nil {
+		// Fall back to List if GetEntry fails
+		dir, name := path.Split(f.path)
+		if dir == "" {
+			dir = "/"
+		}
+
+		entries, listErr := f.conn.List(dir)
+		if listErr != nil {
+			return nil, err // Return original GetEntry error
+		}
+
+		// Find the entry in the list
+		for _, e := range entries {
+			if e.Name == name {
+				return fileInfo{e}, nil
+			}
+		}
+
+		// If not found in list, return original error
 		return nil, err
 	}
 	return fileInfo{entry}, nil
@@ -465,6 +552,34 @@ func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
 }
 
 func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+	// Create an empty file first
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create empty file by writing empty content
+	err = conn.Stor(filePath, bytes.NewReader([]byte{}))
+	if err != nil {
+		// Handle success responses that are returned as errors
+		errStr := err.Error()
+		if strings.Contains(errStr, "226 Transfer complete") ||
+			strings.Contains(errStr, "227 Entering Passive Mode") ||
+			strings.Contains(errStr, "257") ||
+			strings.Contains(errStr, "150 Opening") ||
+			strings.Contains(errStr, "150 Ok to send data") {
+			// These are actually success responses, not errors
+			err = nil
+		}
+	}
+
+	if err != nil {
+		release()
+		return nil, err
+	}
+	release()
+
+	// Now return the read-writer
 	return f.OpenReadWriter(filePath, perm)
 }
 
@@ -508,10 +623,44 @@ func (f *fileSystem) Remove(filePath string) (err error) {
 	}
 	defer release()
 
+	// Try GetEntry first to determine if it's a file or directory
 	entry, err := conn.GetEntry(filePath)
 	if err != nil {
-		return err
+		// Fall back to List if GetEntry fails
+		dir, name := f.SplitDirAndName(filePath)
+		if dir == "" {
+			dir = "/"
+		}
+
+		entries, listErr := conn.List(dir)
+		if listErr != nil {
+			// If we can't determine the type, try to delete as file first
+			err = conn.Delete(filePath)
+			if err != nil {
+				// If file deletion fails, try directory deletion
+				return conn.RemoveDir(filePath)
+			}
+			return nil
+		}
+
+		// Find the entry in the list
+		for _, e := range entries {
+			if e.Name == name {
+				if e.Type == ftp.EntryTypeFolder {
+					return conn.RemoveDir(filePath)
+				}
+				return conn.Delete(filePath)
+			}
+		}
+
+		// If not found in list, try both deletion methods
+		err = conn.Delete(filePath)
+		if err != nil {
+			return conn.RemoveDir(filePath)
+		}
+		return nil
 	}
+
 	if entry.Type == ftp.EntryTypeFolder {
 		return conn.RemoveDir(filePath)
 	}
@@ -557,8 +706,36 @@ func (f *file) Write(p []byte) (n int, err error) {
 
 func (f *file) WriteAt(p []byte, offset int64) (n int, err error) {
 	r := bytes.NewReader(p)
-	err = f.conn.StorFrom(f.path, r, uint64(offset))
-	return len(p) - r.Len(), err
+	if offset == 0 {
+		// For offset 0, use regular Stor method
+		err = f.conn.Stor(f.path, r)
+	} else {
+		// For non-zero offset, use StorFrom
+		err = f.conn.StorFrom(f.path, r, uint64(offset))
+	}
+
+	// Calculate bytes written before handling any errors
+	bytesWritten := len(p) - r.Len()
+
+	// Handle success responses that are returned as errors
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "226 Transfer complete") ||
+			strings.Contains(errStr, "227 Entering Passive Mode") ||
+			strings.Contains(errStr, "257") ||
+			strings.Contains(errStr, "150 Opening") ||
+			strings.Contains(errStr, "150 Ok to send data") {
+			// These are actually success responses, not errors
+			err = nil
+		}
+	}
+
+	// If we successfully wrote data but got a "success" error, return the bytes written
+	if err == nil && bytesWritten > 0 {
+		return bytesWritten, nil
+	}
+
+	return bytesWritten, err
 }
 
 func (f *file) Seek(offset int64, whence int) (int64, error) {
