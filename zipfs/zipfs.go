@@ -240,6 +240,9 @@ func (f *ZipFileSystem) IsSymbolicLink(filePath string) bool {
 }
 
 func (f *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if f.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
 	}
@@ -247,7 +250,79 @@ func (f *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callbac
 		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
 	}
 
-	panic("TODO")
+	// Normalize directory path
+	dirPath = strings.TrimPrefix(dirPath, Separator)
+	if dirPath != "" && !strings.HasSuffix(dirPath, Separator) {
+		dirPath += Separator
+	}
+
+	// Track seen entries to avoid duplicates
+	seen := make(map[string]bool)
+
+	for _, zipFile := range f.zipReader.File {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// Check if file is in the requested directory
+		if !strings.HasPrefix(zipFile.Name, dirPath) {
+			continue
+		}
+
+		// Get relative path from dirPath
+		relativePath := strings.TrimPrefix(zipFile.Name, dirPath)
+		if relativePath == "" {
+			continue
+		}
+
+		// Check if this is a direct child (no more separators)
+		parts := strings.Split(relativePath, Separator)
+		name := parts[0]
+		if name == "" {
+			continue
+		}
+
+		// Skip if already seen
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+
+		// Determine if it's a directory or file
+		isDir := len(parts) > 1 || strings.HasSuffix(zipFile.Name, Separator)
+
+		// Check pattern match
+		matched, err := f.MatchAnyPattern(name, patterns)
+		if err != nil {
+			return err
+		}
+		if !matched {
+			continue
+		}
+
+		// Create FileInfo
+		size := int64(zipFile.UncompressedSize64)
+		if isDir {
+			size = 0
+		}
+		info := &fs.FileInfo{
+			Name:        name,
+			Exists:      true,
+			IsDir:       isDir,
+			IsRegular:   !isDir,
+			IsHidden:    len(name) > 0 && name[0] == '.',
+			Size:        size,
+			Modified:    zipFile.Modified,
+			Permissions: fs.AllRead,
+		}
+
+		err = callback(info)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
@@ -261,11 +336,11 @@ func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string
 		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
 	}
 
-	rootNode := &node{
+	rootNode := &dirTreeNode{
 		FileInfo: &fs.FileInfo{
 			IsDir: true,
 		},
-		children: make(map[string]*node),
+		children: make(map[string]*dirTreeNode),
 	}
 	for _, file := range f.zipReader.File {
 		currentDir := rootNode
@@ -277,17 +352,27 @@ func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string
 		currentDir.addChildFile(parts[lastIndex], file.Modified, int64(file.UncompressedSize64))
 	}
 
+	// Navigate to the requested directory if not root
 	if dirPath != "" && dirPath != "." && dirPath != Separator {
-		// parts := sipfs.SplitPath(dirPath)
-		panic("TODO set rootNode to dirPath")
+		dirPath = strings.TrimPrefix(dirPath, Separator)
+		parts := strings.Split(dirPath, Separator)
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
+			child, ok := rootNode.children[part]
+			if !ok {
+				return fs.NewErrDoesNotExist(f.File(dirPath))
+			}
+			if !child.IsDir {
+				return fs.NewErrIsNotDirectory(f.File(dirPath))
+			}
+			rootNode = child
+		}
 	}
 
-	if !rootNode.IsDir {
-		return fs.NewErrIsNotDirectory(f.File(dirPath))
-	}
-
-	var listRecursive func(parent *node) error
-	listRecursive = func(parent *node) error {
+	var listRecursive func(parent *dirTreeNode) error
+	listRecursive = func(parent *dirTreeNode) error {
 		for _, child := range parent.sortedChildren() {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -368,16 +453,58 @@ func (f *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.W
 }
 
 func (f *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	if f.zipWriter == nil {
-		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
-	}
 	if f.closer == nil {
 		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
 	}
 
-	panic("TODO buffered impl")
+	// ZIP archives don't naturally support simultaneous read-write operations.
+	// However, we can provide limited support using ReadWriteAllSeekCloser:
+	// - For read-only archives: not supported (would need write capability)
+	// - For write-only archives: not supported (would need read capability)
+	// The implementation below is prepared for a future enhancement where
+	// a ZIP file system might support both reading and writing.
 
-	// return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
+	if f.zipReader != nil && f.zipWriter != nil {
+		// If we have both reader and writer (not currently possible but future-proof)
+		readAll := func() ([]byte, error) {
+			zipFile, isDir := f.findFile(filePath)
+			if isDir {
+				return nil, fs.NewErrIsDirectory(f.File(filePath))
+			}
+			if zipFile == nil {
+				// File doesn't exist yet, return empty data
+				return []byte{}, nil
+			}
+			reader, err := zipFile.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer reader.Close()
+			return io.ReadAll(reader)
+		}
+
+		writeAll := func(data []byte) error {
+			cleanPath := strings.TrimPrefix(filePath, Separator)
+			writer, err := f.zipWriter.Create(cleanPath)
+			if err != nil {
+				return err
+			}
+			_, err = writer.Write(data)
+			return err
+		}
+
+		return fsimpl.NewReadWriteAllSeekCloser(readAll, writeAll), nil
+	}
+
+	// Current ZIP implementations only support either reading OR writing
+	if f.zipReader != nil {
+		return nil, fmt.Errorf("%s: %w (read-only ZIP archive)", f.Name(), fs.ErrReadOnlyFileSystem)
+	}
+	if f.zipWriter != nil {
+		return nil, fmt.Errorf("%s: %w (write-only ZIP archive)", f.Name(), fs.ErrWriteOnlyFileSystem)
+	}
+
+	return nil, fs.NewErrUnsupported(f, "OpenReadWriter")
 }
 
 func (f *ZipFileSystem) Remove(filePath string) error {

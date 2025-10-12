@@ -9,8 +9,6 @@ and interprets its value as a local file system path or as a URI.
 TODO
 ----
 
-- [X] MemFileSystem
-- [ ] ZipFileSystem
 - [ ] Return ErrFileSystemClosed from all closable FS
 - [ ] S3
 - [ ] Test dropboxfs
