@@ -105,7 +105,7 @@ func (local *LocalFileSystem) AbsPath(filePath string) string {
 	filePath = expandTilde(filePath)
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		panic(err)
+		return filePath
 	}
 	return absPath
 }

@@ -10,7 +10,8 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-var _ fullyFeaturedFileSystem = InvalidFileSystem("")
+// Ensure that InvalidFileSystem implements the FullyFeaturedFileSystem interface
+var _ FullyFeaturedFileSystem = InvalidFileSystem("")
 
 // InvalidFileSystem is a file system where all operations are invalid.
 // A File with an empty path defaults to this FS.
