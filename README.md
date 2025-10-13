@@ -209,8 +209,8 @@ readFile(fs.NewMemFile("hello-world.txt", []byte("Hello World!")))
 memFile, err := fs.ReadMemFile(ctx, fs.File("../my-local-file.txt"))
 
 // Read all data similar to io.ReadAll from an io.Reader
-var r io.Rader
-memFile, err := fs.ReadAllMemFile(cxt, r, "in-mem-file.txt")
+var r io.Reader
+memFile, err := fs.ReadAllMemFile(ctx, r, "in-mem-file.txt")
 ```
 
 Note that `MemFile` is not a `File` because it doesn't have a path or URI.
@@ -244,4 +244,62 @@ files, err := dir.ListDirMaxContext(ctx, 100, "*.jpg", "*.jpeg")
 Watching the local file system
 ------------------------------
 
-TODO description
+The local file system supports watching files and directories for changes using the `fsnotify` package.
+This functionality is available through the `WatchFileSystem` interface and the `File.Watch` method.
+
+```go
+// Watch a directory for changes
+dir := fs.File("/path/to/watch")
+
+cancel, err := dir.Watch(func(file fs.File, event fs.Event) {
+    if event.HasCreate() {
+        fmt.Printf("File created: %s\n", file.Name())
+    }
+    if event.HasWrite() {
+        fmt.Printf("File written: %s\n", file.Name())
+    }
+    if event.HasRemove() {
+        fmt.Printf("File removed: %s\n", file.Name())
+    }
+    if event.HasRename() {
+        fmt.Printf("File renamed: %s\n", file.Name())
+    }
+    if event.HasChmod() {
+        fmt.Printf("File permissions changed: %s\n", file.Name())
+    }
+})
+
+if err != nil {
+    log.Fatal(err)
+}
+
+// Later, cancel the watch
+defer cancel()
+```
+
+**Event Types:**
+- `HasCreate()` - File or directory was created
+- `HasWrite()` - File was written to
+- `HasRemove()` - File or directory was removed
+- `HasRename()` - File or directory was renamed
+- `HasChmod()` - File permissions were changed
+
+**Important Notes:**
+- Watching a directory only reports changes directly within it, not in recursive sub-directories
+- Multiple watches can be set on the same file/directory
+- The returned `cancel` function stops a specific watch
+- Events are delivered asynchronously via goroutines
+- The local filesystem supports watching; other filesystems may not
+
+**Logging:**
+You can enable logging for watch events and errors:
+
+```go
+fs.Local.WatchEventLogger = fs.LoggerFunc(func(format string, args ...any) {
+    log.Printf("WATCH: "+format, args...)
+})
+
+fs.Local.WatchErrorLogger = fs.LoggerFunc(func(format string, args ...any) {
+    log.Printf("WATCH ERROR: "+format, args...)
+})
+```
