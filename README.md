@@ -10,11 +10,8 @@ TODO
 ----
 
 - [ ] Return ErrFileSystemClosed from all closable FS
-- [ ] S3
 - [ ] Test dropboxfs
-- [ ] Test ftpfs
-- [ ] TestFileReads and TestFileMetaData for all FS
-- [ ] add TestFileWrites
+- [ ] Consider secsy/goftp for ftpfs
 
 Introduction
 ------------

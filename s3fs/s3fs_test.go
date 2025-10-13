@@ -1,339 +1,273 @@
 package s3fs_test
 
-// import (
-// 	"context"
-// 	"errors"
-// 	"fmt"
-// 	"os"
-// 	"path"
-// 	"strings"
-// 	"testing"
-// 	"time"
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/exec"
+	"testing"
+	"time"
 
-// 	"github.com/stretchr/testify/assert"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/stretchr/testify/require"
 
-// 	fs "github.com/ungerik/go-fs"
-// 	"github.com/ungerik/go-fs/s3fs"
-// )
+	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/s3fs"
+)
 
-// // Problems with directories:
-// // The API in general is a bit incosistent here. S3 requires trailing slashes
-// // when creating, changing, deleting directories, but treats them just like any
-// // other object and therefore doesn't return their keys with a trailing slash.
-// // This means that some tests require us to add the trailing slash.
-// //
-// // We could actually just define directories like all the other objects, but
-// // that would make it more difficult to determine which objects are
-// // "directories" and which aren't.
-// var directories = []string{"test", "test1", "test/test2"}
-// var files = []string{"test.txt", "test/test.txt", "test/test2/text.txt"}
+const (
+	minioContainerName = "s3fs-test-minio"
+	testS3Port         = "9000"
+	testS3ConsolePort  = "9001"
+	testAccessKey      = "minioadmin"
+	testSecretKey      = "minioadmin"
+	testBucketName     = "testbucket"
+	testDataDir        = "testdata"
+)
 
-// var testData = []byte("TEST 123")
+var (
+	dockerMinioAvailable bool
+	testS3Endpoint       string
+)
 
-// var s3 *s3fs.S3FileSystem
-// var bucketName string
+func TestMain(m *testing.M) {
+	// Check if Docker is available
+	if _, err := exec.LookPath("docker"); err != nil {
+		log.Println("Docker not available, skipping Docker-based MinIO S3 tests")
+		m.Run()
+		return
+	}
 
-// type defaultPathTestCase struct {
-// 	input string
-// 	want  string
-// }
+	ctx := context.Background()
 
-// // NOTE: For most of these you need to have AWS credentials defined somewhere.
-// // Read more at: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html
+	// Setup MinIO server
+	dockerMinioAvailable = setupMinioServer(ctx)
+	if dockerMinioAvailable {
+		testS3Endpoint = fmt.Sprintf("http://127.0.0.1:%s", testS3Port)
+	}
 
-// func TestMain(m *testing.M) {
-// 	bucketName = os.Getenv("S3_BUCKET_NAME")
-// 	if bucketName == "" {
-// 		panic(errors.New("You need to set S3_BUCKET_NAME environment variable"))
-// 	}
-// 	s3 = createS3FSInstance()
+	// Run tests
+	exitCode := m.Run()
 
-// 	retCode := m.Run()
-// 	os.Exit(retCode)
-// }
+	// Cleanup
+	if dockerMinioAvailable {
+		log.Println("Stopping and removing Docker MinIO test server...")
+		exec.Command("docker", "stop", minioContainerName).Run()
+		exec.Command("docker", "rm", minioContainerName).Run()
+		log.Println("Docker container cleanup complete")
+	}
 
-// func createS3FSInstance() *s3fs.S3FileSystem {
-// 	r, err := s3fs.RegionFromString(os.Getenv("S3_REGION"))
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	return s3fs.New(os.Getenv("S3_BUCKET_NAME"), r, time.Second*10)
-// }
+	os.Exit(exitCode)
+}
 
-// func TestNew(t *testing.T) {
-// 	fs := createS3FSInstance()
-// 	assert.NotNil(t, fs)
-// }
+func setupMinioServer(ctx context.Context) bool {
+	containerName := minioContainerName
 
-// func TestClose(t *testing.T) {
-// 	if err := s3.Close(); err != nil {
-// 		t.Error(err)
-// 	}
+	// Stop and remove any existing container with the same name
+	exec.Command("docker", "stop", containerName).Run()
+	exec.Command("docker", "rm", containerName).Run()
 
-// 	assert.NotContains(t, fs.Registry, s3.Prefix())
-// 	// We need to create the instance again for other tests
-// 	s3 = createS3FSInstance()
-// }
+	// Start MinIO container
+	log.Println("Starting Docker MinIO container...")
+	runCmd := exec.CommandContext(ctx, "docker", "run",
+		"-d",
+		"--name", containerName,
+		"-p", fmt.Sprintf("%s:9000", testS3Port),
+		"-p", fmt.Sprintf("%s:9001", testS3ConsolePort),
+		"-e", fmt.Sprintf("MINIO_ROOT_USER=%s", testAccessKey),
+		"-e", fmt.Sprintf("MINIO_ROOT_PASSWORD=%s", testSecretKey),
+		"minio/minio:latest",
+		"server", "/data", "--console-address", ":9001",
+	)
+	output, err := runCmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to start Docker MinIO container: %v\nOutput: %s", err, output)
+		return false
+	}
+	log.Printf("Started Docker container: %s", containerName)
 
-// func TestRoot(t *testing.T) {
-// 	assert.Equal(t, fmt.Sprintf("%s%s/", s3fs.Prefix, bucketName), string(s3.Root()))
-// }
+	// Wait for MinIO to be ready
+	log.Println("Waiting for MinIO server to be ready...")
+	time.Sleep(3 * time.Second)
 
-// func TestID(t *testing.T) {
-// 	id, err := s3.ID()
-// 	if err != nil {
-// 		t.Error(err)
-// 	}
-// 	assert.Equal(t, bucketName, id)
-// }
+	// Test connection and create bucket
+	maxRetries := 10
+	var testErr error
+	for i := range maxRetries {
+		client := createS3Client(ctx)
 
-// func TestPrefix(t *testing.T) {
-// 	assert.Equal(t, fmt.Sprintf("%s%s", s3fs.Prefix, bucketName), s3.Prefix())
-// }
+		// Try to create bucket
+		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String(testBucketName),
+		})
+		if err == nil {
+			log.Printf("MinIO server is ready and bucket '%s' created", testBucketName)
+			return true
+		}
 
-// func TestFile(t *testing.T) {
-// 	testCases := []struct {
-// 		filePath string
-// 		vals     []string
-// 	}{
-// 		{"test/doc.pdf", []string{"/test/doc.pdf", "doc.pdf", fmt.Sprintf("%s%s/test/doc.pdf", s3fs.Prefix, bucketName)}},
-// 		{"/", []string{"/", "", fmt.Sprintf("%s%s/", s3fs.Prefix, bucketName)}},
-// 	}
+		// Check if bucket already exists (which is also OK)
+		_, headErr := client.HeadBucket(ctx, &s3.HeadBucketInput{
+			Bucket: aws.String(testBucketName),
+		})
+		if headErr == nil {
+			log.Printf("MinIO server is ready (bucket already exists)")
+			return true
+		}
 
-// 	for _, tc := range testCases {
-// 		f := s3.File(tc.filePath)
-// 		assert.NotNil(t, f)
-// 		assert.NotEmpty(t, f)
-// 		assert.Equal(t, tc.vals[0], f.Path())
-// 		assert.Equal(t, tc.vals[1], f.Name())
-// 		assert.Equal(t, tc.vals[2], f.URL())
-// 	}
-// }
+		testErr = err
+		if i < maxRetries-1 {
+			log.Printf("Retry %d/%d: waiting for MinIO server...", i+1, maxRetries)
+			time.Sleep(1 * time.Second)
+		}
+	}
 
-// func TestJoinCleanFile(t *testing.T) {
-// 	testCases := []struct {
-// 		input string
-// 		want  fs.File
-// 	}{
-// 		{fmt.Sprintf("s3://%s/test.pdf", bucketName), fs.File(fmt.Sprintf("s3://%s/test.pdf", bucketName))},
-// 		{"test.pdf", fs.File(fmt.Sprintf("s3://%s/test.pdf", bucketName))},
-// 		{"/test.pdf", fs.File(fmt.Sprintf("s3://%s/test.pdf", bucketName))},
-// 	}
-// 	for _, tc := range testCases {
-// 		assert.Equal(t, tc.want, s3.JoinCleanFile(tc.input))
-// 	}
-// }
+	log.Printf("Failed to connect to MinIO server after retries: %v", testErr)
+	exec.Command("docker", "stop", containerName).Run()
+	exec.Command("docker", "rm", containerName).Run()
+	return false
+}
 
-// func TestURL(t *testing.T) {
-// 	assert.Equal(t, fmt.Sprintf("s3://%s/test/test.pdf", bucketName), s3.URL("/test/test.pdf"))
-// }
+func createS3Client(ctx context.Context) *s3.Client {
+	endpoint := testS3Endpoint
+	if endpoint == "" {
+		endpoint = fmt.Sprintf("http://127.0.0.1:%s", testS3Port)
+	}
+	return s3.New(s3.Options{
+		Region: "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider(
+			testAccessKey,
+			testSecretKey,
+			"",
+		),
+		BaseEndpoint: aws.String(endpoint),
+		UsePathStyle: true, // MinIO requires path-style URLs
+	})
+}
 
-// func TestJoinCleanPath(t *testing.T) {
-// 	testCases := []defaultPathTestCase{
-// 		{fmt.Sprintf("s3://%s/test.pdf", bucketName), "/test.pdf"},
-// 		{"test.pdf", "/test.pdf"},
-// 		{"/test.pdf", "/test.pdf"},
-// 	}
-// 	for _, tc := range testCases {
-// 		assert.Equal(t, tc.want, s3.JoinCleanPath(tc.input))
-// 	}
-// }
+// Test_fileSystem tests the S3 filesystem implementation using MinIO
+func Test_fileSystem(t *testing.T) {
+	if !dockerMinioAvailable {
+		t.Skip("Docker MinIO server not available")
+	}
 
-// func TestSplitPath(t *testing.T) {
-// 	testCases := []struct {
-// 		input string
-// 		want  []string
-// 	}{
-// 		{fmt.Sprintf("s3://%s/test/test.pdf", bucketName), []string{"test", "test.pdf"}},
-// 		{"/test/test.pdf", []string{"test", "test.pdf"}},
-// 	}
-// 	for _, tc := range testCases {
-// 		assert.Equal(t, tc.want, s3.SplitPath(tc.input))
-// 	}
-// }
+	ctx := context.Background()
 
-// func TestDirAndName(t *testing.T) {
-// 	testCases := []struct {
-// 		input string
-// 		want  [2]string
-// 	}{
-// 		{fmt.Sprintf("s3://%s/test/test.pdf", bucketName), [2]string{fmt.Sprintf("s3://%s/test", bucketName), "test.pdf"}},
-// 		{"/test/test.pdf", [2]string{"/test", "test.pdf"}},
-// 	}
-// 	for _, tc := range testCases {
-// 		dir, name := s3.DirAndName(tc.input)
-// 		res := [2]string{dir, name}
-// 		assert.Equal(t, tc.want, res)
-// 	}
-// }
+	// Create S3 client and filesystem
+	client := createS3Client(ctx)
+	s3fs := s3fs.NewAndRegister(client, testBucketName, false)
 
-// func TestIsAbsPath(t *testing.T) {
-// 	assert.True(t, s3.IsAbsPath("/test/test.pdf"))
-// 	assert.False(t, s3.IsAbsPath("test.df"))
-// }
+	// Ensure filesystem is registered
+	require.NotNil(t, s3fs, "S3 filesystem should be created")
 
-// func TestAbsPath(t *testing.T) {
-// 	testCases := []defaultPathTestCase{
-// 		{fmt.Sprintf("s3://%s/test/test.pdf", bucketName), fmt.Sprintf("s3://%s/test/test.pdf", bucketName)},
-// 		{"test.pdf", "/test.pdf"},
-// 	}
-// 	for _, tc := range testCases {
-// 		assert.Equal(t, tc.want, s3.AbsPath(tc.input))
-// 	}
-// }
+	// Clean up test directory before tests
+	cleanupTestDir(ctx, t, client, testDataDir)
 
-// func TestMakeDir(t *testing.T) {
-// 	for _, d := range directories {
-// 		assert.NoError(t, s3.MakeDir(d, nil))
-// 		assert.True(t, s3.Info(d+"/").Exists)
-// 		assert.True(t, s3.Info(d+"/").IsDir)
-// 	}
-// }
+	// Get expected prefix
+	expectedPrefix := fmt.Sprintf("s3://%s", testBucketName)
 
-// func TestWriteAll(t *testing.T) {
-// 	for _, f := range files {
-// 		assert.NoError(t, s3.WriteAll(f, testData, nil))
-// 		text, err := s3.File(f).ReadAllString()
-// 		assert.NoError(t, err)
-// 		assert.Equal(t, string(testData), text)
-// 	}
-// }
+	// Run comprehensive filesystem tests
+	fs.RunFileSystemTests(
+		ctx,
+		t,
+		s3fs,
+		fmt.Sprintf("S3 file system for bucket: s.bucketName"), // name - matches Name() method
+		expectedPrefix,                                           // prefix
+		testDataDir,                                              // testDir
+	)
 
-// func TestInfo(t *testing.T) {
-// 	for _, f := range files {
-// 		assert.NotEmpty(t, s3.Info(f))
-// 	}
-// }
+	// Clean up after tests
+	cleanupTestDir(ctx, t, client, testDataDir)
+}
 
-// func TestInfoNotExists(t *testing.T) {
-// 	i := s3.Info("DOESNOTEXIST/")
-// 	assert.Equal(t, false, i.Exists)
-// }
+func cleanupTestDir(ctx context.Context, t *testing.T, client *s3.Client, dirPath string) {
+	t.Helper()
 
-// func TestIsHidden(t *testing.T) {
-// 	testCases := []struct {
-// 		path   string
-// 		hidden bool
-// 	}{
-// 		{".test.txt", true},
-// 		{"test.txt", false},
-// 		{fmt.Sprintf("%s%s/.test.txt", s3fs.Prefix, bucketName), true},
-// 		{fmt.Sprintf("%s%s/test.txt", s3fs.Prefix, bucketName), false},
-// 		{"/.test", true},
-// 	}
-// 	for _, tc := range testCases {
-// 		assert.Equal(t, tc.hidden, s3.IsHidden(tc.path))
-// 	}
-// }
+	// List all objects with the test directory prefix
+	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(testBucketName),
+		Prefix: aws.String(dirPath),
+	})
 
-// func TestListDirInfo(t *testing.T) {
-// 	expectedOutput := []string{"test.txt", "test", "test1"}
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			t.Logf("Warning: Failed to list objects for cleanup: %v", err)
+			return
+		}
 
-// 	result := []string{}
-// 	assert.NoError(t, s3.ListDirInfo(context.Background(), "/", func(file fs.File, _ fs.FileInfo) error {
-// 		result = append(result, file.Path())
-// 		return nil
-// 	}, nil))
+		for _, obj := range page.Contents {
+			if obj.Key != nil {
+				_, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{
+					Bucket: aws.String(testBucketName),
+					Key:    obj.Key,
+				})
+				if err != nil {
+					t.Logf("Warning: Failed to delete object %s: %v", *obj.Key, err)
+				}
+			}
+		}
+	}
+}
 
-// 	assert.EqualValues(t, expectedOutput, result)
-// }
+// Test_fileSystem_MultipartUploadDownload tests multipart upload/download for large files
+func Test_fileSystem_MultipartUploadDownload(t *testing.T) {
+	if !dockerMinioAvailable {
+		t.Skip("Docker MinIO server not available")
+	}
 
-// func TestListDirInfoRecursive(t *testing.T) {
-// 	expectedOutput := append(directories, files...)
-// 	assert.NoError(t, s3.ListDirInfoRecursive(context.Background(), "/", func(file fs.File, _ fs.FileInfo) error {
-// 		assert.Contains(t, expectedOutput, file.Path())
-// 		return nil
-// 	}, nil))
-// }
+	ctx := context.Background()
 
-// func TestListDirMax(t *testing.T) {
-// 	files, err := s3.ListDirMax(context.Background(), "/", 2, nil)
-// 	assert.NoError(t, err)
-// 	assert.Condition(t, assert.Comparison(func() bool {
-// 		return len(files) <= 2
-// 	}), "Too many object keys returned")
-// }
+	// Create S3 client and filesystem
+	client := createS3Client(ctx)
+	s3fs := s3fs.NewAndRegister(client, testBucketName, false)
+	defer s3fs.Close()
 
-// func TestTouch(t *testing.T) {
-// 	path := "test1/touchtest"
-// 	files = append(files, path)
-// 	assert.NoError(t, s3.Touch(path, nil))
-// 	assert.True(t, s3.File(path).Exists())
-// }
+	// Create a large test file (11 MB - exceeds multipart download threshold of 10 MB)
+	largeFileSize := 11 * 1024 * 1024 // 11 MB
+	largeData := make([]byte, largeFileSize)
+	// Fill with pattern to verify data integrity
+	for i := range largeData {
+		largeData[i] = byte(i % 256)
+	}
 
-// func TestTruncate(t *testing.T) {
-// 	assert.NoError(t, s3.Truncate(files[0], 2))
-// 	data, err := s3.ReadAll(files[0])
-// 	assert.NoError(t, err)
-// 	assert.Len(t, data, 2)
-// }
+	testFilePath := s3fs.JoinCleanPath(testDataDir, "large-test-file.bin")
 
-// func TestCopyFile(t *testing.T) {
-// 	parts := strings.Split(files[1], ".")
-// 	targetPath := parts[0] + "_copy." + parts[1]
-// 	assert.NoError(t, s3.CopyFile(context.Background(), files[1], targetPath, nil))
-// 	assert.True(t, s3.Info(targetPath).Exists)
-// 	dataInCopy, err := s3.ReadAll(targetPath)
-// 	assert.NoError(t, err)
-// 	assert.Equal(t, testData, dataInCopy)
-// 	files = append(files, targetPath)
-// }
+	// Test multipart upload via WriteAll
+	t.Run("MultipartUpload", func(t *testing.T) {
+		err := s3fs.(fs.WriteAllFileSystem).WriteAll(ctx, testFilePath, largeData, nil)
+		require.NoError(t, err, "WriteAll should succeed for large file")
 
-// func TestRename(t *testing.T) {
-// 	originalData, err := s3.ReadAll(files[1])
-// 	assert.NoError(t, err)
+		// Verify file exists
+		info, err := s3fs.Stat(testFilePath)
+		require.NoError(t, err, "Stat should work on uploaded file")
+		require.Equal(t, int64(largeFileSize), info.Size(), "File size should match")
+	})
 
-// 	parts := strings.Split(files[1], ".")
-// 	renamedFile := path.Base(parts[0] + "_renamed." + parts[1])
-// 	assert.NoError(t, s3.Rename(files[1], renamedFile))
+	// Test multipart download via ReadAll
+	t.Run("MultipartDownload", func(t *testing.T) {
+		readData, err := s3fs.(fs.ReadAllFileSystem).ReadAll(ctx, testFilePath)
+		require.NoError(t, err, "ReadAll should succeed for large file")
+		require.Equal(t, len(largeData), len(readData), "Read data size should match")
+		require.Equal(t, largeData, readData, "Read data should match written data")
+	})
 
-// 	// Renamed file has to exist
-// 	renamedPath := path.Join(path.Dir(files[1]), renamedFile)
-// 	assert.True(t, s3.Info(renamedPath).Exists)
+	// Test multipart download via OpenReader
+	t.Run("MultipartOpenReader", func(t *testing.T) {
+		reader, err := s3fs.OpenReader(testFilePath)
+		require.NoError(t, err, "OpenReader should succeed for large file")
+		defer reader.Close()
 
-// 	// Content has to be equal
-// 	dataOfRenamedFile, err := s3.ReadAll(renamedPath)
-// 	assert.NoError(t, err)
-// 	assert.Equal(t, originalData, dataOfRenamedFile)
+		readData, err := io.ReadAll(reader)
+		require.NoError(t, err, "Reading from reader should succeed")
+		require.Equal(t, len(largeData), len(readData), "Read data size should match")
+		require.Equal(t, largeData, readData, "Read data should match written data")
+	})
 
-// 	// Original file cannot exist
-// 	assert.False(t, s3.Info(files[1]).Exists)
-
-// 	files = append(files, renamedPath)
-// }
-
-// func TestMove(t *testing.T) {
-// 	originalData, err := s3.ReadAll(files[2])
-// 	source := files[2]
-// 	dest := path.Base(files[2]) // Simply move to root directory
-// 	assert.NoError(t, err)
-// 	assert.NoError(t, s3.Move(source, dest))
-// 	assert.False(t, s3.Info(source).Exists)
-// 	assert.True(t, s3.Info(dest).Exists)
-
-// 	dataAfterMove, err := s3.ReadAll(dest)
-// 	assert.NoError(t, err)
-// 	assert.Equal(t, originalData, dataAfterMove)
-
-// 	files = append(files, dest)
-// }
-
-// // Also test if using fs.File's RemoveRecursive method works with S3.
-// func TestRemoveRecursive(t *testing.T) {
-// 	assert.NoError(t, s3.File(directories[0]).RemoveRecursive())
-// 	// This directory actually had contents before so if it doesn't exist
-// 	// all of its contents were also deleted.
-// 	assert.False(t, s3.Info(directories[0]).Exists)
-// }
-
-// func TestRemove(t *testing.T) {
-// 	for _, d := range directories {
-// 		// The directory keys do not have a trailing slash, but trailing slashes
-// 		// are required for S3 to delete directories. See the description at the
-// 		// very top.
-// 		assert.NoError(t, s3.Remove(d+s3fs.Separator))
-// 	}
-// 	for _, f := range files {
-// 		assert.NoError(t, s3.Remove(f))
-// 	}
-// }
+	// Clean up
+	err := s3fs.Remove(testFilePath)
+	require.NoError(t, err, "Cleanup should succeed")
+}
