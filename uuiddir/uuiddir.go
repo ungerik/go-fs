@@ -3,8 +3,9 @@
 // of UUIDs can be used as directories.
 //
 // Example:
-//   The UUID f0498fad-437c-4954-ad82-8ec2cc202628 maps to the path
-//   f0/498/fad/437c4954/ad828ec2cc202628
+//
+//	The UUID f0498fad-437c-4954-ad82-8ec2cc202628 maps to the path
+//	f0/498/fad/437c4954/ad828ec2cc202628
 package uuiddir
 
 import (
@@ -18,9 +19,11 @@ import (
 )
 
 // Split a UUID into 5 hex strings.
+//
 // Example:
-//   Splitting the UUID f0498fad-437c-4954-ad82-8ec2cc202628 returns
-//   []string{"f0", "498", "fad", "437c4954", "ad828ec2cc202628"}
+//
+//	Splitting the UUID f0498fad-437c-4954-ad82-8ec2cc202628 returns
+//	[]string{"f0", "498", "fad", "437c4954", "ad828ec2cc202628"}
 func Split(uuid [16]byte) []string {
 	hexStr := hex.EncodeToString(uuid[:])
 	return []string{
