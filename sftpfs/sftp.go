@@ -318,7 +318,7 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 		// Apply backoff delay for retries
 		if attempt > 0 {
 			if f.connLogger != nil {
-				f.connLogger.Printf("Waiting %s before retrying SFTP connection to %s", backoff, f.address)
+				f.connLogger.Printf("Waiting %s before retry attempt %d of %d of SFTP connection to %s", backoff, attempt, maxRetries, f.address)
 			}
 			select {
 			case <-ctx.Done():
