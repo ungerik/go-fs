@@ -197,7 +197,7 @@ func (f *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (io
 	}
 
 	name := path.Base(filePath)
-	size := int64(zipFile.UncompressedSize64)
+	size := int64(zipFile.UncompressedSize64) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
 	if isDir {
 		size = 0
 	}
@@ -301,7 +301,7 @@ func (f *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callbac
 		}
 
 		// Create FileInfo
-		size := int64(zipFile.UncompressedSize64)
+		size := int64(zipFile.UncompressedSize64) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
 		if isDir {
 			size = 0
 		}
@@ -346,10 +346,10 @@ func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string
 		currentDir := rootNode
 		parts := strings.Split(file.Name, Separator)
 		lastIndex := len(parts) - 1
-		for i := 0; i < lastIndex; i++ {
+		for i := range lastIndex {
 			currentDir = currentDir.addChildDir(parts[i], file.Modified)
 		}
-		currentDir.addChildFile(parts[lastIndex], file.Modified, int64(file.UncompressedSize64))
+		currentDir.addChildFile(parts[lastIndex], file.Modified, int64(file.UncompressedSize64)) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
 	}
 
 	// Navigate to the requested directory if not root

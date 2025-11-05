@@ -214,7 +214,7 @@ func metadataToFileInfo(meta files.IsMetadata) *fs.FileInfo {
 		info.IsRegular = true
 		info.IsDir = false
 		info.IsHidden = len(m.Name) > 0 && m.Name[0] == '.'
-		info.Size = int64(m.Size)
+		info.Size = int64(m.Size) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
 		info.Modified = m.ServerModified
 		info.Permissions = DefaultPermissions
 	case *files.FolderMetadata:

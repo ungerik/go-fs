@@ -106,7 +106,7 @@ func NewMemFileSystem(separator string, initialFiles ...MemFile) (*MemFileSystem
 			Dir:      make(map[string]*memFileNode, len(initialFiles)),
 		},
 	}
-	memFS.id = fmt.Sprintf("%x", unsafe.Pointer(memFS))
+	memFS.id = fmt.Sprintf("%x", unsafe.Pointer(memFS)) //#nosec G103 -- this is a valid use of unsafe.Pointer
 	memFS.updatePrefix()
 
 	// Add initial files

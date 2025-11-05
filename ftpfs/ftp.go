@@ -102,7 +102,7 @@ func dial(ctx context.Context, host, username, password string, secure bool, deb
 		}
 		// Use very permissive TLS configuration for FTPS to work around jlaffaye/ftp library issues
 		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,             // Accept any certificate (self-signed, expired, etc.)
+			InsecureSkipVerify: true,             //#nosec G402 -- Accept any certificate (self-signed, expired, etc.)
 			ServerName:         "",               // Don't verify server name
 			MinVersion:         tls.VersionTLS10, // Accept TLS 1.0+ (more permissive)
 			MaxVersion:         tls.VersionTLS13, // Support up to TLS 1.3
@@ -332,7 +332,7 @@ type fileInfo struct {
 }
 
 func (i fileInfo) Name() string        { return i.entry.Name }
-func (i fileInfo) Size() int64         { return int64(i.entry.Size) }
+func (i fileInfo) Size() int64         { return int64(i.entry.Size) } //#nosec G115 -- int64 limit will not be exceeded in real world use cases
 func (i fileInfo) Mode() iofs.FileMode { return 0666 }
 func (i fileInfo) ModTime() time.Time  { return i.entry.Time }
 func (i fileInfo) IsDir() bool         { return i.entry.Type == ftp.EntryTypeFolder }
@@ -346,7 +346,7 @@ func entryToFileInfo(entry *ftp.Entry, file fs.File) *fs.FileInfo {
 		IsDir:       entry.Type == ftp.EntryTypeFolder,
 		IsRegular:   entry.Type != ftp.EntryTypeLink,
 		IsHidden:    false,
-		Size:        int64(entry.Size),
+		Size:        int64(entry.Size), //#nosec G115 -- int64 limit will not be exceeded in real world use cases
 		Modified:    entry.Time,
 		Permissions: 0666,
 	}
@@ -572,12 +572,10 @@ func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Writ
 			err = nil
 		}
 	}
-
+	err = errors.Join(err, release())
 	if err != nil {
-		release()
 		return nil, err
 	}
-	release()
 
 	// Now return the read-writer
 	return f.OpenReadWriter(filePath, perm)
@@ -693,6 +691,9 @@ func (f *file) Read(p []byte) (n int, err error) {
 }
 
 func (f *file) ReadAt(p []byte, offset int64) (n int, err error) {
+	if offset < 0 {
+		return 0, errors.New("ReadAt: negative offset")
+	}
 	response, err := f.conn.RetrFrom(f.path, uint64(offset))
 	if err != nil {
 		return 0, err
@@ -705,6 +706,9 @@ func (f *file) Write(p []byte) (n int, err error) {
 }
 
 func (f *file) WriteAt(p []byte, offset int64) (n int, err error) {
+	if offset < 0 {
+		return 0, errors.New("WriteAt: negative offset")
+	}
 	r := bytes.NewReader(p)
 	if offset == 0 {
 		// For offset 0, use regular Stor method

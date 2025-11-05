@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -426,7 +427,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 		return os.Chtimes(filePath, now, now)
 	}
 	p := JoinPermissions(perm, Local.DefaultCreatePermissions)
-	f, err := os.OpenFile(filePath, os.O_CREATE, p.FileMode(false))
+	f, err := os.OpenFile(filePath, os.O_CREATE, p.FileMode(false)) //#nosec G304
 	if err != nil {
 		return err
 	}

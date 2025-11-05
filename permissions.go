@@ -37,7 +37,7 @@ var (
 )
 
 // Permissions for a file, follows the Unix/os.FileMode bit schema.
-type Permissions int
+type Permissions uint32
 
 // FileMode returns an os.FileMode for the given permissions
 // together with the information if the file is a directory.

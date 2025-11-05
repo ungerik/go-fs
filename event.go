@@ -6,7 +6,7 @@ import "github.com/fsnotify/fsnotify"
 //
 // This is a bitmask and some systems may send multiple operations at once.
 // Use the Has... methods to check if an event has a certain operation.
-type Event int
+type Event uint32
 
 func (e Event) String() string  { return fsnotify.Op(e).String() }
 func (e Event) HasCreate() bool { return fsnotify.Op(e).Has(fsnotify.Create) }
