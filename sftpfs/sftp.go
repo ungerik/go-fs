@@ -289,8 +289,8 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 	}
 
 	// Progressive reconnection with exponential backoff
-	const maxRetries = 3
-	backoff := 100 * time.Millisecond
+	backoff := InitialRetryBackoff
+	maxRetries := MaxConnectRetries
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Apply backoff delay for retries
@@ -317,10 +317,10 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 				return f.client, filePath, nop, nil
 			}
 			// On connection error during reconnect, retry
-			if attempt < maxRetries {
+			if attempt < MaxConnectRetries {
 				continue
 			}
-			return nil, "", nop, fmt.Errorf("failed to reconnect after %d attempts: %w", maxRetries, err)
+			return nil, "", nop, fmt.Errorf("failed to reconnect after %d attempts: %w", MaxConnectRetries, err)
 		}
 
 		// Fallback: try to dial with credentials from URL (legacy behavior)
@@ -338,7 +338,7 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 		}
 		client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey)
 		if err != nil {
-			if attempt < maxRetries && isConnectionError(err) {
+			if attempt < MaxConnectRetries && isConnectionError(err) {
 				continue
 			}
 			return nil, "", nop, err
@@ -346,7 +346,7 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 		return client, u.Path, func() error { return client.Close() }, nil
 	}
 
-	return nil, "", nop, fmt.Errorf("failed to get client after %d attempts", maxRetries)
+	return nil, "", nop, fmt.Errorf("failed to get client after %d attempts", MaxConnectRetries)
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
