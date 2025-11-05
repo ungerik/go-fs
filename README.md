@@ -2,6 +2,10 @@ go-fs: A unified file system for Go
 ===================================
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ungerik/go-fs.svg)](https://pkg.go.dev/github.com/ungerik/go-fs)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ungerik/go-fs)](https://goreportcard.com/report/github.com/ungerik/go-fs)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/ungerik/go-fs)](https://github.com/ungerik/go-fs)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub release](https://img.shields.io/github/release/ungerik/go-fs.svg)](https://github.com/ungerik/go-fs/releases)
 
 The package is built around a `File` type that is a string underneath
 and interprets its value as a local file system path or as a URI.
