@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	iofs "io/fs"
 	"net"
 	"net/url"
 	"os"
 	"path"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -71,6 +74,7 @@ type fileSystem struct {
 	prefix string
 
 	// Dial arguments for reconnecting after a connection loss
+	mu                  sync.Mutex
 	address             string
 	credentialsCallback CredentialsCallback
 	hostKeyCallback     ssh.HostKeyCallback
@@ -222,33 +226,130 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 
 func nop() error { return nil }
 
+// isConnectionError returns true if the error indicates a connection loss
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "connection lost") ||
+		strings.Contains(errStr, "closed network connection") ||
+		strings.Contains(errStr, "use of closed") ||
+		strings.Contains(errStr, "ssh_msg_disconnect") ||
+		strings.Contains(errStr, "connection timed out") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "no route to host") ||
+		strings.Contains(errStr, "network is unreachable") ||
+		strings.Contains(errStr, "connection closed") ||
+		strings.Contains(errStr, "transport endpoint") ||
+		strings.Contains(errStr, "software caused connection abort")
+}
+
+// reconnect attempts to re-establish the SFTP connection using stored credentials.
+// It uses prepareDial and dial to recreate the connection.
+// The caller must hold f.mu lock.
+func (f *fileSystem) reconnect(ctx context.Context) error {
+	// Close existing broken connection if any
+	if f.client != nil {
+		f.client.Close()
+		f.client = nil
+	}
+
+	// Check if we have the necessary connection parameters
+	if f.address == "" || f.credentialsCallback == nil || f.hostKeyCallback == nil {
+		return fmt.Errorf("cannot reconnect: missing connection parameters")
+	}
+
+	// Use prepareDial to get connection details
+	u, username, password, _, err := prepareDial(f.address, f.credentialsCallback, f.hostKeyCallback)
+	if err != nil {
+		return fmt.Errorf("reconnect prepareDial failed: %w", err)
+	}
+
+	// Establish new connection using dial
+	client, err := dial(ctx, u.Host, username, password, f.hostKeyCallback)
+	if err != nil {
+		return fmt.Errorf("reconnect dial failed: %w", err)
+	}
+
+	f.client = client
+	return nil
+}
+
 func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sftp.Client, clientPath string, release func() error, err error) {
 	if err = ctx.Err(); err != nil {
 		return nil, "", nop, err
 	}
-	if f.client != nil {
-		return f.client, filePath, nop, nil
+
+	// Progressive reconnection with exponential backoff
+	const maxRetries = 3
+	backoff := 100 * time.Millisecond
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Apply backoff delay for retries
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, "", nop, ctx.Err()
+			case <-time.After(backoff):
+				backoff *= 2 // Exponential backoff: 100ms, 200ms, 400ms
+			}
+		}
+
+		f.mu.Lock()
+		currentClient := f.client
+		f.mu.Unlock()
+
+		if currentClient != nil {
+			return currentClient, filePath, nop, nil
+		}
+
+		// If we have connection parameters, try to reconnect
+		if f.address != "" && f.credentialsCallback != nil && f.hostKeyCallback != nil {
+			f.mu.Lock()
+			err = f.reconnect(ctx)
+			currentClient = f.client
+			f.mu.Unlock()
+
+			if err == nil && currentClient != nil {
+				return currentClient, filePath, nop, nil
+			}
+			// On connection error during reconnect, retry
+			if attempt < maxRetries {
+				continue
+			}
+			return nil, "", nop, fmt.Errorf("failed to reconnect after %d attempts: %w", maxRetries, err)
+		}
+
+		// Fallback: try to dial with credentials from URL (legacy behavior)
+		u, parseErr := url.Parse(f.URL(filePath))
+		if parseErr != nil {
+			return nil, "", nop, parseErr
+		}
+		username := u.User.Username()
+		if username == "" {
+			return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
+		}
+		password, ok := u.User.Password()
+		if !ok {
+			return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
+		}
+		client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey)
+		if err != nil {
+			if attempt < maxRetries && isConnectionError(err) {
+				continue
+			}
+			return nil, "", nop, err
+		}
+		return client, u.Path, func() error { return client.Close() }, nil
 	}
 
-	// fmt.Printf("%s file system not registered, trying to dial with credentials from URL: %s", f.Name(), f.URL(filePath))
-
-	u, err := url.Parse(f.URL(filePath))
-	if err != nil {
-		return nil, "", nop, err
-	}
-	username := u.User.Username()
-	if username == "" {
-		return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
-	}
-	password, ok := u.User.Password()
-	if !ok {
-		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
-	}
-	client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey)
-	if err != nil {
-		return nil, "", nop, err
-	}
-	return client, u.Path, func() error { return client.Close() }, nil
+	return nil, "", nop, fmt.Errorf("failed to get client after %d attempts", maxRetries)
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
