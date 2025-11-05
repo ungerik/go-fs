@@ -69,6 +69,11 @@ func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error
 type fileSystem struct {
 	client *sftp.Client
 	prefix string
+
+	// Dial arguments for reconnecting after a connection loss
+	address             string
+	credentialsCallback CredentialsCallback
+	hostKeyCallback     ssh.HostKeyCallback
 }
 
 // Dial dials a new SFTP connection without registering it as file system.
@@ -86,8 +91,11 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 		return nil, err
 	}
 	return &fileSystem{
-		client: client,
-		prefix: prefix,
+		client:              client,
+		prefix:              prefix,
+		address:             address,
+		credentialsCallback: credentialsCallback,
+		hostKeyCallback:     hostKeyCallback,
 	}, nil
 }
 
@@ -164,8 +172,11 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return nop, err
 	}
 	f = &fileSystem{
-		client: client,
-		prefix: prefix,
+		client:              client,
+		prefix:              prefix,
+		address:             address,
+		credentialsCallback: credentialsCallback,
+		hostKeyCallback:     hostKeyCallback,
 	}
 	fs.Register(f) // TODO somone else might have registered, so free should not close it
 	return func() error { return f.Close() }, nil
