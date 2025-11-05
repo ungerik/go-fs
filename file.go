@@ -645,7 +645,6 @@ func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
 		file = file.Join(pSegments[:i]...)
 		pSegments = pSegments[i:]
 	}
-	file.CheckIsDir()
 	return file.glob(onlyDirs, pSegments, nil), nil
 }
 

@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	iofs "io/fs"
 	"net"
 	"net/url"
 	"os"
 	"path"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -67,8 +70,13 @@ func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error
 }
 
 type fileSystem struct {
-	client *sftp.Client
-	prefix string
+	prefix    string
+	client    *sftp.Client
+	clientMtx sync.RWMutex
+
+	// connLogger is optional (can be nil) and will be used
+	// to log connection events like dialing and reconnecting
+	connLogger fs.Logger
 
 	// Dial arguments for reconnecting after a connection loss
 	address             string
@@ -81,17 +89,21 @@ type fileSystem struct {
 // The passed address can be a URL with scheme `sftp:` or just a host name.
 // If no port is provided in the address, then port 22 will be used.
 // The address can contain a username or a username and password.
-func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (fs.FileSystem, error) {
+//
+// The connLogger parameter is optional (can be nil) and will be used
+// to log connection events like dialing and reconnecting.
+func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (fs.FileSystem, error) {
 	u, username, password, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
 	if err != nil {
 		return nil, err
 	}
-	client, err := dial(ctx, u.Host, username, password, hostKeyCallback)
+	client, err := dial(ctx, u.Host, username, password, hostKeyCallback, connLogger)
 	if err != nil {
 		return nil, err
 	}
 	return &fileSystem{
 		client:              client,
+		connLogger:          connLogger,
 		prefix:              prefix,
 		address:             address,
 		credentialsCallback: credentialsCallback,
@@ -142,8 +154,11 @@ func prepareDial(address string, credentialsCallback CredentialsCallback, hostKe
 // The passed address can be a URL with scheme `sftp:` or just a host name.
 // If no port is provided in the address, then port 22 will be used.
 // The address can contain a username or a username and password.
-func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (fs.FileSystem, error) {
-	fileSystem, err := Dial(ctx, address, credentialsCallback, hostKeyCallback)
+//
+// The connLogger parameter is optional (can be nil) and will be used
+// to log connection events like dialing and reconnecting.
+func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (fs.FileSystem, error) {
+	fileSystem, err := Dial(ctx, address, credentialsCallback, hostKeyCallback, connLogger)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +171,10 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 // The returned free function has to be called to decrease the file system's
 // reference count and close it when the reference count reaches 0.
 // The returned free function will never be nil.
-func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (free func() error, err error) {
+//
+// The connLogger parameter is optional (can be nil) and will be used
+// to log connection events like dialing and reconnecting.
+func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (free func() error, err error) {
 	u, username, password, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
 	if err != nil {
 		return nop, err
@@ -167,12 +185,13 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return func() error { fs.Unregister(f); return nil }, nil
 	}
 
-	client, err := dial(ctx, u.Host, username, password, hostKeyCallback)
+	client, err := dial(ctx, u.Host, username, password, hostKeyCallback, connLogger)
 	if err != nil {
 		return nop, err
 	}
 	f = &fileSystem{
 		client:              client,
+		connLogger:          connLogger,
 		prefix:              prefix,
 		address:             address,
 		credentialsCallback: credentialsCallback,
@@ -182,7 +201,7 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	return func() error { return f.Close() }, nil
 }
 
-func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback) (*sftp.Client, error) {
+func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (*sftp.Client, error) {
 	config := &ssh.ClientConfig{
 		User: user,
 		Auth: []ssh.AuthMethod{
@@ -201,6 +220,9 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, host, config)
 	if err != nil {
 		return nil, err
+	}
+	if connLogger != nil {
+		connLogger.Printf("Dialed SFTP connection to %s with user %s", host, user)
 	}
 	return sftp.NewClient(ssh.NewClient(sshConn, chans, reqs))
 }
@@ -222,33 +244,134 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 
 func nop() error { return nil }
 
+// isConnectionError returns true if the error indicates a connection loss
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "closed network connection") ||
+		strings.Contains(errStr, "connection closed") ||
+		strings.Contains(errStr, "connection lost") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "connection timed out") ||
+		strings.Contains(errStr, "network is unreachable") ||
+		strings.Contains(errStr, "no route to host") ||
+		strings.Contains(errStr, "software caused connection abort") ||
+		strings.Contains(errStr, "ssh_msg_disconnect") ||
+		strings.Contains(errStr, "transport endpoint") ||
+		strings.Contains(errStr, "use of closed")
+}
+
+// reconnectAndSetClient attempts to re-establish the SFTP connection using stored credentials.
+// It uses prepareDial and dial to recreate the connection
+// and stores the new connection in f.client while locking the f.clientMtx.
+func (f *fileSystem) reconnectAndSetClient(ctx context.Context) error {
+	// Check if we have the necessary connection parameters
+	if f.address == "" || f.credentialsCallback == nil || f.hostKeyCallback == nil {
+		return fmt.Errorf("cannot reconnect: missing connection parameters")
+	}
+
+	if f.connLogger != nil {
+		f.connLogger.Printf("Reconnecting SFTP to %s", f.address)
+	}
+
+	// Use prepareDial to get connection details
+	u, username, password, _, err := prepareDial(f.address, f.credentialsCallback, f.hostKeyCallback)
+	if err != nil {
+		return fmt.Errorf("reconnect prepareDial failed: %w", err)
+	}
+
+	f.clientMtx.Lock()
+	defer f.clientMtx.Unlock()
+
+	// Close existing broken connection if any
+	if f.client != nil {
+		_ = f.client.Close() // ignore error
+		f.client = nil
+	}
+
+	// Establish new connection using dial
+	f.client, err = dial(ctx, u.Host, username, password, f.hostKeyCallback, f.connLogger)
+	if err != nil {
+		return fmt.Errorf("reconnect dial failed: %w", err)
+	}
+
+	return nil
+}
+
 func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sftp.Client, clientPath string, release func() error, err error) {
 	if err = ctx.Err(); err != nil {
 		return nil, "", nop, err
 	}
-	if f.client != nil {
-		return f.client, filePath, nop, nil
+
+	// Progressive reconnection with exponential backoff
+	backoff := InitialRetryBackoff
+	maxRetries := MaxConnectRetries
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Apply backoff delay for retries
+		if attempt > 0 {
+			if f.connLogger != nil {
+				f.connLogger.Printf("Waiting %s before retry attempt %d of %d of SFTP connection to %s", backoff, attempt, maxRetries, f.address)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, "", nop, ctx.Err()
+			case <-time.After(backoff):
+				backoff *= 2 // Exponential backoff: 100ms, 200ms, 400ms
+			}
+		}
+
+		f.clientMtx.RLock()
+		client = f.client
+		f.clientMtx.RUnlock()
+		if client != nil {
+			return client, filePath, nop, nil
+		}
+
+		// If we have connection parameters, try to reconnect
+		if f.address != "" && f.credentialsCallback != nil && f.hostKeyCallback != nil {
+			err = f.reconnectAndSetClient(ctx)
+			if err == nil {
+				return f.client, filePath, nop, nil
+			}
+			// On connection error during reconnect, retry
+			if attempt < MaxConnectRetries {
+				continue
+			}
+			return nil, "", nop, fmt.Errorf("failed to reconnect after %d attempts: %w", MaxConnectRetries, err)
+		}
+
+		// Fallback: try to dial with credentials from URL
+		u, parseErr := url.Parse(f.URL(filePath))
+		if parseErr != nil {
+			return nil, "", nop, parseErr
+		}
+		username := u.User.Username()
+		if username == "" {
+			return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
+		}
+		password, ok := u.User.Password()
+		if !ok {
+			return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
+		}
+		client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey, f.connLogger)
+		if err != nil {
+			if attempt < MaxConnectRetries && isConnectionError(err) {
+				continue
+			}
+			return nil, "", nop, err
+		}
+		return client, u.Path, func() error { return client.Close() }, nil
 	}
 
-	// fmt.Printf("%s file system not registered, trying to dial with credentials from URL: %s", f.Name(), f.URL(filePath))
-
-	u, err := url.Parse(f.URL(filePath))
-	if err != nil {
-		return nil, "", nop, err
-	}
-	username := u.User.Username()
-	if username == "" {
-		return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
-	}
-	password, ok := u.User.Password()
-	if !ok {
-		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
-	}
-	client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey)
-	if err != nil {
-		return nil, "", nop, err
-	}
-	return client, u.Path, func() error { return client.Close() }, nil
+	return nil, "", nop, fmt.Errorf("failed to get client after %d attempts", MaxConnectRetries)
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
