@@ -70,11 +70,11 @@ func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error
 }
 
 type fileSystem struct {
-	client *sftp.Client
-	prefix string
+	prefix    string
+	client    *sftp.Client
+	clientMtx sync.RWMutex
 
 	// Dial arguments for reconnecting after a connection loss
-	mu                  sync.Mutex
 	address             string
 	credentialsCallback CredentialsCallback
 	hostKeyCallback     ssh.HostKeyCallback
@@ -235,31 +235,25 @@ func isConnectionError(err error) bool {
 		return true
 	}
 	errStr := strings.ToLower(err.Error())
-	return strings.Contains(errStr, "connection reset") ||
-		strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "connection lost") ||
+	return strings.Contains(errStr, "broken pipe") ||
 		strings.Contains(errStr, "closed network connection") ||
-		strings.Contains(errStr, "use of closed") ||
-		strings.Contains(errStr, "ssh_msg_disconnect") ||
-		strings.Contains(errStr, "connection timed out") ||
-		strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "no route to host") ||
-		strings.Contains(errStr, "network is unreachable") ||
 		strings.Contains(errStr, "connection closed") ||
+		strings.Contains(errStr, "connection lost") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "connection timed out") ||
+		strings.Contains(errStr, "network is unreachable") ||
+		strings.Contains(errStr, "no route to host") ||
+		strings.Contains(errStr, "software caused connection abort") ||
+		strings.Contains(errStr, "ssh_msg_disconnect") ||
 		strings.Contains(errStr, "transport endpoint") ||
-		strings.Contains(errStr, "software caused connection abort")
+		strings.Contains(errStr, "use of closed")
 }
 
-// reconnect attempts to re-establish the SFTP connection using stored credentials.
-// It uses prepareDial and dial to recreate the connection.
-// The caller must hold f.mu lock.
-func (f *fileSystem) reconnect(ctx context.Context) error {
-	// Close existing broken connection if any
-	if f.client != nil {
-		f.client.Close()
-		f.client = nil
-	}
-
+// reconnectAndSetClient attempts to re-establish the SFTP connection using stored credentials.
+// It uses prepareDial and dial to recreate the connection
+// and stores the new connection in f.client while locking the f.clientMtx.
+func (f *fileSystem) reconnectAndSetClient(ctx context.Context) error {
 	// Check if we have the necessary connection parameters
 	if f.address == "" || f.credentialsCallback == nil || f.hostKeyCallback == nil {
 		return fmt.Errorf("cannot reconnect: missing connection parameters")
@@ -271,13 +265,21 @@ func (f *fileSystem) reconnect(ctx context.Context) error {
 		return fmt.Errorf("reconnect prepareDial failed: %w", err)
 	}
 
+	f.clientMtx.Lock()
+	defer f.clientMtx.Unlock()
+
+	// Close existing broken connection if any
+	if f.client != nil {
+		_ = f.client.Close() // ignore error
+		f.client = nil
+	}
+
 	// Establish new connection using dial
-	client, err := dial(ctx, u.Host, username, password, f.hostKeyCallback)
+	f.client, err = dial(ctx, u.Host, username, password, f.hostKeyCallback)
 	if err != nil {
 		return fmt.Errorf("reconnect dial failed: %w", err)
 	}
 
-	f.client = client
 	return nil
 }
 
@@ -301,23 +303,18 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 			}
 		}
 
-		f.mu.Lock()
-		currentClient := f.client
-		f.mu.Unlock()
-
-		if currentClient != nil {
-			return currentClient, filePath, nop, nil
+		f.clientMtx.RLock()
+		client = f.client
+		f.clientMtx.RUnlock()
+		if client != nil {
+			return client, filePath, nop, nil
 		}
 
 		// If we have connection parameters, try to reconnect
 		if f.address != "" && f.credentialsCallback != nil && f.hostKeyCallback != nil {
-			f.mu.Lock()
-			err = f.reconnect(ctx)
-			currentClient = f.client
-			f.mu.Unlock()
-
-			if err == nil && currentClient != nil {
-				return currentClient, filePath, nop, nil
+			err = f.reconnectAndSetClient(ctx)
+			if err == nil {
+				return f.client, filePath, nop, nil
 			}
 			// On connection error during reconnect, retry
 			if attempt < maxRetries {
