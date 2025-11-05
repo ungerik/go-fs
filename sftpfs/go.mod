@@ -7,7 +7,7 @@ replace github.com/ungerik/go-fs => ..
 require github.com/ungerik/go-fs v0.0.0-00010101000000-000000000000 // replaced
 
 require (
-	github.com/pkg/sftp v1.13.9
+	github.com/pkg/sftp v1.13.10
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.43.0
 )
