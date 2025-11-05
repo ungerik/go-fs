@@ -74,6 +74,10 @@ type fileSystem struct {
 	client    *sftp.Client
 	clientMtx sync.RWMutex
 
+	// connLogger is optional (can be nil) and will be used
+	// to log connection events like dialing and reconnecting
+	connLogger fs.Logger
+
 	// Dial arguments for reconnecting after a connection loss
 	address             string
 	credentialsCallback CredentialsCallback
@@ -85,17 +89,21 @@ type fileSystem struct {
 // The passed address can be a URL with scheme `sftp:` or just a host name.
 // If no port is provided in the address, then port 22 will be used.
 // The address can contain a username or a username and password.
-func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (fs.FileSystem, error) {
+//
+// The connLogger parameter is optional (can be nil) and will be used
+// to log connection events like dialing and reconnecting.
+func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (fs.FileSystem, error) {
 	u, username, password, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
 	if err != nil {
 		return nil, err
 	}
-	client, err := dial(ctx, u.Host, username, password, hostKeyCallback)
+	client, err := dial(ctx, u.Host, username, password, hostKeyCallback, connLogger)
 	if err != nil {
 		return nil, err
 	}
 	return &fileSystem{
 		client:              client,
+		connLogger:          connLogger,
 		prefix:              prefix,
 		address:             address,
 		credentialsCallback: credentialsCallback,
@@ -146,8 +154,11 @@ func prepareDial(address string, credentialsCallback CredentialsCallback, hostKe
 // The passed address can be a URL with scheme `sftp:` or just a host name.
 // If no port is provided in the address, then port 22 will be used.
 // The address can contain a username or a username and password.
-func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (fs.FileSystem, error) {
-	fileSystem, err := Dial(ctx, address, credentialsCallback, hostKeyCallback)
+//
+// The connLogger parameter is optional (can be nil) and will be used
+// to log connection events like dialing and reconnecting.
+func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (fs.FileSystem, error) {
+	fileSystem, err := Dial(ctx, address, credentialsCallback, hostKeyCallback, connLogger)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +171,10 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 // The returned free function has to be called to decrease the file system's
 // reference count and close it when the reference count reaches 0.
 // The returned free function will never be nil.
-func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (free func() error, err error) {
+//
+// The connLogger parameter is optional (can be nil) and will be used
+// to log connection events like dialing and reconnecting.
+func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (free func() error, err error) {
 	u, username, password, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
 	if err != nil {
 		return nop, err
@@ -171,12 +185,13 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return func() error { fs.Unregister(f); return nil }, nil
 	}
 
-	client, err := dial(ctx, u.Host, username, password, hostKeyCallback)
+	client, err := dial(ctx, u.Host, username, password, hostKeyCallback, connLogger)
 	if err != nil {
 		return nop, err
 	}
 	f = &fileSystem{
 		client:              client,
+		connLogger:          connLogger,
 		prefix:              prefix,
 		address:             address,
 		credentialsCallback: credentialsCallback,
@@ -186,7 +201,7 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	return func() error { return f.Close() }, nil
 }
 
-func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback) (*sftp.Client, error) {
+func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (*sftp.Client, error) {
 	config := &ssh.ClientConfig{
 		User: user,
 		Auth: []ssh.AuthMethod{
@@ -205,6 +220,9 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, host, config)
 	if err != nil {
 		return nil, err
+	}
+	if connLogger != nil {
+		connLogger.Printf("Dialed SFTP connection to %s with user %s", host, user)
 	}
 	return sftp.NewClient(ssh.NewClient(sshConn, chans, reqs))
 }
@@ -259,6 +277,10 @@ func (f *fileSystem) reconnectAndSetClient(ctx context.Context) error {
 		return fmt.Errorf("cannot reconnect: missing connection parameters")
 	}
 
+	if f.connLogger != nil {
+		f.connLogger.Printf("Reconnecting SFTP to %s", f.address)
+	}
+
 	// Use prepareDial to get connection details
 	u, username, password, _, err := prepareDial(f.address, f.credentialsCallback, f.hostKeyCallback)
 	if err != nil {
@@ -275,7 +297,7 @@ func (f *fileSystem) reconnectAndSetClient(ctx context.Context) error {
 	}
 
 	// Establish new connection using dial
-	f.client, err = dial(ctx, u.Host, username, password, f.hostKeyCallback)
+	f.client, err = dial(ctx, u.Host, username, password, f.hostKeyCallback, f.connLogger)
 	if err != nil {
 		return fmt.Errorf("reconnect dial failed: %w", err)
 	}
@@ -295,6 +317,9 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Apply backoff delay for retries
 		if attempt > 0 {
+			if f.connLogger != nil {
+				f.connLogger.Printf("Waiting %s before retrying SFTP connection to %s", backoff, f.address)
+			}
 			select {
 			case <-ctx.Done():
 				return nil, "", nop, ctx.Err()
@@ -323,7 +348,7 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 			return nil, "", nop, fmt.Errorf("failed to reconnect after %d attempts: %w", MaxConnectRetries, err)
 		}
 
-		// Fallback: try to dial with credentials from URL (legacy behavior)
+		// Fallback: try to dial with credentials from URL
 		u, parseErr := url.Parse(f.URL(filePath))
 		if parseErr != nil {
 			return nil, "", nop, parseErr
@@ -336,7 +361,7 @@ func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sf
 		if !ok {
 			return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
 		}
-		client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey)
+		client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey, f.connLogger)
 		if err != nil {
 			if attempt < MaxConnectRetries && isConnectionError(err) {
 				continue

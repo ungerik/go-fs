@@ -85,7 +85,7 @@ func TestMain(m *testing.M) {
 	maxRetries := 10
 	var testErr error
 	for i := range maxRetries {
-		sftpFS, err := Dial(ctx, testSFTPAddress, UsernameAndPassword(testUsername, testPassword), AcceptAnyHostKey)
+		sftpFS, err := Dial(ctx, testSFTPAddress, UsernameAndPassword(testUsername, testPassword), AcceptAnyHostKey, nil)
 		if err == nil {
 			sftpFS.Close()
 			dockerSFTPAvailable = true
@@ -135,7 +135,7 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("test.rebex.net", func(t *testing.T) {
-		sftpFS, err := DialAndRegister(context.Background(), "demo@test.rebex.net:22", Password("password"), AcceptAnyHostKey)
+		sftpFS, err := DialAndRegister(context.Background(), "demo@test.rebex.net:22", Password("password"), AcceptAnyHostKey, nil)
 		require.NoError(t, err, "Dial")
 
 		require.Equal(t, "sftp://demo@test.rebex.net", sftpFS.Prefix())
@@ -161,7 +161,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 	})
 	t.Run("demo.wftpserver.com", func(t *testing.T) {
 		// http://demo.wftpserver.com/main.html
-		sftpFS, err := DialAndRegister(context.Background(), "demo.wftpserver.com:2222", UsernameAndPassword("demo", "demo"), AcceptAnyHostKey)
+		sftpFS, err := DialAndRegister(context.Background(), "demo.wftpserver.com:2222", UsernameAndPassword("demo", "demo"), AcceptAnyHostKey, nil)
 		require.NoError(t, err, "Dial")
 		require.Equal(t, "sftp://demo@demo.wftpserver.com:2222", sftpFS.Prefix())
 
@@ -195,7 +195,7 @@ func Test_fileSystem(t *testing.T) {
 	ctx := context.Background()
 
 	// Connect to the shared test SFTP server
-	sftpFS, err := Dial(ctx, testSFTPAddress, UsernameAndPassword(testUsername, testPassword), AcceptAnyHostKey)
+	sftpFS, err := Dial(ctx, testSFTPAddress, UsernameAndPassword(testUsername, testPassword), AcceptAnyHostKey, nil)
 	require.NoError(t, err, "Failed to connect to SFTP server")
 	defer sftpFS.Close()
 
