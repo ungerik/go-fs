@@ -38,8 +38,12 @@ var (
 // This is why NewMemFile does not return a pointer.
 //
 // Note that the ReadAll and ReadAllContext methods return FileData
-// directly without copying it to optimized performance.
+// directly without copying it to optimize performance.
 // So be careful when modifying the FileData bytes of a MemFile.
+// Since MemFile implements FileReader, any function accepting a FileReader
+// parameter may call these methods and receive a reference to the internal
+// data without copying. This includes functions like ReadMemFile and
+// ReadMemFileRename which will share the FileData when the input is a MemFile.
 //
 // MemFile implements the following interfaces:
 //   - FileReader
@@ -56,7 +60,9 @@ type MemFile struct {
 	FileData []byte `json:"data,omitempty"`
 }
 
-// NewMemFile returns a new MemFile
+// NewMemFile returns a new MemFile.
+// The passed data slice is used directly without copying it,
+// so be careful when modifying the data after passing it to this function.
 func NewMemFile(name string, data []byte) MemFile {
 	return MemFile{FileName: name, FileData: data}
 }
@@ -165,6 +171,9 @@ func (f MemFile) WithName(name string) MemFile {
 
 // WithData returns a MemFile with the passed data
 // and the same name as the original MemFile.
+//
+// The passed data slice is used directly without copying it,
+// so be careful when modifying the data after passing it to this function.
 func (f MemFile) WithData(data []byte) MemFile {
 	return MemFile{FileName: f.FileName, FileData: data}
 }
@@ -226,11 +235,17 @@ func (f MemFile) ContentHashContext(ctx context.Context) (string, error) {
 }
 
 // ReadAll returns the FileData without copying it.
+//
+// Be careful when modifying the returned data as it shares
+// the same underlying array with the MemFile's FileData.
 func (f MemFile) ReadAll() (data []byte, err error) {
 	return f.FileData, nil
 }
 
 // ReadAllContext returns the FileData without copying it.
+//
+// Be careful when modifying the returned data as it shares
+// the same underlying array with the MemFile's FileData.
 func (f MemFile) ReadAllContext(ctx context.Context) (data []byte, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -240,6 +255,9 @@ func (f MemFile) ReadAllContext(ctx context.Context) (data []byte, err error) {
 
 // ReadAllContentHash returns the FileData without copying it
 // together with the DefaultContentHash.
+//
+// Be careful when modifying the returned data as it shares
+// the same underlying array with the MemFile's FileData.
 func (f MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
 	hash, err = DefaultContentHash(ctx, bytes.NewReader(f.FileData))
 	if err != nil {
