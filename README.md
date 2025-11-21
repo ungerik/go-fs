@@ -200,6 +200,11 @@ type MemFile struct {
 }
 ```
 
+**Pass by value:** `MemFile` should be passed by value (not by pointer) because it's a small,
+simple struct containing only a string and a slice (both reference types internally).
+Passing by value is more efficient and idiomatic for such lightweight types.
+This is why `NewMemFile` returns a `MemFile` value, not a pointer.
+
 The type exists because it's very common to build up a file in memory
 and/or pass around some buffered file bytes together with a filename:
 
