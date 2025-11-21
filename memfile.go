@@ -60,14 +60,18 @@ type MemFile struct {
 	FileData []byte `json:"data,omitempty"`
 }
 
-// NewMemFile returns a new MemFile.
+// NewMemFile returns a new MemFile by value (not a pointer).
+// MemFile should be passed by value because it's a small, simple struct
+// containing only a string and a slice (both reference types internally).
+// Passing by value is more efficient and idiomatic for such lightweight types.
+//
 // The passed data slice is used directly without copying it,
 // so be careful when modifying the data after passing it to this function.
 func NewMemFile(name string, data []byte) MemFile {
 	return MemFile{FileName: name, FileData: data}
 }
 
-// NewMemFileWriteJSON returns a new MemFile with the input mashalled to JSON as FileData.
+// NewMemFileWriteJSON returns a new MemFile by value with the input mashalled to JSON as FileData.
 // Any indent arguments will be concanated and used as JSON line indentation.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
@@ -87,7 +91,7 @@ func NewMemFileWriteJSON(name string, input any, indent ...string) (MemFile, err
 	return MemFile{FileName: name, FileData: data}, nil
 }
 
-// NewMemFileWriteXML returns a new MemFile with the input mashalled to XML as FileData.
+// NewMemFileWriteXML returns a new MemFile by value with the input mashalled to XML as FileData.
 // Any indent arguments will be concanated and used as XML line indentation.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
@@ -107,7 +111,7 @@ func NewMemFileWriteXML(name string, input any, indent ...string) (MemFile, erro
 	return MemFile{FileName: name, FileData: append([]byte(xml.Header), data...)}, nil
 }
 
-// ReadMemFile returns a new MemFile with name and data from fileReader.
+// ReadMemFile returns a new MemFile by value with name and data from fileReader.
 // If the passed fileReader is a MemFile then
 // its FileData is used directly without copying it.
 func ReadMemFile(ctx context.Context, fileReader FileReader) (MemFile, error) {
@@ -118,7 +122,7 @@ func ReadMemFile(ctx context.Context, fileReader FileReader) (MemFile, error) {
 	return MemFile{FileName: fileReader.Name(), FileData: data}, nil
 }
 
-// ReadMemFileRename returns a new MemFile with the data from fileReader and the passed name.
+// ReadMemFileRename returns a new MemFile by value with the data from fileReader and the passed name.
 // If the passed fileReader is a MemFile then
 // its FileData is used directly without copying it.
 func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) (MemFile, error) {
@@ -129,7 +133,7 @@ func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) 
 	return MemFile{FileName: name, FileData: data}, nil
 }
 
-// ReadAllMemFile returns a new MemFile with the data
+// ReadAllMemFile returns a new MemFile by value with the data
 // from ReadAllContext(r) and the passed name.
 // It reads all data from r until EOF is reached,
 // another error is returned, or the context got canceled.
