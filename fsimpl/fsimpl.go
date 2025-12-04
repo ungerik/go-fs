@@ -11,14 +11,20 @@ import (
 
 // RandomString returns a 120 bit randum number
 // encoded as URL compatible base64 string with a length of 20 characters.
+// The first character will never be a dash '-' to avoid issues with
+// file names being interpreted as a command line options.
 func RandomString() string {
-	var buffer [15]byte
-	b := buffer[:]
+	var data [15]byte
+	b := data[:]
 	_, err := rand.Read(b)
 	if err != nil {
 		panic(err)
 	}
-	return base64.RawURLEncoding.EncodeToString(b)
+	s := base64.RawURLEncoding.EncodeToString(b)
+	if s[0] == '-' || s[0] == '_' {
+		s = "X" + s[1:]
+	}
+	return s
 }
 
 // Ext returns the extension of filePath including the point, or an empty string.

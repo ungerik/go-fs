@@ -2,6 +2,7 @@ package fsimpl
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,7 +35,11 @@ func TestSplitDirAndName(t *testing.T) {
 }
 
 func TestRandomString(t *testing.T) {
-	require.Len(t, RandomString(), 20, "RandomString length should be 20")
+	for range 100 {
+		s := RandomString()
+		require.Len(t, s, 20, "RandomString length should be 20")
+		require.False(t, strings.HasPrefix(s, "-"), "RandomString never starts with a dash '-'")
+	}
 }
 
 func ExampleExt() {
