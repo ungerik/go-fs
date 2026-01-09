@@ -151,9 +151,9 @@ func (f MemFile) String() string {
 	return fmt.Sprintf("MemFile{name: `%s`, size: %d}", f.FileName, len(f.FileData))
 }
 
-// PrintForCallStack prints the metadata of the file
-// for call stack errors.
-func (f MemFile) PrintForCallStack(w io.Writer) {
+// PrettyPrint implements the pretty.Printable interface
+// by writing the result of the String method.
+func (f MemFile) PrettyPrint(w io.Writer) {
 	_, _ = io.WriteString(w, f.String())
 }
 
