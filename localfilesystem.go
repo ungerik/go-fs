@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/pkg/xattr"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -78,7 +79,7 @@ func (local *LocalFileSystem) RootDir() File {
 }
 
 func (local *LocalFileSystem) ID() (string, error) {
-	return "/", nil // TODO something more meaningfull like platform dependend the ID of the actual file system
+	return "/", nil // TODO something more meaningful like platform dependent the ID of the actual file system
 }
 
 func (local *LocalFileSystem) Prefix() string {
@@ -763,4 +764,57 @@ func (local *LocalFileSystem) watchEventCallback(event fsnotify.Event, callback 
 
 func (*LocalFileSystem) Close() error {
 	return nil
+}
+
+// ListXAttr returns the names of all extended attributes for the file.
+// If followSymlinks is true, symlinks are resolved to their target.
+func (local *LocalFileSystem) ListXAttr(filePath string, followSymlinks bool) ([]string, error) {
+	if filePath == "" {
+		return nil, ErrEmptyPath
+	}
+	filePath = expandTilde(filePath)
+	if followSymlinks {
+		return xattr.List(filePath)
+	}
+	return xattr.LList(filePath)
+}
+
+// GetXAttr returns the value of the named extended attribute.
+// If followSymlinks is true, symlinks are resolved to their target.
+func (local *LocalFileSystem) GetXAttr(filePath string, name string, followSymlinks bool) ([]byte, error) {
+	if filePath == "" {
+		return nil, ErrEmptyPath
+	}
+	filePath = expandTilde(filePath)
+	if followSymlinks {
+		return xattr.Get(filePath, name)
+	}
+	return xattr.LGet(filePath, name)
+}
+
+// SetXAttr sets the value of the named extended attribute.
+// The flags parameter controls the behavior (e.g., xattr.XATTR_CREATE, xattr.XATTR_REPLACE).
+// If followSymlinks is true, symlinks are resolved to their target.
+func (local *LocalFileSystem) SetXAttr(filePath string, name string, data []byte, flags int, followSymlinks bool) error {
+	if filePath == "" {
+		return ErrEmptyPath
+	}
+	filePath = expandTilde(filePath)
+	if followSymlinks {
+		return xattr.SetWithFlags(filePath, name, data, flags)
+	}
+	return xattr.LSetWithFlags(filePath, name, data, flags)
+}
+
+// RemoveXAttr removes the named extended attribute from the file.
+// If followSymlinks is true, symlinks are resolved to their target.
+func (local *LocalFileSystem) RemoveXAttr(filePath string, name string, followSymlinks bool) error {
+	if filePath == "" {
+		return ErrEmptyPath
+	}
+	filePath = expandTilde(filePath)
+	if followSymlinks {
+		return xattr.Remove(filePath, name)
+	}
+	return xattr.LRemove(filePath, name)
 }

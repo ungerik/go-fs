@@ -359,3 +359,29 @@ type ListDirRecursiveFileSystem interface {
 	// at least one of the patterns are returned.
 	ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error
 }
+
+// XAttrFileSystem extends FileSystem with support for extended file attributes (xattrs).
+// Extended attributes are name-value pairs associated with files that provide
+// additional metadata beyond standard file attributes.
+// Not all file systems support xattrs (e.g., FAT32 does not).
+// On Linux, xattr names are typically prefixed with a namespace like "user.".
+type XAttrFileSystem interface {
+	FileSystem
+
+	// ListXAttr returns the names of all extended attributes for the file.
+	// If followSymlinks is true, symlinks are resolved to their target.
+	ListXAttr(filePath string, followSymlinks bool) ([]string, error)
+
+	// GetXAttr returns the value of the named extended attribute.
+	// If followSymlinks is true, symlinks are resolved to their target.
+	GetXAttr(filePath string, name string, followSymlinks bool) ([]byte, error)
+
+	// SetXAttr sets the value of the named extended attribute.
+	// The flags parameter controls the behavior (e.g., unix.XATTR_CREATE, unix.XATTR_REPLACE).
+	// If followSymlinks is true, symlinks are resolved to their target.
+	SetXAttr(filePath string, name string, data []byte, flags int, followSymlinks bool) error
+
+	// RemoveXAttr removes the named extended attribute from the file.
+	// If followSymlinks is true, symlinks are resolved to their target.
+	RemoveXAttr(filePath string, name string, followSymlinks bool) error
+}

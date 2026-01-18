@@ -215,10 +215,10 @@ func (file File) IsReadable() bool {
 	return (info.Mode().IsDir() || info.Mode().IsRegular()) && (info.Mode()&0400 != 0)
 }
 
-// IsWriteable returns if the file exists and is writeable,
+// IsWritable returns if the file exists and is writable,
 // or in case it doesn't exist,
-// if the parent directory exists and is writeable.
-func (file File) IsWriteable() bool {
+// if the parent directory exists and is writable.
+func (file File) IsWritable() bool {
 	if file == "" {
 		return false
 	}
@@ -230,7 +230,7 @@ func (file File) IsWriteable() bool {
 	if err == nil {
 		return info.Mode().IsRegular() && (info.Mode()&0200 != 0)
 	}
-	// File does not exist, check if parent directory is writeable
+	// File does not exist, check if parent directory is writable
 	parentDir, _ := fileSystem.SplitDirAndName(pathFile)
 	info, err = fileSystem.Stat(parentDir)
 	if err != nil {
@@ -1609,6 +1609,114 @@ func (file File) StdFS() StdFS {
 // from the standard library for a File.
 func (file File) StdDirEntry() StdDirEntry {
 	return StdDirEntry{file}
+}
+
+// ListXAttr returns the names of all extended attributes for the file.
+// Symbolic links are resolved to their target.
+// Returns ErrUnsupported if the file system does not support extended attributes.
+func (file File) ListXAttr() ([]string, error) {
+	const followSymlinks = true
+	fileSystem, path := file.ParseRawURI()
+	if fs, ok := fileSystem.(XAttrFileSystem); ok {
+		return fs.ListXAttr(path, followSymlinks)
+	}
+	return nil, NewErrUnsupported(fileSystem, "ListXAttr")
+}
+
+// LListXAttr returns the names of all extended attributes for the file.
+// Symbolic links are not resolved.
+// Returns ErrUnsupported if the file system does not support extended attributes.
+func (file File) LListXAttr() ([]string, error) {
+	const followSymlinks = false
+	fileSystem, path := file.ParseRawURI()
+	if fs, ok := fileSystem.(XAttrFileSystem); ok {
+		return fs.ListXAttr(path, followSymlinks)
+	}
+	return nil, NewErrUnsupported(fileSystem, "ListXAttr")
+}
+
+// GetXAttr returns the value of the named extended attribute.
+// Symbolic links are resolved to their target.
+// Returns ErrUnsupported if the file system does not support extended attributes.
+func (file File) GetXAttr(name string) ([]byte, error) {
+	const followSymlinks = true
+	fileSystem, path := file.ParseRawURI()
+	if fs, ok := fileSystem.(XAttrFileSystem); ok {
+		return fs.GetXAttr(path, name, followSymlinks)
+	}
+	return nil, NewErrUnsupported(fileSystem, "GetXAttr")
+}
+
+// LGetXAttr returns the value of the named extended attribute.
+// Symbolic links are not resolved.
+// Returns ErrUnsupported if the file system does not support extended attributes.
+func (file File) LGetXAttr(name string) ([]byte, error) {
+	const followSymlinks = false
+	fileSystem, path := file.ParseRawURI()
+	if fs, ok := fileSystem.(XAttrFileSystem); ok {
+		return fs.GetXAttr(path, name, followSymlinks)
+	}
+	return nil, NewErrUnsupported(fileSystem, "GetXAttr")
+}
+
+// SetXAttr sets the value of the named extended attribute.
+// Symbolic links are resolved to their target.
+// The optional flags parameter controls the behavior
+// (e.g., xattr.XATTR_CREATE, xattr.XATTR_REPLACE).
+// Returns ErrUnsupported if the file system does not support extended attributes.
+func (file File) SetXAttr(name string, data []byte, flags ...int) error {
+	const followSymlinks = true
+	fileSystem, path := file.ParseRawURI()
+	if fs, ok := fileSystem.(XAttrFileSystem); ok {
+		combinedFlags := 0
+		for _, flag := range flags {
+			combinedFlags |= flag
+		}
+		return fs.SetXAttr(path, name, data, combinedFlags, followSymlinks)
+	}
+	return NewErrUnsupported(fileSystem, "SetXAttr")
+}
+
+// LSetXAttr sets the value of the named extended attribute.
+// Symbolic links are not resolved.
+// The optional flags parameter controls the behavior
+// (e.g., xattr.XATTR_CREATE, xattr.XATTR_REPLACE).
+// Returns ErrUnsupported if the file system does not support extended attributes.
+func (file File) LSetXAttr(name string, data []byte, flags ...int) error {
+	const followSymlinks = false
+	fileSystem, path := file.ParseRawURI()
+	if fs, ok := fileSystem.(XAttrFileSystem); ok {
+		combinedFlags := 0
+		for _, flag := range flags {
+			combinedFlags |= flag
+		}
+		return fs.SetXAttr(path, name, data, combinedFlags, followSymlinks)
+	}
+	return NewErrUnsupported(fileSystem, "SetXAttr")
+}
+
+// RemoveXAttr removes the named extended attribute from the file.
+// Symbolic links are resolved to their target.
+// Returns ErrUnsupported if the file system does not support extended attributes.
+func (file File) RemoveXAttr(name string) error {
+	const followSymlinks = true
+	fileSystem, path := file.ParseRawURI()
+	if fs, ok := fileSystem.(XAttrFileSystem); ok {
+		return fs.RemoveXAttr(path, name, followSymlinks)
+	}
+	return NewErrUnsupported(fileSystem, "RemoveXAttr")
+}
+
+// LRemoveXAttr removes the named extended attribute from the file.
+// Symbolic links are not resolved.
+// Returns ErrUnsupported if the file system does not support extended attributes.
+func (file File) LRemoveXAttr(name string) error {
+	const followSymlinks = false
+	fileSystem, path := file.ParseRawURI()
+	if fs, ok := fileSystem.(XAttrFileSystem); ok {
+		return fs.RemoveXAttr(path, name, followSymlinks)
+	}
+	return NewErrUnsupported(fileSystem, "RemoveXAttr")
 }
 
 // NewFileReadWriteAllSeekCloser creates a ReadWriteSeekCloser for a File
