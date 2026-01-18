@@ -1445,7 +1445,7 @@ func TestFile(t *testing.T) {
 			require.True(t, readable)
 		})
 
-		t.Run("IsWriteable", func(t *testing.T) {
+		t.Run("IsWritable", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
 			mockFS := createMockFS("mock" + t.Name() + "://")
 			Register(mockFS)
@@ -1461,8 +1461,8 @@ func TestFile(t *testing.T) {
 				}, nil
 			}
 
-			writeable := file.IsWriteable()
-			require.True(t, writeable)
+			writable := file.IsWritable()
+			require.True(t, writable)
 		})
 
 		t.Run("Stat", func(t *testing.T) {

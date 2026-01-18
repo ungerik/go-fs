@@ -26,7 +26,7 @@ The README is partially outdated. Key findings:
 - `ReadXML()`, `WriteXML()` - not mentioned in README at all
 
 **Additional File Methods:**
-- `IsReadable()`, `IsWriteable()` - check file access
+- `IsReadable()`, `IsWritable()` - check file access
 - `PathWithSlashes()` - path with forward slashes
 - `LocalPath()`, `MustLocalPath()` - get local filesystem path
 - `TrimExt()` - remove file extension
