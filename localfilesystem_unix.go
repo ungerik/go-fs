@@ -4,6 +4,7 @@
 package fs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -12,6 +13,12 @@ import (
 )
 
 const localRoot = `/`
+
+// isCrossDeviceError reports whether the error is
+// a cross-device link error (EXDEV) from os.Rename.
+func isCrossDeviceError(err error) bool {
+	return errors.Is(err, syscall.EXDEV)
+}
 
 var extraDirPermissions Permissions = AllExecute
 

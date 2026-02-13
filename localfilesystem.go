@@ -640,6 +640,12 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) (newPath s
 	return newPath, nil
 }
 
+// Move moves filePath to destPath.
+// If filePath is a directory, it is moved into destPath
+// using the base name of filePath.
+// Move first tries os.Rename which is atomic but only works
+// within the same filesystem. If the destination is on a different
+// volume it falls back to copy + delete.
 func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return ErrEmptyPath
@@ -653,7 +659,17 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 	if info.IsDir() {
 		destPath = filepath.Join(destPath, filepath.Base(filePath))
 	}
-	return os.Rename(filePath, destPath)
+	err = os.Rename(filePath, destPath)
+	if err != nil && isCrossDeviceError(err) {
+		// os.Rename does not work across filesystem boundaries,
+		// fall back to copy + delete
+		err = CopyRecursive(context.Background(), File(filePath), File(destPath))
+		if err != nil {
+			return err
+		}
+		return os.RemoveAll(filePath)
+	}
+	return err
 }
 
 func (local *LocalFileSystem) Remove(filePath string) error {
