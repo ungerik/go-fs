@@ -1383,6 +1383,9 @@ func (file File) Renamef(newNameFormat string, args ...any) (renamedFile File, e
 // MoveTo moves and/or renames the file to destination.
 // destination can be a directory or file-path and
 // can be on another FileSystem.
+// If the file and distination are using the LocalFileSystem
+// but are on different volumes, then the file will be copied
+// to the destination and then deleted.
 func (file File) MoveTo(destination File) error {
 	return Move(context.Background(), file, destination)
 }
