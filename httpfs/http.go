@@ -104,7 +104,7 @@ func (f *fileSystem) info(filePath string) fs.FileInfo {
 	if err != nil {
 		return fs.FileInfo{}
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := http.DefaultClient.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
 		return fs.FileInfo{}
 	}
@@ -125,7 +125,7 @@ func (f *fileSystem) info(filePath string) fs.FileInfo {
 	}
 
 	// If HEAD request did not return a ContentLength do a full GET request
-	response, err = http.DefaultClient.Get(f.URL(filePath))
+	response, err = http.DefaultClient.Get(f.URL(filePath)) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
 		return fs.FileInfo{}
 	}
@@ -198,7 +198,7 @@ func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
 	if err != nil {
 		return nil, err
 	}
-	response, err := http.DefaultClient.Get(f.URL(filePath))
+	response, err := http.DefaultClient.Get(f.URL(filePath)) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
 		return nil, fmt.Errorf("HTTPFileSystem.OpenReader: %w", err)
 	}
