@@ -151,10 +151,11 @@ func (f MemFile) String() string {
 	return fmt.Sprintf("MemFile{name: `%s`, size: %d}", f.FileName, len(f.FileData))
 }
 
-// PrettyPrint implements the pretty.Printable interface
-// by writing the result of the String method.
-func (f MemFile) PrettyPrint(w io.Writer) {
-	_, _ = io.WriteString(w, f.String())
+// PrettyString implements the pretty.Stringer interface
+// to provide a compact representation of the MemFile
+// in error messages and pretty-printed output.
+func (f MemFile) PrettyString() string {
+	return f.String()
 }
 
 // Name returns the name of the file.
