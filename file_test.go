@@ -678,7 +678,7 @@ func (m *mockFileInfo) Size() int64        { return m.size }
 func (m *mockFileInfo) Mode() os.FileMode  { return m.mode }
 func (m *mockFileInfo) ModTime() time.Time { return m.modTime }
 func (m *mockFileInfo) IsDir() bool        { return m.isDir }
-func (m *mockFileInfo) Sys() interface{}   { return nil }
+func (m *mockFileInfo) Sys() any           { return nil }
 
 // mockReadCloser implements iofs.File for testing
 type mockReadCloser struct {
@@ -1204,7 +1204,7 @@ func TestFile(t *testing.T) {
 
 		file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-		testData := map[string]interface{}{"name": "test", "value": 123}
+		testData := map[string]any{"name": "test", "value": 123}
 		var capturedPerms []Permissions
 		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 			capturedPerms = perm
@@ -2126,7 +2126,7 @@ func TestFile(t *testing.T) {
 				return jsonData, nil
 			}
 
-			var result map[string]interface{}
+			var result map[string]any
 			err := testFile.ReadJSON(context.Background(), &result)
 			require.NoError(t, err)
 			assert.Equal(t, "test", result["name"])
