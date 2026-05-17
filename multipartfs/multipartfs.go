@@ -36,7 +36,7 @@ type MultipartFileSystem struct {
 
 // FromRequestForm returns a MultipartFileSystem from a http.Request
 func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSystem, error) {
-	err := request.ParseMultipartForm(maxMemory)
+	err := request.ParseMultipartForm(maxMemory) //#nosec G120 -- caller bounds memory via maxMemory parameter
 	if err != nil {
 		return nil, err
 	}

@@ -107,7 +107,7 @@ func dial(ctx context.Context, host, username, password string, secure bool, deb
 			MinVersion:         tls.VersionTLS10, // Accept TLS 1.0+ (more permissive)
 			MaxVersion:         tls.VersionTLS13, // Support up to TLS 1.3
 			// Disable certificate verification completely
-			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error { //#nosec G123 -- intentional: FTPS workaround already accepts any certificate via InsecureSkipVerify
 				return nil // Accept any certificate
 			},
 		}

@@ -511,7 +511,7 @@ func ReadMultipartFormMemFiles(ctx context.Context, form *multipart.Form) (map[s
 // ParseRequestMultipartFormMemFiles parses the multipart form from the request
 // and returns a map of form field name to MemFiles.
 func ParseRequestMultipartFormMemFiles(request *http.Request, maxMemory int64) (map[string][]MemFile, error) {
-	err := request.ParseMultipartForm(maxMemory)
+	err := request.ParseMultipartForm(maxMemory) //#nosec G120 -- caller bounds memory via maxMemory parameter
 	if err != nil {
 		return nil, err
 	}
