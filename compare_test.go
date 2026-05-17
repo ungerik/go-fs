@@ -67,7 +67,7 @@ func deleteRandomSubDir(dir File) error {
 
 func writeRandomDirFiles(dir File, subDirDepth int) (err error) {
 	numFiles := randFileCount()
-	for i := 0; i < numFiles; i++ {
+	for i := range numFiles {
 		file := dir.Join(fsimpl.RandomString() + ".bin")
 		if i == 0 {
 			// always write one empty file
@@ -82,7 +82,7 @@ func writeRandomDirFiles(dir File, subDirDepth int) (err error) {
 
 	if subDirDepth > 0 {
 		numDirs := randDirCount()
-		for i := 0; i < numDirs; i++ {
+		for i := range numDirs {
 			subDir := dir.Join(fsimpl.RandomString())
 			err = subDir.MakeDir()
 			if err != nil {

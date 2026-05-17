@@ -722,8 +722,8 @@ func TestFile(t *testing.T) {
 			},
 			MockCleanPathFromURI: func(uri string) string {
 				// Simple implementation that removes the prefix and returns the path
-				if strings.HasPrefix(uri, prefix) {
-					path := strings.TrimPrefix(uri, prefix)
+				if after, ok := strings.CutPrefix(uri, prefix); ok {
+					path := after
 					// Ensure path starts with /
 					if !strings.HasPrefix(path, "/") {
 						path = "/" + path

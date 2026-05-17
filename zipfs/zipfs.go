@@ -355,8 +355,8 @@ func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string
 	// Navigate to the requested directory if not root
 	if dirPath != "" && dirPath != "." && dirPath != Separator {
 		dirPath = strings.TrimPrefix(dirPath, Separator)
-		parts := strings.Split(dirPath, Separator)
-		for _, part := range parts {
+		parts := strings.SplitSeq(dirPath, Separator)
+		for part := range parts {
 			if part == "" {
 				continue
 			}
