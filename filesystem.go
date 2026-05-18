@@ -172,6 +172,12 @@ type MoveFileSystem interface {
 	// Move moves and/or renames the file to destination.
 	// destination can be a directory or file-path.
 	// If successful, this also changes the path of this File's implementation.
+	//
+	// When filePath and destinationPath resolve to the same location after
+	// path cleaning, Move must be a no-op and return nil — matching the
+	// behavior of [os.Rename] for same-path renames. Implementations must
+	// not surface ErrAlreadyExists, an "into itself" cycle error, or any
+	// other failure for this case.
 	Move(filePath string, destinationPath string) error
 }
 
@@ -194,6 +200,7 @@ type RenameFileSystem interface {
 // that have volume names.
 type VolumeNameFileSystem interface {
 	FileSystem
+
 	// VolumeName returns the name of the volume at the beginning of the filePath,
 	// or an empty string if the filePath has no volume.
 	// A volume is for example "C:" on Windows

@@ -26,6 +26,13 @@ func JoinCleanFilePath(uriParts ...string) File {
 // If source and destination are using the same FileSystem,
 // then FileSystem.Move will be used, else source will be
 // copied recursively first to destination and then deleted.
+//
+// When source and destination resolve to the same location on the same
+// FileSystem, Move returns nil without touching the file. This matches
+// the [os.Rename] no-op behavior required by the [MoveFileSystem]
+// contract and protects against the copy-then-delete fallback path
+// destroying the file when caller passes identical source and
+// destination.
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath
@@ -33,6 +40,9 @@ func Move(ctx context.Context, source, destination File) error {
 	srcFS, srcPath := source.ParseRawURI()
 	destFS, destPath := destination.ParseRawURI()
 	if srcFS == destFS {
+		if srcFS.JoinCleanPath(srcPath) == srcFS.JoinCleanPath(destPath) {
+			return nil
+		}
 		if moveFS, ok := srcFS.(MoveFileSystem); ok {
 			return moveFS.Move(srcPath, destPath)
 		}

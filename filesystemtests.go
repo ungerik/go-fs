@@ -446,7 +446,21 @@ func RunFileSystemTests(ctx context.Context, t *testing.T, fs FileSystem, name, 
 
 		if mfs, ok := fs.(MoveFileSystem); ok {
 			t.Log("FileSystem implements MoveFileSystem")
-			_ = mfs // Move requires changing paths, complex to test generically
+
+			// MoveFileSystem.Move with src == dest must be a no-op (matches
+			// os.Rename's same-path behavior). Every implementation that
+			// satisfies the interface is expected to honor this.
+			samePath := fs.JoinCleanPath(testDir, "move-noop.txt")
+			writer, err := fs.OpenWriter(samePath, nil)
+			require.NoError(t, err, "OpenWriter for Move(src,src) test")
+			_, err = writer.Write([]byte("same"))
+			require.NoError(t, err, "Write for Move(src,src) test")
+			require.NoError(t, writer.Close(), "Close for Move(src,src) test")
+
+			require.NoError(t, mfs.Move(samePath, samePath), "Move(src, src) must be a no-op")
+			info, err := fs.Stat(samePath)
+			require.NoError(t, err, "file still exists after no-op move")
+			assert.Equal(t, int64(4), info.Size(), "content preserved across no-op move")
 		}
 
 		if rfs, ok := fs.(RenameFileSystem); ok {

@@ -2317,6 +2317,28 @@ func TestFile(t *testing.T) {
 			require.NoError(t, err)
 		})
 
+		t.Run("MoveTo_SamePath", func(t *testing.T) {
+			// Package-level Move and File.MoveTo must short-circuit
+			// same-path moves without delegating to FileSystem.Move OR
+			// falling through to the copy+delete recursive fallback.
+			// The latter would silently destroy the file.
+			tmp := MustMakeTempDir()
+			t.Cleanup(func() { _ = tmp.RemoveRecursive() })
+
+			file := tmp.Join("a.txt")
+			require.NoError(t, file.WriteAll([]byte("payload")))
+
+			require.NoError(t, file.MoveTo(file), "File.MoveTo(self) must be a no-op")
+			require.True(t, file.Exists(), "file survives same-path MoveTo")
+			got, err := file.ReadAllString()
+			require.NoError(t, err)
+			assert.Equal(t, "payload", got, "content preserved")
+
+			// Same again via the package-level Move with explicit context.
+			require.NoError(t, Move(t.Context(), file, file), "Move(ctx, src, src) must be a no-op")
+			require.True(t, file.Exists())
+		})
+
 		t.Run("Remove", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
 			mockFS := createMockFS("mock" + t.Name() + "://")

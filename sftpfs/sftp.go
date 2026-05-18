@@ -567,7 +567,18 @@ func (f *fileSystem) Truncate(filePath string, size int64) error {
 	)
 }
 
+// Move renames filePath to destPath via the SFTP RENAME packet.
+//
+// When filePath and destPath resolve to the same location after path
+// cleaning, Move returns nil without contacting the server, matching the
+// no-op behavior required by the [fs.MoveFileSystem] contract. (Many SFTP
+// servers would otherwise reject the rename with a "file exists" error.)
 func (f *fileSystem) Move(filePath string, destPath string) error {
+	filePath = path.Clean(filePath)
+	destPath = path.Clean(destPath)
+	if filePath == destPath {
+		return nil
+	}
 	client, filePath, release, err := f.getClient(context.Background(), filePath)
 	if err != nil {
 		return err

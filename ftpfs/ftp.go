@@ -600,9 +600,21 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (rw 
 	}, nil
 }
 
+// Move renames filePath to destPath via the FTP RNFR/RNTO commands.
+//
+// When filePath and destPath resolve to the same location after path
+// cleaning, Move returns nil without contacting the server, matching the
+// no-op behavior required by the [fs.MoveFileSystem] contract. (Many FTP
+// servers would otherwise reject the rename with a "file unavailable"
+// reply.)
 func (f *fileSystem) Move(filePath string, destPath string) (err error) {
 	defer f.convertResultError(&err, filePath)
 
+	filePath = path.Clean(filePath)
+	destPath = path.Clean(destPath)
+	if filePath == destPath {
+		return nil
+	}
 	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return err

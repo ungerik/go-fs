@@ -1458,6 +1458,10 @@ func (file File) Renamef(newNameFormat string, args ...any) (renamedFile File, e
 // If the file and distination are using the LocalFileSystem
 // but are on different volumes, then the file will be copied
 // to the destination and then deleted.
+//
+// When file and destination resolve to the same location, MoveTo
+// returns nil without touching the file, matching the no-op behavior
+// of [os.Rename]. See [Move] for the full contract.
 func (file File) MoveTo(destination File) error {
 	return Move(context.Background(), file, destination)
 }

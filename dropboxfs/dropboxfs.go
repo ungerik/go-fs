@@ -499,7 +499,18 @@ func (dbfs *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile s
 
 // Move moves (renames) a file or directory from filePath to destPath.
 // Uses the Dropbox MoveV2 API for server-side moving (no data transfer required).
+//
+// When filePath and destPath resolve to the same location after path
+// cleaning, Move returns nil without calling the Dropbox API, matching
+// the no-op behavior required by the [fs.MoveFileSystem] contract.
+// (Dropbox MoveV2 would otherwise reject the request with a "to/conflict"
+// error.)
 func (dbfs *fileSystem) Move(filePath string, destPath string) error {
+	filePath = path.Clean(filePath)
+	destPath = path.Clean(destPath)
+	if filePath == destPath {
+		return nil
+	}
 	arg := files.NewRelocationArg(filePath, destPath)
 	_, err := dbfs.filesClient.MoveV2(arg)
 	return dbfs.wrapErrNotExist(filePath, err)

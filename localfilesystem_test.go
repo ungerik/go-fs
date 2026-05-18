@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"context"
 	"os/user"
 	"path/filepath"
 	"testing"
@@ -17,13 +16,42 @@ func TestLocalFileSystem(t *testing.T) {
 	})
 
 	RunFileSystemTests(
-		context.Background(),
+		t.Context(),
 		t,
 		Local,               // fs
 		"local file system", // name
 		"file://",           // prefix
 		testDir.LocalPath(), // testDir
 	)
+}
+
+func Test_LocalFileSystem_MoveSameSrcDest(t *testing.T) {
+	tmp := MustMakeTempDir()
+	t.Cleanup(func() { _ = tmp.RemoveRecursive() })
+
+	file := tmp.Join("a.txt")
+	require.NoError(t, file.WriteAll([]byte("hello")))
+
+	// File: Move(src, src) is a no-op, matching os.Rename.
+	srcPath := file.LocalPath()
+	require.NoError(t, Local.Move(srcPath, srcPath), "Move(file, file) must be a no-op")
+	got, err := file.ReadAllString()
+	require.NoError(t, err)
+	assert.Equal(t, "hello", got, "file content preserved")
+
+	// Same after cleaning (./a.txt should normalize to a.txt).
+	noisy := filepath.Join(filepath.Dir(srcPath), ".", filepath.Base(srcPath))
+	require.NoError(t, Local.Move(srcPath, noisy), "Move with redundant path components is still a no-op")
+	require.True(t, file.Exists(), "file still present after no-op move with redundant path")
+
+	// Directory: Move(dir, dir) is also a no-op (matches os.Rename, even
+	// though our usual Move(dir, dir-that-exists) semantics would otherwise
+	// append a base name).
+	dir := tmp.Join("subdir")
+	require.NoError(t, dir.MakeDir())
+	dirPath := dir.LocalPath()
+	require.NoError(t, Local.Move(dirPath, dirPath), "Move(dir, dir) must be a no-op")
+	assert.True(t, dir.IsDir(), "directory still present after no-op move")
 }
 
 func Test_LocalFileSystem_MakeAllDirs(t *testing.T) {

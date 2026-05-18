@@ -774,6 +774,10 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) (newPath s
 // Move moves filePath to destPath. If filePath is a directory, it is moved
 // *into* destPath using the base name of filePath as the new child name.
 //
+// When filePath and destPath resolve to the same location after cleaning,
+// Move returns nil without touching the file, matching the no-op behavior
+// of [os.Rename] for same-path renames.
+//
 // Move first tries [os.Rename], which is atomic but only works within the
 // same underlying filesystem. If the OS returns a cross-device error
 // (EXDEV on Unix, ERROR_NOT_SAME_DEVICE on Windows) it falls back to
@@ -783,8 +787,11 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return ErrEmptyPath
 	}
-	filePath = expandTilde(filePath)
-	destPath = expandTilde(destPath)
+	filePath = filepath.Clean(expandTilde(filePath))
+	destPath = filepath.Clean(expandTilde(destPath))
+	if filePath == destPath {
+		return nil
+	}
 	info, err := local.Stat(filePath)
 	if err != nil {
 		return err
