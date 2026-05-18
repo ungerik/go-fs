@@ -107,15 +107,47 @@ name := file.Name() // "file.txt"
 path := file.Path() // "/tmp/file.txt"
 url := file.URL()   // "file:///tmp/file.txt"
 ext := file.Ext()   // ".txt"
+lower := file.ExtLower() // ".txt"
+trimmed := file.TrimExt() // "/tmp/file"
+
+slashed := file.PathWithSlashes() // forward slashes regardless of OS
+local := file.LocalPath()         // "" if not on Local
+mustLocal := file.MustLocalPath() // panics if not on Local
 
 file2 := file.Dir().Join("a", "b", "c").Joinf("file%d.txt", 2)
 path2 := file2.Path() // "/tmp/a/b/c/file2.txt"
 
 abs := fs.File("~/some-dir/../file").AbsPath() // "/home/erik/file"
+isAbs := abs.HasAbsPath()                      // true
+absFile := fs.File("relative/path").ToAbsPath() // File with an absolute path
 
 // Relative path between two files on the same FileSystem
 base := fs.File("/tmp/project")
 rel, err := base.RelPathOf(base.Join("a", "b", "c")) // "a/b/c"
+```
+
+Access and existence checks:
+
+```go
+file.IsReadable() // file exists and is readable
+file.IsWritable() // file (or its parent dir) is writable
+file.IsEmptyDir() // directory exists and contains no entries
+```
+
+Ownership (where the file system supports it, e.g. `LocalFileSystem`):
+
+```go
+user, err := file.User()
+err = file.SetUser("alice")
+
+group, err := file.Group()
+err = file.SetGroup("staff")
+```
+
+Resizing existing files (where supported):
+
+```go
+err := file.Truncate(1024) // resize to exactly 1024 bytes
 ```
 
 Meta information:
@@ -125,7 +157,7 @@ size := file.Size() // int64, 0 for non existing or dirs
 isDir := dir.IsDir()      // true
 exists := file.Exists()   // true
 fileIsDir := file.IsDir() // false
-modTime := file.ModTime()
+modTime := file.Modified()
 hash, err := file.ContentHash()  // Dropbox hash algo
 regular := file.Info().IsRegular // true
 info := file.Info().FSFileInfo() // io/fs.FileInfo
@@ -230,11 +262,21 @@ Note that `MemFile` is not a `File` because it doesn't have a path or URI.
 The in-memory `FileName` is not interpreted as a path and should not contain
 path separators.
 
+Derive new `MemFile` values without copying the underlying data:
+
+```go
+renamed := memFile.WithName("renamed.txt")  // same FileData, different name
+patched := memFile.WithData(newBytes)       // same FileName, different data
+```
+
 Listing directories
 -------------------
 
+Callback-based listing (cancel by returning an error from the callback or
+canceling the context):
+
 ```go
-// Print names of all JPEGs in dir
+// Print names of all entries in dir
 dir.ListDir(func(f fs.File) error {
 	_, err := fmt.Println(f.Name())
 	return err
@@ -252,7 +294,136 @@ files, err := dir.ListDirMax(-1)
 
 // Get the first 100 JPEGs in dir
 files, err := dir.ListDirMaxContext(ctx, 100, "*.jpg", "*.jpeg")
+
+// Recursive variant with a hard cap
+files, err := dir.ListDirRecursiveMax(1000, "*.go")
 ```
+
+Go 1.23+ iterator methods (`iter.Seq2[fs.File, error]`):
+
+```go
+// Range directly over directory entries
+for file, err := range dir.ListDirIter("*.jpg", "*.jpeg") {
+	if err != nil {
+		return err
+	}
+	fmt.Println(file.Name())
+}
+
+// Recursive iteration with a cancelable context
+for file, err := range dir.ListDirRecursiveIterContext(ctx, "*.go") {
+	if err != nil {
+		return err
+	}
+	fmt.Println(file.Path())
+}
+```
+
+Channel-based listing for fan-out pipelines (the `cancel` channel stops
+the goroutine if any value is sent into it):
+
+```go
+cancel := make(chan error)
+files, errs := dir.ListDirChan(cancel, "*.log")
+
+for f := range files {
+	process(f)
+}
+if err := <-errs; err != nil {
+	return err
+}
+
+// Recursive variant
+files, errs = dir.ListDirRecursiveChan(cancel, "*.log")
+```
+
+Glob with wildcard substitution (Go 1.23+ iterator, the second yielded
+value is the list of substituted wildcard segments):
+
+```go
+// All Go files under any "cmd/*" sub-directory
+for file, segments := range fs.MustGlob("cmd/*/*.go") {
+	fmt.Println(segments, file.Path()) // segments == ["mytool", "main.go"]
+}
+
+// Relative to a specific base directory
+iter, err := dir.Glob("**/*.png")
+if err != nil {
+	return err
+}
+for file := range iter {
+	fmt.Println(file.Path())
+}
+```
+
+A pattern ending with a slash (`/`) only matches directories. Glob
+ignores I/O errors and only fails on a malformed pattern.
+
+Standard library compatibility (`io/fs`)
+----------------------------------------
+
+A `File` can be exposed as an `io/fs.FS` so it works with any code that
+expects the standard library file system abstraction (`fs.WalkDir`,
+`html/template.ParseFS`, `http.FS`, ...):
+
+```go
+stdFS := fs.File("/srv/static").StdFS()
+
+// Use with io/fs
+entries, err := iofs.ReadDir(stdFS, ".")
+
+// Or with http.FS (note: http.FS expects io/fs.FS)
+http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(stdFS))))
+```
+
+`StdFS` implements `io/fs.FS`, `io/fs.SubFS`, `io/fs.StatFS`,
+`io/fs.ReadDirFS`, and `io/fs.ReadFileFS`.
+
+A `File` can also be returned as a directory entry:
+
+```go
+entry := fs.File("./file.txt").StdDirEntry() // io/fs.DirEntry
+```
+
+JSON and XML helpers
+--------------------
+
+```go
+type Config struct { Name string `json:"name"` }
+
+var cfg Config
+err := fs.File("config.json").ReadJSON(ctx, &cfg)
+err = fs.File("config.json").WriteJSON(ctx, &cfg, "  ") // indented
+
+err = fs.File("config.xml").ReadXML(ctx, &cfg)
+err = fs.File("config.xml").WriteXML(ctx, &cfg, "  ")
+```
+
+The same helpers are also available as `MemFile` constructors:
+
+```go
+m, err := fs.NewMemFileWriteJSON("config.json", &cfg, "  ")
+m, err  = fs.NewMemFileWriteXML("config.xml", &cfg, "  ")
+```
+
+Encoding files with `encoding/gob`
+----------------------------------
+
+`File` implements `gob.GobEncoder` / `gob.GobDecoder`. Unlike the default
+string marshaling (which only encodes the path/URI), gob encoding includes
+the file's **content** so the receiver can rematerialize the bytes:
+
+```go
+var buf bytes.Buffer
+err := gob.NewEncoder(&buf).Encode(fs.File("/tmp/data.bin"))
+
+// On the receiver, decoding into a File writes the bytes to that file.
+var dst fs.File = fs.TempDir().Join("decoded.bin")
+err = gob.NewDecoder(&buf).Decode(&dst)
+```
+
+`MemFile` implements the same interfaces and round-trips its name and
+data through gob without touching any file system.
 
 Symbolic links
 --------------
@@ -345,3 +516,140 @@ fs.Local.WatchErrorLogger = fs.LoggerFunc(func(format string, args ...any) {
     log.Printf("WATCH ERROR: "+format, args...)
 })
 ```
+
+File system implementations
+---------------------------
+
+`go-fs` ships with the local file system and several remote / virtual
+backends. Each backend is an independent Go module under its own
+sub-directory. Importing the package registers a `FileSystem` for its
+URI prefix, after which `File` values with that prefix transparently
+route to the right backend.
+
+| Package         | URI prefix       | Constructor                                      | Read | Write |
+| --------------- | ---------------- | ------------------------------------------------ | :--: | :---: |
+| (built-in)      | `file://`        | `fs.Local` (registered by default)               | yes  | yes   |
+| `httpfs`        | `http://`, `https://` | side-effect import: `import _ ".../httpfs"`  | yes  | no    |
+| `s3fs`          | `s3://<bucket>`  | `s3fs.NewAndRegister` / `s3fs.NewLoadDefaultConfig` | yes | yes/ro |
+| `sftpfs`        | `sftp://`        | `sftpfs.Dial` / `sftpfs.DialAndRegister`         | yes  | yes   |
+| `ftpfs`         | `ftp://`         | `ftpfs.Dial` / `ftpfs.DialAndRegister`           | yes  | yes   |
+| `dropboxfs`     | `dropbox://`     | `dropboxfs.NewAndRegister`                       | yes  | yes   |
+| `zipfs`         | `zip://`         | `zipfs.NewReaderFileSystem` / `NewWriterFileSystem` | yes/ro | yes/ro |
+| `multipartfs`   | (per-request)    | `multipartfs.FromRequestForm`                    | yes  | no    |
+| (built-in)      | `mem://`         | `fs.NewMemFileSystem`                            | yes  | yes   |
+
+### httpfs
+
+```go
+import _ "github.com/ungerik/go-fs/httpfs"
+
+data, err := fs.File("https://example.com/file.txt").ReadAll(ctx)
+```
+
+Read-only. Useful for treating remote files uniformly with local ones.
+
+### s3fs
+
+```go
+import "github.com/ungerik/go-fs/s3fs"
+
+// Using the default AWS credential chain
+bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-bucket", false)
+
+// Or with an existing aws-sdk-go-v2 client
+bucket = s3fs.NewAndRegister(client, "my-bucket", false)
+
+err = fs.File("s3://my-bucket/path/file.txt").WriteAllString(ctx, "Hello")
+```
+
+Multipart upload/download is used automatically for files larger than
+5/10 MB.
+
+### sftpfs
+
+```go
+import "github.com/ungerik/go-fs/sftpfs"
+
+sftpFS, err := sftpfs.DialAndRegister(
+    ctx,
+    "sftp://user@host:22/",
+    sftpfs.Password("secret"),
+    ssh.InsecureIgnoreHostKey(), // use a real callback in production
+    nil,
+)
+
+data, err := fs.File("sftp://user@host:22/etc/hostname").ReadAll(ctx)
+```
+
+### ftpfs
+
+```go
+import "github.com/ungerik/go-fs/ftpfs"
+
+ftpFS, err := ftpfs.DialAndRegister(
+    ctx,
+    "ftp://example.com:21/",
+    ftpfs.AnonymousCredentials,
+    nil, // debug output
+)
+```
+
+Supports plain FTP and FTPS.
+
+### dropboxfs
+
+```go
+import "github.com/ungerik/go-fs/dropboxfs"
+
+dbxFS := dropboxfs.NewAndRegister(accessToken, 5*time.Minute, false)
+
+err := fs.File("dropbox://Apps/MyApp/notes.md").WriteAllString(ctx, "...")
+```
+
+### zipfs
+
+```go
+import "github.com/ungerik/go-fs/zipfs"
+
+// Read a ZIP archive as a file system
+zipFS, err := zipfs.NewReaderFileSystem(fs.File("archive.zip"))
+defer zipFS.Close()
+
+err = zipFS.RootDir().ListDir(func(f fs.File) error {
+    fmt.Println(f.Path())
+    return nil
+})
+
+// Write a new ZIP archive
+out, err := zipfs.NewWriterFileSystem(fs.File("out.zip"))
+defer out.Close()
+```
+
+A `ZipFileSystem` is either reader- or writer-mode depending on the
+constructor used.
+
+### multipartfs
+
+See the introduction for `multipartfs.FromRequestForm` — it wraps an
+uploaded HTML form so files can be consumed using the regular `fs.File`
+API.
+
+### MemFileSystem
+
+A fully-featured, thread-safe, in-memory file system useful for tests
+or as a cache for slower backends:
+
+```go
+memFS, err := fs.NewMemFileSystem("/", fs.NewMemFile("hello.txt", []byte("hi")))
+defer memFS.Close()
+
+// Access through the global Registry using the URI prefix
+data, err := fs.File(memFS.Prefix() + "/hello.txt").ReadAll(ctx)
+
+// Or create a one-shot single-file FS that gives you a ready-to-use File
+ms, file, err := fs.NewSingleMemFileSystem(fs.NewMemFile("a.txt", []byte("a")))
+defer ms.Close()
+```
+
+The implementation is mostly complete; a few uncommon operations may
+still panic — see `memfilesystem.go` for current coverage.
