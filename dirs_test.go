@@ -3,13 +3,35 @@ package fs
 import (
 	"context"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
+// homeEnvVar returns the environment variable name that [os.UserHomeDir]
+// reads on the current platform: USERPROFILE on Windows, home on Plan 9,
+// HOME everywhere else.
+func homeEnvVar() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "USERPROFILE"
+	case "plan9":
+		return "home"
+	default:
+		return "HOME"
+	}
+}
+
 func TestHomeDir(t *testing.T) {
 	require.True(t, HomeDir().IsDir(), "home directory exists")
+}
+
+func TestHomeDir_HonorsEnv(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv(homeEnvVar(), fakeHome)
+	require.Equal(t, File(fakeHome), HomeDir(),
+		"HomeDir must read %s before falling back to user.Current", homeEnvVar())
 }
 
 func Test_listDirMaxImpl(t *testing.T) {

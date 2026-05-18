@@ -111,3 +111,14 @@ func Test_expandTilde(t *testing.T) {
 		})
 	}
 }
+
+func Test_expandTilde_HonorsEnv(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv(homeEnvVar(), fakeHome)
+
+	require.Equal(t, fakeHome, expandTilde("~"),
+		"expandTilde(~) must use %s before falling back to user.Current", homeEnvVar())
+	require.Equal(t, filepath.Join(fakeHome, "foo"), expandTilde("~/foo"))
+	require.Equal(t, filepath.Join(fakeHome, "Documents/test/file.txt"),
+		expandTilde("~/Documents/test/file.txt"))
+}

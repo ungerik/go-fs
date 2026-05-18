@@ -63,6 +63,9 @@ func expandTilde(path string) string {
 	if len(path) == 0 || path[0] != '~' {
 		return path
 	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, path[1:])
+	}
 	currentUser, _ := user.Current()
 	if currentUser == nil || currentUser.HomeDir == "" {
 		return path

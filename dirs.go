@@ -8,7 +8,19 @@ import (
 )
 
 // HomeDir returns the home directory of the current user.
+//
+// It first calls [os.UserHomeDir], which honors the $HOME environment
+// variable on Unix and macOS, %USERPROFILE% on Windows, and $home on
+// Plan 9. This lets tests, containers, and HOME=/other invocations
+// override the resolved directory.
+//
+// If [os.UserHomeDir] returns an error (for example when the relevant
+// environment variable is unset) HomeDir falls back to looking up the
+// current user's home via [user.Current].
 func HomeDir() File {
+	if home, err := os.UserHomeDir(); err == nil {
+		return File(home)
+	}
 	u, err := user.Current()
 	if err != nil {
 		return InvalidFile
