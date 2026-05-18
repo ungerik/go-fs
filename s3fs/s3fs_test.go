@@ -55,11 +55,14 @@ func TestMain(m *testing.M) {
 	// Run tests
 	exitCode := m.Run()
 
-	// Cleanup
+	// Cleanup. `docker rm -v` is required so the anonymous /data volume
+	// MinIO declares is removed too — otherwise every test run leaks a
+	// multi-GB volume and eventually fills Docker Desktop's VM disk,
+	// surfacing as XMinioStorageFull on later runs.
 	if dockerMinioAvailable {
 		log.Println("Stopping and removing Docker MinIO test server...")
 		exec.Command("docker", "stop", minioContainerName).Run()
-		exec.Command("docker", "rm", minioContainerName).Run()
+		exec.Command("docker", "rm", "-v", minioContainerName).Run()
 		log.Println("Docker container cleanup complete")
 	}
 
@@ -69,9 +72,10 @@ func TestMain(m *testing.M) {
 func setupMinioServer(ctx context.Context) bool {
 	containerName := minioContainerName
 
-	// Stop and remove any existing container with the same name
+	// Stop and remove any existing container with the same name (and its
+	// anonymous /data volume — see the matching note in TestMain).
 	exec.Command("docker", "stop", containerName).Run()
-	exec.Command("docker", "rm", containerName).Run()
+	exec.Command("docker", "rm", "-v", containerName).Run()
 
 	// Start MinIO container
 	log.Println("Starting Docker MinIO container...")
@@ -129,7 +133,7 @@ func setupMinioServer(ctx context.Context) bool {
 
 	log.Printf("Failed to connect to MinIO server after retries: %v", testErr)
 	exec.Command("docker", "stop", containerName).Run()
-	exec.Command("docker", "rm", containerName).Run()
+	exec.Command("docker", "rm", "-v", containerName).Run()
 	return false
 }
 
