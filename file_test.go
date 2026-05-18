@@ -8,6 +8,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -165,6 +166,78 @@ func TestFile_TrimExt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFile_RelPathOf(t *testing.T) {
+	base := File(t.TempDir())
+
+	tests := []struct {
+		name   string
+		base   File
+		target File
+		want   string
+	}{
+		{
+			name:   "same file is dot",
+			base:   base,
+			target: base,
+			want:   ".",
+		},
+		{
+			name:   "direct child",
+			base:   base,
+			target: base.Join("sub"),
+			want:   "sub",
+		},
+		{
+			name:   "nested descendant",
+			base:   base,
+			target: base.Join("a", "b", "c"),
+			want:   filepath.Join("a", "b", "c"),
+		},
+		{
+			name:   "parent of base",
+			base:   base.Join("a"),
+			target: base,
+			want:   "..",
+		},
+		{
+			name:   "sibling via parent",
+			base:   base.Join("a"),
+			target: base.Join("b"),
+			want:   filepath.Join("..", "b"),
+		},
+		{
+			name:   "uncle via grandparent",
+			base:   base.Join("a", "b"),
+			target: base.Join("c"),
+			want:   filepath.Join("..", "..", "c"),
+		},
+		{
+			name:   "joined path is cleaned",
+			base:   base,
+			target: base.Join("a", "..", "b"),
+			want:   "b",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.base.RelPathOf(tt.target)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	t.Run("relative base and absolute target errors", func(t *testing.T) {
+		_, err := File("relative/dir").RelPathOf(base)
+		require.Error(t, err)
+	})
+
+	t.Run("different file systems error", func(t *testing.T) {
+		// InvalidFile lives on the Invalid file system, base lives on Local.
+		_, err := base.RelPathOf(InvalidFile)
+		require.ErrorContains(t, err, "file systems do not match")
+	})
 }
 
 func TestFile_Watch(t *testing.T) {

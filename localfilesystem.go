@@ -70,39 +70,54 @@ func expandTilde(path string) string {
 	return filepath.Join(currentUser.HomeDir, path[1:])
 }
 
+// ReadableWritable always returns true, true because the local file system
+// is read-write at the file-system level (individual files may still be denied
+// access by their OS permissions).
 func (local *LocalFileSystem) ReadableWritable() (readable, writable bool) {
 	return true, true
 }
 
+// RootDir returns the platform-specific root directory:
+// "/" on Unix and `C:\` on Windows.
 func (local *LocalFileSystem) RootDir() File {
 	return localRoot
 }
 
+// ID returns "/" as a placeholder. It does not currently identify
+// the underlying physical file system.
 func (local *LocalFileSystem) ID() (string, error) {
 	return "/", nil // TODO something more meaningful like platform dependent the ID of the actual file system
 }
 
+// Prefix returns [LocalPrefix] ("file://").
 func (local *LocalFileSystem) Prefix() string {
 	return LocalPrefix
 }
 
+// Name returns the human readable name "local file system".
 func (local *LocalFileSystem) Name() string {
 	return "local file system"
 }
 
-// String implements the fmt.Stringer interface.
+// String implements [fmt.Stringer] and returns the [Name] followed by " with prefix " and [Prefix].
 func (local *LocalFileSystem) String() string {
 	return local.Name() + " with prefix " + local.Prefix()
 }
 
+// JoinCleanFile is a thin wrapper over [LocalFileSystem.JoinCleanPath] that returns a [File].
 func (local *LocalFileSystem) JoinCleanFile(uri ...string) File {
 	return File(local.JoinCleanPath(uri...))
 }
 
+// IsAbsPath reports whether filePath is absolute using [filepath.IsAbs],
+// so the rules are platform-specific (e.g. drive-letter prefixes count on Windows).
 func (local *LocalFileSystem) IsAbsPath(filePath string) bool {
 	return filepath.IsAbs(filePath)
 }
 
+// AbsPath expands a leading "~" to the current user's home directory
+// and then resolves the path via [filepath.Abs].
+// If resolution fails the (tilde-expanded) input is returned unchanged.
 func (local *LocalFileSystem) AbsPath(filePath string) string {
 	filePath = expandTilde(filePath)
 	absPath, err := filepath.Abs(filePath)
@@ -112,10 +127,21 @@ func (local *LocalFileSystem) AbsPath(filePath string) string {
 	return absPath
 }
 
+// RelPath implements [RelPathFileSystem] by delegating to [filepath.Rel]
+// after expanding a leading "~" in both paths.
+func (local *LocalFileSystem) RelPath(basePath, targPath string) (string, error) {
+	return filepath.Rel(expandTilde(basePath), expandTilde(targPath))
+}
+
+// URL returns the [LocalPrefix] followed by the absolute path with
+// platform separators converted to forward slashes, so a Windows path like
+// `C:\dir\file` becomes "file://C:/dir/file".
 func (local *LocalFileSystem) URL(cleanPath string) string {
 	return LocalPrefix + filepath.ToSlash(local.AbsPath(cleanPath))
 }
 
+// CleanPathFromURI strips a leading [LocalPrefix], ensures a leading separator,
+// runs [filepath.Clean], and finally expands a leading "~".
 func (local *LocalFileSystem) CleanPathFromURI(uri string) string {
 	cleanPath := strings.TrimPrefix(uri, LocalPrefix)
 	if cleanPath != "" && !strings.HasPrefix(cleanPath, Separator) {
@@ -126,6 +152,10 @@ func (local *LocalFileSystem) CleanPathFromURI(uri string) string {
 	return cleanPath
 }
 
+// JoinCleanPath strips a leading [LocalPrefix] from the first element,
+// joins the parts with [filepath.Join], URL-unescapes the result on a best-effort
+// basis (a decoding error keeps the escaped form), cleans it, and finally
+// expands a leading "~".
 func (local *LocalFileSystem) JoinCleanPath(uriParts ...string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], LocalPrefix)
@@ -140,6 +170,9 @@ func (local *LocalFileSystem) JoinCleanPath(uriParts ...string) string {
 	return cleanPath
 }
 
+// SplitPath trims an optional [LocalPrefix], expands a leading "~",
+// and splits on [Separator]. Leading and trailing separators are dropped,
+// so the result has no empty elements. An empty or root-only path returns nil.
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
 	filePath = strings.TrimPrefix(filePath, LocalPrefix)
 	filePath = expandTilde(filePath)
@@ -150,6 +183,8 @@ func (local *LocalFileSystem) SplitPath(filePath string) []string {
 	return strings.Split(filePath, Separator)
 }
 
+// Separator returns [Separator], which is the platform-specific
+// [filepath.Separator] as a string ("/" on Unix, "\\" on Windows).
 func (local *LocalFileSystem) Separator() string {
 	return Separator
 }
@@ -179,16 +214,23 @@ func (local *LocalFileSystem) MatchAnyPattern(name string, patterns []string) (b
 	return false, nil
 }
 
+// SplitDirAndName expands a leading "~", honors the platform-specific
+// volume prefix (e.g. `C:` on Windows), and splits filePath into its
+// parent directory and last element.
 func (*LocalFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	filePath = expandTilde(filePath)
 	return fsimpl.SplitDirAndName(filePath, len(filepath.VolumeName(filePath)), Separator)
 }
 
+// VolumeName returns the volume prefix of filePath via [filepath.VolumeName]
+// after expanding a leading "~". On Unix the result is always empty.
 func (local *LocalFileSystem) VolumeName(filePath string) string {
 	filePath = expandTilde(filePath)
 	return filepath.VolumeName(filePath)
 }
 
+// Stat expands a leading "~" and calls [os.Stat]. A non-existent path
+// is returned as [ErrDoesNotExist]; other errors are passed through unwrapped.
 func (local *LocalFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	filePath = expandTilde(filePath)
 	info, err := os.Stat(filePath)
@@ -201,6 +243,11 @@ func (local *LocalFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	return info, nil
 }
 
+// IsHidden reports whether the file is hidden. A name beginning with "."
+// is considered hidden on every platform; additionally on Windows the
+// FILE_ATTRIBUTE_HIDDEN attribute is checked. On Unix the attribute check
+// is a no-op. Errors from the attribute lookup are logged to stderr and
+// treated as not-hidden.
 func (local *LocalFileSystem) IsHidden(filePath string) bool {
 	filePath = expandTilde(filePath)
 	name := filepath.Base(filePath)
@@ -216,6 +263,8 @@ func (local *LocalFileSystem) IsHidden(filePath string) bool {
 	return hidden
 }
 
+// IsSymbolicLink reports whether filePath is a symbolic link using [os.Lstat].
+// Any stat error (including not-exist) returns false.
 func (local *LocalFileSystem) IsSymbolicLink(filePath string) bool {
 	filePath = expandTilde(filePath)
 	info, err := os.Lstat(filePath)
@@ -225,36 +274,41 @@ func (local *LocalFileSystem) IsSymbolicLink(filePath string) bool {
 	return info.Mode()&os.ModeSymlink != 0
 }
 
-func (local *LocalFileSystem) CreateSymbolicLink(oldFile, newFile File) error {
-	if oldFile == "" || newFile == "" {
+// CreateSymbolicLink implements [SymbolicLinkFileSystem] by creating a symbolic
+// link at linkPath pointing to targetPath via [os.Symlink]. A leading "~" in
+// either path is expanded. On Windows this typically requires the
+// "Create symbolic links" privilege or Developer Mode.
+func (local *LocalFileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
+	if targetPath == "" || linkPath == "" {
 		return ErrEmptyPath
 	}
-	oldFs, oldPath := oldFile.ParseRawURI()
-	newFs, newPath := newFile.ParseRawURI()
-	oldPath = expandTilde(oldPath)
-	newPath = expandTilde(newPath)
-	if oldFs != local || newFs != local {
-		return errors.New("LocalFileSystem.CreateSymbolicLink needs LocalFileSystem files")
-	}
-	return os.Symlink(oldPath, newPath)
+	targetPath = expandTilde(targetPath)
+	linkPath = expandTilde(linkPath)
+	return os.Symlink(targetPath, linkPath)
 }
 
-func (local *LocalFileSystem) ReadSymbolicLink(file File) (linked File, err error) {
-	if file == "" {
+// ReadSymbolicLink implements [SymbolicLinkFileSystem] by returning the target
+// of the symbolic link at linkPath via [os.Readlink]. The returned path is the
+// raw link target as stored on disk, so it may be relative to linkPath's
+// directory. A leading "~" in linkPath is expanded.
+func (local *LocalFileSystem) ReadSymbolicLink(linkPath string) (targetPath string, err error) {
+	if linkPath == "" {
 		return "", ErrEmptyPath
 	}
-	fileFs, filePath := file.ParseRawURI()
-	if fileFs != local {
-		return "", errors.New("LocalFileSystem.CreateSymbolicLink needs LocalFileSystem files")
-	}
-	filePath = expandTilde(filePath)
-	linkedPath, err := os.Readlink(filePath)
+	linkPath = expandTilde(linkPath)
+	targetPath, err = os.Readlink(linkPath)
 	if err != nil {
-		return "", fmt.Errorf("LocalFileSystem.ReadSymbolicLink(%#v): error reading link: %w", file, err)
+		return "", fmt.Errorf("LocalFileSystem.ReadSymbolicLink(%#v): error reading link: %w", linkPath, err)
 	}
-	return File(linkedPath), nil
+	return targetPath, nil
 }
 
+// ListDirInfo reads dirPath in batches of 256 entries using [os.File.ReadDir],
+// honoring ctx cancellation between batches. Each entry is filtered through
+// [LocalFileSystem.MatchAnyPattern] and its hidden flag is computed via the
+// same rules as [LocalFileSystem.IsHidden]. The function returns
+// [ErrEmptyPath] for an empty dirPath and [ErrIsNotDirectory] when dirPath
+// exists but is not a directory.
 func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -329,6 +383,13 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 	return nil
 }
 
+// ListDirMax returns up to max entries of dirPath. A negative max means
+// "all entries" and is read in 64-name batches via [os.File.Readdirnames];
+// a positive max preallocates the result slice and reads exactly enough
+// names to satisfy the cap. max == 0 returns nil without touching the disk.
+// Entries are filtered by [LocalFileSystem.MatchAnyPattern]. Cancellation
+// is checked between batches. Symbolic semantics match [LocalFileSystem.ListDirInfo]
+// (same error types for empty / not-a-directory).
 func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []File, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -403,6 +464,9 @@ func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, ma
 	return files, nil
 }
 
+// SetPermissions overwrites only the 9 [os.ModePerm] bits of filePath via
+// [os.Chmod]. Special bits (setuid, setgid, sticky) and the file-type bits
+// already on the file are preserved.
 func (local *LocalFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -418,6 +482,9 @@ func (local *LocalFileSystem) SetPermissions(filePath string, perm Permissions) 
 	return os.Chmod(filePath, mode)
 }
 
+// Touch updates the access and modification times of an existing file to now
+// via [os.Chtimes]. If filePath does not exist, an empty file is created using
+// the supplied [Permissions] joined with [LocalFileSystem.DefaultCreatePermissions].
 func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -435,6 +502,13 @@ func (local *LocalFileSystem) Touch(filePath string, perm []Permissions) error {
 	return f.Close()
 }
 
+// MakeDir creates a single directory at dirPath via [os.Mkdir].
+// Permissions are joined with [LocalFileSystem.DefaultCreateDirPermissions]
+// and ORed with the platform-specific extraDirPermissions (the execute bits
+// on Unix, zero on Windows). On Unix, an explicit [os.Chmod] is issued
+// afterward when OthersWrite is requested because [os.Mkdir] honors umask
+// and may drop that bit. [os.ErrExist] is translated to [ErrAlreadyExists]
+// (and [os.ErrNotExist] in the parent path to [ErrDoesNotExist]).
 func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error {
 	if dirPath == "" {
 		return ErrEmptyPath
@@ -457,6 +531,10 @@ func (local *LocalFileSystem) MakeDir(dirPath string, perm []Permissions) error 
 	return nil
 }
 
+// MakeAllDirs implements [MakeAllDirsFileSystem] by calling [os.MkdirAll].
+// The same permission and umask-workaround rules as [LocalFileSystem.MakeDir]
+// apply; the umask chmod is issued for every path component that the call
+// may have created.
 func (local *LocalFileSystem) MakeAllDirs(dirPath string, perm []Permissions) error {
 	if dirPath == "" {
 		return ErrEmptyPath
@@ -483,6 +561,9 @@ func (local *LocalFileSystem) MakeAllDirs(dirPath string, perm []Permissions) er
 	return nil
 }
 
+// ReadAll reads filePath in one shot using [os.ReadFile]. ctx is only
+// checked before the read starts; the read itself is not cancelable.
+// OS errors are mapped through [wrapOSErr].
 func (local *LocalFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	// TODO make really large file op cancelable
 	if ctx.Err() != nil {
@@ -496,6 +577,10 @@ func (local *LocalFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 	return data, wrapOSErr(filePath, err)
 }
 
+// WriteAll writes data to filePath in one shot using [os.WriteFile],
+// creating or truncating the file with permissions joined from perm and
+// [LocalFileSystem.DefaultCreatePermissions]. ctx is only checked
+// before the write starts; the write itself is not cancelable.
 func (local *LocalFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	// TODO make really large file op cancelable
 	if ctx.Err() != nil {
@@ -509,6 +594,9 @@ func (local *LocalFileSystem) WriteAll(ctx context.Context, filePath string, dat
 	return wrapOSErr(filePath, os.WriteFile(filePath, data, p.FileMode(false)))
 }
 
+// Append opens filePath in append mode via [LocalFileSystem.OpenAppendWriter]
+// and writes data. A short write is reported as [io.ErrShortWrite].
+// ctx is only checked before opening; the write itself is not cancelable.
 func (local *LocalFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
 	// TODO make really large file op cancelable
 	if ctx.Err() != nil {
@@ -526,6 +614,9 @@ func (local *LocalFileSystem) Append(ctx context.Context, filePath string, data 
 	return err
 }
 
+// OpenReader opens filePath read-only via [os.OpenFile] with O_RDONLY.
+// OS errors are mapped through [wrapOSErr]. The returned [*os.File]
+// must be closed by the caller.
 func (local *LocalFileSystem) OpenReader(filePath string) (ReadCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -535,6 +626,10 @@ func (local *LocalFileSystem) OpenReader(filePath string) (ReadCloser, error) {
 	return f, wrapOSErr(filePath, err)
 }
 
+// OpenWriter opens filePath write-only with O_WRONLY|O_CREATE|O_TRUNC,
+// truncating any existing content. The file is created with permissions
+// joined from perm and [LocalFileSystem.DefaultCreatePermissions] when
+// it doesn't yet exist.
 func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -545,6 +640,10 @@ func (local *LocalFileSystem) OpenWriter(filePath string, perm []Permissions) (W
 	return f, wrapOSErr(filePath, err)
 }
 
+// OpenAppendWriter opens filePath with O_WRONLY|O_CREATE|O_APPEND, so writes
+// are positioned at end-of-file. The file is created with permissions joined
+// from perm and [LocalFileSystem.DefaultCreatePermissions] when it doesn't
+// yet exist.
 func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (WriteCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -555,6 +654,10 @@ func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm []Permissio
 	return f, wrapOSErr(filePath, err)
 }
 
+// OpenReadWriter opens filePath read-write with O_RDWR|O_CREATE.
+// The file is created with permissions joined from perm and
+// [LocalFileSystem.DefaultCreatePermissions] when it doesn't yet exist.
+// Existing content is preserved (no O_TRUNC).
 func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -565,6 +668,10 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm []Permissions
 	return f, wrapOSErr(filePath, err)
 }
 
+// Truncate sets filePath to newSize using [os.Truncate].
+// Returns [ErrDoesNotExist] if the file is missing and [ErrIsDirectory]
+// if filePath is a directory. A no-op is performed when the file already
+// has the requested size.
 func (local *LocalFileSystem) Truncate(filePath string, newSize int64) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -583,6 +690,19 @@ func (local *LocalFileSystem) Truncate(filePath string, newSize int64) error {
 	return os.Truncate(filePath, newSize)
 }
 
+// CopyFile copies srcFilePath to destFilePath using [io.CopyBuffer].
+// If both paths refer to the same inode ([os.SameFile]) the call is a no-op.
+// The destination is created with the source file's mode bits and is
+// truncated if it already exists.
+//
+// buf controls the copy buffer:
+//   - nil pointer: a one-shot buffer is allocated for this call only
+//     (no buffer reuse).
+//   - pointer to a nil/empty slice: a fresh buffer of copyBufferSize is
+//     allocated and stored back through buf for reuse by later calls.
+//   - pointer to a non-empty slice: that slice is used as-is.
+//
+// ctx is only checked before the copy starts; the copy itself is not cancelable.
 func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, destFilePath string, buf *[]byte) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -611,6 +731,9 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 	}
 	defer w.Close() //#nosec G307
 
+	if buf == nil {
+		buf = new([]byte)
+	}
 	if len(*buf) == 0 {
 		*buf = make([]byte, copyBufferSize)
 	}
@@ -621,6 +744,11 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 	return nil
 }
 
+// Rename renames the file at filePath to newName within the same directory
+// using [os.Rename]. newName must be a leaf name without any [Separator]
+// (otherwise an error is returned); the new full path is built from
+// [filepath.Dir](filePath) and newName and returned to the caller.
+// A missing source file yields [ErrDoesNotExist].
 func (local *LocalFileSystem) Rename(filePath string, newName string) (newPath string, err error) {
 	if filePath == "" || newName == "" {
 		return "", ErrEmptyPath
@@ -640,12 +768,14 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) (newPath s
 	return newPath, nil
 }
 
-// Move moves filePath to destPath.
-// If filePath is a directory, it is moved into destPath
-// using the base name of filePath.
-// Move first tries os.Rename which is atomic but only works
-// within the same filesystem. If the destination is on a different
-// volume it falls back to copy + delete.
+// Move moves filePath to destPath. If filePath is a directory, it is moved
+// *into* destPath using the base name of filePath as the new child name.
+//
+// Move first tries [os.Rename], which is atomic but only works within the
+// same underlying filesystem. If the OS returns a cross-device error
+// (EXDEV on Unix, ERROR_NOT_SAME_DEVICE on Windows) it falls back to
+// [CopyRecursive] followed by [os.RemoveAll]. The fallback is not atomic
+// and uses [context.Background], so it is not cancelable.
 func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return ErrEmptyPath
@@ -672,6 +802,9 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 	return err
 }
 
+// Remove deletes filePath via [os.Remove]. Directories must be empty;
+// for recursive removal use [CopyRecursive] / [os.RemoveAll] callers
+// at a higher level. OS errors are mapped through [wrapOSErr].
 func (local *LocalFileSystem) Remove(filePath string) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -680,6 +813,18 @@ func (local *LocalFileSystem) Remove(filePath string) error {
 	return wrapOSErr(filePath, os.Remove(filePath))
 }
 
+// Watch registers onEvent for changes to filePath using [fsnotify].
+// A single fsnotify.Watcher is lazily created and shared by all watches
+// on this [LocalFileSystem]; the first call starts the dispatch goroutine.
+// Multiple callbacks per path are supported and stored in a per-path map.
+// The returned cancel function deregisters this specific callback and only
+// removes the underlying fsnotify watch when the last callback for filePath
+// is gone. For every event the watcher dispatches callbacks registered at
+// both the event path and its parent directory, so a callback registered
+// on a directory automatically receives events for entries inside it.
+// Errors and (when configured) raw events are forwarded to
+// [LocalFileSystem.WatchErrorLogger] and [LocalFileSystem.WatchEventLogger].
+// Panics from a callback are recovered and logged to WatchErrorLogger.
 func (local *LocalFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -778,12 +923,18 @@ func (local *LocalFileSystem) watchEventCallback(event fsnotify.Event, callback 
 	callback(File(event.Name), Event(event.Op))
 }
 
+// Close is a no-op for the local file system; there are no
+// long-lived resources outside the lazily started fsnotify watcher,
+// which is tied to the process lifetime.
 func (*LocalFileSystem) Close() error {
 	return nil
 }
 
-// ListXAttr returns the names of all extended attributes for the file.
-// If followSymlinks is true, symlinks are resolved to their target.
+// ListXAttr returns the names of all extended attributes for filePath
+// using the [xattr] package. If followSymlinks is true the symlink target's
+// attributes are read ([xattr.List]); otherwise the link's own attributes
+// are read ([xattr.LList]). Extended-attribute support is platform-
+// and filesystem-dependent (e.g. tmpfs and FAT do not support xattrs).
 func (local *LocalFileSystem) ListXAttr(filePath string, followSymlinks bool) ([]string, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -795,8 +946,8 @@ func (local *LocalFileSystem) ListXAttr(filePath string, followSymlinks bool) ([
 	return xattr.LList(filePath)
 }
 
-// GetXAttr returns the value of the named extended attribute.
-// If followSymlinks is true, symlinks are resolved to their target.
+// GetXAttr returns the value of the named extended attribute via the [xattr]
+// package ([xattr.Get] when followSymlinks is true, [xattr.LGet] otherwise).
 func (local *LocalFileSystem) GetXAttr(filePath string, name string, followSymlinks bool) ([]byte, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -808,9 +959,10 @@ func (local *LocalFileSystem) GetXAttr(filePath string, name string, followSymli
 	return xattr.LGet(filePath, name)
 }
 
-// SetXAttr sets the value of the named extended attribute.
-// The flags parameter controls the behavior (e.g., xattr.XATTR_CREATE, xattr.XATTR_REPLACE).
-// If followSymlinks is true, symlinks are resolved to their target.
+// SetXAttr sets the value of the named extended attribute via the [xattr]
+// package ([xattr.SetWithFlags] when followSymlinks is true, otherwise
+// [xattr.LSetWithFlags]). The flags parameter is passed through unchanged
+// and accepts values like xattr.XATTR_CREATE and xattr.XATTR_REPLACE.
 func (local *LocalFileSystem) SetXAttr(filePath string, name string, data []byte, flags int, followSymlinks bool) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -822,8 +974,8 @@ func (local *LocalFileSystem) SetXAttr(filePath string, name string, data []byte
 	return xattr.LSetWithFlags(filePath, name, data, flags)
 }
 
-// RemoveXAttr removes the named extended attribute from the file.
-// If followSymlinks is true, symlinks are resolved to their target.
+// RemoveXAttr removes the named extended attribute via the [xattr]
+// package ([xattr.Remove] when followSymlinks is true, [xattr.LRemove] otherwise).
 func (local *LocalFileSystem) RemoveXAttr(filePath string, name string, followSymlinks bool) error {
 	if filePath == "" {
 		return ErrEmptyPath

@@ -358,6 +358,31 @@ func (file File) ToAbsPath() File {
 	return File(strings.TrimPrefix(uri, LocalPrefix))
 }
 
+// RelPathOf returns the path of target relative to file,
+// like [filepath.Rel] but interpreted by file's [FileSystem].
+//
+// file is treated as the base; the result is the path that,
+// when joined with file, refers to the same location as target.
+// The result is cleaned and may contain ".." segments.
+//
+// Both files must belong to the same [FileSystem], otherwise an error is returned.
+// An error is also returned if the file system does not implement [RelPathFileSystem],
+// or if target can't be made relative to file
+// (for example when one path is absolute and the other is not,
+// or when computing the relation would require knowing the current working directory).
+func (file File) RelPathOf(target File) (string, error) {
+	fileSystem, basePath := file.ParseRawURI()
+	targetFileSystem, targetPath := target.ParseRawURI()
+	if targetFileSystem != fileSystem {
+		return "", fmt.Errorf("file systems do not match: %s and %s", fileSystem, targetFileSystem)
+	}
+	relFS, ok := fileSystem.(RelPathFileSystem)
+	if !ok {
+		return "", NewErrUnsupported(fileSystem, "RelPath")
+	}
+	return relFS.RelPath(basePath, targetPath)
+}
+
 // IsRegular reports if this is a regular file.
 func (file File) IsRegular() bool {
 	stat, err := file.Stat()
@@ -381,11 +406,58 @@ func (file File) IsHidden() bool {
 }
 
 // IsSymbolicLink returns if the file is a symbolic link.
-// Use LocalFileSystem.CreateSymbolicLink and LocalFileSystem.ReadSymbolicLink
-// to handle symbolic links.
+// Use [File.CreateSymbolicLink] and [File.ReadSymbolicLink]
+// to create and resolve symbolic links.
 func (file File) IsSymbolicLink() bool {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.IsSymbolicLink(path)
+}
+
+// CreateSymbolicLink creates file as a symbolic link pointing to target.
+// file is the link to be created; target is what the link points to.
+//
+// Both files must belong to the same [FileSystem], otherwise an error is returned.
+// An error is also returned if the file system does not implement
+// [SymbolicLinkFileSystem].
+//
+// The target path is stored as given. If you want a stable link regardless of
+// where it is resolved from, pass an absolute target.
+func (file File) CreateSymbolicLink(target File) error {
+	if file == "" || target == "" {
+		return ErrEmptyPath
+	}
+	linkFS, linkPath := file.ParseRawURI()
+	targetFS, targetPath := target.ParseRawURI()
+	if linkFS != targetFS {
+		return fmt.Errorf("file systems do not match: %s and %s", linkFS, targetFS)
+	}
+	symlinkFS, ok := linkFS.(SymbolicLinkFileSystem)
+	if !ok {
+		return NewErrUnsupported(linkFS, "CreateSymbolicLink")
+	}
+	return symlinkFS.CreateSymbolicLink(targetPath, linkPath)
+}
+
+// ReadSymbolicLink returns the target of the symbolic link at file.
+// The returned [File] is the raw link target as stored on disk and may be
+// relative to file's directory.
+//
+// Returns an [ErrUnsupported] error if file's [FileSystem] does not
+// implement [SymbolicLinkFileSystem].
+func (file File) ReadSymbolicLink() (File, error) {
+	if file == "" {
+		return "", ErrEmptyPath
+	}
+	fileSystem, linkPath := file.ParseRawURI()
+	symlinkFS, ok := fileSystem.(SymbolicLinkFileSystem)
+	if !ok {
+		return "", NewErrUnsupported(fileSystem, "ReadSymbolicLink")
+	}
+	targetPath, err := symlinkFS.ReadSymbolicLink(linkPath)
+	if err != nil {
+		return "", err
+	}
+	return File(targetPath), nil
 }
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.

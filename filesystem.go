@@ -322,6 +322,50 @@ type PermissionsFileSystem interface {
 	SetPermissions(filePath string, perm Permissions) error
 }
 
+// RelPathFileSystem can be implemented by file systems
+// that support computing a relative path between two paths.
+//
+// If a file system does not implement this interface
+// then [File.RelPathOf] returns an [ErrUnsupported] error.
+type RelPathFileSystem interface {
+	FileSystem
+
+	// RelPath returns the relative path of targPath relative to basePath
+	// like [filepath.Rel] but for the file system implementation.
+	//
+	// The returned path will always be relative to basePath, even if basePath and
+	// targPath share no elements: joining basePath with the result yields a path
+	// equivalent to targPath after cleaning. The returned path is cleaned
+	// and may contain ".." segments. If basePath and targPath are identical,
+	// "." is returned.
+	//
+	// An error is returned if targPath can't be made relative to basePath
+	// (for example when one is absolute and the other is not),
+	// or if knowing the current working directory would be necessary to compute it.
+	RelPath(basePath, targPath string) (string, error)
+}
+
+// SymbolicLinkFileSystem can be implemented by file systems
+// that support creating and reading symbolic links.
+//
+// If a file system does not implement this interface
+// then [File.CreateSymbolicLink] and [File.ReadSymbolicLink]
+// return an [ErrUnsupported] error.
+type SymbolicLinkFileSystem interface {
+	FileSystem
+
+	// CreateSymbolicLink creates a symbolic link at linkPath
+	// pointing to targetPath. targetPath is stored verbatim,
+	// so it may be relative to linkPath's directory or absolute,
+	// depending on what the caller wants the resolved link to mean.
+	CreateSymbolicLink(targetPath, linkPath string) error
+
+	// ReadSymbolicLink returns the target of the symbolic link at linkPath
+	// as stored on disk. The returned path is raw and may be relative
+	// to linkPath's directory.
+	ReadSymbolicLink(linkPath string) (targetPath string, err error)
+}
+
 // MakeAllDirsFileSystem can be implemented by file systems
 // that have native recursive directory creation functionality.
 //

@@ -112,6 +112,10 @@ file2 := file.Dir().Join("a", "b", "c").Joinf("file%d.txt", 2)
 path2 := file2.Path() // "/tmp/a/b/c/file2.txt"
 
 abs := fs.File("~/some-dir/../file").AbsPath() // "/home/erik/file"
+
+// Relative path between two files on the same FileSystem
+base := fs.File("/tmp/project")
+rel, err := base.RelPathOf(base.Join("a", "b", "c")) // "a/b/c"
 ```
 
 Meta information:
@@ -249,6 +253,35 @@ files, err := dir.ListDirMax(-1)
 // Get the first 100 JPEGs in dir
 files, err := dir.ListDirMaxContext(ctx, 100, "*.jpg", "*.jpeg")
 ```
+
+Symbolic links
+--------------
+
+File systems opt into symbolic link support by implementing the
+`SymbolicLinkFileSystem` interface. `LocalFileSystem` opts in; the cloud and
+archive backends (s3fs, httpfs, ftpfs, sftpfs, zipfs, dropboxfs, multipartfs,
+memfilesystem) do not, so calling these methods on files from those backends
+returns an `ErrUnsupported` error.
+
+```go
+target := fs.File("/etc/hosts")
+link := fs.File("/tmp/hosts-link")
+
+// Create link as a symbolic link pointing to target
+err := link.CreateSymbolicLink(target)
+
+// Check whether a file is a symbolic link
+if link.IsSymbolicLink() {
+    // Read the link target as stored on disk (may be relative)
+    resolved, err := link.ReadSymbolicLink()
+    _ = resolved
+}
+```
+
+Both files must live on the same `FileSystem`; passing a target from a
+different file system returns an error. The target path is stored verbatim,
+so pass an absolute path if you want the link to resolve the same way
+regardless of where it is read from.
 
 Watching the local file system
 ------------------------------
