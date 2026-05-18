@@ -37,6 +37,8 @@ func TestMain(m *testing.M) {
 		return
 	}
 
+	// TestMain runs before any *testing.T exists, so t.Context() is not
+	// available — context.Background() is the right choice here.
 	ctx := context.Background()
 
 	// Stop and remove any existing container with the same name
@@ -135,7 +137,7 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("test.rebex.net", func(t *testing.T) {
-		sftpFS, err := DialAndRegister(context.Background(), "demo@test.rebex.net:22", Password("password"), AcceptAnyHostKey, nil)
+		sftpFS, err := DialAndRegister(t.Context(), "demo@test.rebex.net:22", Password("password"), AcceptAnyHostKey, nil)
 		require.NoError(t, err, "Dial")
 
 		require.Equal(t, "sftp://demo@test.rebex.net", sftpFS.Prefix())
@@ -161,7 +163,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 	})
 	t.Run("demo.wftpserver.com", func(t *testing.T) {
 		// http://demo.wftpserver.com/main.html
-		sftpFS, err := DialAndRegister(context.Background(), "demo.wftpserver.com:2222", UsernameAndPassword("demo", "demo"), AcceptAnyHostKey, nil)
+		sftpFS, err := DialAndRegister(t.Context(), "demo.wftpserver.com:2222", UsernameAndPassword("demo", "demo"), AcceptAnyHostKey, nil)
 		require.NoError(t, err, "Dial")
 		require.Equal(t, "sftp://demo@demo.wftpserver.com:2222", sftpFS.Prefix())
 
@@ -192,7 +194,7 @@ func Test_fileSystem(t *testing.T) {
 		t.Skip("Docker SFTP server not available")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Connect to the shared test SFTP server
 	sftpFS, err := Dial(ctx, testSFTPAddress, UsernameAndPassword(testUsername, testPassword), AcceptAnyHostKey, nil)

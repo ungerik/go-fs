@@ -40,6 +40,8 @@ func TestMain(m *testing.M) {
 		return
 	}
 
+	// TestMain runs before any *testing.T exists, so t.Context() is not
+	// available — context.Background() is the right choice here.
 	ctx := context.Background()
 
 	// Setup combined FTP/FTPS server
@@ -146,7 +148,7 @@ func Test_fileSystem_FTP(t *testing.T) {
 		t.Skip("Docker FTP/FTPS server not available")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Connect to the shared test FTP server
 	ftpFS, err := Dial(ctx, testFTPAddress, UsernameAndPassword(testUsername, testPassword), nil)
@@ -174,7 +176,7 @@ func Test_fileSystem_FTPS(t *testing.T) {
 		t.Skip("Docker FTP/FTPS server not available")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Test FTPS connection with comprehensive error handling
 	// The jlaffaye/ftp library has known issues with FTPS connections (EOF during TLS handshake)

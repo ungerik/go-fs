@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -118,18 +117,18 @@ func Test_IdenticalDirContents(t *testing.T) {
 			return err
 		}
 		b.MakeDir()
-		return CopyRecursive(context.Background(), a, b)
+		return CopyRecursive(t.Context(), a, b)
 	}
 
 	// Empty directories should be identical:
-	identical, err := IdenticalDirContents(context.Background(), a, b, false)
+	identical, err := IdenticalDirContents(t.Context(), a, b, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !identical {
 		t.Fail()
 	}
-	identical, err = IdenticalDirContents(context.Background(), a, b, true)
+	identical, err = IdenticalDirContents(t.Context(), a, b, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +146,7 @@ func Test_IdenticalDirContents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	identical, err = IdenticalDirContents(context.Background(), a, b, true)
+	identical, err = IdenticalDirContents(t.Context(), a, b, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +159,7 @@ func Test_IdenticalDirContents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	identical, err = IdenticalDirContents(context.Background(), a, b, true)
+	identical, err = IdenticalDirContents(t.Context(), a, b, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +177,7 @@ func Test_IdenticalDirContents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	identical, err = IdenticalDirContents(context.Background(), a, b, true)
+	identical, err = IdenticalDirContents(t.Context(), a, b, true)
 	if err != nil {
 		t.Fatal(err)
 	}

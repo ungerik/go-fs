@@ -2,7 +2,6 @@ package fsimpl
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"testing"
@@ -43,7 +42,7 @@ func TestDropboxContentHash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := DropboxContentHash(context.Background(), tt.args.reader)
+			got, err := DropboxContentHash(t.Context(), tt.args.reader)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("DropboxContentHash() error = %v, wantErr %v", err, tt.wantErr)
 				return

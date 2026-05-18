@@ -1,7 +1,6 @@
 package httpfs
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +23,7 @@ func TestStat(t *testing.T) {
 }
 
 func TestReadAll(t *testing.T) {
-	data, err := FileSystemTLS.ReadAll(context.Background(), "raw.githubusercontent.com/ungerik/go-fs/master/README.md")
+	data, err := FileSystemTLS.ReadAll(t.Context(), "raw.githubusercontent.com/ungerik/go-fs/master/README.md")
 	assert.NoError(t, err)
 	assert.Greater(t, len(data), 0, "file size greater zero")
 

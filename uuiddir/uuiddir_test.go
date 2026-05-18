@@ -149,7 +149,7 @@ func Test_Enum(t *testing.T) {
 	assert.NoError(t, err, "makeTestDirs")
 	defer baseDir.RemoveRecursive()
 
-	Enum(context.Background(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
+	Enum(t.Context(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
 		hasDir := dirs[uuidDir] && uuidDir.IsDir()
 		assert.True(t, hasDir, "valid directory")
 
@@ -160,9 +160,9 @@ func Test_Enum(t *testing.T) {
 	})
 }
 
-func findUUIDs(baseDir fs.File) map[[16]byte]struct{} {
+func findUUIDs(ctx context.Context, baseDir fs.File) map[[16]byte]struct{} {
 	ids := make(map[[16]byte]struct{})
-	Enum(context.Background(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
+	Enum(ctx, baseDir, func(uuidDir fs.File, uuid [16]byte) error {
 		ids[uuid] = struct{}{}
 		return nil
 	})
@@ -181,7 +181,7 @@ func Test_RemoveDir(t *testing.T) {
 		assert.NoError(t, err, "RemoveDir")
 
 		delete(ids, id)
-		idsEqual(ids, findUUIDs(baseDir))
+		idsEqual(ids, findUUIDs(t.Context(), baseDir))
 	}
 }
 

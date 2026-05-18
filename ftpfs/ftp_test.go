@@ -1,7 +1,6 @@
 package ftpfs
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -25,7 +24,7 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("ftp://demo@test.rebex.net", func(t *testing.T) {
-		ftpFS, err := DialAndRegister(context.Background(), "ftp://demo@test.rebex.net", Password("password"), os.Stdout)
+		ftpFS, err := DialAndRegister(t.Context(), "ftp://demo@test.rebex.net", Password("password"), os.Stdout)
 		require.NoError(t, err, "Dial")
 
 		require.Equal(t, "ftp://demo@test.rebex.net", ftpFS.Prefix())
@@ -57,7 +56,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 
 		// Strategy 1: Try FTPS with explicit TLS
 		t.Log("Attempting FTPS connection with explicit TLS...")
-		ftpFS, err = DialAndRegister(context.Background(), "ftps://demo@test.rebex.net", Password("password"), os.Stdout)
+		ftpFS, err = DialAndRegister(t.Context(), "ftps://demo@test.rebex.net", Password("password"), os.Stdout)
 		if err != nil {
 			t.Logf("FTPS connection failed: %v", err)
 			if strings.Contains(err.Error(), "EOF") ||
@@ -105,7 +104,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 			ftpFS.Close() // Close FTPS connection
 
 			// Try regular FTP as fallback
-			ftpFS, err = DialAndRegister(context.Background(), "ftp://demo@test.rebex.net", Password("password"), os.Stdout)
+			ftpFS, err = DialAndRegister(t.Context(), "ftp://demo@test.rebex.net", Password("password"), os.Stdout)
 			if err != nil {
 				t.Logf("FTP fallback connection failed: %v", err)
 				t.Skip("Both FTPS and FTP connections failed - server may be unavailable")

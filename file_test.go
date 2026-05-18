@@ -316,7 +316,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("all files without pattern", func(t *testing.T) {
 		var files []File
-		err := dir.ListDirInfoRecursiveContext(context.Background(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
 			files = append(files, info.File)
 			return nil
 		})
@@ -330,7 +330,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("filter by pattern *.txt", func(t *testing.T) {
 		var files []File
-		err := dir.ListDirInfoRecursiveContext(context.Background(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
 			files = append(files, info.File)
 			return nil
 		}, "*.txt")
@@ -344,7 +344,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("filter by pattern *.log", func(t *testing.T) {
 		var files []File
-		err := dir.ListDirInfoRecursiveContext(context.Background(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
 			files = append(files, info.File)
 			return nil
 		}, "*.log")
@@ -358,7 +358,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("filter by multiple patterns", func(t *testing.T) {
 		var files []File
-		err := dir.ListDirInfoRecursiveContext(context.Background(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
 			files = append(files, info.File)
 			return nil
 		}, "*.txt", "*.md")
@@ -372,7 +372,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("callback returns error", func(t *testing.T) {
 		expectedErr := errors.New("callback error")
-		err := dir.ListDirInfoRecursiveContext(context.Background(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
 			return expectedErr
 		})
 		assert.Error(t, err)
@@ -380,7 +380,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel() // Cancel immediately
 
 		err := dir.ListDirInfoRecursiveContext(ctx, func(info *FileInfo) error {
@@ -392,7 +392,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("empty file path", func(t *testing.T) {
 		emptyFile := File("")
-		err := emptyFile.ListDirInfoRecursiveContext(context.Background(), func(info *FileInfo) error {
+		err := emptyFile.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
 			return nil
 		})
 		assert.Equal(t, ErrEmptyPath, err)
@@ -400,7 +400,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("non-existent directory", func(t *testing.T) {
 		nonExistent := dir.Join("nonexistent")
-		err := nonExistent.ListDirInfoRecursiveContext(context.Background(), func(info *FileInfo) error {
+		err := nonExistent.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
 			return nil
 		})
 		// Should return an error (likely file not found)
@@ -409,7 +409,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("verify info fields", func(t *testing.T) {
 		var infos []*FileInfo
-		err := dir.ListDirInfoRecursiveContext(context.Background(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
 			infos = append(infos, info)
 			return nil
 		}, "*.txt")
@@ -869,7 +869,7 @@ func TestFile(t *testing.T) {
 			},
 			MockOpenReader: func(filePath string) (ReadCloser, error) {
 				// Return a reader with empty content by default
-				data, err := mockFS.MockReadAll(context.Background(), filePath)
+				data, err := mockFS.MockReadAll(t.Context(), filePath)
 				if err != nil {
 					return nil, err
 				}
@@ -883,13 +883,13 @@ func TestFile(t *testing.T) {
 		mockFS.MockOpenAppendWriter = func(filePath string, perm []Permissions) (WriteCloser, error) {
 			// Emulate the fallback implementation: read existing content,
 			// return a buffer that calls WriteAll on close
-			current, err := mockFS.MockReadAll(context.Background(), filePath)
+			current, err := mockFS.MockReadAll(t.Context(), filePath)
 			if err != nil {
 				current = []byte{} // Empty if file doesn't exist
 			}
 			var fileBuffer *fsimpl.FileBuffer
 			fileBuffer = fsimpl.NewFileBufferWithClose(current, func() error {
-				return mockFS.MockWriteAll(context.Background(), filePath, fileBuffer.Bytes(), perm)
+				return mockFS.MockWriteAll(t.Context(), filePath, fileBuffer.Bytes(), perm)
 			})
 			return fileBuffer, nil
 		}
@@ -1157,7 +1157,7 @@ func TestFile(t *testing.T) {
 					return nil
 				}
 
-				err := file.WriteAllContext(context.Background(), testData, permTest.permissions...)
+				err := file.WriteAllContext(t.Context(), testData, permTest.permissions...)
 				require.NoError(t, err)
 				require.Equal(t, permTest.permissions, capturedPerms)
 			})
@@ -1209,7 +1209,7 @@ func TestFile(t *testing.T) {
 					return nil
 				}
 
-				err := file.WriteAllStringContext(context.Background(), testStr, permTest.permissions...)
+				err := file.WriteAllStringContext(t.Context(), testStr, permTest.permissions...)
 				require.NoError(t, err)
 				require.Equal(t, permTest.permissions, capturedPerms)
 			})
@@ -1235,7 +1235,7 @@ func TestFile(t *testing.T) {
 					return nil
 				}
 
-				err := file.Append(context.Background(), testData, permTest.permissions...)
+				err := file.Append(t.Context(), testData, permTest.permissions...)
 				require.NoError(t, err)
 				require.Equal(t, permTest.permissions, capturedPerms)
 			})
@@ -1261,7 +1261,7 @@ func TestFile(t *testing.T) {
 					return nil
 				}
 
-				err := file.AppendString(context.Background(), testStr, permTest.permissions...)
+				err := file.AppendString(t.Context(), testStr, permTest.permissions...)
 				require.NoError(t, err)
 				require.Equal(t, permTest.permissions, capturedPerms)
 			})
@@ -1288,7 +1288,7 @@ func TestFile(t *testing.T) {
 			return nil
 		}
 
-		err := file.WriteJSON(context.Background(), testData)
+		err := file.WriteJSON(t.Context(), testData)
 		require.NoError(t, err)
 		// WriteJSON doesn't support permissions, so it should pass nil
 		require.Nil(t, capturedPerms)
@@ -1320,7 +1320,7 @@ func TestFile(t *testing.T) {
 			return nil
 		}
 
-		err := file.WriteXML(context.Background(), testData)
+		err := file.WriteXML(t.Context(), testData)
 		require.NoError(t, err)
 		// WriteXML doesn't support permissions, so it should pass nil
 		require.Nil(t, capturedPerms)
@@ -1793,7 +1793,7 @@ func TestFile(t *testing.T) {
 				return &mockReadCloser{io.NopCloser(strings.NewReader("test content"))}, nil
 			}
 
-			hash, err := file.ContentHashContext(context.Background())
+			hash, err := file.ContentHashContext(t.Context())
 			require.NoError(t, err)
 			assert.NotEmpty(t, hash)
 		})
@@ -1905,7 +1905,7 @@ func TestFile(t *testing.T) {
 			}
 
 			var listedFiles []File
-			err := testFile.ListDirContext(context.Background(), func(f File) error {
+			err := testFile.ListDirContext(t.Context(), func(f File) error {
 				listedFiles = append(listedFiles, f)
 				return nil
 			})
@@ -2126,7 +2126,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			data, err := testFile.ReadAllContext(context.Background())
+			data, err := testFile.ReadAllContext(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, expectedData, data)
 		})
@@ -2144,7 +2144,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			data, hash, err := testFile.ReadAllContentHash(context.Background())
+			data, hash, err := testFile.ReadAllContentHash(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, expectedData, data)
 			assert.NotEmpty(t, hash)
@@ -2181,7 +2181,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			str, err := testFile.ReadAllStringContext(context.Background())
+			str, err := testFile.ReadAllStringContext(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, "test content", str)
 		})
@@ -2200,7 +2200,7 @@ func TestFile(t *testing.T) {
 			}
 
 			var result map[string]any
-			err := testFile.ReadJSON(context.Background(), &result)
+			err := testFile.ReadJSON(t.Context(), &result)
 			require.NoError(t, err)
 			assert.Equal(t, "test", result["name"])
 			assert.Equal(t, float64(123), result["value"])
@@ -2223,7 +2223,7 @@ func TestFile(t *testing.T) {
 				Name  string `xml:"name"`
 				Value int    `xml:"value"`
 			}
-			err := testFile.ReadXML(context.Background(), &result)
+			err := testFile.ReadXML(t.Context(), &result)
 			require.NoError(t, err)
 			assert.Equal(t, "test", result.Name)
 			assert.Equal(t, 123, result.Value)

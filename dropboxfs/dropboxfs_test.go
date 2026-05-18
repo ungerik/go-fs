@@ -1,7 +1,6 @@
 package dropboxfs
 
 import (
-	"context"
 	"os"
 	"testing"
 	"time"
@@ -41,7 +40,7 @@ func Test_fileSystem(t *testing.T) {
 
 	// Run comprehensive filesystem tests
 	fs.RunFileSystemTests(
-		context.Background(),
+		t.Context(),
 		t,
 		dbfs,                  // filesystem
 		"Dropbox file system", // expected name

@@ -35,8 +35,8 @@ func TestHomeDir_HonorsEnv(t *testing.T) {
 }
 
 func Test_listDirMaxImpl(t *testing.T) {
-	ctx := context.Background()
-	errCtx, cancel := context.WithCancel(context.Background())
+	ctx := t.Context()
+	errCtx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	list := func(files ...File) func(ctx context.Context, callback func(File) error) error {

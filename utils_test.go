@@ -41,19 +41,19 @@ func Test_writeAllContext(t *testing.T) {
 		wantW   string
 		wantErr bool
 	}{
-		{name: " chunkSize2", args: args{ctx: context.Background(), data: []byte(""), chunkSize: 2}, wantW: "", wantErr: false},
-		{name: "1 chunkSize2", args: args{ctx: context.Background(), data: []byte("1"), chunkSize: 2}, wantW: "1", wantErr: false},
-		{name: "12 chunkSize2", args: args{ctx: context.Background(), data: []byte("12"), chunkSize: 2}, wantW: "12", wantErr: false},
-		{name: "123 chunkSize2", args: args{ctx: context.Background(), data: []byte("123"), chunkSize: 2}, wantW: "123", wantErr: false},
-		{name: "1234 chunkSize2", args: args{ctx: context.Background(), data: []byte("1234"), chunkSize: 2}, wantW: "1234", wantErr: false},
-		{name: "12345 chunkSize2", args: args{ctx: context.Background(), data: []byte("12345"), chunkSize: 2}, wantW: "12345", wantErr: false},
+		{name: " chunkSize2", args: args{ctx: t.Context(), data: []byte(""), chunkSize: 2}, wantW: "", wantErr: false},
+		{name: "1 chunkSize2", args: args{ctx: t.Context(), data: []byte("1"), chunkSize: 2}, wantW: "1", wantErr: false},
+		{name: "12 chunkSize2", args: args{ctx: t.Context(), data: []byte("12"), chunkSize: 2}, wantW: "12", wantErr: false},
+		{name: "123 chunkSize2", args: args{ctx: t.Context(), data: []byte("123"), chunkSize: 2}, wantW: "123", wantErr: false},
+		{name: "1234 chunkSize2", args: args{ctx: t.Context(), data: []byte("1234"), chunkSize: 2}, wantW: "1234", wantErr: false},
+		{name: "12345 chunkSize2", args: args{ctx: t.Context(), data: []byte("12345"), chunkSize: 2}, wantW: "12345", wantErr: false},
 
-		{name: " chunkSize3", args: args{ctx: context.Background(), data: []byte(""), chunkSize: 3}, wantW: "", wantErr: false},
-		{name: "1 chunkSize3", args: args{ctx: context.Background(), data: []byte("1"), chunkSize: 3}, wantW: "1", wantErr: false},
-		{name: "12 chunkSize3", args: args{ctx: context.Background(), data: []byte("12"), chunkSize: 3}, wantW: "12", wantErr: false},
-		{name: "123 chunkSize3", args: args{ctx: context.Background(), data: []byte("123"), chunkSize: 3}, wantW: "123", wantErr: false},
-		{name: "1234 chunkSize3", args: args{ctx: context.Background(), data: []byte("1234"), chunkSize: 3}, wantW: "1234", wantErr: false},
-		{name: "12345 chunkSize3", args: args{ctx: context.Background(), data: []byte("12345"), chunkSize: 3}, wantW: "12345", wantErr: false},
+		{name: " chunkSize3", args: args{ctx: t.Context(), data: []byte(""), chunkSize: 3}, wantW: "", wantErr: false},
+		{name: "1 chunkSize3", args: args{ctx: t.Context(), data: []byte("1"), chunkSize: 3}, wantW: "1", wantErr: false},
+		{name: "12 chunkSize3", args: args{ctx: t.Context(), data: []byte("12"), chunkSize: 3}, wantW: "12", wantErr: false},
+		{name: "123 chunkSize3", args: args{ctx: t.Context(), data: []byte("123"), chunkSize: 3}, wantW: "123", wantErr: false},
+		{name: "1234 chunkSize3", args: args{ctx: t.Context(), data: []byte("1234"), chunkSize: 3}, wantW: "1234", wantErr: false},
+		{name: "12345 chunkSize3", args: args{ctx: t.Context(), data: []byte("12345"), chunkSize: 3}, wantW: "12345", wantErr: false},
 
 		{name: "12345 chunkSize2 error", args: args{ctx: &failContext{errAfter: 1, err: errors.New("contextError")}, data: []byte("12345"), chunkSize: 2}, wantW: "12", wantErr: true},
 	}

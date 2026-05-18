@@ -42,6 +42,8 @@ func TestMain(m *testing.M) {
 		return
 	}
 
+	// TestMain runs before any *testing.T exists, so t.Context() is not
+	// available — context.Background() is the right choice here.
 	ctx := context.Background()
 
 	// Setup MinIO server
@@ -154,7 +156,7 @@ func Test_fileSystem(t *testing.T) {
 		t.Skip("Docker MinIO server not available")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create S3 client and filesystem
 	client := createS3Client(ctx)
@@ -219,7 +221,7 @@ func Test_fileSystem_MultipartUploadDownload(t *testing.T) {
 		t.Skip("Docker MinIO server not available")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create S3 client and filesystem
 	client := createS3Client(ctx)

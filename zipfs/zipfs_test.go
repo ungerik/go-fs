@@ -1,7 +1,6 @@
 package zipfs
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -102,7 +101,7 @@ func TestZipFileSystem(t *testing.T) {
 
 		t.Run("ListDirInfo", func(t *testing.T) {
 			var files []*fs.FileInfo
-			err := zipReader.ListDirInfo(context.Background(), "test", func(info *fs.FileInfo) error {
+			err := zipReader.ListDirInfo(t.Context(), "test", func(info *fs.FileInfo) error {
 				files = append(files, info)
 				return nil
 			}, nil)
