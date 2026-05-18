@@ -429,10 +429,10 @@ Symbolic links
 --------------
 
 File systems opt into symbolic link support by implementing the
-`SymbolicLinkFileSystem` interface. `LocalFileSystem` opts in; the cloud and
-archive backends (s3fs, httpfs, ftpfs, sftpfs, zipfs, dropboxfs, multipartfs,
-memfilesystem) do not, so calling these methods on files from those backends
-returns an `ErrUnsupported` error.
+`SymbolicLinkFileSystem` interface. `LocalFileSystem` and `MemFileSystem`
+opt in; the cloud and archive backends (s3fs, httpfs, ftpfs, sftpfs,
+zipfs, dropboxfs, multipartfs) do not, so calling these methods on files
+from those backends returns an `ErrUnsupported` error.
 
 ```go
 target := fs.File("/etc/hosts")
@@ -651,5 +651,11 @@ ms, file, err := fs.NewSingleMemFileSystem(fs.NewMemFile("a.txt", []byte("a")))
 defer ms.Close()
 ```
 
-The implementation is mostly complete; a few uncommon operations may
-still panic — see `memfilesystem.go` for current coverage.
+`MemFileSystem` implements every optional `FileSystem` interface the
+local backend does — including `RenameFileSystem`, `MoveFileSystem`,
+`WatchFileSystem`, `PermissionsFileSystem`, `UserFileSystem`,
+`GroupFileSystem`, `ListDirMaxFileSystem`, `ListDirRecursiveFileSystem`,
+`XAttrFileSystem`, and `SymbolicLinkFileSystem` — so it can stand in
+for any other backend in tests. Watch events are synthesized from
+every mutation that goes through the FS API; direct mutation of a
+`MemFile.FileData` byte slice obtained outside the API is not observable.
