@@ -11,6 +11,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"iter"
+	"os"
 	"path"
 	"slices"
 	"strings"
@@ -1066,6 +1067,13 @@ func (file File) Touch(perm ...Permissions) error {
 
 // MakeDir creates a directory if it does not exist yet.
 // No error is returned if the directory already exists.
+//
+// Compatible with [os.MkdirAll]: if the underlying filesystem reports the
+// path already exists (a race with another goroutine or process creating
+// the directory between the [File.IsDir] check and the [FileSystem.MakeDir]
+// call), MakeDir re-stats the path. If the path is now a directory, returns
+// nil (race winner created it; treat as success). If the path exists but is
+// not a directory, returns a descriptive [ErrIsNotDirectory].
 func (file File) MakeDir(perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
@@ -1074,7 +1082,23 @@ func (file File) MakeDir(perm ...Permissions) error {
 		return nil
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.MakeDir(path, perm)
+	err := fileSystem.MakeDir(path, perm)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, os.ErrExist) {
+		// Race recovery: another goroutine or process may have created the
+		// directory between our IsDir() probe above and the MakeDir call.
+		// Stat the path and only treat the EEXIST as an error if it now
+		// exists as a non-directory entry.
+		if info, statErr := file.Stat(); statErr == nil {
+			if info.IsDir() {
+				return nil
+			}
+			return NewErrIsNotDirectory(file)
+		}
+	}
+	return err
 }
 
 // MakeAllDirs creates all directories up to this one.
