@@ -66,6 +66,35 @@ func Test_Parse(t *testing.T) {
 	}
 }
 
+func Test_parseUUID_versions(t *testing.T) {
+	// RFC 9562 versions 1-8 are all valid.
+	valid := []string{
+		"f0498fad-437c-1954-ad82-8ec2cc202628", // v1
+		"f0498fad-437c-2954-ad82-8ec2cc202628", // v2
+		"f0498fad-437c-3954-ad82-8ec2cc202628", // v3
+		"f0498fad-437c-4954-ad82-8ec2cc202628", // v4
+		"f0498fad-437c-5954-ad82-8ec2cc202628", // v5
+		"1ec9414c-232a-6b00-b3c8-9e6bdeced846", // v6
+		"0190b6e0-8f3a-7c2d-9a1b-2c3d4e5f6a7b", // v7
+		"0190b6e0-8f3a-8c2d-9a1b-2c3d4e5f6a7b", // v8
+	}
+	for _, str := range valid {
+		_, err := parseUUID(str)
+		assert.NoError(t, err, "parseUUID(%q)", str)
+	}
+
+	// Version 0 (Nil UUID) and versions 9-15 are not valid UUID versions.
+	invalid := []string{
+		"f0498fad-437c-0954-ad82-8ec2cc202628", // v0
+		"0190b6e0-8f3a-9c2d-9a1b-2c3d4e5f6a7b", // v9
+		"0190b6e0-8f3a-fc2d-9a1b-2c3d4e5f6a7b", // v15
+	}
+	for _, str := range invalid {
+		_, err := parseUUID(str)
+		assert.Error(t, err, "parseUUID(%q)", str)
+	}
+}
+
 func Test_FormatString(t *testing.T) {
 	uuid := mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628")
 	assert.Equal(t, "f0/498/fad/437c4954/ad828ec2cc202628", FormatString(uuid), "FormatString(%s)", uuid)
