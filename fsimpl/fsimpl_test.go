@@ -88,7 +88,6 @@ func TestJoinCleanPath(t *testing.T) {
 	type args struct {
 		uriParts   []string
 		trimPrefix string
-		separator  string
 	}
 	tests := []struct {
 		name string
@@ -97,60 +96,104 @@ func TestJoinCleanPath(t *testing.T) {
 	}{
 		{
 			name: `empty`,
-			args: args{uriParts: nil, trimPrefix: ``, separator: ``},
-			want: `.`,
-		},
-		{
-			name: `. with sep`,
-			args: args{uriParts: []string{`.`}, trimPrefix: ``, separator: `/`},
+			args: args{uriParts: nil, trimPrefix: ``},
 			want: `/`,
 		},
 		{
-			name: `. without sep`,
-			args: args{uriParts: []string{`.`}, trimPrefix: ``, separator: ``},
-			want: `.`,
+			name: `dot`,
+			args: args{uriParts: []string{`.`}, trimPrefix: ``},
+			want: `/`,
 		},
 		{
-			name: `relative no sep`,
-			args: args{uriParts: []string{`relative`}, trimPrefix: ``, separator: ``},
-			want: `relative`,
-		},
-		{
-			name: `relative with sep`,
-			args: args{uriParts: []string{`relative`}, trimPrefix: ``, separator: `/`},
+			name: `relative is made absolute`,
+			args: args{uriParts: []string{`relative`}, trimPrefix: ``},
 			want: `/relative`,
 		},
 		{
-			name: `C:`,
-			args: args{uriParts: nil, trimPrefix: `C:`, separator: `\`},
-			want: `\`,
+			name: `already absolute`,
+			args: args{uriParts: []string{`/a/b`}, trimPrefix: ``},
+			want: `/a/b`,
 		},
 		{
-			name: `C:\`,
-			args: args{uriParts: nil, trimPrefix: `C:\`, separator: `\`},
-			want: `\`,
+			name: `joins parts and collapses trailing slash`,
+			args: args{uriParts: []string{`a/b/`, `./c/`}, trimPrefix: ``},
+			want: `/a/b/c`,
 		},
 		{
-			name: `C:\\`,
-			args: args{uriParts: nil, trimPrefix: `C:\`, separator: `\`},
-			want: `\`,
+			name: `resolves dot dot`,
+			args: args{uriParts: []string{`a/b`, `../c`}, trimPrefix: ``},
+			want: `/a/c`,
 		},
 		{
-			name: `weird C:\ with / sep`,
-			args: args{uriParts: nil, trimPrefix: `C:\`, separator: `/`},
-			want: `/`,
+			name: `trims prefix from first part`,
+			args: args{uriParts: []string{`myprefix/a`, `b`}, trimPrefix: `myprefix`},
+			want: `/a/b`,
 		},
 		{
-			name: `ftp://example.com/dir/subdir/`,
-			args: args{uriParts: []string{`ftp://example.com/dir/`, `./subdir/`}, trimPrefix: `ftp://`, separator: `/`},
+			name: `url unescapes`,
+			args: args{uriParts: []string{`a%20b/c`}, trimPrefix: ``},
+			want: `/a b/c`,
+		},
+		{
+			name: `ftp scheme prefix`,
+			args: args{uriParts: []string{`ftp://example.com/dir/`, `./subdir/`}, trimPrefix: `ftp://`},
 			want: `/example.com/dir/subdir`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := JoinCleanPath(tt.args.uriParts, tt.args.trimPrefix, tt.args.separator); got != tt.want {
-				t.Errorf("JoinCleanPath(%#v, %#v, %#v) = %#v, want %#v", tt.args.uriParts, tt.args.trimPrefix, tt.args.separator, got, tt.want)
+			if got := JoinCleanPath(tt.args.uriParts, tt.args.trimPrefix); got != tt.want {
+				t.Errorf("JoinCleanPath(%#v, %#v) = %#v, want %#v", tt.args.uriParts, tt.args.trimPrefix, got, tt.want)
 			}
 		})
 	}
+}
+
+func TestSplitPath(t *testing.T) {
+	tests := []struct {
+		name      string
+		filePath  string
+		prefix    string
+		separator string
+		want      []string
+	}{
+		{name: `empty`, filePath: ``, prefix: ``, separator: `/`, want: nil},
+		{name: `only separators`, filePath: `///`, prefix: ``, separator: `/`, want: nil},
+		{name: `single element`, filePath: `dir`, prefix: ``, separator: `/`, want: []string{`dir`}},
+		{name: `multiple elements`, filePath: `a/b/c`, prefix: ``, separator: `/`, want: []string{`a`, `b`, `c`}},
+		{name: `leading and trailing separators trimmed`, filePath: `/a/b/`, prefix: ``, separator: `/`, want: []string{`a`, `b`}},
+		{name: `prefix trimmed`, filePath: `file:///a/b`, prefix: `file://`, separator: `/`, want: []string{`a`, `b`}},
+		{name: `backslash separator`, filePath: `\a\b\`, prefix: ``, separator: `\`, want: []string{`a`, `b`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, SplitPath(tt.filePath, tt.prefix, tt.separator))
+		})
+	}
+}
+
+func TestMatchAnyPattern(t *testing.T) {
+	tests := []struct {
+		name     string
+		match    string
+		patterns []string
+		want     bool
+	}{
+		{name: `no patterns matches anything`, match: `anything.txt`, patterns: nil, want: true},
+		{name: `exact match`, match: `file.txt`, patterns: []string{`file.txt`}, want: true},
+		{name: `wildcard match`, match: `file.txt`, patterns: []string{`*.txt`}, want: true},
+		{name: `no match`, match: `file.txt`, patterns: []string{`*.go`}, want: false},
+		{name: `second pattern matches`, match: `file.go`, patterns: []string{`*.txt`, `*.go`}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := MatchAnyPattern(tt.match, tt.patterns)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	// An invalid pattern returns the path.Match error
+	_, err := MatchAnyPattern(`file.txt`, []string{`[`})
+	require.Error(t, err)
 }

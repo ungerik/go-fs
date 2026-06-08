@@ -1,4 +1,5 @@
-// fsimpl contains helper functions for implementing a fs.FileSystem
+// Package fsimpl contains helper functions and types for
+// implementing a fs.FileSystem.
 package fsimpl
 
 import (
@@ -28,10 +29,20 @@ func RandomString() string {
 }
 
 // Ext returns the extension of filePath including the point, or an empty string.
+//
+// In contrast to path.Ext (which is fixed to "/") and filepath.Ext (which
+// uses the OS specific separator), the path separator is passed as an argument.
+// With a non-empty separator only the part after the last separator is
+// considered, matching the behavior of path.Ext / filepath.Ext for that separator.
+// With an empty separator the whole filePath is searched for the last point,
+// so points in directory elements are also considered, unlike path.Ext and
+// filepath.Ext.
+//
 // Example:
 //
 //	Ext("image.png", "/") == ".png"
-//	Ext("image.png/file", "/") == ""
+//	Ext("image.png/file", "/") == ""          // like path.Ext: last element has no point
+//	Ext("image.png/file", "") == ".png/file"  // empty separator searches the whole path
 func Ext(filePath, separator string) string {
 	if separator != "" {
 		filePath = filePath[strings.LastIndex(filePath, separator)+1:]
@@ -103,7 +114,13 @@ func MatchAnyPattern(name string, patterns []string) (bool, error) {
 	return false, nil
 }
 
-func JoinCleanPath(uriParts []string, trimPrefix, separator string) string {
+// JoinCleanPath trims trimPrefix from the first of the uriParts,
+// joins all parts with path.Join, URL-unescapes the result,
+// ensures it begins with a slash and returns it cleaned by path.Clean.
+//
+// The slash "/" is always used as path separator because the joining
+// and cleaning is done by the path package of the standard library.
+func JoinCleanPath(uriParts []string, trimPrefix string) string {
 	if len(uriParts) > 0 {
 		uriParts[0] = strings.TrimPrefix(uriParts[0], trimPrefix)
 	}
@@ -112,23 +129,15 @@ func JoinCleanPath(uriParts []string, trimPrefix, separator string) string {
 	if err == nil {
 		cleanPath = unescPath
 	}
-	if !strings.HasPrefix(cleanPath, separator) {
-		cleanPath = separator + cleanPath
+	if !strings.HasPrefix(cleanPath, "/") {
+		cleanPath = "/" + cleanPath
 	}
-	return path.Clean(cleanPath) // TODO works only when separator is "/"
+	return path.Clean(cleanPath)
 }
 
-func CleanPath(p, separator string) string {
-	unescPath, err := url.PathUnescape(p)
-	if err == nil {
-		p = unescPath
-	}
-	if !strings.HasPrefix(p, separator) {
-		p = separator + p
-	}
-	return path.Clean(p) // TODO works only when separator is "/"
-}
-
+// SplitPath trims prefix and any leading or trailing separator from filePath
+// and splits the remaining path into its elements using separator.
+// It returns nil if nothing is left after trimming.
 func SplitPath(filePath, prefix, separator string) []string {
 	filePath = strings.TrimPrefix(filePath, prefix)
 	filePath = strings.Trim(filePath, separator)

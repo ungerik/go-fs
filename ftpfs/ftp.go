@@ -290,9 +290,9 @@ func (f *fileSystem) CleanPathFromURI(uri string) string {
 
 func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
 	if f.secure {
-		return fsimpl.JoinCleanPath(uriParts, PrefixTLS, Separator)
+		return fsimpl.JoinCleanPath(uriParts, PrefixTLS)
 	}
-	return fsimpl.JoinCleanPath(uriParts, Prefix, Separator)
+	return fsimpl.JoinCleanPath(uriParts, Prefix)
 }
 
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {

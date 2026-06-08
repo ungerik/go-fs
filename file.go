@@ -95,7 +95,7 @@ func (file File) PathWithSlashes() string {
 	fileSystem, path := file.ParseRawURI()
 	path = fileSystem.JoinCleanPath(path)
 	if sep := fileSystem.Separator(); sep != "/" {
-		path = strings.Replace(path, sep, "/", -1)
+		path = strings.ReplaceAll(path, sep, "/")
 	}
 	return path
 }

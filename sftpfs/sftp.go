@@ -414,7 +414,7 @@ func (f *fileSystem) CleanPathFromURI(uri string) string {
 }
 
 func (*fileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, Prefix, Separator)
+	return fsimpl.JoinCleanPath(uriParts, Prefix)
 }
 
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {

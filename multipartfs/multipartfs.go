@@ -125,7 +125,7 @@ func (f *MultipartFileSystem) CleanPathFromURI(uri string) string {
 }
 
 func (f *MultipartFileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, f.prefix, Separator)
+	return fsimpl.JoinCleanPath(uriParts, f.prefix)
 }
 
 func (f *MultipartFileSystem) SplitPath(filePath string) []string {

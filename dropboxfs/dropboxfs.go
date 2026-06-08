@@ -159,7 +159,7 @@ func (dbfs *fileSystem) CleanPathFromURI(uri string) string {
 // JoinCleanPath joins multiple path parts into a clean path string.
 // Uses "/" as the separator, which is standard for Dropbox paths.
 func (dbfs *fileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, dbfs.prefix, Separator)
+	return fsimpl.JoinCleanPath(uriParts, dbfs.prefix)
 }
 
 // SplitPath splits a file path into its component parts.

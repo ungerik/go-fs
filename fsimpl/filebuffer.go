@@ -27,6 +27,9 @@ func NewReadonlyFileBuffer(data []byte, info iofs.FileInfo) *ReadonlyFileBuffer 
 	return &ReadonlyFileBuffer{data: data, info: info}
 }
 
+// NewReadonlyFileBufferReadAll reads all data from reader and returns it
+// wrapped as a ReadonlyFileBuffer with the passed info,
+// or an error if reading from reader failed.
 func NewReadonlyFileBufferReadAll(reader io.Reader, info iofs.FileInfo) (*ReadonlyFileBuffer, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
@@ -36,10 +39,13 @@ func NewReadonlyFileBufferReadAll(reader io.Reader, info iofs.FileInfo) (*Readon
 }
 
 // NewReadonlyFileBufferWithClose returns a new ReadonlyFileBuffer
+// that calls the passed close function when its Close method is called.
 func NewReadonlyFileBufferWithClose(data []byte, info iofs.FileInfo, close func() error) *ReadonlyFileBuffer {
 	return &ReadonlyFileBuffer{data: data, info: info, close: close}
 }
 
+// Stat returns the iofs.FileInfo of the buffer,
+// implementing the io/fs.File interface.
 func (buf *ReadonlyFileBuffer) Stat() (iofs.FileInfo, error) {
 	return buf.info, nil
 }

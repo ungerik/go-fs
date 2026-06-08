@@ -114,7 +114,7 @@ func (f *ZipFileSystem) CleanPathFromURI(uri string) string {
 }
 
 func (f *ZipFileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, f.prefix, Separator)
+	return fsimpl.JoinCleanPath(uriParts, f.prefix)
 }
 
 func (f *ZipFileSystem) SplitPath(filePath string) []string {

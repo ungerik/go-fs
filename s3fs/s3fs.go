@@ -161,7 +161,7 @@ func (s *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 // Cleans redundant separators and resolves . and .. components.
 // Always uses forward slash (/) as the separator, regardless of OS.
 func (s *fileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, s.prefix, Separator)
+	return fsimpl.JoinCleanPath(uriParts, s.prefix)
 }
 
 // SplitPath splits a file path into its components.
