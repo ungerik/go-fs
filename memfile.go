@@ -11,6 +11,7 @@ import (
 	iofs "io/fs"
 	"mime/multipart"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -36,6 +37,13 @@ var (
 //
 // As a small an simple struct MemFile is usually passed by value.
 // This is why NewMemFile does not return a pointer.
+//
+// The FileName can mirror the complete path of a file or directory on a
+// file system, but the most common simple case is just a name without any
+// slashes and path semantics. When the FileName contains slashes, the path
+// related methods like Name, Dir, DirAndName, Ext and CleanPath interpret
+// it as a '/' separated path. A FileName ending with a slash marks the
+// MemFile as a directory (see IsDir), in which case FileData is ignored.
 //
 // Note that the ReadAll and ReadAllContext methods return FileData
 // directly without copying it to optimize performance.
@@ -158,24 +166,82 @@ func (f MemFile) PrettyString() string {
 	return f.String()
 }
 
-// Name returns the name of the file.
-// If FileName contains a slash or backslash
-// then only the part after it will be returned.
+// Name returns the name of the file or directory, which is the last
+// element of the FileName path. A single trailing slash marks a
+// directory (see IsDir) and is ignored, so the name before it is returned.
 func (f MemFile) Name() string {
-	if i := strings.LastIndexAny(f.FileName, `/\`); i >= 0 {
-		return f.FileName[i+1:]
+	name := f.FileName
+	// Ignore a single trailing slash that marks a directory.
+	if n := len(name); n > 0 && name[n-1] == '/' {
+		name = name[:n-1]
 	}
-	return f.FileName
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
-// WithName returns a MemFile with the passed name
-// and the same shared data as the original MemFile.
+// Dir returns the parent directory of the FileName as a MemFile
+// with nil FileData and the FileName truncated up to and including
+// the last slash. Because the returned FileName ends with a slash
+// (or is empty) the resulting MemFile is considered a directory.
+//
+// If FileName contains no slash then an empty MemFile is returned.
+func (f MemFile) Dir() MemFile {
+	i := strings.LastIndexByte(f.FileName, '/')
+	if i < 0 {
+		return MemFile{}
+	}
+	return MemFile{FileName: f.FileName[:i+1]}
+}
+
+// DirAndName returns the parent directory of the FileName as a MemFile
+// together with the name of the last path element.
+// It is equivalent to calling Dir and Name, see those methods for details,
+// but computes both results in a single scan.
+func (f MemFile) DirAndName() (dir MemFile, name string) {
+	s := f.FileName
+	if n := len(s); n > 0 && s[n-1] == '/' {
+		// A single trailing slash marks a directory: the path is its own
+		// parent directory, the name is the element before the trailing slash.
+		dir = MemFile{FileName: s}
+		s = s[:n-1]
+		if i := strings.LastIndexByte(s, '/'); i >= 0 {
+			return dir, s[i+1:]
+		}
+		return dir, s
+	}
+	// No trailing slash: a single scan splits the parent directory and name.
+	if i := strings.LastIndexByte(s, '/'); i >= 0 {
+		return MemFile{FileName: s[:i+1]}, s[i+1:]
+	}
+	return MemFile{}, s
+}
+
+// CleanPath returns the FileName with "." and ".." path elements
+// resolved, redundant slashes removed and trailing slashes trimmed,
+// using '/' as separator. An empty FileName returns an empty string.
+func (f MemFile) CleanPath() string {
+	return cleanPath(f.FileName)
+}
+
+// WithName returns a MemFile with the passed name as its complete
+// FileName and the same shared data as the original MemFile.
+// Use WithData to derive a MemFile with the same name but different data.
+//
+// Note that name replaces the whole FileName including any path,
+// so WithName is not symmetric with the Name method which only
+// returns the last path element. To change just the name while
+// keeping the directory, prepend the FileName of the Dir method:
+//
+//	f = f.WithName(f.Dir().FileName + newName)
 func (f MemFile) WithName(name string) MemFile {
 	return MemFile{FileName: name, FileData: f.FileData}
 }
 
 // WithData returns a MemFile with the passed data
 // and the same name as the original MemFile.
+// Use WithName to derive a MemFile with the same data but a different name.
 //
 // The passed data slice is used directly without copying it,
 // so be careful when modifying the data after passing it to this function.
@@ -183,9 +249,11 @@ func (f MemFile) WithData(data []byte) MemFile {
 	return MemFile{FileName: f.FileName, FileData: data}
 }
 
-// Ext returns the extension of file name including the point, or an empty string.
+// Ext returns the extension of the file or directory name including
+// the point, or an empty string. '/' is used as separator and a
+// trailing slash is ignored.
 func (f MemFile) Ext() string {
-	return fsimpl.Ext(f.FileName, "")
+	return path.Ext(f.Name())
 }
 
 // ExtLower returns the lower case extension of the FileName including the point, or an empty string.
@@ -219,35 +287,54 @@ func (f MemFile) CheckExists() error {
 	return nil
 }
 
-// IsDir always returns false for a MemFile.
-func (MemFile) IsDir() bool {
-	return false
+// IsDir returns true if the FileName ends with a slash.
+// In that case the MemFile is considered a directory and FileData is ignored.
+func (f MemFile) IsDir() bool {
+	return strings.HasSuffix(f.FileName, "/")
 }
 
-// CheckIsDir always returns ErrIsNotDirectory.
+// CheckIsDir returns nil if the MemFile is a directory
+// (its FileName ends with a slash), ErrEmptyPath if the FileName is empty,
+// or an ErrIsNotDirectory error otherwise.
 func (f MemFile) CheckIsDir() error {
-	return NewErrIsNotDirectory(f)
+	if f.FileName == "" {
+		return ErrEmptyPath
+	}
+	if !f.IsDir() {
+		return NewErrIsNotDirectory(f)
+	}
+	return nil
 }
 
-// ContentHash returns the DefaultContentHash for the file.
+// ContentHash returns the DefaultContentHash for the file,
+// or an empty string if the MemFile is a directory.
 func (f MemFile) ContentHash() (string, error) {
 	return f.ContentHashContext(context.Background())
 }
 
-// ContentHashContext returns the DefaultContentHash for the file.
+// ContentHashContext returns the DefaultContentHash for the file,
+// or an empty string if the MemFile is a directory.
 func (f MemFile) ContentHashContext(ctx context.Context) (string, error) {
+	if f.IsDir() {
+		return "", nil
+	}
 	return DefaultContentHash(ctx, bytes.NewReader(f.FileData))
 }
 
-// ReadAll returns the FileData without copying it.
+// ReadAll returns the FileData without copying it,
+// or an ErrIsDirectory error if the MemFile is a directory.
 //
 // Be careful when modifying the returned data as it shares
 // the same underlying array with the MemFile's FileData.
 func (f MemFile) ReadAll() (data []byte, err error) {
+	if f.IsDir() {
+		return nil, NewErrIsDirectory(f)
+	}
 	return f.FileData, nil
 }
 
-// ReadAllContext returns the FileData without copying it.
+// ReadAllContext returns the FileData without copying it,
+// or an ErrIsDirectory error if the MemFile is a directory.
 //
 // Be careful when modifying the returned data as it shares
 // the same underlying array with the MemFile's FileData.
@@ -255,15 +342,22 @@ func (f MemFile) ReadAllContext(ctx context.Context) (data []byte, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	if f.IsDir() {
+		return nil, NewErrIsDirectory(f)
+	}
 	return f.FileData, nil
 }
 
 // ReadAllContentHash returns the FileData without copying it
-// together with the DefaultContentHash.
+// together with the DefaultContentHash,
+// or an ErrIsDirectory error if the MemFile is a directory.
 //
 // Be careful when modifying the returned data as it shares
 // the same underlying array with the MemFile's FileData.
 func (f MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
+	if f.IsDir() {
+		return nil, "", NewErrIsDirectory(f)
+	}
 	hash, err = DefaultContentHash(ctx, bytes.NewReader(f.FileData))
 	if err != nil {
 		return nil, "", err
@@ -271,15 +365,23 @@ func (f MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash stri
 	return f.FileData, hash, nil
 }
 
-// ReadAllString returns the FileData as string.
+// ReadAllString returns the FileData as string,
+// or an ErrIsDirectory error if the MemFile is a directory.
 func (f MemFile) ReadAllString() (string, error) {
+	if f.IsDir() {
+		return "", NewErrIsDirectory(f)
+	}
 	return string(f.FileData), nil
 }
 
-// ReadAllStringContext returns the FileData as string.
+// ReadAllStringContext returns the FileData as string,
+// or an ErrIsDirectory error if the MemFile is a directory.
 func (f MemFile) ReadAllStringContext(ctx context.Context) (string, error) {
 	if ctx.Err() != nil {
 		return "", ctx.Err()
+	}
+	if f.IsDir() {
+		return "", NewErrIsDirectory(f)
 	}
 	return string(f.FileData), nil
 }
@@ -299,7 +401,11 @@ func (f MemFile) ReadAllStringContext(ctx context.Context) (string, error) {
 // same input source.
 //
 // ReadAt implements the interface io.ReaderAt.
+// It returns an ErrIsDirectory error if the MemFile is a directory.
 func (f MemFile) ReadAt(p []byte, off int64) (n int, err error) {
+	if f.IsDir() {
+		return 0, NewErrIsDirectory(f)
+	}
 	if off >= int64(len(f.FileData)) {
 		return 0, io.EOF
 	}
@@ -310,31 +416,47 @@ func (f MemFile) ReadAt(p []byte, off int64) (n int, err error) {
 	return n, nil
 }
 
-// WriteTo implements the io.WriterTo interface
+// WriteTo implements the io.WriterTo interface.
+// It returns an ErrIsDirectory error if the MemFile is a directory.
 func (f MemFile) WriteTo(writer io.Writer) (n int64, err error) {
+	if f.IsDir() {
+		return 0, NewErrIsDirectory(f)
+	}
 	i, err := writer.Write(f.FileData)
 	return int64(i), err
 }
 
-// OpenReader opens the file and returns a io/fs.File that has to be closed after reading
+// OpenReader opens the file and returns a io/fs.File that has to be closed after reading,
+// or an ErrIsDirectory error if the MemFile is a directory.
 func (f MemFile) OpenReader() (ReadCloser, error) {
+	if f.IsDir() {
+		return nil, NewErrIsDirectory(f)
+	}
 	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
-// OpenReadSeeker opens the file and returns a ReadSeekCloser.
+// OpenReadSeeker opens the file and returns a ReadSeekCloser,
+// or an ErrIsDirectory error if the MemFile is a directory.
 // Use OpenReader if seeking is not necessary because implementations
 // may need additional buffering to support seeking or not support it at all.
 func (f MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
+	if f.IsDir() {
+		return nil, NewErrIsDirectory(f)
+	}
 	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
 // ReadJSON reads and unmarshalles the JSON content of the file to output.
 //
-// Returns a wrapped ErrUnmarshalJSON when the unmarshalling failed.
+// Returns an ErrIsDirectory error if the MemFile is a directory,
+// or a wrapped ErrUnmarshalJSON when the unmarshalling failed.
 func (f MemFile) ReadJSON(ctx context.Context, output any) error {
 	// Context is passed for identical call signature as other types
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if f.IsDir() {
+		return NewErrIsDirectory(f)
 	}
 	err := json.Unmarshal(f.FileData, output)
 	if err != nil {
@@ -367,11 +489,15 @@ func (f *MemFile) WriteJSON(ctx context.Context, input any, indent ...string) (e
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
 //
-// Returns a wrapped ErrUnmarshalXML when the unmarshalling failed.
+// Returns an ErrIsDirectory error if the MemFile is a directory,
+// or a wrapped ErrUnmarshalXML when the unmarshalling failed.
 func (f MemFile) ReadXML(ctx context.Context, output any) error {
 	// Context is passed for identical call signature as other types
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if f.IsDir() {
+		return NewErrIsDirectory(f)
 	}
 	err := xml.Unmarshal(f.FileData, output)
 	if err != nil {
@@ -477,15 +603,19 @@ var _ iofs.FileInfo = memFileInfo{}
 
 // memFileInfo implements io/fs.FileInfo for a MemFile.
 //
-// Name() is derived from MemFile.
+// Name() and IsDir() are derived from the embedded MemFile.
 type memFileInfo struct {
 	MemFile
 }
 
-func (i memFileInfo) Mode() iofs.FileMode { return 0666 }
-func (i memFileInfo) ModTime() time.Time  { return time.Now() }
-func (i memFileInfo) IsDir() bool         { return false }
-func (i memFileInfo) Sys() any            { return nil }
+func (i memFileInfo) Mode() iofs.FileMode {
+	if i.IsDir() {
+		return iofs.ModeDir | 0777
+	}
+	return 0666
+}
+func (i memFileInfo) ModTime() time.Time { return time.Now() }
+func (i memFileInfo) Sys() any           { return nil }
 
 // ReadMultipartFormMemFiles reads the multipart form
 // and returns a map of form field name to MemFiles.
