@@ -258,9 +258,29 @@ var r io.Reader
 memFile, err := fs.ReadAllMemFile(ctx, r, "in-mem-file.txt")
 ```
 
-Note that `MemFile` is not a `File` because it doesn't have a path or URI.
-The in-memory `FileName` is not interpreted as a path and should not contain
-path separators.
+Note that `MemFile` is not a `File` because it has no backing file system:
+its `FileName` is just a name, not a registered path or URI.
+
+The `FileName` can mirror the complete path of a file or directory on a
+file system, but the most common simple case is just a name without any
+slashes and path semantics. When the `FileName` contains slashes, the path
+methods interpret it as a `/`-separated path (a backslash is an ordinary
+character, not a separator). A `FileName` ending with a slash marks the
+`MemFile` as a directory: `IsDir` returns true, `FileData` is ignored, and
+the read methods return an `ErrIsDirectory` error.
+
+```go
+mf := fs.NewMemFile("some/path/file.txt", data)
+
+mf.Name()                    // "file.txt"
+mf.Ext()                     // ".txt"
+mf.Dir()                     // MemFile{FileName: "some/path/"}, a directory
+dir, name := mf.DirAndName() // MemFile{FileName: "some/path/"}, "file.txt"
+
+mf.IsDir()                                   // false
+fs.MemFile{FileName: "some/path/"}.IsDir()   // true
+fs.MemFile{FileName: "a/b/../c"}.CleanPath() // "a/c"
+```
 
 Derive new `MemFile` values without copying the underlying data:
 
@@ -268,6 +288,40 @@ Derive new `MemFile` values without copying the underlying data:
 renamed := memFile.WithName("renamed.txt")  // same FileData, different name
 patched := memFile.WithData(newBytes)       // same FileName, different data
 ```
+
+`WithName` replaces the whole `FileName` (like `WithData` replaces the whole `FileData`) including any path,
+so it is not symmetric with `Name` which only returns the last path element.
+
+fs.MemDir
+---------
+
+`MemDir` is the directory counterpart of `MemFile`: an in-memory directory
+represented by nothing but its path string. Like `MemFile` it implements
+`fs.FileReader` and is passed by value.
+
+```go
+type MemDir string
+```
+
+Because a directory has no contents, every read method returns an
+`ErrIsDirectory` error, while `IsDir` returns true and `ContentHash`
+returns an empty string (matching `File` for a directory). All path
+methods use `/` as separator and ignore trailing slashes:
+
+```go
+dir := fs.MemDir("some/path/sub/")
+
+dir.Name()                  // "sub"        (trailing slash ignored)
+dir.Dir()                   // "some/path"  (parent directory)
+dir.Ext()                   // ""
+sub := dir.Join("a", "b")   // "some/path/sub/a/b"
+clean := fs.MemDir("a/b/../c/").CleanPath() // "a/c"
+
+reader, err := dir.OpenReader() // err is an ErrIsDirectory error
+```
+
+Like `MemFile`, `MemDir` implements `fmt.Stringer` and round-trips its
+path through `gob` without touching any file system.
 
 Listing directories
 -------------------
