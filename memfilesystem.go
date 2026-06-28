@@ -14,7 +14,6 @@ import (
 	"unsafe"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/pkg/xattr"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -914,11 +913,11 @@ func (fs *MemFileSystem) SetXAttr(filePath string, name string, data []byte, fla
 		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
 	}
 	_, exists := node.XAttrs[name]
-	if flags&xattr.XATTR_CREATE != 0 && exists {
+	if flags&xattrCreate != 0 && exists {
 		fs.mtx.Unlock()
 		return fmt.Errorf("xattr %q already exists on %s", name, fs.RootDir().Join(filePath))
 	}
-	if flags&xattr.XATTR_REPLACE != 0 && !exists {
+	if flags&xattrReplace != 0 && !exists {
 		fs.mtx.Unlock()
 		return fmt.Errorf("xattr %q not found on %s", name, fs.RootDir().Join(filePath))
 	}
