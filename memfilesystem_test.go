@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/xattr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -229,9 +228,9 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.Equal(t, []string{"user.other", "user.tag"}, names, "sorted keys")
 
 		// XATTR_CREATE rejects existing
-		require.Error(t, memFS.SetXAttr("/a.txt", "user.tag", []byte("new"), xattr.XATTR_CREATE, true))
+		require.Error(t, memFS.SetXAttr("/a.txt", "user.tag", []byte("new"), xattrCreate, true))
 		// XATTR_REPLACE rejects missing
-		require.Error(t, memFS.SetXAttr("/a.txt", "user.absent", []byte("z"), xattr.XATTR_REPLACE, true))
+		require.Error(t, memFS.SetXAttr("/a.txt", "user.absent", []byte("z"), xattrReplace, true))
 
 		// Remove and verify
 		require.NoError(t, memFS.RemoveXAttr("/a.txt", "user.tag", true))
