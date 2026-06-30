@@ -53,16 +53,6 @@ func UsernameAndPassword(username, password string) CredentialsCallback {
 	}
 }
 
-// // UsernameAndPasswordFromURL is a CredentialsCallback that returns
-// // the username and password encoded in the passed URL.
-// func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
-// 	password, ok := u.User.Password()
-// 	if !ok {
-// 		return "", "", fmt.Errorf("no password in URL: %s", u.String())
-// 	}
-// 	return u.User.Username(), password, nil
-// }
-
 // AcceptAnyHostKey can be passed as hostKeyCallback to Dial
 // to accept any SSH public key from a remote host.
 func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error {
@@ -227,21 +217,6 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 	}
 	return sftp.NewClient(ssh.NewClient(sshConn, chans, reqs))
 }
-
-// func NewFileSystem(addr string, conn *ssh.Client) (*FileSystem, error) {
-// 	addr = strings.TrimSuffix(strings.TrimPrefix(addr, "sftp://"), "/")
-
-// 	client, err := sftp.NewClient(conn)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	fileSystem := &FileSystem{
-// 		client: client,
-// 		prefix: "sftp://" + addr,
-// 	}
-// 	fs.Register(fileSystem)
-// 	return fileSystem, nil
-// }
 
 func nop() error { return nil }
 

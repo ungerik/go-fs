@@ -152,7 +152,7 @@ func (s *fileSystem) Prefix() string {
 
 // Name returns a human-readable name for the filesystem.
 func (s *fileSystem) Name() string {
-	return "S3 file system for bucket: s.bucketName"
+	return "S3 file system for bucket: " + s.bucketName
 }
 
 // String returns a detailed string representation of the filesystem.

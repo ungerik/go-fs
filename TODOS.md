@@ -142,33 +142,41 @@ File:line references are approximate and may drift as code changes.
 
 ## 🟠 Should-fix — half-baked solutions & dead code
 
-- [ ] **`subfilesystem.go` is 100% commented out** — the `sub://` mount
-      concept is promised by the file but doesn't compile in (full of
-      `panic("TODO")`). Implement it or delete the file.
-- [ ] **`fsimpl/other.go` is an empty file with a 60-line block comment** —
-      delete.
-- [ ] **`zipfs` writer mode misuses `archive/zip.Writer`**
-      (`zipfs.go:420-453, 524-530`): `Touch` calls `Create` and discards the
-      writer; `OpenWriter` returns a `nopCloser` that never finalizes the
-      entry; nothing enforces zip's strictly-sequential-write rule;
-      `OpenReadWriter` has an unreachable "future-proof" dual-mode branch
-      (`zipfs.go:467`); `MakeDir` silently returns `nil` doing nothing.
-- [ ] **`s3fs.Name()` returns the literal `"S3 file system for bucket:
-      s.bucketName"`** — `bucketName` is never interpolated (`s3fs.go:125`).
-      `zipfs.Name()` always says "Zip reader filesystem" even in writer mode.
+- [x] **`subfilesystem.go` (100% commented-out `sub://` mount) deleted.**
+- [x] **`fsimpl/other.go` (60-line commented block) deleted.**
+- [x] **`zipfs` writer mode no longer misuses `archive/zip.Writer`.** Was:
+      `Touch` discarded the `Create` writer; `OpenWriter` returned a `nopCloser`
+      that never finalized the entry; nothing enforced zip's sequential-write
+      rule; `OpenReadWriter` had an unreachable "future-proof" dual-mode branch;
+      `MakeDir` silently returned `nil`. **Fixed:** `OpenWriter` returns a
+      `zipEntryWriter` tracked as the file system's single active writer;
+      opening another entry (via `OpenWriter`/`Touch`) before closing it, or
+      writing to a closed/superseded writer, now returns a clear error instead
+      of corrupting the archive (all guarded by a `sync.Mutex`). `OpenReadWriter`
+      lost its dead branch and reports the read-only/write-only reason;
+      `MakeDir` is mode-aware (errors on read-only/closed, documented no-op for
+      writer mode since zip dirs are implicit). Covered by
+      `TestZipWriter_SequentialEnforcement` and
+      `TestZipWriter_MakeDirReadOnlyErrors`.
+- [x] **`s3fs.Name()`/`zipfs.Name()` placeholder strings fixed.** `s3fs.Name()`
+      now interpolates the bucket name; `zipfs.Name()` reports "Zip writer
+      filesystem" in writer mode.
 - [ ] **`multipartfs` placeholders:** `EscapePath` is a stub (only replaces
       `"`, `multipartfs.go:311`, `TODO: properly escape paths`) and is applied
       inconsistently (used by `OpenReader`, not `Stat`/`Exists`); `info()`
       fabricates `Size:-1` and `Modified:time.Now()`
       (`TODO get time from header`, line 179) though the real size is on the
       `multipart.FileHeader`.
-- [ ] **`stdfs.go` advertises `io/fs.GlobFS` but `Glob` is commented out**
-      (`stdfs.go:93-126`). Also `checkStdFSName` rejects valid names via
-      `strings.Contains(name, "/.")` (blocks `dir/.gitignore`) — use
-      `iofs.ValidPath`.
-- [ ] **Delete remaining commented-out blocks:** `file.go:264-289`,
-      `dirs.go:71-87`, `fileinfo.go:85-103`, dead `NewFileSystem`/
-      `UsernameAndPasswordFromURL` in `sftp.go`.
+- [x] **`stdfs.go` no longer falsely advertises `io/fs.GlobFS`.** Removed the
+      `GlobFS` line from the doc comment, the commented-out assertion, and the
+      commented-out `Glob` method.
+  - [ ] Still open (separate concern): `checkStdFSName` rejects valid names via
+        `strings.Contains(name, "/.")` (blocks `dir/.gitignore`) — use
+        `iofs.ValidPath`.
+- [x] **Deleted remaining commented-out blocks:** `InfoWithContentHash*` in
+      `file.go`, `ListDirRecursiveImpl` in `dirs.go`, `NameSizeProvider`/
+      `nameSizeInfo` in `fileinfo.go`, and the dead `NewFileSystem`/
+      `UsernameAndPasswordFromURL` in `sftpfs/sftp.go`.
 - [ ] **`EnsureRegistered` ref-count bug** in `sftpfs` and `ftpfs`
       (`sftp.go:200`, `ftp.go:168`): the returned `free` func calls `Close()`
       unconditionally and can close an FS another caller registered.

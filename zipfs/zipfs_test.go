@@ -149,3 +149,73 @@ func TestZipFileSystem(t *testing.T) {
 		})
 	})
 }
+
+func TestZipWriter_SequentialEnforcement(t *testing.T) {
+	tempDir := fs.MustMakeTempDir()
+	t.Cleanup(func() {
+		assert.NoError(t, tempDir.RemoveRecursive())
+	})
+
+	zipWriter, err := NewWriterFileSystem(tempDir.Join("seq.zip"))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, zipWriter.Close()) })
+
+	assert.Contains(t, zipWriter.Name(), "Zip writer filesystem", "writer mode Name()")
+
+	// Opening a second writer while the first is still open must fail, because
+	// archive/zip can only write to the most recently created entry.
+	w1, err := zipWriter.OpenWriter("a.txt", nil)
+	require.NoError(t, err)
+	_, err = zipWriter.OpenWriter("b.txt", nil)
+	require.Error(t, err, "opening a second writer before closing the first must fail")
+
+	// A write to the first (still active) writer succeeds; after closing it a
+	// further write must fail rather than silently corrupt the archive.
+	_, err = w1.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, w1.Close())
+	_, err = w1.Write([]byte("more"))
+	require.Error(t, err, "write to a closed entry writer must fail")
+
+	// After closing the first, a second writer can be opened sequentially.
+	w2, err := zipWriter.OpenWriter("b.txt", nil)
+	require.NoError(t, err)
+	_, err = w2.Write([]byte("world"))
+	require.NoError(t, err)
+	require.NoError(t, w2.Close())
+
+	// Writing to a writer that was superseded by a newer one must fail.
+	w3, err := zipWriter.OpenWriter("c.txt", nil)
+	require.NoError(t, err)
+	require.NoError(t, w3.Close())
+	w4, err := zipWriter.OpenWriter("d.txt", nil)
+	require.NoError(t, err)
+	_, err = w3.Write([]byte("stale")) // w3 already closed -> closed error
+	require.Error(t, err)
+	require.NoError(t, w4.Close())
+}
+
+func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
+	tempDir := fs.MustMakeTempDir()
+	t.Cleanup(func() {
+		assert.NoError(t, tempDir.RemoveRecursive())
+	})
+
+	zipFile := tempDir.Join("ro.zip")
+	zipWriter, err := NewWriterFileSystem(zipFile)
+	require.NoError(t, err)
+	w, err := zipWriter.OpenWriter("f.txt", nil)
+	require.NoError(t, err)
+	_, err = w.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.NoError(t, zipWriter.Close())
+
+	zipReader, err := NewReaderFileSystem(zipFile)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, zipReader.Close()) })
+
+	// MakeDir on a read-only archive must report read-only, not silently succeed.
+	err = zipReader.MakeDir("somedir", nil)
+	require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
+}

@@ -267,33 +267,6 @@ func (file File) Info() *FileInfo {
 	return NewFileInfo(file, info, fileSystem.IsHidden(path))
 }
 
-// InfoWithContentHash returns a FileInfo, but in contrast to Stat
-// it always fills the ContentHash field.
-// func (file File) InfoWithContentHash() (FileInfo, error) {
-// 	return file.InfoWithContentHashContext(context.Background())
-// }
-
-// InfoWithContentHashContext returns a FileInfo, but in contrast to Stat
-// it always fills the ContentHash field.
-// func (file File) InfoWithContentHashContext(ctx context.Context) (FileInfo, error) {
-// 	if file == "" {
-// 		return FileInfo{}, ErrEmptyPath
-// 	}
-// 	info := file.Info()
-// 	if !info.IsDir && info.ContentHash == "" {
-// 		reader, err := file.OpenReader()
-// 		if err != nil {
-// 			return FileInfo{}, err
-// 		}
-// 		defer reader.Close()
-// 		info.ContentHash, err = DefaultContentHash(ctx, reader)
-// 		if err != nil {
-// 			return FileInfo{}, err
-// 		}
-// 	}
-// 	return info, nil
-// }
-
 // Exists returns if a file or directory with the path of File exists.
 //
 // It does not return an error by design: any error, including the file not
