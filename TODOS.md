@@ -29,8 +29,11 @@ File:line references are approximate and may drift as code changes.
       restructured to seed content and verify read paths for read-only file
       systems. (`uuiddir` is a UUID directory-layout helper, not a `FileSystem`,
       so the suite does not apply to it.)
-- [ ] Add integration tests for `dropboxfs` (currently untested).
-- [ ] Add integration tests for `ftpfs` (currently untested).
+- [x] `ftpfs` now has a Docker-free in-process FTP server test plus closed-state
+      and `EnsureRegistered` ref-count tests (and a Docker-based conformance run).
+- [ ] `dropboxfs` has error-mapping and closed-state unit tests now; its full
+      `RunFileSystemTests` conformance run still needs a real Dropbox access
+      token to execute in CI.
 - [ ] Flesh out `TestFileReads`, `TestFileMetaData`, and add `TestFileWrites`
       with comprehensive coverage across backends.
 
@@ -212,10 +215,12 @@ File:line references are approximate and may drift as code changes.
       `O_TRUNC` and would destroy an existing file's content, so a native Touch
       that updates mtime in place (and only creates when missing) is a real
       benefit. Deliberately did NOT add `Exists`/`ReadAll`/`WriteAll`/`Append`
-      to sftp/ftp where they would be byte-for-byte identical to the generic
-      emulation. The per-backend support matrix is now documented in the README
-      ("Optional interface support"). Covered by `ftpfs` Touch in-process test
-      and the conformance `FileTouch` subtest.
+      to `sftpfs`, where they would be byte-for-byte identical to the generic
+      emulation (`ftpfs` already gained native `ReadAll`/`WriteAll`/`Append` in
+      the earlier FTP rewrite, so only `Touch` was new there). The per-backend
+      support matrix is now documented in the README ("Optional interface
+      support"). Covered by the `ftpfs` Touch in-process test and the
+      conformance `FileTouch` subtest.
 
 - [x] **Predicate methods return false on any error — by design.**
       `Exists`/`IsDir`/`IsReadable`/`IsWritable`/`IsRegular`/`IsEmptyDir`/

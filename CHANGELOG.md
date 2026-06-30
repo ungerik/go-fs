@@ -7,10 +7,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ## v0.1.0 - 2026-06-30
 
-First tagged release, and a v1.0 preparation pass: a broad audit of the library
-that fixes data-loss and crash bugs across the backends, tightens the public
-API, and adds cross-backend test coverage. `TODOS.md` tracks the remaining road
-to v1.0.
+First release, and a v1.0 preparation pass: a broad audit of the library that
+fixes data-loss and crash bugs across the backends, tightens the public API, and
+adds cross-backend test coverage. `TODOS.md` tracks the remaining road to v1.0.
 
 ### Fixed
 

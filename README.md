@@ -568,8 +568,10 @@ File system implementations
 ---------------------------
 
 `go-fs` ships with the local file system and several remote / virtual
-backends. Each backend is an independent Go module under its own
-sub-directory. Importing the package registers a `FileSystem` for its
+backends. The network backends (`s3fs`, `sftpfs`, `ftpfs`, `dropboxfs`) are
+independent Go modules under their own sub-directory with their own
+dependencies; the lighter ones (`httpfs`, `zipfs`, `multipartfs`) are packages
+in the root module. Importing the package registers a `FileSystem` for its
 URI prefix, after which `File` values with that prefix transparently
 route to the right backend.
 
@@ -595,7 +597,7 @@ only implements an optional interface when doing so is more efficient or more
 capable than that emulation.
 
 `LocalFileSystem` and `MemFileSystem` implement the full set natively. For the
-remote and archive backends:
+remote backends:
 
 | Capability             | s3  | sftp | ftp | dropbox | http |
 | ---------------------- | :-: | :--: | :-: | :-----: | :--: |
@@ -610,9 +612,14 @@ remote and archive backends:
 | Truncate               | –   | ✓    | –   | –       | r/o  |
 | ListDirRecursive       | ✓   | –    | –   | ✓       | –    |
 
-`✓` native implementation · `–` falls back to the generic emulation (still
-fully functional) · `r/o` read-only backend, so the write operation does not
-apply.
+`✓` native implementation · `–` falls back to the generic emulation (works the
+same, just not specialized) · `r/o` read-only backend, so the write operation
+does not apply.
+
+The archive and request-scoped backends implement a mode-dependent subset:
+`zipfs` provides `Exists`, `Touch` and `ListDirRecursive` (Touch only in writer
+mode, Exists/listing only in reader mode), and `multipartfs` is read-only and
+provides `Exists` and `ReadAll`.
 
 ### httpfs
 
