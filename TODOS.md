@@ -11,12 +11,22 @@ File:line references are approximate and may drift as code changes.
       (`v1.0.0`, `s3fs/v1.0.0`, `sftpfs/v1.0.0`, `ftpfs/v1.0.0`,
       `dropboxfs/v1.0.0`). No version tags exist yet.
 - [ ] Add a CHANGELOG.
-- [ ] Run the shared conformance suite (`RunFileSystemTests`,
-      `filesystemtests.go`) against `httpfs`, `zipfs`, `multipartfs`, and
-      `uuiddir` — none currently run it.
-- [ ] Extend the conformance suite to cover the cases that hide the data-loss
-      bugs below: overwriting a larger file with smaller data (truncation),
-      and renaming a non-empty directory.
+- [x] Extend the conformance suite to cover the cases that hid the data-loss
+      bugs above: overwriting a larger file with smaller data (truncation) and
+      renaming a non-empty directory. **Done:** `RunFileSystemTests` now has
+      `OverwriteShrink` (OpenWriter, native WriteAll and high-level
+      `File.WriteAll` must all truncate) and `RenameNonEmptyDir` subtests, and
+      registers the FS under test so the high-level File API paths run on every
+      backend. Passing on local, mem, s3fs and sftpfs (ftpfs/dropboxfs
+      conformance need a live server/credentials to run).
+- [ ] Run the shared conformance suite against the read-only backends
+      (`httpfs`, `zipfs` reader mode, `multipartfs`). Blocked on suite design:
+      the read tests are gated behind the writable check (`filesystemtests.go`,
+      `if !writable { return }`), so a read-only FS currently only exercises the
+      metadata/path/pattern subtests. Running them meaningfully needs the suite
+      restructured to seed content and verify read paths for read-only file
+      systems. (`uuiddir` is a UUID directory-layout helper, not a `FileSystem`,
+      so the suite does not apply to it.)
 - [ ] Add integration tests for `dropboxfs` (currently untested).
 - [ ] Add integration tests for `ftpfs` (currently untested).
 - [ ] Flesh out `TestFileReads`, `TestFileMetaData`, and add `TestFileWrites`
@@ -122,9 +132,13 @@ File:line references are approximate and may drift as code changes.
       `zipfs.OpenReadWriter`) pass `nil` since their closures self-close.
       Covered by `TestReadWriteAllSeekCloser_CloseCallback`
       (`readwriteallseekcloser_close_test.go`).
-- [ ] **`fsimpl.DropboxContentHash` uses `reader.Read` not `io.ReadFull`**
-      (`contenthash.go:29`), so a legal chunking reader that returns <4 MB
-      without EOF terminates the block loop early and computes the wrong hash.
+- [x] **`fsimpl.DropboxContentHash` uses `reader.Read` not `io.ReadFull`**
+      (`contenthash.go:29`), so a legal chunking reader that returned <4 MB
+      without EOF terminated the block loop early and computed the wrong hash.
+      **Fixed:** the block loop now fills each 4 MB block with `io.ReadFull`
+      (treating `io.EOF`/`io.ErrUnexpectedEOF` as end-of-input), so the hash is
+      independent of how the reader chunks its output. Covered by
+      `TestDropboxContentHash_ChunkingReader` (`fsimpl/contenthash_test.go`).
 
 ## 🟠 Should-fix — half-baked solutions & dead code
 
@@ -188,12 +202,18 @@ File:line references are approximate and may drift as code changes.
       | OpenAppendWriter | no  | yes  | no  | no      | –    |
       | ListDirRecursive | yes | no   | no  | yes     | –    |
 
-- [ ] **Predicate methods hide real errors.** `Exists`/`IsDir`/`IsReadable`/
-      `IsWritable`/`IsRegular` collapse any `Stat` error (permission, I/O)
-      into `false` (`file.go:204-321`). `IsWritable` is also wrong for
-      directories — it requires `IsRegular()`, so a writable dir reports
-      `false` (`file.go:222-241`), and it only checks the mode bit, not
-      whether this process can write.
+- [x] **Predicate methods return false on any error — by design.**
+      `Exists`/`IsDir`/`IsReadable`/`IsWritable`/`IsRegular`/`IsEmptyDir`/
+      `IsSymbolicLink` collapse any `Stat` error (permission, I/O) into the
+      value consistent with the file/dir not existing (`false`). **Decision:**
+      this is intended — the methods do not return errors. **Done:** documented
+      the no-error contract and the default-on-error result on each method;
+      callers needing the error use `CheckExists`/`CheckIsDir`/`Stat`.
+  - [ ] Separate open sub-question (not about error handling): `IsWritable`
+        reports `false` for an existing writable *directory* because it requires
+        `IsRegular()` (`file.go:232`), and it only checks the mode bit, not
+        whether this process can actually write. Decide the intended semantics
+        before the freeze.
 - [ ] **`perm []Permissions` variadic-as-optional-arg.** Consumed by
       `JoinPermissions` (`permissions.go:91`) which OR-merges all elements, so
       `OpenWriter(UserRead, OthersWrite)` silently means the union and

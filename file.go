@@ -201,6 +201,9 @@ func (file File) Joinf(format string, args ...any) File {
 }
 
 // IsReadable returns if the file exists and is readable.
+//
+// It does not return an error by design: any error, including the file not
+// existing or not being accessible, results in false.
 func (file File) IsReadable() bool {
 	if file == "" {
 		return false
@@ -219,6 +222,9 @@ func (file File) IsReadable() bool {
 // IsWritable returns if the file exists and is writable,
 // or in case it doesn't exist,
 // if the parent directory exists and is writable.
+//
+// It does not return an error by design: any error, including the file and
+// its parent directory not existing or not being accessible, results in false.
 func (file File) IsWritable() bool {
 	if file == "" {
 		return false
@@ -289,6 +295,9 @@ func (file File) Info() *FileInfo {
 // }
 
 // Exists returns if a file or directory with the path of File exists.
+//
+// It does not return an error by design: any error, including the file not
+// being accessible, results in false. Use [File.CheckExists] to get an error.
 func (file File) Exists() bool {
 	fileSystem, path := file.ParseRawURI()
 	if fs, ok := fileSystem.(ExistsFileSystem); ok {
@@ -312,6 +321,10 @@ func (file File) CheckExists() error {
 }
 
 // IsDir returns if a directory with the path of File exists.
+//
+// It does not return an error by design: any error, including the path not
+// existing or not being accessible, results in false. Use [File.CheckIsDir]
+// to get an error.
 func (file File) IsDir() bool {
 	stat, err := file.Stat()
 	if err != nil {
@@ -385,6 +398,9 @@ func (file File) RelPathOf(target File) (string, error) {
 }
 
 // IsRegular reports if this is a regular file.
+//
+// It does not return an error by design: any error, including the file not
+// existing or not being accessible, results in false.
 func (file File) IsRegular() bool {
 	stat, err := file.Stat()
 	if err != nil {
@@ -394,6 +410,9 @@ func (file File) IsRegular() bool {
 }
 
 // IsEmptyDir returns if file is an empty directory.
+//
+// It does not return an error by design: any error, including the directory
+// not existing or not being accessible, results in false.
 func (file File) IsEmptyDir() bool {
 	l, err := file.ListDirMax(1)
 	return len(l) == 0 && err == nil
@@ -409,6 +428,9 @@ func (file File) IsHidden() bool {
 // IsSymbolicLink returns if the file is a symbolic link.
 // Use [File.CreateSymbolicLink] and [File.ReadSymbolicLink]
 // to create and resolve symbolic links.
+//
+// It does not return an error by design: any error, including the file not
+// existing or not being accessible, results in false.
 func (file File) IsSymbolicLink() bool {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.IsSymbolicLink(path)
