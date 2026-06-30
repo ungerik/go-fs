@@ -2427,3 +2427,145 @@ func TestFile(t *testing.T) {
 		})
 	})
 }
+
+// TestFile_WriteAllContext_FallbackTruncates is a regression test for a bug
+// where File.WriteAllContext fell back to OpenReadWriter (O_RDWR|O_CREATE,
+// non-truncating) for file systems without a native WriteAll. Writing fewer
+// bytes over an existing larger file left stale trailing bytes behind, e.g.
+// writing a small JSON document over a larger one produced invalid JSON.
+// The fallback must use OpenWriter (O_TRUNC) so the file is truncated first.
+func TestFile_WriteAllContext_FallbackTruncates(t *testing.T) {
+	// stored holds the current file content for a single mock file.
+	var stored []byte
+
+	// Base MockFileSystem deliberately does NOT implement WriteAllFileSystem,
+	// so File.WriteAllContext exercises the OpenWriter/OpenReadWriter fallback.
+	mockFS := &MockFileSystem{
+		MockPrefix: "mockwritealltrunc://",
+		MockCleanPathFromURI: func(uri string) string {
+			return strings.TrimPrefix(uri, "mockwritealltrunc://")
+		},
+		// OpenWriter mimics O_TRUNC: writing starts from an empty buffer.
+		MockOpenWriter: func(filePath string, perm []Permissions) (WriteCloser, error) {
+			var buf *fsimpl.FileBuffer
+			buf = fsimpl.NewFileBufferWithClose(nil, func() error {
+				stored = bytes.Clone(buf.Bytes())
+				return nil
+			})
+			return buf, nil
+		},
+		// OpenReadWriter mimics O_RDWR|O_CREATE: existing content is preserved
+		// and writes overwrite in place without truncating (the buggy path).
+		MockOpenReadWriter: func(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
+			var buf *fsimpl.FileBuffer
+			buf = fsimpl.NewFileBufferWithClose(bytes.Clone(stored), func() error {
+				stored = bytes.Clone(buf.Bytes())
+				return nil
+			})
+			return buf, nil
+		},
+	}
+	Register(mockFS)
+	t.Cleanup(func() { Unregister(mockFS) })
+
+	file := File("mockwritealltrunc://test.json")
+
+	// Seed the file with a large JSON document.
+	stored = []byte(`{"key":"a large json document with plenty of content"}`)
+
+	// Overwrite with a smaller JSON document.
+	small := []byte(`{"k":1}`)
+	err := file.WriteAll(small)
+	require.NoError(t, err)
+
+	// The fallback must truncate: no stale trailing bytes from the larger file.
+	require.Equal(t, small, stored)
+}
+
+// noRenameMoveFS wraps a FileSystem but only exposes the base FileSystem
+// interface, deliberately hiding any Rename or Move methods of the wrapped
+// implementation. This forces File.Rename into its default copy-and-remove
+// fallback branch for file systems that implement neither RenameFileSystem
+// nor MoveFileSystem (for example s3fs).
+type noRenameMoveFS struct {
+	FileSystem
+}
+
+// registerNoRenameMoveFS creates an in-memory file system with the given
+// initial files, re-registers it wrapped so that it routes through the
+// default Rename branch, and returns the wrapped file system's root dir.
+func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
+	t.Helper()
+	memFS, err := NewMemFileSystem("/", initialFiles...)
+	require.NoError(t, err)
+	// Replace the registered *MemFileSystem (which implements Rename and
+	// Move) with a wrapper that only exposes the base FileSystem interface.
+	Unregister(memFS)
+	wrapped := &noRenameMoveFS{FileSystem: memFS}
+	Register(wrapped)
+	t.Cleanup(func() {
+		Unregister(wrapped)
+		_ = memFS.Close()
+	})
+	// Guard the test's premise: the wrapper must not satisfy the optional
+	// rename/move interfaces, otherwise the default branch is never reached.
+	if _, ok := any(wrapped).(RenameFileSystem); ok {
+		t.Fatal("noRenameMoveFS must not implement RenameFileSystem")
+	}
+	if _, ok := any(wrapped).(MoveFileSystem); ok {
+		t.Fatal("noRenameMoveFS must not implement MoveFileSystem")
+	}
+	return wrapped.RootDir()
+}
+
+// TestFile_Rename_DefaultBranch covers the fallback used by file systems that
+// implement neither RenameFileSystem nor MoveFileSystem. The previous
+// implementation created an empty directory and then tried file.Remove(),
+// which silently discarded a non-empty directory's contents and failed to
+// remove the source. See file.go Rename default case.
+func TestFile_Rename_DefaultBranch(t *testing.T) {
+	t.Run("non-empty directory keeps all contents", func(t *testing.T) {
+		root := registerNoRenameMoveFS(t,
+			NewMemFile("dir/a.txt", []byte("aaa")),
+			NewMemFile("dir/b.txt", []byte("bbb")),
+			NewMemFile("dir/sub/c.txt", []byte("ccc")),
+		)
+		dir := root.Join("dir")
+		require.True(t, dir.IsDir(), "source must be a directory")
+
+		renamed, err := dir.Rename("renamed")
+		require.NoError(t, err, "Rename of non-empty directory")
+
+		// Source directory must be gone, including its contents.
+		require.False(t, dir.Exists(), "source directory must be removed")
+
+		// Destination must exist and carry over all contents recursively.
+		require.True(t, renamed.IsDir(), "renamed must be a directory")
+		require.Equal(t, "renamed", renamed.Name())
+		assertFileContent(t, renamed.Join("a.txt"), "aaa")
+		assertFileContent(t, renamed.Join("b.txt"), "bbb")
+		require.True(t, renamed.Join("sub").IsDir(), "nested directory preserved")
+		assertFileContent(t, renamed.Join("sub", "c.txt"), "ccc")
+	})
+
+	t.Run("single file", func(t *testing.T) {
+		root := registerNoRenameMoveFS(t, NewMemFile("a.txt", []byte("hello")))
+		src := root.Join("a.txt")
+		require.True(t, src.Exists())
+
+		renamed, err := src.Rename("b.txt")
+		require.NoError(t, err, "Rename of single file")
+
+		require.False(t, src.Exists(), "source file must be removed")
+		require.Equal(t, "b.txt", renamed.Name())
+		assertFileContent(t, renamed, "hello")
+	})
+}
+
+func assertFileContent(t *testing.T, file File, want string) {
+	t.Helper()
+	require.True(t, file.Exists(), "file %s must exist", file)
+	got, err := file.ReadAllString()
+	require.NoError(t, err, "ReadAllString %s", file)
+	require.Equal(t, want, got, "content of %s", file)
+}

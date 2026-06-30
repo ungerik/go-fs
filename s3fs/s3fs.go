@@ -50,6 +50,36 @@ type fileSystem struct {
 	bucketName string
 	prefix     string
 	readOnly   bool
+	closed     bool
+}
+
+// checkClosed returns fs.ErrFileSystemClosed if the file system has been
+// closed, else nil. It guards every method that dereferences the S3 client.
+func (s *fileSystem) checkClosed() error {
+	if s.closed {
+		return fs.ErrFileSystemClosed
+	}
+	return nil
+}
+
+// derefInt64 returns the value pointed to by p, or 0 if p is nil.
+// The AWS SDK models numeric S3 response fields as pointers; S3-compatible
+// servers may leave them nil, so they must never be dereferenced blindly.
+func derefInt64(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// derefTime returns the value pointed to by p, or the zero time if p is nil.
+// The AWS SDK models S3 timestamp response fields as pointers; S3-compatible
+// servers may leave them nil, so they must never be dereferenced blindly.
+func derefTime(p *time.Time) time.Time {
+	if p == nil {
+		return time.Time{}
+	}
+	return *p
 }
 
 // NewAndRegister creates a new S3 filesystem for the specified bucket and registers it
@@ -229,6 +259,9 @@ func (s *fileSystem) VolumeName(filePath string) string {
 //   - No permission information (S3 uses IAM policies)
 //   - LastModified is set by S3, not the client
 func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -244,8 +277,8 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	if err == nil {
 		return &fileInfo{
 			name: path.Base(filePath),
-			size: *out.ContentLength,
-			time: *out.LastModified,
+			size: derefInt64(out.ContentLength),
+			time: derefTime(out.LastModified),
 		}, nil
 	}
 
@@ -263,7 +296,7 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 			return &fileInfo{
 				name: path.Base(filePath),
 				size: 0,
-				time: *out.LastModified,
+				time: derefTime(out.LastModified),
 				dir:  true,
 			}, nil
 		}
@@ -285,6 +318,9 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 //
 // Note: For better directory detection, use Stat() instead.
 func (s *fileSystem) Exists(filePath string) bool {
+	if s.closed {
+		return false
+	}
 	if filePath == "" || filePath == "/" {
 		return false
 	}
@@ -340,6 +376,9 @@ func (s *fileSystem) IsSymbolicLink(filePath string) bool {
 //   - CommonPrefixes represent "virtual" directories
 //   - Zero-byte objects with trailing "/" are real directory markers
 func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -438,7 +477,7 @@ func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback f
 			}
 
 			// Skip the directory marker itself
-			if *obj.Key == dirPath || strings.HasSuffix(*obj.Key, "/") && *obj.Size == 0 {
+			if *obj.Key == dirPath || strings.HasSuffix(*obj.Key, "/") && derefInt64(obj.Size) == 0 {
 				continue
 			}
 
@@ -476,7 +515,7 @@ func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback f
 				Name:        baseName,
 				Exists:      true,
 				IsRegular:   true,
-				Size:        *obj.Size,
+				Size:        derefInt64(obj.Size),
 				Modified:    modTime,
 				Permissions: DefaultPermissions,
 			}
@@ -523,6 +562,9 @@ func (s *fileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, c
 //
 // Note: The perm parameter is ignored for existing files (S3 uses IAM policies)
 func (s *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
 	if s.readOnly {
 		return fs.ErrReadOnlyFileSystem
 	}
@@ -599,6 +641,9 @@ func (s *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 //   - No resume capability for interrupted downloads
 //   - No progress reporting
 func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -670,6 +715,9 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 //   - The perm parameter is ignored (S3 uses IAM policies)
 //   - No progress reporting
 func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -716,6 +764,9 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 //
 // Note: This downloads the file eagerly. For streaming, use ReadAll with a custom reader.
 func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -737,8 +788,8 @@ func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 
 	info := &fileInfo{
 		name: path.Base(filePath),
-		size: *stat.ContentLength,
-		time: *stat.LastModified,
+		size: derefInt64(stat.ContentLength),
+		time: derefTime(stat.LastModified),
 	}
 
 	// For large files, use multipart download via manager
@@ -792,6 +843,9 @@ func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 //
 // Use WriteAll directly for better error handling if you have all data upfront.
 func (s *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -831,6 +885,9 @@ func (s *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.
 
 // openFileBuffer is the internal implementation of OpenReadWriter.
 func (s *fileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileBuffer, err error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
 	if s.readOnly {
 		return nil, fs.ErrReadOnlyFileSystem
 	}
@@ -865,6 +922,9 @@ func (s *fileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileBuf
 // S3 pricing:
 //   - Copy operations have API costs but no data transfer costs
 func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
 	if s.readOnly {
 		return fs.ErrReadOnlyFileSystem
 	}
@@ -905,6 +965,9 @@ func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 //
 // Note: This operation cannot be undone. S3 doesn't have a "trash" or recycle bin.
 func (s *fileSystem) Remove(filePath string) error {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
 	if s.readOnly {
 		return fs.ErrReadOnlyFileSystem
 	}
@@ -945,16 +1008,18 @@ func (s *fileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (ca
 // After calling Close:
 //   - The filesystem is removed from the global registry
 //   - File URLs with this filesystem's prefix will no longer work
-//   - The S3 client reference is cleared
+//   - All methods return fs.ErrFileSystemClosed instead of dereferencing the
+//     now-cleared S3 client
 //
 // Safe to call multiple times (subsequent calls are no-ops).
 //
 // Note: This doesn't close HTTP connections (managed by the AWS SDK).
 func (s *fileSystem) Close() error {
-	if s.client == nil {
+	if s.closed {
 		return nil // already closed
 	}
 	fs.Unregister(s)
+	s.closed = true
 	s.client = nil
 	return nil
 }

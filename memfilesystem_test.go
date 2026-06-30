@@ -1259,6 +1259,76 @@ func TestMemFileSystem_ListDir_EdgeCases(t *testing.T) {
 	})
 }
 
+// TestMemFileSystem_ListDir_PopulatesFileAndDoesNotDeadlock guards two
+// regressions in the directory-listing methods:
+//   - FileInfo.File was left empty, so File.ListDir / CopyRecursive yielded
+//     invalid empty-path files instead of real ones.
+//   - the read lock was held across the callback, so a callback that wrote
+//     back into the same MemFileSystem (e.g. CopyRecursive copying within one
+//     file system) deadlocked.
+func TestMemFileSystem_ListDir_PopulatesFileAndDoesNotDeadlock(t *testing.T) {
+	t.Run("ListDir populates FileInfo.File", func(t *testing.T) {
+		memFS := newTestMemFS(t,
+			NewMemFile("dir/a.txt", []byte("a")),
+			NewMemFile("dir/sub/b.txt", []byte("b")),
+		)
+
+		var names []string
+		err := memFS.RootDir().Join("dir").ListDir(func(f File) error {
+			require.NotEqual(t, File(""), f, "listed file must not be the empty/invalid file")
+			require.True(t, f.Exists(), "listed file %s must resolve to an existing file", f)
+			names = append(names, f.Name())
+			return nil
+		})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"a.txt", "sub"}, names)
+	})
+
+	t.Run("ListDirRecursive populates FileInfo.File", func(t *testing.T) {
+		memFS := newTestMemFS(t,
+			NewMemFile("dir/a.txt", []byte("a")),
+			NewMemFile("dir/sub/b.txt", []byte("b")),
+		)
+
+		var paths []string
+		err := memFS.RootDir().Join("dir").ListDirRecursive(func(f File) error {
+			require.True(t, f.Exists(), "listed file %s must exist", f)
+			paths = append(paths, f.Name())
+			return nil
+		})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"a.txt", "b.txt"}, paths)
+	})
+
+	t.Run("CopyRecursive within the same file system does not deadlock", func(t *testing.T) {
+		memFS := newTestMemFS(t,
+			NewMemFile("src/a.txt", []byte("aaa")),
+			NewMemFile("src/sub/b.txt", []byte("bbb")),
+		)
+
+		// Copying a directory into a sibling of the same MemFileSystem makes
+		// the listing callback write back into this file system. A read lock
+		// held across the callback would deadlock here; the 10s test timeout
+		// would turn that into a failure.
+		src := memFS.RootDir().Join("src")
+		dst := memFS.RootDir().Join("dst")
+		err := CopyRecursive(t.Context(), src, dst)
+		require.NoError(t, err)
+
+		require.Equal(t, "aaa", mustReadString(t, dst.Join("a.txt")))
+		require.Equal(t, "bbb", mustReadString(t, dst.Join("sub", "b.txt")))
+		// Source is untouched by a copy.
+		require.True(t, src.Join("a.txt").Exists())
+	})
+}
+
+func mustReadString(t *testing.T, file File) string {
+	t.Helper()
+	s, err := file.ReadAllString()
+	require.NoError(t, err, "ReadAllString %s", file)
+	return s
+}
+
 func TestMemFileSystem_Watch_EdgeCases(t *testing.T) {
 	t.Run("EmptyPath", func(t *testing.T) {
 		memFS := newTestMemFS(t)

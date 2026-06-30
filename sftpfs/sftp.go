@@ -72,6 +72,7 @@ func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error
 type fileSystem struct {
 	prefix    string
 	client    *sftp.Client
+	closed    bool
 	clientMtx sync.RWMutex
 
 	// connLogger is optional (can be nil) and will be used
@@ -308,6 +309,15 @@ func (f *fileSystem) reconnectAndSetClient(ctx context.Context) error {
 func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sftp.Client, clientPath string, release func() error, err error) {
 	if err = ctx.Err(); err != nil {
 		return nil, "", nop, err
+	}
+
+	// A closed file system must not be used, and in particular must not
+	// silently reconnect below using the stored credentials.
+	f.clientMtx.RLock()
+	closed := f.closed
+	f.clientMtx.RUnlock()
+	if closed {
+		return nil, "", nop, fs.ErrFileSystemClosed
 	}
 
 	// Progressive reconnection with exponential backoff
@@ -598,9 +608,16 @@ func (f *fileSystem) Remove(filePath string) error {
 	return client.Remove(filePath)
 }
 
+// Close closes the underlying SFTP connection and unregisters the file system.
+// After the last reference is closed all methods return fs.ErrFileSystemClosed
+// instead of dialing a new connection. Calling Close more than once, or on a
+// file system that never connected, is a safe no-op.
 func (f *fileSystem) Close() error {
-	if f.client == nil {
-		return nil // already closed
+	f.clientMtx.Lock()
+	defer f.clientMtx.Unlock()
+
+	if f.closed || f.client == nil {
+		return nil // already closed or never connected
 	}
 	count := fs.Unregister(f)
 	if count > 1 {
@@ -608,5 +625,6 @@ func (f *fileSystem) Close() error {
 	}
 	err := f.client.Close()
 	f.client = nil
+	f.closed = true
 	return err
 }

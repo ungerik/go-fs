@@ -10,13 +10,6 @@ go-fs: A unified file system for Go
 The package is built around a `File` type that is a string underneath
 and interprets its value as a local file system path or as a URI.
 
-TODO
-----
-
-- [ ] Return ErrFileSystemClosed from all closable FS
-- [ ] Test dropboxfs
-- [ ] Consider secsy/goftp for ftpfs
-
 Introduction
 ------------
 

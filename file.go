@@ -1298,7 +1298,10 @@ func (file File) WriteAllContext(ctx context.Context, data []byte, perm ...Permi
 	if fs, ok := fileSystem.(WriteAllFileSystem); ok {
 		return fs.WriteAll(ctx, path, data, perm)
 	}
-	w, err := fileSystem.OpenReadWriter(path, perm)
+	// Use OpenWriter (O_TRUNC) instead of OpenReadWriter (O_RDWR|O_CREATE
+	// without truncation), otherwise writing fewer bytes over an existing
+	// larger file would leave stale trailing bytes.
+	w, err := fileSystem.OpenWriter(path, perm)
 	if err != nil {
 		return err
 	}
@@ -1455,16 +1458,18 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 		}
 		return fs.RootDir().Join(newPath), nil
 	default:
+		// Fallback for file systems that implement neither
+		// RenameFileSystem nor MoveFileSystem: copy to the new name
+		// and then remove the source. CopyRecursive and RemoveRecursive
+		// both handle single files and directories with their contents,
+		// so a non-empty directory is moved completely instead of being
+		// replaced by an empty directory and left behind undeleted.
 		renamedFile = file.Dir().Join(newName)
-		if file.IsDir() {
-			err = renamedFile.MakeDir()
-		} else {
-			err = CopyFile(context.Background(), file, renamedFile)
-		}
+		err = CopyRecursive(context.Background(), file, renamedFile)
 		if err != nil {
 			return "", err
 		}
-		return renamedFile, file.Remove()
+		return renamedFile, file.RemoveRecursive()
 	}
 }
 
@@ -1843,5 +1848,8 @@ func NewFileReadWriteAllSeekCloser(file File, permissions ...Permissions) ReadWr
 		func(data []byte) error {
 			return file.WriteAll(data, permissions...)
 		},
+		// File.ReadAll and File.WriteAll open and close their own handles
+		// internally, so there is no persistent handle to release here.
+		nil,
 	)
 }

@@ -493,7 +493,10 @@ func (f *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (
 			return err
 		}
 
-		return fsimpl.NewReadWriteAllSeekCloser(readAll, writeAll), nil
+		// readAll closes the per-call reader it opens, and writeAll writes
+		// through the shared zip writer (closed when the file system closes),
+		// so there is no separate handle to release here.
+		return fsimpl.NewReadWriteAllSeekCloser(readAll, writeAll, nil), nil
 	}
 
 	// Current ZIP implementations only support either reading OR writing
