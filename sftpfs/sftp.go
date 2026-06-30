@@ -170,17 +170,16 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	if err != nil {
 		return nop, err
 	}
-	f := fs.GetFileSystemByPrefixOrNil(prefix)
-	if f != nil {
-		fs.Register(f) // Increase ref count
-		return func() error { fs.Unregister(f); return nil }, nil
+	if f := fs.GetFileSystemByPrefixOrNil(prefix); f != nil {
+		fs.Register(f) // increase ref count
+		return func() error { return f.Close() }, nil
 	}
 
 	client, err := dial(ctx, u.Host, username, password, hostKeyCallback, connLogger)
 	if err != nil {
 		return nop, err
 	}
-	f = &fileSystem{
+	newFS := &fileSystem{
 		client:              client,
 		connLogger:          connLogger,
 		prefix:              prefix,
@@ -188,8 +187,18 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		credentialsCallback: credentialsCallback,
 		hostKeyCallback:     hostKeyCallback,
 	}
-	fs.Register(f) // TODO somone else might have registered, so free should not close it
-	return func() error { return f.Close() }, nil
+	// Register dedups by prefix. If another caller registered a file system
+	// with the same prefix while we were dialing, our freshly dialed connection
+	// is redundant: close it and hand back a free that only drops the ref count
+	// of the file system that actually won the race. The returned free is always
+	// ref-count aware (it closes the connection only when the last reference is
+	// released), so it can never close a file system another caller still holds.
+	fs.Register(newFS)
+	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != fs.FileSystem(newFS) {
+		_ = newFS.closeConn()
+		return func() error { return registered.Close() }, nil
+	}
+	return func() error { return newFS.Close() }, nil
 }
 
 func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (*sftp.Client, error) {
@@ -587,16 +596,32 @@ func (f *fileSystem) Remove(filePath string) error {
 // After the last reference is closed all methods return fs.ErrFileSystemClosed
 // instead of dialing a new connection. Calling Close more than once, or on a
 // file system that never connected, is a safe no-op.
+// Close decreases the file system's reference count in the registry and only
+// closes the underlying SFTP connection once the last reference is released, so
+// it never closes a connection another caller still holds. Calling Close on an
+// already-closed file system is a safe no-op.
 func (f *fileSystem) Close() error {
 	f.clientMtx.Lock()
-	defer f.clientMtx.Unlock()
-
-	if f.closed || f.client == nil {
+	alreadyClosed := f.closed || f.client == nil
+	f.clientMtx.Unlock()
+	if alreadyClosed {
 		return nil // already closed or never connected
 	}
-	count := fs.Unregister(f)
-	if count > 1 {
-		return nil // still referenced
+	if fs.Unregister(f) > 0 {
+		return nil // still referenced by another caller
+	}
+	return f.closeConn()
+}
+
+// closeConn closes the underlying SFTP connection without touching the
+// registry. It is used both by Close once the last reference is released and to
+// discard a redundant connection that lost the registration race in
+// EnsureRegistered.
+func (f *fileSystem) closeConn() error {
+	f.clientMtx.Lock()
+	defer f.clientMtx.Unlock()
+	if f.closed || f.client == nil {
+		return nil
 	}
 	err := f.client.Close()
 	f.client = nil

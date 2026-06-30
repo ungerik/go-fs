@@ -177,9 +177,18 @@ File:line references are approximate and may drift as code changes.
       `file.go`, `ListDirRecursiveImpl` in `dirs.go`, `NameSizeProvider`/
       `nameSizeInfo` in `fileinfo.go`, and the dead `NewFileSystem`/
       `UsernameAndPasswordFromURL` in `sftpfs/sftp.go`.
-- [ ] **`EnsureRegistered` ref-count bug** in `sftpfs` and `ftpfs`
-      (`sftp.go:200`, `ftp.go:168`): the returned `free` func calls `Close()`
-      unconditionally and can close an FS another caller registered.
+- [x] **`EnsureRegistered` ref-count bug** in `sftpfs` and `ftpfs` fixed. The
+      returned `free` could close an FS another caller still held: the "already
+      registered" branch never closed (leaking when the creator freed first),
+      the creator branch closed unconditionally, `Close` used an off-by-one
+      threshold (closing while one reference remained), and a connection that
+      lost the dial-then-register race was left orphaned while `free` closed the
+      wrong instance by prefix. **Fixed:** both branches now return the same
+      ref-count-aware `free` (`f.Close`), `Close` closes the connection only when
+      the last reference is released (split out a registry-free `closeConn`), and
+      a connection that loses the registration race is discarded immediately via
+      `closeConn` while `free` drops the ref count of the winner. Covered by
+      `TestEnsureRegistered_RefCount` (ftpfs, in-process server).
 
 ## 🟠 Should-fix — weak abstractions
 
