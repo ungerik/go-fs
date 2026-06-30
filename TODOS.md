@@ -202,22 +202,18 @@ File:line references are approximate and may drift as code changes.
       `Local`. The only scheme that maps to local is `file://` (matched via the
       registered `Local` file system); scheme-less paths still resolve to
       `Local`. Covered by `TestParseRawURI_SchemeNotLocal` (`registry_test.go`).
-- [ ] **Rationalize the optional-interface matrix.** `FullyFeaturedFileSystem`
-      bundles 15 optional interfaces; coverage is inconsistent with no stated
-      rationale. Either align backends or document the matrix:
-
-      | optional         | s3  | sftp | ftp | dropbox | http |
-      | ---------------- | --- | ---- | --- | ------- | ---- |
-      | CopyFile         | yes | no   | no  | yes     | –    |
-      | Move             | no  | yes  | yes | yes     | –    |
-      | Rename           | no  | no   | no  | no      | –    |
-      | Exists           | yes | no   | no  | yes     | r/o  |
-      | ReadAll          | yes | no   | no  | yes     | r/o  |
-      | WriteAll         | yes | no   | no  | yes     | –    |
-      | Touch            | yes | no   | no  | yes     | –    |
-      | Truncate         | no  | yes  | no  | no      | –    |
-      | OpenAppendWriter | no  | yes  | no  | no      | –    |
-      | ListDirRecursive | yes | no   | no  | yes     | –    |
+- [x] **Optional-interface matrix rationalized and documented.** Guiding
+      principle adopted: a backend implements an optional interface only when it
+      is more efficient or more capable than the generic emulation. **Done:**
+      added native `Touch` to `sftpfs` (via SFTP `SETSTAT`/`Chtimes`) and
+      `ftpfs` (via FTP `MFMT`/`SetTime`) — the generic `Touch` opens with
+      `O_TRUNC` and would destroy an existing file's content, so a native Touch
+      that updates mtime in place (and only creates when missing) is a real
+      benefit. Deliberately did NOT add `Exists`/`ReadAll`/`WriteAll`/`Append`
+      to sftp/ftp where they would be byte-for-byte identical to the generic
+      emulation. The per-backend support matrix is now documented in the README
+      ("Optional interface support"). Covered by `ftpfs` Touch in-process test
+      and the conformance `FileTouch` subtest.
 
 - [x] **Predicate methods return false on any error — by design.**
       `Exists`/`IsDir`/`IsReadable`/`IsWritable`/`IsRegular`/`IsEmptyDir`/

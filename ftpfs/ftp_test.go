@@ -99,6 +99,24 @@ func Test_fileSystem_InProcess(t *testing.T) {
 		assert.Equal(t, "short", string(srv.fileContent("/trunc.txt")))
 	})
 
+	t.Run("Touch preserves existing content and creates missing files", func(t *testing.T) {
+		srv := newTestFTPServer(t)
+		ftpFS := dialInProcess(t, srv)
+		tfs := ftpFS.(fs.TouchFileSystem)
+
+		// Touching an existing file must NOT truncate it. The generic
+		// emulation opens the file with O_TRUNC and would destroy "keep me".
+		require.NoError(t, ftpFS.(fs.WriteAllFileSystem).WriteAll(ctx, "/touch.txt", []byte("keep me"), nil))
+		require.NoError(t, tfs.Touch("/touch.txt", nil), "Touch existing")
+		assert.Equal(t, "keep me", string(srv.fileContent("/touch.txt")), "Touch must preserve existing content")
+
+		// Touching a missing file creates it (empty).
+		require.NoError(t, tfs.Touch("/touched-new.txt", nil), "Touch missing")
+		got, err := ftpFS.(fs.ReadAllFileSystem).ReadAll(ctx, "/touched-new.txt")
+		require.NoError(t, err, "touched file must exist")
+		assert.Empty(t, got, "newly touched file is empty")
+	})
+
 	t.Run("OpenReadWriter reads to EOF then seeks and modifies", func(t *testing.T) {
 		srv := newTestFTPServer(t)
 		ftpFS := dialInProcess(t, srv)

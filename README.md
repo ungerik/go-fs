@@ -585,6 +585,35 @@ route to the right backend.
 | `multipartfs`   | (per-request)    | `multipartfs.FromRequestForm`                    | yes  | no    |
 | (built-in)      | `mem://`         | `fs.NewMemFileSystem`                            | yes  | yes   |
 
+### Optional interface support
+
+Every backend implements the core `FileSystem` interface. Beyond that, the
+package defines small *optional* interfaces (`CopyFileSystem`, `MoveFileSystem`,
+`TouchFileSystem`, …). When a backend does not implement one, the operation
+still works through a generic emulation built on the core methods — a backend
+only implements an optional interface when doing so is more efficient or more
+capable than that emulation.
+
+`LocalFileSystem` and `MemFileSystem` implement the full set natively. For the
+remote and archive backends:
+
+| Capability             | s3  | sftp | ftp | dropbox | http |
+| ---------------------- | :-: | :--: | :-: | :-----: | :--: |
+| CopyFile (server-side) | ✓   | –    | –   | ✓       | –    |
+| Move                   | –   | ✓    | ✓   | ✓       | –    |
+| Exists                 | ✓   | –    | –   | ✓       | ✓    |
+| ReadAll                | ✓   | –    | ✓   | ✓       | ✓    |
+| WriteAll               | ✓   | –    | ✓   | ✓       | r/o  |
+| Append                 | –   | –    | ✓   | –       | r/o  |
+| OpenAppendWriter       | –   | ✓    | ✓   | –       | r/o  |
+| Touch                  | ✓   | ✓    | ✓   | ✓       | r/o  |
+| Truncate               | –   | ✓    | –   | –       | r/o  |
+| ListDirRecursive       | ✓   | –    | –   | ✓       | –    |
+
+`✓` native implementation · `–` falls back to the generic emulation (still
+fully functional) · `r/o` read-only backend, so the write operation does not
+apply.
+
 ### httpfs
 
 ```go

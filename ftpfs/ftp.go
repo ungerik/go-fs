@@ -603,6 +603,63 @@ func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	return ignoreFTPSuccessResponse(conn.Stor(filePath, bytes.NewReader(data)))
 }
 
+// fileSystem implements fs.TouchFileSystem. The other optional interfaces it
+// could add over FTP (Exists/...) would be identical to the generic emulation
+// in package fs, so they are intentionally left to that emulation.
+var _ fs.TouchFileSystem = new(fileSystem)
+
+// Touch implements fs.TouchFileSystem. Unlike the generic emulation — which
+// opens the file with O_TRUNC and would therefore destroy the content of an
+// existing file — this updates the modification time of an existing file in
+// place (via the FTP MFMT command, when the server advertises support) and
+// only creates an empty file when it does not exist yet.
+func (f *fileSystem) Touch(filePath string, perm []fs.Permissions) (err error) {
+	defer f.convertResultError(&err, filePath)
+
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if f.connFileExists(conn, filePath) {
+		if conn.IsSetTimeSupported() {
+			return conn.SetTime(filePath, time.Now())
+		}
+		// The file exists but the server cannot set the modification time;
+		// leave its content intact rather than truncating it.
+		return nil
+	}
+	// Does not exist yet: create an empty file.
+	return ignoreFTPSuccessResponse(conn.Stor(filePath, bytes.NewReader(nil)))
+}
+
+// connFileExists reports whether filePath exists. It tries SIZE and STAT first
+// (widely supported and cheap) and falls back to a directory listing, so it
+// works across servers with different command support.
+func (f *fileSystem) connFileExists(conn *ftp.ServerConn, filePath string) bool {
+	if _, err := conn.FileSize(filePath); err == nil {
+		return true
+	}
+	if _, err := conn.GetEntry(filePath); err == nil {
+		return true
+	}
+	dir, name := f.SplitDirAndName(filePath)
+	if dir == "" {
+		dir = "/"
+	}
+	entries, err := conn.List(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Append appends data to the file at filePath with a single APPE command,
 // creating it if it does not exist.
 func (f *fileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) (err error) {

@@ -531,19 +531,7 @@ func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Writ
 }
 
 func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	file, err := f.openFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
-	if err != nil {
-		return nil, err
-	}
-	// info, err := file.Stat()
-	// if err != nil {
-	// 	return nil, errors.Join(err, file.Close())
-	// }
-	// _, err = file.Seek(info.Size(), io.SeekStart)
-	// if err != nil {
-	// 	return nil, errors.Join(err, file.Close())
-	// }
-	return file, nil
+	return f.openFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 }
 
 func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
@@ -559,6 +547,34 @@ func (f *fileSystem) Truncate(filePath string, size int64) error {
 		file.Truncate(size),
 		file.Close(),
 	)
+}
+
+// fileSystem implements fs.TouchFileSystem. The other optional interfaces
+// (Exists/ReadAll/WriteAll/Append/...) are intentionally NOT implemented:
+// over SFTP they would be identical to the generic emulation in package fs
+// (a single Stat, or open+stream), so they would add no benefit.
+var _ fs.TouchFileSystem = new(fileSystem)
+
+// Touch implements fs.TouchFileSystem. Unlike the generic emulation — which
+// opens the file with O_TRUNC and would therefore destroy the content of an
+// existing file — this updates the modification time of an existing file in
+// place via the SFTP SETSTAT packet, and only creates an empty file when it
+// does not exist yet.
+func (f *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
+	client, filePath, release, err := f.getClient(context.Background(), filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err = client.Stat(filePath); err != nil {
+		file, err := client.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+		if err != nil {
+			return err
+		}
+		return file.Close()
+	}
+	now := time.Now()
+	return client.Chtimes(filePath, now, now)
 }
 
 // Move renames filePath to destPath via the SFTP RENAME packet.
