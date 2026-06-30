@@ -223,10 +223,14 @@ File:line references are approximate and may drift as code changes.
       hardcodes `ReadableWritable() (true,false)`, only blocks the core write
       methods (not `Touch`/`WriteAll`/`Append`/`Truncate`/`Move`…), and
       bundles the read-only `MatchAnyPattern`.
-- [ ] **`MockFileSystem` (461 lines, 50+ panics) ships in the root public
-      package** with no build tag — at v1.0 it joins the compatibility promise
-      and pollutes the `fs.` namespace. Move to an `fstest` subpackage
-      (mirroring `testing/fstest`).
+- [x] **`MockFileSystem` moved out of the root public package.** It shipped in
+      package `fs` with no build tag, joining the v1.0 compatibility promise and
+      polluting the `fs.` namespace. **Done:** moved `MockFileSystem` and
+      `MockFullyFeaturedFileSystem` to a new `github.com/ungerik/go-fs/fstest`
+      package (mirroring `testing/fstest`), with all types `fs.`-qualified and
+      the stale `MockFileSystemFullyFeatured` panic names corrected. The two
+      mock-using tests moved to an external `package fs_test` file
+      (`file_mock_test.go`) to avoid the `fstest`→`fs` import cycle.
 - [ ] **Three parallel directory-listing idioms** (callback `ListDir`, channel
       `ListDirChan`, iterator `ListDirIter`) plus slice `ListDirMax` — consider
       deprecating the channel variants before freezing. Also unify the sentinel
@@ -299,8 +303,8 @@ File:line references are approximate and may drift as code changes.
 - [ ] `localfilesystem_unix.go SetGroup` (~87-104) calls `expandTilde` twice
       and checks empty after expansion — copy-paste rot vs `SetUser`.
 - [ ] Fix doc/typo hygiene: `RandomString` "randum" (`fsimpl.go:13`),
-      duplicated `MustGlob` doc (`file.go:585-610`), stale `MockFileSystem`
-      doc/panic names referencing the wrong type.
+      duplicated `MustGlob` doc (`file.go:585-610`). (The stale `MockFileSystem`
+      panic names were corrected during the move to `fstest`.)
 - [ ] `InvalidFileSystem.Close()` returns `ErrInvalidFileSystem`
       (`invalidfilesystem.go:229`) — a no-op `Close` conventionally returns
       nil. It also duplicates path logic from `fsimpl` inline; consolidate.
