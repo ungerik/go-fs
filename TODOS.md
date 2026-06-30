@@ -7,10 +7,12 @@ File:line references are approximate and may drift as code changes.
 
 ## Release process
 
-- [ ] Add a `VERSION` file and tag all modules in lockstep
-      (`v1.0.0`, `s3fs/v1.0.0`, `sftpfs/v1.0.0`, `ftpfs/v1.0.0`,
-      `dropboxfs/v1.0.0`). No version tags exist yet.
-- [ ] Add a CHANGELOG.
+- [x] Add a `VERSION` file — done (`v0.1.0`, the v1.0-prep release; v1.0.0
+      comes later).
+  - [ ] At release, tag all modules in lockstep with the `VERSION` value
+        (`v0.1.0`, `s3fs/v0.1.0`, `sftpfs/v0.1.0`, `ftpfs/v0.1.0`,
+        `dropboxfs/v0.1.0`). No version tags exist yet.
+- [x] Add a CHANGELOG — done (`CHANGELOG.md`, v0.1.0 entry).
 - [x] Extend the conformance suite to cover the cases that hid the data-loss
       bugs above: overwriting a larger file with smaller data (truncation) and
       renaming a non-empty directory. **Done:** `RunFileSystemTests` now has
