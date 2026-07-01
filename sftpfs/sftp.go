@@ -53,16 +53,6 @@ func UsernameAndPassword(username, password string) CredentialsCallback {
 	}
 }
 
-// // UsernameAndPasswordFromURL is a CredentialsCallback that returns
-// // the username and password encoded in the passed URL.
-// func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
-// 	password, ok := u.User.Password()
-// 	if !ok {
-// 		return "", "", fmt.Errorf("no password in URL: %s", u.String())
-// 	}
-// 	return u.User.Username(), password, nil
-// }
-
 // AcceptAnyHostKey can be passed as hostKeyCallback to Dial
 // to accept any SSH public key from a remote host.
 func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error {
@@ -72,6 +62,7 @@ func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error
 type fileSystem struct {
 	prefix    string
 	client    *sftp.Client
+	closed    bool
 	clientMtx sync.RWMutex
 
 	// connLogger is optional (can be nil) and will be used
@@ -179,17 +170,16 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	if err != nil {
 		return nop, err
 	}
-	f := fs.GetFileSystemByPrefixOrNil(prefix)
-	if f != nil {
-		fs.Register(f) // Increase ref count
-		return func() error { fs.Unregister(f); return nil }, nil
+	if f := fs.GetFileSystemByPrefixOrNil(prefix); f != nil {
+		fs.Register(f) // increase ref count
+		return func() error { return f.Close() }, nil
 	}
 
 	client, err := dial(ctx, u.Host, username, password, hostKeyCallback, connLogger)
 	if err != nil {
 		return nop, err
 	}
-	f = &fileSystem{
+	newFS := &fileSystem{
 		client:              client,
 		connLogger:          connLogger,
 		prefix:              prefix,
@@ -197,8 +187,18 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		credentialsCallback: credentialsCallback,
 		hostKeyCallback:     hostKeyCallback,
 	}
-	fs.Register(f) // TODO somone else might have registered, so free should not close it
-	return func() error { return f.Close() }, nil
+	// Register dedups by prefix. If another caller registered a file system
+	// with the same prefix while we were dialing, our freshly dialed connection
+	// is redundant: close it and hand back a free that only drops the ref count
+	// of the file system that actually won the race. The returned free is always
+	// ref-count aware (it closes the connection only when the last reference is
+	// released), so it can never close a file system another caller still holds.
+	fs.Register(newFS)
+	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != fs.FileSystem(newFS) {
+		_ = newFS.closeConn()
+		return func() error { return registered.Close() }, nil
+	}
+	return func() error { return newFS.Close() }, nil
 }
 
 func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (*sftp.Client, error) {
@@ -226,21 +226,6 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 	}
 	return sftp.NewClient(ssh.NewClient(sshConn, chans, reqs))
 }
-
-// func NewFileSystem(addr string, conn *ssh.Client) (*FileSystem, error) {
-// 	addr = strings.TrimSuffix(strings.TrimPrefix(addr, "sftp://"), "/")
-
-// 	client, err := sftp.NewClient(conn)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	fileSystem := &FileSystem{
-// 		client: client,
-// 		prefix: "sftp://" + addr,
-// 	}
-// 	fs.Register(fileSystem)
-// 	return fileSystem, nil
-// }
 
 func nop() error { return nil }
 
@@ -308,6 +293,15 @@ func (f *fileSystem) reconnectAndSetClient(ctx context.Context) error {
 func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sftp.Client, clientPath string, release func() error, err error) {
 	if err = ctx.Err(); err != nil {
 		return nil, "", nop, err
+	}
+
+	// A closed file system must not be used, and in particular must not
+	// silently reconnect below using the stored credentials.
+	f.clientMtx.RLock()
+	closed := f.closed
+	f.clientMtx.RUnlock()
+	if closed {
+		return nil, "", nop, fs.ErrFileSystemClosed
 	}
 
 	// Progressive reconnection with exponential backoff
@@ -537,19 +531,7 @@ func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Writ
 }
 
 func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	file, err := f.openFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
-	if err != nil {
-		return nil, err
-	}
-	// info, err := file.Stat()
-	// if err != nil {
-	// 	return nil, errors.Join(err, file.Close())
-	// }
-	// _, err = file.Seek(info.Size(), io.SeekStart)
-	// if err != nil {
-	// 	return nil, errors.Join(err, file.Close())
-	// }
-	return file, nil
+	return f.openFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 }
 
 func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
@@ -565,6 +547,34 @@ func (f *fileSystem) Truncate(filePath string, size int64) error {
 		file.Truncate(size),
 		file.Close(),
 	)
+}
+
+// fileSystem implements fs.TouchFileSystem. The other optional interfaces
+// (Exists/ReadAll/WriteAll/Append/...) are intentionally NOT implemented:
+// over SFTP they would be identical to the generic emulation in package fs
+// (a single Stat, or open+stream), so they would add no benefit.
+var _ fs.TouchFileSystem = new(fileSystem)
+
+// Touch implements fs.TouchFileSystem. Unlike the generic emulation — which
+// opens the file with O_TRUNC and would therefore destroy the content of an
+// existing file — this updates the modification time of an existing file in
+// place via the SFTP SETSTAT packet, and only creates an empty file when it
+// does not exist yet.
+func (f *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
+	client, filePath, release, err := f.getClient(context.Background(), filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err = client.Stat(filePath); err != nil {
+		file, err := client.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+		if err != nil {
+			return err
+		}
+		return file.Close()
+	}
+	now := time.Now()
+	return client.Chtimes(filePath, now, now)
 }
 
 // Move renames filePath to destPath via the SFTP RENAME packet.
@@ -598,15 +608,39 @@ func (f *fileSystem) Remove(filePath string) error {
 	return client.Remove(filePath)
 }
 
+// Close closes the underlying SFTP connection and unregisters the file system.
+// After the last reference is closed all methods return fs.ErrFileSystemClosed
+// instead of dialing a new connection. Calling Close more than once, or on a
+// file system that never connected, is a safe no-op.
+// Close decreases the file system's reference count in the registry and only
+// closes the underlying SFTP connection once the last reference is released, so
+// it never closes a connection another caller still holds. Calling Close on an
+// already-closed file system is a safe no-op.
 func (f *fileSystem) Close() error {
-	if f.client == nil {
-		return nil // already closed
+	f.clientMtx.Lock()
+	alreadyClosed := f.closed || f.client == nil
+	f.clientMtx.Unlock()
+	if alreadyClosed {
+		return nil // already closed or never connected
 	}
-	count := fs.Unregister(f)
-	if count > 1 {
-		return nil // still referenced
+	if fs.Unregister(f) > 0 {
+		return nil // still referenced by another caller
+	}
+	return f.closeConn()
+}
+
+// closeConn closes the underlying SFTP connection without touching the
+// registry. It is used both by Close once the last reference is released and to
+// discard a redundant connection that lost the registration race in
+// EnsureRegistered.
+func (f *fileSystem) closeConn() error {
+	f.clientMtx.Lock()
+	defer f.clientMtx.Unlock()
+	if f.closed || f.client == nil {
+		return nil
 	}
 	err := f.client.Close()
 	f.client = nil
+	f.closed = true
 	return err
 }

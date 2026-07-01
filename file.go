@@ -201,6 +201,9 @@ func (file File) Joinf(format string, args ...any) File {
 }
 
 // IsReadable returns if the file exists and is readable.
+//
+// It does not return an error by design: any error, including the file not
+// existing or not being accessible, results in false.
 func (file File) IsReadable() bool {
 	if file == "" {
 		return false
@@ -219,6 +222,9 @@ func (file File) IsReadable() bool {
 // IsWritable returns if the file exists and is writable,
 // or in case it doesn't exist,
 // if the parent directory exists and is writable.
+//
+// It does not return an error by design: any error, including the file and
+// its parent directory not existing or not being accessible, results in false.
 func (file File) IsWritable() bool {
 	if file == "" {
 		return false
@@ -261,34 +267,10 @@ func (file File) Info() *FileInfo {
 	return NewFileInfo(file, info, fileSystem.IsHidden(path))
 }
 
-// InfoWithContentHash returns a FileInfo, but in contrast to Stat
-// it always fills the ContentHash field.
-// func (file File) InfoWithContentHash() (FileInfo, error) {
-// 	return file.InfoWithContentHashContext(context.Background())
-// }
-
-// InfoWithContentHashContext returns a FileInfo, but in contrast to Stat
-// it always fills the ContentHash field.
-// func (file File) InfoWithContentHashContext(ctx context.Context) (FileInfo, error) {
-// 	if file == "" {
-// 		return FileInfo{}, ErrEmptyPath
-// 	}
-// 	info := file.Info()
-// 	if !info.IsDir && info.ContentHash == "" {
-// 		reader, err := file.OpenReader()
-// 		if err != nil {
-// 			return FileInfo{}, err
-// 		}
-// 		defer reader.Close()
-// 		info.ContentHash, err = DefaultContentHash(ctx, reader)
-// 		if err != nil {
-// 			return FileInfo{}, err
-// 		}
-// 	}
-// 	return info, nil
-// }
-
 // Exists returns if a file or directory with the path of File exists.
+//
+// It does not return an error by design: any error, including the file not
+// being accessible, results in false. Use [File.CheckExists] to get an error.
 func (file File) Exists() bool {
 	fileSystem, path := file.ParseRawURI()
 	if fs, ok := fileSystem.(ExistsFileSystem); ok {
@@ -312,6 +294,10 @@ func (file File) CheckExists() error {
 }
 
 // IsDir returns if a directory with the path of File exists.
+//
+// It does not return an error by design: any error, including the path not
+// existing or not being accessible, results in false. Use [File.CheckIsDir]
+// to get an error.
 func (file File) IsDir() bool {
 	stat, err := file.Stat()
 	if err != nil {
@@ -385,6 +371,9 @@ func (file File) RelPathOf(target File) (string, error) {
 }
 
 // IsRegular reports if this is a regular file.
+//
+// It does not return an error by design: any error, including the file not
+// existing or not being accessible, results in false.
 func (file File) IsRegular() bool {
 	stat, err := file.Stat()
 	if err != nil {
@@ -394,6 +383,9 @@ func (file File) IsRegular() bool {
 }
 
 // IsEmptyDir returns if file is an empty directory.
+//
+// It does not return an error by design: any error, including the directory
+// not existing or not being accessible, results in false.
 func (file File) IsEmptyDir() bool {
 	l, err := file.ListDirMax(1)
 	return len(l) == 0 && err == nil
@@ -409,6 +401,9 @@ func (file File) IsHidden() bool {
 // IsSymbolicLink returns if the file is a symbolic link.
 // Use [File.CreateSymbolicLink] and [File.ReadSymbolicLink]
 // to create and resolve symbolic links.
+//
+// It does not return an error by design: any error, including the file not
+// existing or not being accessible, results in false.
 func (file File) IsSymbolicLink() bool {
 	fileSystem, path := file.ParseRawURI()
 	return fileSystem.IsSymbolicLink(path)
@@ -1298,7 +1293,10 @@ func (file File) WriteAllContext(ctx context.Context, data []byte, perm ...Permi
 	if fs, ok := fileSystem.(WriteAllFileSystem); ok {
 		return fs.WriteAll(ctx, path, data, perm)
 	}
-	w, err := fileSystem.OpenReadWriter(path, perm)
+	// Use OpenWriter (O_TRUNC) instead of OpenReadWriter (O_RDWR|O_CREATE
+	// without truncation), otherwise writing fewer bytes over an existing
+	// larger file would leave stale trailing bytes.
+	w, err := fileSystem.OpenWriter(path, perm)
 	if err != nil {
 		return err
 	}
@@ -1455,16 +1453,18 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 		}
 		return fs.RootDir().Join(newPath), nil
 	default:
+		// Fallback for file systems that implement neither
+		// RenameFileSystem nor MoveFileSystem: copy to the new name
+		// and then remove the source. CopyRecursive and RemoveRecursive
+		// both handle single files and directories with their contents,
+		// so a non-empty directory is moved completely instead of being
+		// replaced by an empty directory and left behind undeleted.
 		renamedFile = file.Dir().Join(newName)
-		if file.IsDir() {
-			err = renamedFile.MakeDir()
-		} else {
-			err = CopyFile(context.Background(), file, renamedFile)
-		}
+		err = CopyRecursive(context.Background(), file, renamedFile)
 		if err != nil {
 			return "", err
 		}
-		return renamedFile, file.Remove()
+		return renamedFile, file.RemoveRecursive()
 	}
 }
 
@@ -1843,5 +1843,8 @@ func NewFileReadWriteAllSeekCloser(file File, permissions ...Permissions) ReadWr
 		func(data []byte) error {
 			return file.WriteAll(data, permissions...)
 		},
+		// File.ReadAll and File.WriteAll open and close their own handles
+		// internally, so there is no persistent handle to release here.
+		nil,
 	)
 }

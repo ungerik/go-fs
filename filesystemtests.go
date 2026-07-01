@@ -24,6 +24,15 @@ func RunFileSystemTests(ctx context.Context, t *testing.T, fs FileSystem, name, 
 	require.NotEmpty(t, prefix, "prefix must not be empty")
 	require.NotEmpty(t, testDir, "testDir must not be empty")
 
+	// Some subtests exercise the high-level File API, which resolves a
+	// FileSystem via the global registry from a File's URI prefix. Ensure the
+	// FileSystem under test is registered for the duration of the tests so
+	// those subtests run regardless of how the caller constructed it.
+	if !IsRegistered(fs) {
+		Register(fs)
+		t.Cleanup(func() { Unregister(fs) })
+	}
+
 	// Basic metadata tests
 	t.Run("Metadata", func(t *testing.T) {
 		readable, writable := fs.ReadableWritable()
@@ -174,6 +183,75 @@ func RunFileSystemTests(ctx context.Context, t *testing.T, fs FileSystem, name, 
 				assert.Equal(t, newContent, content, "Content should be updated")
 			}
 		}
+	})
+
+	// Overwrite-shrink tests: writing fewer bytes over a larger existing file
+	// must truncate, not leave stale trailing bytes. Guards the truncating
+	// File.WriteAll fallback as well as native OpenWriter/WriteAll.
+	t.Run("OverwriteShrink", func(t *testing.T) {
+		long := []byte("0123456789ABCDEFGHIJ") // 20 bytes
+		short := []byte("xyz")                 // 3 bytes
+
+		// FileSystem.OpenWriter must truncate when re-opening an existing file.
+		openWriterPath := fs.JoinCleanPath(testDir, "overwrite-openwriter.txt")
+		writeOpenWriter := func(data []byte) {
+			w, err := fs.OpenWriter(openWriterPath, nil)
+			require.NoError(t, err, "OpenWriter should not error")
+			_, err = w.Write(data)
+			require.NoError(t, err, "Write should not error")
+			require.NoError(t, w.Close(), "Close should not error")
+		}
+		writeOpenWriter(long)
+		writeOpenWriter(short)
+		r, err := fs.OpenReader(openWriterPath)
+		require.NoError(t, err, "OpenReader should not error")
+		got, err := io.ReadAll(r)
+		require.NoError(t, err, "ReadAll should not error")
+		require.NoError(t, r.Close(), "Close reader should not error")
+		assert.Equal(t, short, got, "OpenWriter must truncate previous larger content")
+
+		// Native WriteAll, if supported, must also truncate.
+		if wafs, ok := fs.(WriteAllFileSystem); ok {
+			p := fs.JoinCleanPath(testDir, "overwrite-writeall-native.txt")
+			require.NoError(t, wafs.WriteAll(ctx, p, long, nil), "native WriteAll long")
+			require.NoError(t, wafs.WriteAll(ctx, p, short, nil), "native WriteAll short")
+			r, err := fs.OpenReader(p)
+			require.NoError(t, err, "OpenReader should not error")
+			got, err := io.ReadAll(r)
+			require.NoError(t, err, "ReadAll should not error")
+			require.NoError(t, r.Close(), "Close reader should not error")
+			assert.Equal(t, short, got, "native WriteAll must truncate previous larger content")
+		}
+
+		// The high-level File.WriteAll routes through the (possibly emulated)
+		// write path and must truncate too. This is the path that used to
+		// corrupt files by writing through a non-truncating OpenReadWriter.
+		f := fs.JoinCleanFile(testDir, "overwrite-writeall-file.txt")
+		require.NoError(t, f.WriteAll(long), "File.WriteAll long")
+		require.NoError(t, f.WriteAll(short), "File.WriteAll short")
+		fileGot, err := f.ReadAll()
+		require.NoError(t, err, "File.ReadAll after shrink")
+		assert.Equal(t, short, fileGot, "File.WriteAll must truncate previous larger content")
+	})
+
+	// Renaming a non-empty directory must move it with all of its contents and
+	// leave the source gone. Guards the File.Rename fallback (CopyRecursive +
+	// RemoveRecursive) for backends without native Rename/Move, and the native
+	// Move/Rename of the others.
+	t.Run("RenameNonEmptyDir", func(t *testing.T) {
+		srcDir := fs.JoinCleanFile(testDir, "rename-dir-src")
+		require.NoError(t, srcDir.MakeDir(), "MakeDir src dir")
+		child := srcDir.Join("child.txt")
+		require.NoError(t, child.WriteAll([]byte("dir-content")), "write child file")
+
+		renamed, err := srcDir.Rename("rename-dir-dst")
+		require.NoError(t, err, "Rename non-empty dir should not error")
+
+		got, err := renamed.Join("child.txt").ReadAll()
+		require.NoError(t, err, "child must exist at the new location")
+		assert.Equal(t, []byte("dir-content"), got, "child content preserved across dir rename")
+
+		assert.False(t, srcDir.Exists(), "source dir must be gone after rename")
 	})
 
 	// Append tests

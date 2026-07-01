@@ -7,7 +7,7 @@ A [go-fs](https://github.com/ungerik/go-fs) implementation for Amazon S3 and S3-
 - ✅ Full S3 file system interface implementation
 - ✅ Automatic multipart upload/download for large files
 - ✅ Support for AWS S3 and S3-compatible services (MinIO, DigitalOcean Spaces, etc.)
-- ✅ Streaming reads and writes
+- ✅ Whole-file reads and writes (buffered in memory; multipart for large files)
 - ✅ Directory operations (list, recursive list, pattern matching)
 - ✅ Metadata operations (stat, touch, copy)
 - ✅ Read-only mode support
@@ -49,13 +49,13 @@ func main() {
     file := fs.File("s3://my-bucket/path/to/file.txt")
 
     // Write data
-    err = file.WriteAllString(ctx, "Hello, S3!", nil)
+    err = file.WriteAllStringContext(ctx, "Hello, S3!")
 
     // Read data
-    content, err := file.ReadAllString(ctx)
+    content, err := file.ReadAllStringContext(ctx)
 
     // List directory
-    files, err := file.Dir().ListDirMax(ctx, -1, nil)
+    files, err := file.Dir().ListDirMaxContext(ctx, -1)
 }
 ```
 
@@ -82,10 +82,10 @@ The package automatically uses multipart upload/download for better performance:
 largeFile := fs.File("s3://my-bucket/large-file.zip")
 
 // Multipart upload happens automatically
-err := largeFile.WriteAll(ctx, largeData, nil)
+err := largeFile.WriteAllContext(ctx, largeData)
 
 // Multipart download happens automatically
-data, err := largeFile.ReadAll(ctx)
+data, err := largeFile.ReadAllContext(ctx)
 ```
 
 ### Directory Operations
@@ -94,16 +94,16 @@ data, err := largeFile.ReadAll(ctx)
 dir := fs.File("s3://my-bucket/documents/")
 
 // List files (non-recursive)
-err := dir.ListDirInfo(ctx, func(info *fs.FileInfo) error {
+err := dir.ListDirInfoContext(ctx, func(info *fs.FileInfo) error {
     fmt.Println(info.Name, info.Size)
     return nil
-}, nil)
+})
 
 // List with pattern matching
-err = dir.ListDirInfo(ctx, callback, []string{"*.pdf", "*.doc"})
+err = dir.ListDirInfoContext(ctx, callback, "*.pdf", "*.doc")
 
 // Recursive listing
-err = dir.ListDirInfoRecursive(ctx, callback, nil)
+err = dir.ListDirInfoRecursiveContext(ctx, callback)
 ```
 
 ### Read-Only Mode
@@ -280,7 +280,7 @@ If Docker is unavailable, tests are automatically skipped with a clear message.
 ### Multipart Transfers
 
 - **Upload**: Default part size is 5 MB, concurrent uploads improve throughput
-- **Download**: Default concurrency is 5 goroutines, adjustable via `manager.Downloader`
+- **Download**: Uses the AWS SDK download manager (default concurrency 5 goroutines)
 - **Memory**: Uses `PartSize * Concurrency` memory during transfers
 
 ### Optimizations

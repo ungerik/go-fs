@@ -1,6 +1,9 @@
 package fsimpl
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 var _ io.ReadWriteSeeker = (*ReadWriteAllSeekCloser)(nil)
 
@@ -15,20 +18,28 @@ var _ io.ReadWriteSeeker = (*ReadWriteAllSeekCloser)(nil)
 //  1. Lazily reads all file content into memory on first read/write operation
 //  2. Performs all read/write/seek operations in memory using a FileBuffer
 //  3. Writes the complete modified content back to the file on Close()
+//  4. Releases the underlying file handle via the optional close callback on Close()
 type ReadWriteAllSeekCloser struct {
 	readAll  func() ([]byte, error)
 	writeAll func([]byte) error
+	close    func() error
 	buffer   *FileBuffer
 	modified bool
 }
 
 // NewReadWriteAllSeekCloser creates a new ReadWriteAllSeekCloser.
 // The file content is not read until the first read or write operation.
-// close is optional and will be called on Close() if not nil.
-func NewReadWriteAllSeekCloser(readAll func() ([]byte, error), writeAll func([]byte) error) *ReadWriteAllSeekCloser {
+//
+// readAll and writeAll are required. close is optional (may be nil) and, if
+// non-nil, is always called by Close to release the underlying file handle,
+// regardless of whether any modifications were written back. Passing a non-nil
+// close is the way to avoid leaking a handle opened by the readAll or writeAll
+// closures.
+func NewReadWriteAllSeekCloser(readAll func() ([]byte, error), writeAll func([]byte) error, close func() error) *ReadWriteAllSeekCloser {
 	return &ReadWriteAllSeekCloser{
 		readAll:  readAll,
 		writeAll: writeAll,
+		close:    close,
 		buffer:   nil,
 		modified: false,
 	}
@@ -101,13 +112,26 @@ func (rw *ReadWriteAllSeekCloser) Seek(offset int64, whence int) (int64, error) 
 	return rw.buffer.Seek(offset, whence)
 }
 
-// Close writes all buffered modifications back to the file if any writes occurred,
-// then closes the underlying file.
+// Close writes all buffered modifications back to the file if any writes
+// occurred, then releases the underlying file handle via the close callback
+// passed to the constructor.
+//
+// The close callback is always invoked (when non-nil), even when nothing was
+// modified, so a handle opened by the read/write closures is never leaked.
+// The write-back error and the close error are joined and returned together.
+// Close is idempotent: the close callback is invoked at most once.
 func (rw *ReadWriteAllSeekCloser) Close() error {
-	if !rw.modified {
-		return nil
+	var writeErr error
+	if rw.modified {
+		writeErr = rw.writeAll(rw.buffer.Bytes())
+		rw.modified = false
 	}
 
-	// Write back if modified
-	return rw.writeAll(rw.buffer.Bytes())
+	var closeErr error
+	if rw.close != nil {
+		closeErr = rw.close()
+		rw.close = nil // ensure the handle is released at most once
+	}
+
+	return errors.Join(writeErr, closeErr)
 }
