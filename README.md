@@ -48,7 +48,7 @@ multipartFS.Form.Value["email"]
 file, err := multipartFS.FormFile("file")
 
 // Use like any other fs.File
-bytes, err := file.ReadAll(ctx)
+bytes, err := file.ReadAllContext(ctx)
 ```
 
 fs.File
@@ -162,9 +162,9 @@ Reading and writing files
 Reading:
 
 ```go
-bytes, err := file.ReadAll(ctx)
+bytes, err := file.ReadAllContext(ctx)
 
-str, err := file.ReadAllString(ctx)
+str, err := file.ReadAllStringContext(ctx)
 
 var w io.Writer
 n, err := file.WriteTo(w)
@@ -177,9 +177,9 @@ r, err := file.OpenReadSeeker() // fs.ReadSeekCloser
 Writing:
 
 ```go
-err := file.WriteAll(ctx, []byte("Hello"))
+err := file.WriteAllContext(ctx, []byte("Hello"))
 
-err := file.WriteAllString(ctx, "Hello")
+err := file.WriteAllStringContext(ctx, "Hello")
 
 err := file.Append(ctx, []byte("Hello"))
 
@@ -626,7 +626,7 @@ provides `Exists` and `ReadAll`.
 ```go
 import _ "github.com/ungerik/go-fs/httpfs"
 
-data, err := fs.File("https://example.com/file.txt").ReadAll(ctx)
+data, err := fs.File("https://example.com/file.txt").ReadAllContext(ctx)
 ```
 
 Read-only. Useful for treating remote files uniformly with local ones.
@@ -642,7 +642,7 @@ bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-bucket", false)
 // Or with an existing aws-sdk-go-v2 client
 bucket = s3fs.NewAndRegister(client, "my-bucket", false)
 
-err = fs.File("s3://my-bucket/path/file.txt").WriteAllString(ctx, "Hello")
+err = fs.File("s3://my-bucket/path/file.txt").WriteAllStringContext(ctx, "Hello")
 ```
 
 Multipart upload/download is used automatically for files larger than
@@ -661,7 +661,7 @@ sftpFS, err := sftpfs.DialAndRegister(
     nil,
 )
 
-data, err := fs.File("sftp://user@host:22/etc/hostname").ReadAll(ctx)
+data, err := fs.File("sftp://user@host:22/etc/hostname").ReadAllContext(ctx)
 ```
 
 ### ftpfs
@@ -686,7 +686,7 @@ import "github.com/ungerik/go-fs/dropboxfs"
 
 dbxFS := dropboxfs.NewAndRegister(accessToken, 5*time.Minute, false)
 
-err := fs.File("dropbox://Apps/MyApp/notes.md").WriteAllString(ctx, "...")
+err := fs.File("dropbox://Apps/MyApp/notes.md").WriteAllStringContext(ctx, "...")
 ```
 
 ### zipfs
@@ -727,7 +727,7 @@ memFS, err := fs.NewMemFileSystem("/", fs.NewMemFile("hello.txt", []byte("hi")))
 defer memFS.Close()
 
 // Access through the global Registry using the URI prefix
-data, err := fs.File(memFS.Prefix() + "/hello.txt").ReadAll(ctx)
+data, err := fs.File(memFS.Prefix() + "/hello.txt").ReadAllContext(ctx)
 
 // Or create a one-shot single-file FS that gives you a ready-to-use File
 ms, file, err := fs.NewSingleMemFileSystem(fs.NewMemFile("a.txt", []byte("a")))
