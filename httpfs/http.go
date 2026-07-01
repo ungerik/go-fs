@@ -122,7 +122,7 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 	if err != nil {
 		return fs.FileInfo{}, err
 	}
-	response.Body.Close()
+	_ = response.Body.Close() // HEAD response body is empty; close error is irrelevant
 
 	switch {
 	case isNotExistStatus(response.StatusCode):
