@@ -4,7 +4,7 @@ go 1.25.0
 
 replace github.com/ungerik/go-fs => ..
 
-require github.com/ungerik/go-fs v0.0.0-00010101000000-000000000000 // replaced
+require github.com/ungerik/go-fs v0.1.0
 
 // External
 require github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
