@@ -69,6 +69,7 @@ type fileSystem struct {
 	conn   *ftp.ServerConn
 	prefix string
 	secure bool
+	closed bool
 }
 
 // Dial a new FTP or FTPS connection and registers it as file system.
@@ -150,23 +151,32 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	if err != nil {
 		return nop, err
 	}
-	f := fs.GetFileSystemByPrefixOrNil(prefix)
-	if f != nil {
-		fs.Register(f) // Increase ref count
-		return func() error { fs.Unregister(f); return nil }, nil
+	if f := fs.GetFileSystemByPrefixOrNil(prefix); f != nil {
+		fs.Register(f) // increase ref count
+		return func() error { return f.Close() }, nil
 	}
 
 	conn, err := dial(ctx, u.Host, username, password, secure, debugOut)
 	if err != nil {
 		return nop, err
 	}
-	f = &fileSystem{
+	newFS := &fileSystem{
 		conn:   conn,
 		prefix: prefix,
 		secure: secure,
 	}
-	fs.Register(f) // TODO somone else might have registered, so free should not close it
-	return func() error { return f.Close() }, nil
+	// Register dedups by prefix. If another caller registered a file system
+	// with the same prefix while we were dialing, our freshly dialed connection
+	// is redundant: close it and hand back a free that only drops the ref count
+	// of the file system that actually won the race. The returned free is always
+	// ref-count aware (it closes the connection only when the last reference is
+	// released), so it can never close a file system another caller still holds.
+	fs.Register(newFS)
+	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != fs.FileSystem(newFS) {
+		_ = newFS.closeConn()
+		return func() error { return registered.Close() }, nil
+	}
+	return func() error { return newFS.Close() }, nil
 }
 
 func prepareDial(address string, credentialsCallback CredentialsCallback) (u *url.URL, username, password, prefix string, secure bool, err error) {
@@ -215,6 +225,11 @@ func nop() error { return nil }
 func (f *fileSystem) getConn(ctx context.Context, filePath string) (conn *ftp.ServerConn, clientPath string, release func() error, err error) {
 	if err = ctx.Err(); err != nil {
 		return nil, "", nop, err
+	}
+	// A closed file system must not be used, and in particular must not
+	// silently dial a new connection below using credentials from the URL.
+	if f.closed {
+		return nil, "", nop, fs.ErrFileSystemClosed
 	}
 	if f.conn != nil {
 		return f.conn, filePath, nop, nil
@@ -471,21 +486,25 @@ func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) (err error) 
 	}
 	defer release()
 
-	err = conn.MakeDir(dirPath)
+	return ignoreFTPSuccessResponse(conn.MakeDir(dirPath))
+}
 
-	// Handle success responses that are returned as errors
-	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "226 Transfer complete") ||
-			strings.Contains(errStr, "227 Entering Passive Mode") ||
-			strings.Contains(errStr, "257") ||
-			strings.Contains(errStr, "150 Opening") ||
-			strings.Contains(errStr, "150 Ok to send data") {
-			// These are actually success responses, not errors
-			err = nil
-		}
+// ignoreFTPSuccessResponse maps error values that actually carry a success
+// status reply back to nil. Some FTP servers (and the jlaffaye/ftp library
+// when used with the permissive FTPS configuration above) surface 1xx/2xx
+// status replies from a data transfer as errors.
+func ignoreFTPSuccessResponse(err error) error {
+	if err == nil {
+		return nil
 	}
-
+	msg := err.Error()
+	if strings.Contains(msg, "226 Transfer complete") ||
+		strings.Contains(msg, "227 Entering Passive Mode") ||
+		strings.Contains(msg, "257") ||
+		strings.Contains(msg, "150 Opening") ||
+		strings.Contains(msg, "150 Ok to send data") {
+		return nil
+	}
 	return err
 }
 
@@ -551,53 +570,157 @@ func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
 	}, nil
 }
 
-func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	// Create an empty file first
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+// ReadAll downloads the complete content of the file at filePath
+// with a single RETR command.
+func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
+	defer f.convertResultError(&err, filePath)
+
+	conn, filePath, release, err := f.getConn(ctx, filePath)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
-	// Create empty file by writing empty content
-	err = conn.Stor(filePath, bytes.NewReader([]byte{}))
-	if err != nil {
-		// Handle success responses that are returned as errors
-		errStr := err.Error()
-		if strings.Contains(errStr, "226 Transfer complete") ||
-			strings.Contains(errStr, "227 Entering Passive Mode") ||
-			strings.Contains(errStr, "257") ||
-			strings.Contains(errStr, "150 Opening") ||
-			strings.Contains(errStr, "150 Ok to send data") {
-			// These are actually success responses, not errors
-			err = nil
-		}
-	}
-	err = errors.Join(err, release())
+	response, err := conn.Retr(filePath)
 	if err != nil {
 		return nil, err
 	}
-
-	// Now return the read-writer
-	return f.OpenReadWriter(filePath, perm)
+	data, err = io.ReadAll(response)
+	return data, errors.Join(err, response.Close())
 }
 
-// func (f *FTPFileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+// WriteAll writes data to the file at filePath with a single STOR command,
+// creating it if it does not exist or truncating it if it does exist.
+func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) (err error) {
+	defer f.convertResultError(&err, filePath)
 
-// }
+	conn, filePath, release, err := f.getConn(ctx, filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
 
-func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (rw fs.ReadWriteSeekCloser, err error) {
+	return ignoreFTPSuccessResponse(conn.Stor(filePath, bytes.NewReader(data)))
+}
+
+// fileSystem implements fs.TouchFileSystem. The other optional interfaces it
+// could add over FTP (Exists/...) would be identical to the generic emulation
+// in package fs, so they are intentionally left to that emulation.
+var _ fs.TouchFileSystem = new(fileSystem)
+
+// Touch implements fs.TouchFileSystem. Unlike the generic emulation — which
+// opens the file with O_TRUNC and would therefore destroy the content of an
+// existing file — this updates the modification time of an existing file in
+// place (via the FTP MFMT command, when the server advertises support) and
+// only creates an empty file when it does not exist yet.
+func (f *fileSystem) Touch(filePath string, perm []fs.Permissions) (err error) {
 	defer f.convertResultError(&err, filePath)
 
 	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
+		return err
+	}
+	defer release()
+
+	if f.connFileExists(conn, filePath) {
+		if conn.IsSetTimeSupported() {
+			return conn.SetTime(filePath, time.Now())
+		}
+		// The file exists but the server cannot set the modification time;
+		// leave its content intact rather than truncating it.
+		return nil
+	}
+	// Does not exist yet: create an empty file.
+	return ignoreFTPSuccessResponse(conn.Stor(filePath, bytes.NewReader(nil)))
+}
+
+// connFileExists reports whether filePath exists. It tries SIZE and STAT first
+// (widely supported and cheap) and falls back to a directory listing, so it
+// works across servers with different command support.
+func (f *fileSystem) connFileExists(conn *ftp.ServerConn, filePath string) bool {
+	if _, err := conn.FileSize(filePath); err == nil {
+		return true
+	}
+	if _, err := conn.GetEntry(filePath); err == nil {
+		return true
+	}
+	dir, name := f.SplitDirAndName(filePath)
+	if dir == "" {
+		dir = "/"
+	}
+	entries, err := conn.List(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Append appends data to the file at filePath with a single APPE command,
+// creating it if it does not exist.
+func (f *fileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) (err error) {
+	defer f.convertResultError(&err, filePath)
+
+	conn, filePath, release, err := f.getConn(ctx, filePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return ignoreFTPSuccessResponse(conn.Append(filePath, bytes.NewReader(data)))
+}
+
+// OpenWriter opens the file at filePath for writing, creating it if it does
+// not exist or truncating it if it does exist.
+//
+// FTP has no random-access I/O, so the written bytes are buffered in memory
+// and flushed to the server with a single STOR command when the returned
+// writer is closed. For bulk data prefer WriteAll, which streams directly
+// to the server without buffering the whole file in memory.
+func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+	var buf *fsimpl.FileBuffer
+	buf = fsimpl.NewFileBufferWithClose(nil, func() error {
+		return f.WriteAll(context.Background(), filePath, buf.Bytes(), perm)
+	})
+	return buf, nil
+}
+
+// OpenAppendWriter opens the file at filePath for appending,
+// creating it if it does not exist.
+//
+// The written bytes are buffered in memory and appended to the server file
+// with a single APPE command when the returned writer is closed. Only the
+// appended data is held in memory, not the whole file.
+func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+	var buf *fsimpl.FileBuffer
+	buf = fsimpl.NewFileBufferWithClose(nil, func() error {
+		return f.Append(context.Background(), filePath, buf.Bytes(), perm)
+	})
+	return buf, nil
+}
+
+// OpenReadWriter opens the file at filePath for reading and writing.
+//
+// FTP has no random-access I/O, so the complete file is downloaded into an
+// in-memory buffer that supports Read, Write and Seek. The buffer is flushed
+// back to the server with a single STOR command when closed. The file must
+// already exist and this is not suitable for very large files.
+func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (rw fs.ReadWriteSeekCloser, err error) {
+	defer f.convertResultError(&err, filePath)
+
+	data, err := f.ReadAll(context.Background(), filePath)
+	if err != nil {
 		return nil, err
 	}
-	return &file{
-		// fs:      f,
-		path:    filePath,
-		conn:    conn,
-		release: release,
-	}, nil
+	var buf *fsimpl.FileBuffer
+	buf = fsimpl.NewFileBufferWithClose(data, func() error {
+		return f.WriteAll(context.Background(), filePath, buf.Bytes(), perm)
+	})
+	return buf, nil
 }
 
 // Move renames filePath to destPath via the FTP RNFR/RNTO commands.
@@ -677,101 +800,35 @@ func (f *fileSystem) Remove(filePath string) (err error) {
 	return conn.Delete(filePath)
 }
 
+// Close quits the underlying FTP connection and unregisters the file system.
+// After the last reference is closed all methods return fs.ErrFileSystemClosed
+// instead of dialing a new connection. Calling Close more than once, or on a
+// file system that never connected, is a safe no-op.
+// Close decreases the file system's reference count in the registry and only
+// closes the underlying FTP connection once the last reference is released, so
+// it never closes a connection another caller still holds. Calling Close on an
+// already-closed file system is a safe no-op.
 func (f *fileSystem) Close() error {
-	if f.conn == nil {
-		return nil // already closed
+	if f.closed || f.conn == nil {
+		return nil // already closed or never connected
 	}
-	count := fs.Unregister(f)
-	if count > 1 {
-		return nil // still referenced
+	if fs.Unregister(f) > 0 {
+		return nil // still referenced by another caller
+	}
+	return f.closeConn()
+}
+
+// closeConn closes the underlying FTP connection without touching the registry.
+// It is used both by Close once the last reference is released and to discard a
+// redundant connection that lost the registration race in EnsureRegistered.
+func (f *fileSystem) closeConn() error {
+	if f.closed || f.conn == nil {
+		return nil
 	}
 	err := f.conn.Quit()
 	f.conn = nil
+	f.closed = true
 	return err
-}
-
-type file struct {
-	// fs      *fileSystem
-	path    string
-	offset  int64
-	conn    *ftp.ServerConn
-	release func() error
-}
-
-func (f *file) Read(p []byte) (n int, err error) {
-	return f.ReadAt(p, f.offset)
-}
-
-func (f *file) ReadAt(p []byte, offset int64) (n int, err error) {
-	if offset < 0 {
-		return 0, errors.New("ReadAt: negative offset")
-	}
-	response, err := f.conn.RetrFrom(f.path, uint64(offset))
-	if err != nil {
-		return 0, err
-	}
-	return response.Read(p)
-}
-
-func (f *file) Write(p []byte) (n int, err error) {
-	return f.WriteAt(p, f.offset)
-}
-
-func (f *file) WriteAt(p []byte, offset int64) (n int, err error) {
-	if offset < 0 {
-		return 0, errors.New("WriteAt: negative offset")
-	}
-	r := bytes.NewReader(p)
-	if offset == 0 {
-		// For offset 0, use regular Stor method
-		err = f.conn.Stor(f.path, r)
-	} else {
-		// For non-zero offset, use StorFrom
-		err = f.conn.StorFrom(f.path, r, uint64(offset))
-	}
-
-	// Calculate bytes written before handling any errors
-	bytesWritten := len(p) - r.Len()
-
-	// Handle success responses that are returned as errors
-	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "226 Transfer complete") ||
-			strings.Contains(errStr, "227 Entering Passive Mode") ||
-			strings.Contains(errStr, "257") ||
-			strings.Contains(errStr, "150 Opening") ||
-			strings.Contains(errStr, "150 Ok to send data") {
-			// These are actually success responses, not errors
-			err = nil
-		}
-	}
-
-	// If we successfully wrote data but got a "success" error, return the bytes written
-	if err == nil && bytesWritten > 0 {
-		return bytesWritten, nil
-	}
-
-	return bytesWritten, err
-}
-
-func (f *file) Seek(offset int64, whence int) (int64, error) {
-	switch whence {
-	case io.SeekStart:
-		f.offset = offset
-	case io.SeekCurrent:
-		f.offset += offset
-	case io.SeekEnd:
-		size, err := f.conn.FileSize(f.path)
-		if err != nil {
-			return 0, err
-		}
-		f.offset = size + offset
-	}
-	return f.offset, nil
-}
-
-func (f *file) Close() error {
-	return f.release()
 }
 
 func (f *fileSystem) convertResultError(err *error, path string) {

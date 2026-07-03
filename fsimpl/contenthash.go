@@ -18,26 +18,28 @@ func DropboxContentHash(ctx context.Context, reader io.Reader) (string, error) {
 	}
 	buf := make([]byte, hashBlockSize)
 	resultHash := sha256.New()
-	numReadBytes, err := reader.Read(buf)
-	if err != nil && err != io.EOF {
-		return "", err
-	}
-	if numReadBytes > 0 {
-		bufHash := sha256.Sum256(buf[:numReadBytes])
-		resultHash.Write(bufHash[:])
-	}
-	for numReadBytes == hashBlockSize && err == nil {
+	for {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		numReadBytes, err = reader.Read(buf)
-		if err != nil && err != io.EOF {
-			return "", err
-		}
+		// io.ReadFull fills the whole block even if the underlying reader
+		// returns the data in smaller chunks without io.EOF, which is legal
+		// per io.Reader. Using reader.Read directly would split blocks at the
+		// wrong boundaries for such readers and produce a wrong hash.
+		numReadBytes, err := io.ReadFull(reader, buf)
 		if numReadBytes > 0 {
 			bufHash := sha256.Sum256(buf[:numReadBytes])
 			resultHash.Write(bufHash[:])
 		}
+		switch err {
+		case nil:
+			// Full block read, continue with the next one
+		case io.EOF, io.ErrUnexpectedEOF:
+			// Reader exhausted (io.EOF on a block boundary, or
+			// io.ErrUnexpectedEOF for the last partial block)
+			return hex.EncodeToString(resultHash.Sum(nil)), nil
+		default:
+			return "", err
+		}
 	}
-	return hex.EncodeToString(resultHash.Sum(nil)), nil
 }

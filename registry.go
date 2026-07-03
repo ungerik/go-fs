@@ -150,6 +150,19 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 		}
 	}
 
-	// No file system found, assume uri is for the local file system
+	// No registered file system matched.
+	//
+	// A URI that carries a scheme (contains the PrefixSeparator "://") but did
+	// not match any registered file system must not be treated as a local
+	// path: silently resolving e.g. "s3://bucket/key" or "http://host/file"
+	// against the local file system would read or write a bogus local path.
+	// The only scheme that maps to the local file system is file:// (matched
+	// above via the registered Local file system), so any other scheme is
+	// reported as the invalid file system instead.
+	if strings.Contains(uri, PrefixSeparator) && !strings.HasPrefix(uri, LocalPrefix) {
+		return Invalid, uri
+	}
+
+	// No scheme: assume uri is a path for the local file system
 	return Local, uri
 }

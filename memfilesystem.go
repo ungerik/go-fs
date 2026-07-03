@@ -600,29 +600,53 @@ func (fs *MemFileSystem) ListDirInfo(ctx context.Context, dirPath string, callba
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
+
+	// Snapshot the directory entries while holding the read lock, then
+	// release it before invoking the callback. The callback must be able to
+	// read from or write to this file system (e.g. CopyRecursive copying a
+	// listed file into a sibling directory of the same MemFileSystem), which
+	// would deadlock against a read lock held across the callback.
+	infos, err := fs.dirInfoSnapshot(dirPath, patterns)
+	if err != nil {
+		return err
+	}
+	for _, info := range infos {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := callback(info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dirInfoSnapshot returns FileInfo values for the direct children of dirPath
+// that match patterns. It acquires the read lock only for the duration of the
+// snapshot so that callers can invoke callbacks without holding the lock.
+func (fs *MemFileSystem) dirInfoSnapshot(dirPath string, patterns []string) ([]*FileInfo, error) {
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
 	node, _ := fs.pathNodeOrNil(dirPath)
 	if node == nil {
-		return NewErrDoesNotExist(fs.RootDir().Join(dirPath))
+		return nil, NewErrDoesNotExist(fs.RootDir().Join(dirPath))
 	}
 	if !node.IsDir() {
-		return NewErrIsNotDirectory(fs.RootDir().Join(dirPath))
+		return nil, NewErrIsNotDirectory(fs.RootDir().Join(dirPath))
 	}
 
+	infos := make([]*FileInfo, 0, len(node.Dir))
 	for name, childNode := range node.Dir {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		matched, err := fs.MatchAnyPattern(name, patterns)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !matched {
 			continue
 		}
-		info := &FileInfo{
+		infos = append(infos, &FileInfo{
+			File:        fs.JoinCleanFile(dirPath, name),
 			Name:        name,
 			Exists:      true,
 			IsDir:       childNode.IsDir(),
@@ -631,13 +655,9 @@ func (fs *MemFileSystem) ListDirInfo(ctx context.Context, dirPath string, callba
 			Size:        int64(len(childNode.FileData)),
 			Modified:    childNode.Modified,
 			Permissions: childNode.Permissions,
-		}
-		err = callback(info)
-		if err != nil {
-			return err
-		}
+		})
 	}
-	return nil
+	return infos, nil
 }
 
 // ListDirMax returns at most max files and directories in dirPath
@@ -700,33 +720,57 @@ func (fs *MemFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath strin
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
+
+	// Snapshot the whole sub-tree while holding the read lock, then release
+	// it before invoking the callback so the callback may read from or write
+	// to this file system without deadlocking. See ListDirInfo for details.
+	infos, err := fs.dirInfoSnapshotRecursive(dirPath, patterns)
+	if err != nil {
+		return err
+	}
+	for _, info := range infos {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := callback(info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (fs *MemFileSystem) dirInfoSnapshotRecursive(dirPath string, patterns []string) ([]*FileInfo, error) {
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
 	node, _ := fs.pathNodeOrNil(dirPath)
 	if node == nil {
-		return NewErrDoesNotExist(fs.RootDir().Join(dirPath))
+		return nil, NewErrDoesNotExist(fs.RootDir().Join(dirPath))
 	}
 	if !node.IsDir() {
-		return NewErrIsNotDirectory(fs.RootDir().Join(dirPath))
+		return nil, NewErrIsNotDirectory(fs.RootDir().Join(dirPath))
 	}
-	return fs.walkDirInfoRecursive(ctx, node, dirPath, callback, patterns)
+	var infos []*FileInfo
+	if err := fs.walkDirInfoRecursive(node, dirPath, patterns, &infos); err != nil {
+		return nil, err
+	}
+	return infos, nil
 }
 
-func (fs *MemFileSystem) walkDirInfoRecursive(ctx context.Context, node *memFileNode, dirPath string, callback func(*FileInfo) error, patterns []string) error {
+// walkDirInfoRecursive appends a FileInfo for every file (not directory) in
+// node and its sub-directories to infos, visiting names in sorted order. It
+// must be called with fs.mtx held for reading.
+func (fs *MemFileSystem) walkDirInfoRecursive(node *memFileNode, dirPath string, patterns []string, infos *[]*FileInfo) error {
 	names := make([]string, 0, len(node.Dir))
 	for name := range node.Dir {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		child := node.Dir[name]
 		childPath := fs.JoinCleanPath(dirPath, name)
 		if child.IsDir() {
-			if err := fs.walkDirInfoRecursive(ctx, child, childPath, callback, patterns); err != nil {
+			if err := fs.walkDirInfoRecursive(child, childPath, patterns, infos); err != nil {
 				return err
 			}
 			continue
@@ -738,7 +782,8 @@ func (fs *MemFileSystem) walkDirInfoRecursive(ctx context.Context, node *memFile
 		if !matched {
 			continue
 		}
-		info := &FileInfo{
+		*infos = append(*infos, &FileInfo{
+			File:        fs.JoinCleanFile(childPath),
 			Name:        name,
 			Exists:      true,
 			IsDir:       false,
@@ -747,10 +792,7 @@ func (fs *MemFileSystem) walkDirInfoRecursive(ctx context.Context, node *memFile
 			Size:        int64(len(child.FileData)),
 			Modified:    child.Modified,
 			Permissions: child.Permissions,
-		}
-		if err := callback(info); err != nil {
-			return err
-		}
+		})
 	}
 	return nil
 }

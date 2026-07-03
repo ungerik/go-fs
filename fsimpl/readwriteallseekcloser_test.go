@@ -13,7 +13,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		initialData := []byte("Hello, World!")
 		mockFile := &mockReadWriteAllFile{data: initialData}
 
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll)
+		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
 
 		buf := make([]byte, len(initialData))
 		n, err := rw.Read(buf)
@@ -29,7 +29,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		initialData := []byte("Hello, World!")
 		mockFile := &mockReadWriteAllFile{data: initialData}
 
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll)
+		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
 
 		// Seek to position 7 (after "Hello, ")
 		pos, err := rw.Seek(7, io.SeekStart)
@@ -65,7 +65,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		initialData := []byte("0123456789")
 		mockFile := &mockReadWriteAllFile{data: initialData}
 
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll)
+		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
 		defer rw.Close()
 
 		// WriteAt position 3
@@ -88,7 +88,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		initialData := []byte("0123456789")
 		mockFile := &mockReadWriteAllFile{data: initialData}
 
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll)
+		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
 		defer rw.Close()
 
 		// Seek from start
@@ -119,7 +119,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		originalData := make([]byte, len(initialData))
 		copy(originalData, initialData)
 
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll)
+		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
 
 		// Only read, no write
 		buf := make([]byte, 5)
@@ -135,7 +135,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		initialData := []byte("Hello")
 		mockFile := &mockReadWriteAllFile{data: initialData}
 
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll)
+		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
 
 		// Write beyond the initial size
 		_, err := rw.Seek(0, io.SeekEnd)
@@ -154,7 +154,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		initialData := []byte("Hello, World!")
 		mockFile := &mockReadWriteAllFile{data: initialData}
 
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll)
+		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
 
 		// Buffer should not be loaded yet
 		assert.Equal(t, 0, mockFile.readCount, "ReadAll should not be called on construction")
@@ -177,7 +177,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		initialData := []byte("Hello, World!")
 		mockFile := &mockReadWriteAllFile{data: initialData}
 
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll)
+		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
 
 		// Read some data
 		buf := make([]byte, 5)
@@ -216,7 +216,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 			return nil
 		}
 
-		rw := NewReadWriteAllSeekCloser(readAll, writeAll)
+		rw := NewReadWriteAllSeekCloser(readAll, writeAll, nil)
 
 		// Read initial content
 		buf := make([]byte, 5)
@@ -255,7 +255,7 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 			return nil
 		}
 
-		rw := NewReadWriteAllSeekCloser(readAll, writeAll)
+		rw := NewReadWriteAllSeekCloser(readAll, writeAll, nil)
 
 		// Read and write
 		buf := make([]byte, 5)
