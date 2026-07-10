@@ -9,7 +9,7 @@ require github.com/ungerik/go-fs v0.0.0-00010101000000-000000000000 // replaced
 require (
 	github.com/pkg/sftp v1.13.10
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/crypto v0.50.0
+	golang.org/x/crypto v0.52.0
 )
 
 require (
@@ -19,6 +19,6 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/pkg/xattr v0.4.12 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
