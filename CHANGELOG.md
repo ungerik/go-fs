@@ -117,6 +117,10 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 - `fs.SubFileSystem` is a view of a directory of another file system with
   the prefix `sub://<id>`, forwarding every operation (including the
   optional interfaces) to the parent with translated paths.
+- `fs.OverlayFileSystem` stacks a writable upper layer on a read-only base
+  with the prefix `overlay://<id>`: reads fall through, listings are the
+  union, writes go to the upper layer with copy-up for in-place changes,
+  removed base entries are hidden by in-memory whiteouts.
 - `fs.NewStdFileSystemWithPrefix` builds a `StdFileSystem` with a scheme of
   its own; zipfs uses it: `zipfs.ReaderFileSystem` is a `StdFileSystem` over
   `archive/zip.Reader` and `zipfs.WriterFileSystem` the sequential writer,

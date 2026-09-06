@@ -523,6 +523,7 @@ route to the right backend.
 | (built-in)    | `mem://`                | `fs.NewMemFileSystem`                              | yes  | yes    |
 | (built-in)    | `stdfs://<id>`          | `fs.NewStdFileSystem(iofs.FS)`: embed.FS, os.DirFS, zip.Reader, MapFS | yes | no |
 | (built-in)    | `sub://<id>`            | `fs.NewSubFileSystem(parent, dir)`: view rooted at a directory | as parent | as parent |
+| (built-in)    | `overlay://<id>`        | `fs.NewOverlayFileSystem(base, upper)`: writable layer over a read-only base | yes | yes |
 
 Every registered file system has a stable `ID()`: the file system id of the
 root volume for the local file system, the bucket for s3fs, `user@host` for
@@ -766,6 +767,23 @@ defer subFS.Close()
 
 files, err := fs.File("sub://data/").ListDirMax(ctx, -1)
 err = fs.File("sub://data/report.txt").WriteAllString(ctx, "...") // writes /srv/data/report.txt
+```
+
+`OverlayFileSystem` stacks a writable upper layer on a read-only base:
+reads fall through to the base, listings are the union, every write goes
+to the upper layer, base files modified in place are copied up first, and
+removed base entries are hidden by in-memory whiteouts. Typical uses are
+a scratch copy of embedded defaults, or tests that must not modify a
+fixture:
+
+```go
+defaults := fs.NewStdFileSystemAndRegister(embeddedConfig, "defaults")
+scratch, err := fs.NewMemFileSystem("/")
+overlay, err := fs.NewOverlayFileSystemAndRegister(defaults, scratch, "config")
+defer overlay.Close()
+
+err = fs.File("overlay://config/app.json").WriteAllString(ctx, "...") // lands in scratch
+data, err := fs.File("overlay://config/schema.json").ReadAll(ctx)   // read from defaults
 ```
 
 Implementing a file system
