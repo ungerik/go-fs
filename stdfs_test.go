@@ -11,6 +11,19 @@ import (
 )
 
 func TestStdFS(t *testing.T) {
+	// Round trip: a MapFS through StdFileSystem and back through StdFS
+	// must still pass the io/fs test suite.
+	t.Run("MapFS", func(t *testing.T) {
+		fixture := fstest.MapFS{
+			"a.txt":       {Data: []byte("a")},
+			"sub/b.txt":   {Data: []byte("b")},
+			"sub/.hidden": {Data: []byte("h")},
+		}
+		stdFS := NewStdFileSystemAndRegister(fixture, "")
+		t.Cleanup(func() { _ = stdFS.Close() })
+		require.NoError(t, fstest.TestFS(stdFS.RootDir().StdFS(), "a.txt", "sub/b.txt", "sub/.hidden"))
+	})
+
 	// A controlled tree instead of the repository checkout, which
 	// makes the walk deterministic and fast on every platform.
 	dir := MustMakeTempDir()

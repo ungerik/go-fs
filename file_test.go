@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	iofs "io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	stdfstest "testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -302,21 +304,24 @@ func TestFile_Watch(t *testing.T) {
 	assert.NoError(t, err, "cancel watch")
 }
 
-func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
-	// Create test directory structure
-	dir := MustMakeTempDir()
-	t.Cleanup(func() { dir.RemoveRecursive(context.Background()) })
+// mapFSDir registers a read-only StdFileSystem over the MapFS
+// fixture for the test and returns its root directory.
+func mapFSDir(t *testing.T, fixture stdfstest.MapFS) File {
+	t.Helper()
+	stdFS := NewStdFileSystemAndRegister(fixture, "")
+	t.Cleanup(func() { _ = stdFS.Close() })
+	return stdFS.RootDir()
+}
 
-	// Create a nested directory structure:
-	// dir/
-	//   file1.txt
-	//   file2.log
-	//   subdir1/
-	//     file3.txt
-	//     file4.log
-	//     subdir2/
-	//       file5.txt
-	//       file6.md
+func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
+	dir := mapFSDir(t, stdfstest.MapFS{
+		"file1.txt":                 {},
+		"file2.log":                 {},
+		"subdir1/file3.txt":         {},
+		"subdir1/file4.log":         {},
+		"subdir1/subdir2/file5.txt": {},
+		"subdir1/subdir2/file6.md":  {},
+	})
 	file1 := dir.Join("file1.txt")
 	file2 := dir.Join("file2.log")
 	subdir1 := dir.Join("subdir1")
@@ -325,14 +330,6 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 	subdir2 := subdir1.Join("subdir2")
 	file5 := subdir2.Join("file5.txt")
 	file6 := subdir2.Join("file6.md")
-
-	require.NoError(t, subdir2.MakeAllDirs())
-	require.NoError(t, file1.Touch())
-	require.NoError(t, file2.Touch())
-	require.NoError(t, file3.Touch())
-	require.NoError(t, file4.Touch())
-	require.NoError(t, file5.Touch())
-	require.NoError(t, file6.Touch())
 
 	t.Run("all files without pattern", func(t *testing.T) {
 		var files []File
@@ -445,22 +442,14 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 }
 
 func TestFile_ListDir(t *testing.T) {
-	dir, err := MakeTempDir()
-	require.NoError(t, err, "MakeTempDir")
-	t.Cleanup(func() { dir.RemoveRecursive(context.Background()) })
-
+	dir := mapFSDir(t, stdfstest.MapFS{"a": {}, "b": {}, "c": {}})
 	files := map[File]bool{
 		dir.Join("a"): true,
 		dir.Join("b"): true,
 		dir.Join("c"): true,
 	}
 
-	for file := range files {
-		err := file.Touch()
-		require.NoError(t, err)
-	}
-
-	err = dir.ListDir(t.Context(), func(file File) error {
+	err := dir.ListDir(t.Context(), func(file File) error {
 		if !files[file] {
 			t.Errorf("unexpected file: %s", file)
 		}
@@ -472,19 +461,11 @@ func TestFile_ListDir(t *testing.T) {
 }
 
 func TestFile_ListDirIter(t *testing.T) {
-	dir, err := MakeTempDir()
-	require.NoError(t, err, "MakeTempDir")
-	t.Cleanup(func() { dir.RemoveRecursive(context.Background()) })
-
+	dir := mapFSDir(t, stdfstest.MapFS{"a": {}, "b": {}, "c": {}})
 	files := map[File]bool{
 		dir.Join("a"): true,
 		dir.Join("b"): true,
 		dir.Join("c"): true,
-	}
-
-	for file := range files {
-		err := file.Touch()
-		require.NoError(t, err)
 	}
 
 	for file, err := range dir.ListDirIter(t.Context()) {
@@ -494,36 +475,31 @@ func TestFile_ListDirIter(t *testing.T) {
 		}
 		delete(files, file)
 	}
-	require.NoError(t, err)
 	require.Empty(t, files, "not all files listed")
 }
 
 func TestFile_Glob(t *testing.T) {
-	dir := MustMakeTempDir()
-	t.Cleanup(func() { dir.RemoveRecursive(context.Background()) })
+	rootDir := mapFSDir(t, stdfstest.MapFS{
+		"seed/a/b/c/cFile":                   {},
+		"seed/a/b/c/Hello/World/x/file1.txt": {},
+		"seed/a/b/c/Hello/World/x/file2.txt": {},
+		"seed/a/b/c/Hello/World/x/file3.txt": {},
+		"seed/a/b/c/Hello/World/y":           {Mode: iofs.ModeDir},
+	})
+	dir := rootDir.Join("seed")
 	xDir := dir.Join("a", "b", "c", "Hello", "World", "x")
-	yDir := dir.Join("a", "b", "c", "Hello", "World", "y")
-	require.NoError(t, xDir.MakeAllDirs())
-	require.NoError(t, yDir.MakeAllDirs())
 	cFile := dir.Join("a", "b", "c", "cFile")
-	require.NoError(t, cFile.Touch())
 	xFile1 := xDir.Join("file1.txt")
-	require.NoError(t, xFile1.Touch())
 	xFile2 := xDir.Join("file2.txt")
-	require.NoError(t, xFile2.Touch())
 	xFile3 := xDir.Join("file3.txt")
-	require.NoError(t, xFile3.Touch())
 
 	type result struct {
 		file   File
 		values []string
 	}
 
-	// On Windows dir has a volume like "C:", which is the root
-	// the absolute patterns below are relative to.
-	volume := filepath.VolumeName(string(dir))
-	rootDir := File(volume + "/")
-	dirPathFromRoot := strings.TrimPrefix(dir.PathWithSlashes(), volume)
+	// Absolute patterns below are relative to the root directory
+	dirPathFromRoot := dir.Path()
 
 	tests := []struct {
 		name    string
@@ -639,7 +615,7 @@ func TestFile_Glob(t *testing.T) {
 				require.Truef(t, file.Exists(), "file %s does not exist", file)
 				got = append(got, result{file, values})
 			}
-			sort.Slice(got, func(i, j int) bool { return got[i].file.LocalPath() < got[j].file.LocalPath() })
+			sort.Slice(got, func(i, j int) bool { return got[i].file.Path() < got[j].file.Path() })
 			require.Equal(t, tt.want, got, "file path sorted results")
 		})
 	}

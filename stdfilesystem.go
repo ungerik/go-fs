@@ -250,7 +250,20 @@ func (s *StdFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if info.IsDir() {
 		return nil, errors.Join(NewErrIsDirectory(s.file(filePath)), file.Close())
 	}
-	return file, nil
+	// Stat of the opened file must report the same info as Stat
+	// of the file system, including the readable permissions
+	return &stdFile{File: file, info: s.fileInfo(s.file(filePath), info, s.IsHidden(filePath)).StdFileInfo()}, nil
+}
+
+// stdFile is an opened io/fs.File whose Stat reports
+// the FileInfo of the StdFileSystem.
+type stdFile struct {
+	iofs.File
+	info iofs.FileInfo
+}
+
+func (f *stdFile) Stat() (iofs.FileInfo, error) {
+	return f.info, nil
 }
 
 // ReadAll uses io/fs.ReadFile, which uses the ReadFile method

@@ -2,8 +2,11 @@ package uuiddir
 
 import (
 	"context"
+	iofs "io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -176,9 +179,25 @@ func makeTestDirs() (baseDir fs.File, dirs map[fs.File]bool, ids map[[16]byte]st
 }
 
 func Test_Enum(t *testing.T) {
-	baseDir, dirs, ids, err := makeTestDirs()
-	assert.NoError(t, err, "makeTestDirs")
-	defer baseDir.RemoveRecursive(context.Background())
+	// Enum only reads, so the directories are a read-only MapFS fixture
+	fixture := make(fstest.MapFS)
+	dirs := make(map[fs.File]bool)
+	ids := make(map[[16]byte]struct{})
+	stdFS := fs.NewStdFileSystemAndRegister(fixture, "")
+	t.Cleanup(func() { _ = stdFS.Close() })
+	baseDir := stdFS.RootDir()
+	for _, id := range []string{
+		"ced14f11-83f6-4908-b502-8971ff464608",
+		"8e7c40d7-49fa-41e1-8962-263070ecb87f",
+		"4717a9b7-17d8-4c12-89e1-c998fb34e9ac",
+		"10ba4b07-907e-4702-a6df-7b5df92c9c2e",
+		"cc2f6bad-9a2d-4b12-a083-23a05e4207c2",
+	} {
+		uuid := mustParseUUID(id)
+		fixture[strings.Join(Split(uuid), "/")] = &fstest.MapFile{Mode: iofs.ModeDir}
+		dirs[Join(baseDir, uuid)] = true
+		ids[uuid] = struct{}{}
+	}
 
 	Enum(t.Context(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
 		hasDir := dirs[uuidDir] && uuidDir.IsDir()

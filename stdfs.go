@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"errors"
+	"io"
 	iofs "io/fs"
 	"runtime"
 	"sort"
@@ -51,7 +52,67 @@ func (f StdFS) Open(name string) (iofs.File, error) {
 	if err := checkStdFSName(name); err != nil {
 		return nil, err
 	}
-	return f.File.Join(name).OpenReader()
+	file := f.File.Join(name)
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		// Directories are opened as io/fs.ReadDirFile,
+		// which not every file system's OpenReader supports
+		return &stdDirFile{file: file, info: info}, nil
+	}
+	return file.OpenReader()
+}
+
+// stdDirFile is the io/fs.ReadDirFile of a directory opened by StdFS.
+type stdDirFile struct {
+	file    File
+	info    iofs.FileInfo
+	entries []iofs.DirEntry // loaded by the first ReadDir
+	loaded  bool
+	offset  int
+}
+
+func (d *stdDirFile) Stat() (iofs.FileInfo, error) {
+	return d.info, nil
+}
+
+func (d *stdDirFile) Read([]byte) (int, error) {
+	return 0, &iofs.PathError{Op: "read", Path: d.file.Path(), Err: NewErrIsDirectory(d.file)}
+}
+
+func (d *stdDirFile) Close() error {
+	return nil
+}
+
+// ReadDir reads the directory entries sorted by name like io/fs.ReadDir,
+// n entries at a time for n > 0 and all remaining entries otherwise.
+func (d *stdDirFile) ReadDir(n int) ([]iofs.DirEntry, error) {
+	if !d.loaded {
+		err := d.file.ListDir(context.Background(), func(file File) error {
+			d.entries = append(d.entries, file.StdDirEntry())
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		sort.Slice(d.entries, func(i, j int) bool { return d.entries[i].Name() < d.entries[j].Name() })
+		d.loaded = true
+	}
+	remaining := d.entries[d.offset:]
+	if n <= 0 {
+		d.offset = len(d.entries)
+		return remaining, nil
+	}
+	if len(remaining) == 0 {
+		return nil, io.EOF
+	}
+	if len(remaining) > n {
+		remaining = remaining[:n]
+	}
+	d.offset += len(remaining)
+	return remaining, nil
 }
 
 // ReadFile reads the named file and returns its contents.
