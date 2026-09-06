@@ -29,11 +29,7 @@ func TestClosedFileSystem(t *testing.T) {
 
 	ctx := t.Context()
 
-	exists, err := s3fsys.(fs.ExistsFileSystem).Exists("/file")
-	assert.False(t, exists, "Exists must be false on a closed filesystem")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	_, err = s3fsys.Stat("/file")
+	_, err := s3fsys.Stat("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	_, err = s3fsys.OpenReader("/file")
@@ -64,5 +60,11 @@ func TestClosedFileSystem(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	err = s3fsys.(fs.TouchFileSystem).Touch("/file", 0)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+
+	err = s3fsys.(fs.RemoveAllFileSystem).RemoveAll(ctx, "/dir")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+
+	err = s3fsys.(fs.ListDirRecursiveFileSystem).ListDirRecursive(ctx, "/dir", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 }

@@ -62,6 +62,17 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
   underlying file on `Close` (the handle used to leak), and `fs.Glob` yields
   files cleaned for their file system's separator.
 
+- **s3fs rework (Phase 5).** Object keys are derived consistently from the
+  rooted file system paths (objects used to be written with a leading slash
+  but listed without). `Stat` recognises marker and implicit directories,
+  `MakeDir` on an existing path wraps `os.ErrExist`, `Remove` wraps
+  `os.ErrNotExist` and refuses non-empty directories, `RemoveAll` uses
+  batched `DeleteObjects`, `ListDirRecursive` is a single paginated listing,
+  `OpenReader` streams the object body, `OpenReadWriter` creates a missing
+  object, `CopyFile` URL-encodes the copy source. `MultipartUploadThreshold`
+  and `MultipartDownloadThreshold` are variables now. The `Watch` stub and
+  the `Exists` method are gone (the generic emulations cover both).
+
 ### Added
 
 - `fs.CreateTempFile` creates a temporary file atomically (`fs.TempFile` only
@@ -85,6 +96,12 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
   on Close; `fsimpl.FileBuffer.Truncate`.
 
 ### Fixed
+
+- The generic `OpenAppendWriter` emulation (used by file systems without a
+  native append writer) overwrote the beginning of the file instead of
+  appending.
+- `s3fs.DefaultDirPermissions` was `0660 + 0666`, which cleared the user
+  write bit and made `File.IsWritable` false for new S3 objects.
 
 - `JoinCleanPath` no longer modifies the passed slice (all file systems).
 - `fsimpl.FileBuffer.WriteAt` no longer panics on a negative offset and honors

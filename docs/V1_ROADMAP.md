@@ -444,11 +444,22 @@ One PR per phase unless noted.
       scope, `WriteAll`/`ListDirMax`-style calls that need `ctx, ` inserted,
       package-level functions that share a method name).
 
-### Phase 5 — Backends (one PR each: s3fs, sftpfs, ftpfs, dropboxfs)
+### Phase 5 — Backends (one commit each: s3fs, sftpfs, ftpfs, dropboxfs)
 
-- [ ] Per-backend changes listed above; each PR migrates the backend off
-      `AdaptLegacy` and runs its conformance (Docker where needed).
-- [ ] After the last one, delete `LegacyFileSystem`/`AdaptLegacy`. Tag `v0.3.0`.
+- [x] s3fs: `key`/`dirKey` helpers (paths are rooted, keys are not), `Stat`
+      of marker and implicit directories via one `ListObjectsV2 MaxKeys=1`,
+      `MakeDir` reports `ErrExist`, `Remove` reports `ErrNotExist` and refuses
+      non-empty directories, native `RemoveAll` (batched `DeleteObjects`) and
+      `ListDirRecursive`, streaming `OpenReader`, `OpenReadWriter` creates a
+      missing object, URL-encoded `CopySource`, `Exists` dropped (the `Stat`
+      emulation handles implicit directories), client guarded by a mutex,
+      multipart thresholds are package variables, `DefaultDirPermissions`
+      fixed (it was `0660 + 0666`). `Test_fileSystem` is no longer gated.
+      Found on the way: the `OpenAppendWriter` emulation in `dispatch.go`
+      wrote at offset 0 instead of appending.
+- [ ] sftpfs: per the backend list above.
+- [ ] ftpfs: per the backend list above.
+- [ ] dropboxfs: per the backend list above.
 
 ### Phase 6 — Docs and release
 

@@ -317,9 +317,15 @@ func fsOpenAppendWriter(fileSystem FileSystem, filePath string, perm Permissions
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	return fsimpl.NewWriteOnCloseFileBuffer(current, func(data []byte) error {
+	buf := fsimpl.NewWriteOnCloseFileBuffer(current, func(data []byte) error {
 		return fsWriteAll(context.Background(), fileSystem, filePath, data, perm)
-	}), nil
+	})
+	// Writes must append after the current content
+	_, err = buf.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, err
+	}
+	return buf, nil
 }
 
 func fsAppend(ctx context.Context, fileSystem FileSystem, filePath string, data []byte, perm Permissions) error {
