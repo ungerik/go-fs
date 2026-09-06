@@ -157,6 +157,16 @@ func (f *ZipFileSystem) AbsPath(filePath string) string {
 	return path.Clean(filePath)
 }
 
+// checkClosed returns an fs.ErrFileSystemClosed error if the archive was closed.
+func (f *ZipFileSystem) checkClosed() error {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closer == nil {
+		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+	}
+	return nil
+}
+
 func (f *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir bool) {
 	if f.closer == nil {
 		return nil, false
@@ -202,6 +212,9 @@ func (f *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (io
 }
 
 func (f *ZipFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+	if err := f.checkClosed(); err != nil {
+		return nil, err
+	}
 	if f.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
 	}
@@ -293,6 +306,7 @@ func (f *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callbac
 			size = 0
 		}
 		info := &fs.FileInfo{
+			File:        f.JoinCleanFile(dirPath, name),
 			Name:        name,
 			Exists:      true,
 			IsDir:       isDir,
@@ -319,67 +333,63 @@ func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string
 	if f.zipReader == nil {
 		return fs.ErrWriteOnlyFileSystem
 	}
-	if f.closer == nil {
-		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+	if err := f.checkClosed(); err != nil {
+		return err
 	}
 
-	rootNode := &dirTreeNode{
-		FileInfo: &fs.FileInfo{
-			IsDir: true,
-		},
-		children: make(map[string]*dirTreeNode),
-	}
+	root := newDirTreeRoot()
 	for _, file := range f.zipReader.File {
-		currentDir := rootNode
-		parts := strings.Split(file.Name, Separator)
-		lastIndex := len(parts) - 1
-		for i := range lastIndex {
-			currentDir = currentDir.addChildDir(parts[i], file.Modified)
-		}
-		currentDir.addChildFile(parts[lastIndex], file.Modified, int64(file.UncompressedSize64)) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
-	}
-
-	// Navigate to the requested directory if not root
-	if dirPath != "" && dirPath != "." && dirPath != Separator {
-		dirPath = strings.TrimPrefix(dirPath, Separator)
-		parts := strings.SplitSeq(dirPath, Separator)
-		for part := range parts {
-			if part == "" {
-				continue
-			}
-			child, ok := rootNode.children[part]
-			if !ok {
-				return fs.NewErrDoesNotExist(f.File(dirPath))
-			}
-			if !child.IsDir {
-				return fs.NewErrIsNotDirectory(f.File(dirPath))
-			}
-			rootNode = child
+		err := root.add(file.Name, file.Modified, int64(file.UncompressedSize64)) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
+		if err != nil {
+			return err
 		}
 	}
 
-	var listRecursive func(parent *dirTreeNode) error
-	listRecursive = func(parent *dirTreeNode) error {
+	dir := root.lookup(dirPath)
+	if dir == nil {
+		return fs.NewErrDoesNotExist(f.File(dirPath))
+	}
+	if !dir.isDir {
+		return fs.NewErrIsNotDirectory(f.File(dirPath))
+	}
+
+	var listFiles func(parent *dirTreeNode) error
+	listFiles = func(parent *dirTreeNode) error {
 		for _, child := range parent.sortedChildren() {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-
-			err := callback(child.FileInfo)
-			if err != nil {
-				return err
-			}
-			if child.IsDir {
-				err = listRecursive(child)
+			if child.isDir {
+				err := listFiles(child)
 				if err != nil {
 					return err
 				}
+				continue
+			}
+			matched, err := f.MatchAnyPattern(child.name, patterns)
+			if err != nil {
+				return err
+			}
+			if !matched {
+				continue
+			}
+			err = callback(&fs.FileInfo{
+				File:        f.JoinCleanFile(child.path),
+				Name:        child.name,
+				Exists:      true,
+				IsRegular:   true,
+				IsHidden:    strings.HasPrefix(child.name, "."),
+				Size:        child.size,
+				Modified:    child.modified,
+				Permissions: fs.AllRead,
+			})
+			if err != nil {
+				return err
 			}
 		}
 		return nil
 	}
-
-	return listRecursive(rootNode)
+	return listFiles(dir)
 }
 
 func (f *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
@@ -491,7 +501,12 @@ func (f *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (
 	return nil, fs.NewErrUnsupported(f, "OpenReadWriter")
 }
 
+// Remove is not possible for ZIP archives: entries can't be removed
+// from an archive that is read, nor from one that is being written.
 func (f *ZipFileSystem) Remove(filePath string) error {
+	if f.zipReader != nil {
+		return fmt.Errorf("%s: %w (entries can't be removed from a ZIP archive)", f.Name(), fs.ErrReadOnlyFileSystem)
+	}
 	return fs.NewErrUnsupported(f, "Remove")
 }
 

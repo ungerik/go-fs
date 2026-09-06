@@ -239,7 +239,7 @@ The package uses **Docker-based integration testing** with MinIO as an S3-compat
 The test suite includes:
 
 1. **Comprehensive filesystem tests** (`Test_fileSystem`):
-   - Uses `fs.RunFileSystemTests` for standard compliance
+   - Uses `fstest.RunConformance` for standard compliance
    - Tests all file operations, directory operations, and metadata
    - 16+ sub-tests covering the entire interface
 

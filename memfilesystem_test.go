@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,28 +67,6 @@ func TestNewSingleMemFileSystem(t *testing.T) {
 	require.False(t, f.Exists(), "test.txt does not exist after close")
 	require.False(t, fs.RootDir().Exists(), "root dir does not exist after close")
 	require.False(t, fs.RootDir().IsDir(), "root dir does not exist after close")
-}
-
-func TestMemFileSystem(t *testing.T) {
-	memFS, err := NewMemFileSystem("/")
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		assert.NoError(t, memFS.Close())
-	})
-
-	testDir := "/test"
-	err = memFS.MakeDir(testDir, nil)
-	require.NoError(t, err, "Failed to create test directory")
-
-	RunFileSystemTests(
-		t.Context(),
-		t,
-		memFS,
-		"memory file system", // name
-		memFS.Prefix(),       // prefix
-		testDir,              // testDir
-	)
 }
 
 func TestMemFileSystem_FullFeatures(t *testing.T) {
@@ -583,10 +560,14 @@ func TestMemFileSystem_Stat_And_Exists(t *testing.T) {
 		require.NotZero(t, info.Mode()&iofs.ModeDir)
 	})
 
-	t.Run("SymlinkMode", func(t *testing.T) {
+	t.Run("SymlinkFollowed", func(t *testing.T) {
+		// Like os.Stat, Stat follows symbolic links and reports the target,
+		// while IsSymbolicLink reports the link itself.
 		info, err := memFS.Stat("/link")
 		require.NoError(t, err)
-		require.NotZero(t, info.Mode()&iofs.ModeSymlink, "Mode must carry ModeSymlink")
+		require.Zero(t, info.Mode()&iofs.ModeSymlink, "Stat must follow the link to the target")
+		require.Equal(t, int64(3), info.Size(), "Stat must report the target size")
+		require.True(t, memFS.IsSymbolicLink("/link"))
 		require.Nil(t, info.Sys())
 	})
 }
@@ -612,13 +593,10 @@ func TestMemFileSystem_ReadAll_EdgeCases(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
-	t.Run("OnDirectoryReturnsNilData", func(t *testing.T) {
-		// ReadAll on a directory returns its (always-nil) FileData rather
-		// than erroring. Documenting the current behavior so a future
-		// change is intentional.
-		data, err := memFS.ReadAll(t.Context(), "/d")
-		require.NoError(t, err)
-		require.Empty(t, data)
+	t.Run("OnDirectoryErrors", func(t *testing.T) {
+		// Like os.ReadFile, reading a directory is an error
+		_, err := memFS.ReadAll(t.Context(), "/d")
+		require.ErrorAs(t, err, new(ErrIsDirectory))
 	})
 }
 
@@ -1001,11 +979,12 @@ func TestMemFileSystem_Remove_EdgeCases(t *testing.T) {
 		require.Error(t, err, "removing root must fail")
 	})
 
-	t.Run("RemovingDirDropsSubtree", func(t *testing.T) {
-		// Current semantics: Remove on a directory drops it (and the
-		// entire subtree) atomically. Documented here so a future change
-		// to e.g. require ENOTEMPTY is intentional.
-		require.NoError(t, memFS.Remove("/d"))
+	t.Run("NonEmptyDirRefused", func(t *testing.T) {
+		// Like os.Remove, a non-empty directory can't be removed;
+		// File.RemoveRecursive is the way to drop a subtree.
+		require.Error(t, memFS.Remove("/d"))
+		require.True(t, memFS.Exists("/d/sub/inner.txt"), "content must survive a refused Remove")
+		require.NoError(t, memFS.RootDir().Join("d").RemoveRecursive())
 		require.False(t, memFS.Exists("/d"))
 		require.False(t, memFS.Exists("/d/sub/inner.txt"))
 	})

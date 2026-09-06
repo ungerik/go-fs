@@ -117,14 +117,16 @@ func MatchAnyPattern(name string, patterns []string) (bool, error) {
 // JoinCleanPath trims trimPrefix from the first of the uriParts,
 // joins all parts with path.Join, URL-unescapes the result,
 // ensures it begins with a slash and returns it cleaned by path.Clean.
+// The passed uriParts slice is not modified.
 //
 // The slash "/" is always used as path separator because the joining
 // and cleaning is done by the path package of the standard library.
 func JoinCleanPath(uriParts []string, trimPrefix string) string {
+	var cleanPath string
 	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], trimPrefix)
+		// Don't modify the passed slice
+		cleanPath = path.Join(append([]string{strings.TrimPrefix(uriParts[0], trimPrefix)}, uriParts[1:]...)...)
 	}
-	cleanPath := path.Join(uriParts...)
 	unescPath, err := url.PathUnescape(cleanPath)
 	if err == nil {
 		cleanPath = unescPath

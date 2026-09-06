@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fstest"
 )
 
 const (
@@ -205,12 +206,9 @@ func Test_fileSystem(t *testing.T) {
 	expectedPrefix := fmt.Sprintf("sftp://%s@localhost:%s", testUsername, testSFTPPort)
 
 	// Run comprehensive filesystem tests
-	fs.RunFileSystemTests(
-		ctx,
-		t,
-		sftpFS,
-		"SFTP",         // name
-		expectedPrefix, // prefix
-		testDataDir,    // testDir
-	)
+	fstest.RunConformance(t, sftpFS, fstest.Config{
+		Name:    "SFTP",
+		Prefix:  expectedPrefix,
+		TestDir: testDataDir,
+	})
 }

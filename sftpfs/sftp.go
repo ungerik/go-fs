@@ -451,7 +451,16 @@ func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 	}
 	defer release()
 
-	return client.Mkdir(dirPath)
+	err = client.Mkdir(dirPath)
+	if err != nil {
+		// SFTP reports a generic failure for an existing path,
+		// map it to os.ErrExist like os.Mkdir does
+		if _, statErr := client.Stat(dirPath); statErr == nil {
+			return fs.NewErrAlreadyExists(f.JoinCleanFile(dirPath))
+		}
+		return err
+	}
+	return nil
 }
 
 func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
@@ -476,10 +485,14 @@ func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback f
 
 	infos, err := client.ReadDirContext(ctx, dirPath)
 	if err != nil {
-		// Should we replace alls os.ErrNotExist errors with fs.ErrDoesNotExist?
-		// if errors.Is(err, os.ErrNotExist) {
-		// 	return fs.NewErrDoesNotExist(f.JoinCleanFile(dirPath))
-		// }
+		// Distinguish a missing directory from a path that is not a directory
+		info, statErr := client.Stat(dirPath)
+		switch {
+		case statErr == nil && !info.IsDir():
+			return fs.NewErrIsNotDirectory(f.JoinCleanFile(dirPath))
+		case errors.Is(err, os.ErrNotExist) || errors.Is(statErr, os.ErrNotExist):
+			return fs.NewErrDoesNotExist(f.JoinCleanFile(dirPath))
+		}
 		return err
 	}
 	for _, info := range infos {

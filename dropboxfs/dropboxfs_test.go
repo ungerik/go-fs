@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fstest"
 )
 
 func Test_fileSystem(t *testing.T) {
@@ -39,14 +39,11 @@ func Test_fileSystem(t *testing.T) {
 	})
 
 	// Run comprehensive filesystem tests
-	fs.RunFileSystemTests(
-		t.Context(),
-		t,
-		dbfs,                  // filesystem
-		"Dropbox file system", // expected name
-		"dropbox://",          // expected prefix
-		testDir,               // test directory
-	)
+	fstest.RunConformance(t, dbfs, fstest.Config{
+		Name:    "Dropbox file system",
+		Prefix:  dbfs.Prefix(),
+		TestDir: testDir,
+	})
 }
 
 func Test_fileSystem_MuteConfiguration(t *testing.T) {

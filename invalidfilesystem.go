@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	iofs "io/fs"
-	"net/url"
 	"path"
 	"strings"
 
@@ -79,16 +78,7 @@ func (fs InvalidFileSystem) CleanPathFromURI(uri string) string {
 }
 
 func (fs InvalidFileSystem) JoinCleanPath(uriParts ...string) string {
-	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], fs.Prefix())
-	}
-	cleanPath := path.Join(uriParts...)
-	unescPath, err := url.PathUnescape(cleanPath)
-	if err == nil {
-		cleanPath = unescPath
-	}
-	cleanPath = path.Clean(cleanPath)
-	return cleanPath
+	return fsimpl.JoinCleanPath(uriParts, fs.Prefix())
 }
 
 func (fs InvalidFileSystem) SplitPath(filePath string) []string {

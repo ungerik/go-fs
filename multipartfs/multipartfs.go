@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ungerik/go-fs"
@@ -32,6 +33,9 @@ type MultipartFileSystem struct {
 
 	prefix string
 	Form   *multipart.Form
+
+	closeMtx sync.Mutex
+	closed   bool
 }
 
 // FromRequestForm returns a MultipartFileSystem from a http.Request
@@ -168,16 +172,16 @@ func (f *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 			if formFile.Filename == filename {
 				info.Name = filename
 				info.Exists = true
+				info.IsRegular = true
+				info.Size = formFile.Size
 				break
 			}
 		}
 	}
 	if info.Exists {
-		info.File = fs.File(filePath)
-		info.IsRegular = true
-		info.Size = -1
-		// TODO get time from header if exists
-		info.Modified = time.Now()
+		info.File = f.JoinCleanFile(filePath)
+		info.IsHidden = strings.HasPrefix(info.Name, ".")
+		// Multipart form files carry no modification time
 		info.Permissions = fs.AllRead
 	}
 	return &info
@@ -233,24 +237,31 @@ func (f *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 	case 1:
 		dir := parts[0]
 		formFiles, _ := f.Form.File[dir]
-		if len(formFiles) > 0 {
-			for _, formFile := range formFiles {
-				filePath := path.Join(dir, formFile.Filename)
-				info := f.info(filePath)
-				err = callback(info)
-				if err != nil {
-					return err
-				}
+		if len(formFiles) == 0 {
+			return fs.NewErrDoesNotExist(f.File(dirPath))
+		}
+		for _, formFile := range formFiles {
+			matched, err := f.MatchAnyPattern(formFile.Filename, patterns)
+			if err != nil {
+				return err
 			}
-		} else {
-			err = fs.NewErrDoesNotExist(f.File(dirPath))
+			if !matched {
+				continue
+			}
+			err = callback(f.info(path.Join(dir, formFile.Filename)))
+			if err != nil {
+				return err
+			}
 		}
 	case 2:
-		err = fs.NewErrIsNotDirectory(f.File(dirPath))
+		if f.Exists(dirPath) {
+			return fs.NewErrIsNotDirectory(f.File(dirPath))
+		}
+		return fs.NewErrDoesNotExist(f.File(dirPath))
 	default:
-		err = fs.NewErrDoesNotExist(f.File(dirPath))
+		return fs.NewErrDoesNotExist(f.File(dirPath))
 	}
-	return err
+	return nil
 }
 
 func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
@@ -282,7 +293,15 @@ func (f *MultipartFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	return multipartFile{File: file, header: header}, nil
 }
 
+// Close unregisters the file system and removes the temporary
+// files of the multipart form. It is safe to call Close more than once.
 func (f *MultipartFileSystem) Close() error {
+	f.closeMtx.Lock()
+	defer f.closeMtx.Unlock()
+	if f.closed {
+		return nil
+	}
+	f.closed = true
 	fs.Unregister(f)
 	return f.Form.RemoveAll()
 }
@@ -304,7 +323,7 @@ type multipartFileInfo struct {
 func (f multipartFileInfo) Name() string        { return f.header.Filename }
 func (f multipartFileInfo) Size() int64         { return f.header.Size }
 func (f multipartFileInfo) Mode() iofs.FileMode { return 0666 }
-func (f multipartFileInfo) ModTime() time.Time  { return time.Now() }
+func (f multipartFileInfo) ModTime() time.Time  { return time.Time{} }
 func (f multipartFileInfo) IsDir() bool         { return false }
 func (f multipartFileInfo) Sys() any            { return nil }
 

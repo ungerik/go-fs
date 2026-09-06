@@ -160,10 +160,11 @@ func (local *LocalFileSystem) CleanPathFromURI(uri string) string {
 // basis (a decoding error keeps the escaped form), cleans it, and finally
 // expands a leading "~".
 func (local *LocalFileSystem) JoinCleanPath(uriParts ...string) string {
+	var cleanPath string
 	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], LocalPrefix)
+		// Don't modify the passed slice
+		cleanPath = filepath.Join(append([]string{strings.TrimPrefix(uriParts[0], LocalPrefix)}, uriParts[1:]...)...)
 	}
-	cleanPath := filepath.Join(uriParts...)
 	unescPath, err := url.PathUnescape(cleanPath)
 	if err == nil {
 		cleanPath = unescPath

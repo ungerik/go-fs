@@ -73,8 +73,10 @@ func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
 }
 
+// JoinCleanPath returns the joined and cleaned path without a leading
+// slash, because HTTP paths start with the host name: Prefix()+path is the URL.
 func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, f.prefix)
+	return strings.TrimPrefix(fsimpl.JoinCleanPath(uriParts, f.prefix), Separator)
 }
 
 func (f *fileSystem) SplitPath(filePath string) []string {
@@ -131,10 +133,12 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 
 	case isSuccessStatus(response.StatusCode) && response.ContentLength >= 0:
 		return fs.FileInfo{
-			Exists:   true,
-			Name:     name,
-			Size:     response.ContentLength,
-			Modified: modifiedTime(response),
+			Exists:      true,
+			Name:        name,
+			IsRegular:   true,
+			Size:        response.ContentLength,
+			Modified:    modifiedTime(response),
+			Permissions: fs.AllRead,
 		}, nil
 
 	case isSuccessStatus(response.StatusCode):
@@ -174,10 +178,12 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 	}
 
 	return fs.FileInfo{
-		Exists:   true,
-		Name:     name,
-		Size:     size,
-		Modified: modifiedTime(response),
+		Exists:      true,
+		Name:        name,
+		IsRegular:   true,
+		Size:        size,
+		Modified:    modifiedTime(response),
+		Permissions: fs.AllRead,
 	}, nil
 }
 

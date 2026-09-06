@@ -1,6 +1,15 @@
-// Package uuiddirs provides functions to split up a UUID
-// into a series of sub-directories so that an unlimited number
-// of UUIDs can be used as directories.
+// Package uuiddir stores an unlimited number of UUID-named directories
+// without ever putting too many entries into a single directory.
+//
+// Why: file systems (and the tools and object-store listings around them)
+// degrade badly when one directory holds millions of entries, while an
+// application that keys its data by UUID easily produces that many.
+// Splitting the 32 hex digits of a UUID into nested sub-directories bounds
+// the fan-out per directory level: the first level holds at most 256
+// entries (2 hex digits), the next two at most 4096 each (3 hex digits),
+// so no directory grows without limit no matter how many UUIDs are stored.
+// The layout is deterministic, so a UUID maps to exactly one path and the
+// path can be parsed back into the UUID.
 //
 // Example:
 //
@@ -116,7 +125,9 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 						}
 						uuid, err := Parse(uuidDir)
 						if err != nil {
-							return err
+							// Skip directories that are not a valid UUID path
+							// like files at the other levels are skipped
+							return nil
 						}
 						return callback(uuidDir, uuid)
 					})
@@ -131,11 +142,13 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 func RemoveDir(baseDir, uuidSubDir fs.File) error {
 	basePath := baseDir.Path()
 	uuidPath := uuidSubDir.Path()
-	if !strings.HasPrefix(uuidPath, basePath) || baseDir.FileSystem() != uuidSubDir.FileSystem() {
-		return fmt.Errorf("uuidDir(%q) is not a sub directory of baseDir(%q)", uuidPath, basePath)
-	}
 	if uuidPath == basePath {
 		return nil
+	}
+	sep := baseDir.FileSystem().Separator()
+	if baseDir.FileSystem() != uuidSubDir.FileSystem() ||
+		!strings.HasPrefix(uuidPath, strings.TrimSuffix(basePath, sep)+sep) {
+		return fmt.Errorf("uuidDir(%q) is not a sub directory of baseDir(%q)", uuidPath, basePath)
 	}
 
 	// fmt.Println("deleting", uuidDir.Path())
@@ -159,7 +172,7 @@ func RemoveDir(baseDir, uuidSubDir fs.File) error {
 // Make sub-directories under baseDir for the passed UUID
 func Make(baseDir fs.File, uuid [16]byte) (uuidDir fs.File, err error) {
 	uuidDir = Join(baseDir, uuid)
-	return uuidDir, baseDir.MakeAllDirs()
+	return uuidDir, uuidDir.MakeAllDirs()
 }
 
 // Remove the sub-directories under baseDir for the passed UUID

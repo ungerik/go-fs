@@ -9,22 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLocalFileSystem(t *testing.T) {
-	testDir := MustMakeTempDir()
-	t.Cleanup(func() {
-		assert.NoError(t, testDir.RemoveRecursive(), "testDir.RemoveRecursive() should not return an error")
-	})
-
-	RunFileSystemTests(
-		t.Context(),
-		t,
-		Local,               // fs
-		"local file system", // name
-		"file://",           // prefix
-		testDir.LocalPath(), // testDir
-	)
-}
-
 func Test_LocalFileSystem_MoveSameSrcDest(t *testing.T) {
 	tmp := MustMakeTempDir()
 	t.Cleanup(func() { _ = tmp.RemoveRecursive() })

@@ -5,6 +5,50 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## Unreleased
+
+Road to v1.0, see `docs/V1_ROADMAP.md`.
+
+### Added
+
+- **`fstest.RunConformance`** replaces `fs.RunFileSystemTests` and the `tests`
+  package. The suite seeds one directory tree, reads it back through the
+  `FileSystem` methods and the `File` API on every backend including the
+  read-only ones, verifies content (not just existence) for every write
+  operation and optional interface, and checks the error contract:
+  `os.ErrNotExist`, `os.ErrExist`, `ErrReadOnlyFileSystem`,
+  `ErrWriteOnlyFileSystem`, `ErrFileSystemClosed`, context cancellation.
+  httpfs, zipfs and multipartfs now run it too.
+- CI runs build, vet, race tests, staticcheck and gosec for every module on
+  ubuntu, macOS and Windows (Windows tests non-blocking for now).
+
+### Fixed
+
+- `JoinCleanPath` no longer modifies the passed slice (all file systems).
+- `MemFileSystem`: paths with the `\` separator are cleaned correctly,
+  `Remove` refuses non-empty directories, `Stat`/`OpenReader`/`ReadAll` follow
+  symbolic links, and operations after `Close` return `ErrFileSystemClosed`.
+- httpfs: `Join` no longer produces `http:///host/...` URLs, and file infos
+  are readable (`IsReadable` was always false).
+- zipfs: listed files carry the `zip://` prefix, recursive listing lists files
+  only and returns an error instead of panicking on conflicting entries,
+  `Remove` reports `ErrReadOnlyFileSystem` and `Stat` reports
+  `ErrFileSystemClosed` after `Close`.
+- multipartfs: real sizes instead of `-1`, deterministic modification time,
+  prefixed `FileInfo.File`, `ErrDoesNotExist`/`ErrIsNotDirectory` from listing,
+  idempotent `Close`.
+- sftpfs: `MakeDir` on an existing path wraps `os.ErrExist`, listing a file
+  reports `ErrIsNotDirectory`.
+- uuiddir: `Make` created `baseDir` instead of the UUID directory, `RemoveDir`
+  accepted siblings sharing the path prefix (`/base` vs `/basement`), `Enum`
+  aborted on one unparsable directory.
+
+### Removed
+
+- `fs.RunFileSystemTests` and the `tests` package (use `fstest.RunConformance`).
+- `fs.MemFileSystem.ReadAll` on a directory returns `ErrIsDirectory` instead
+  of empty data.
+
 ## v0.1.0 - 2026-06-30
 
 First release, and a v1.0 preparation pass: a broad audit of the library that

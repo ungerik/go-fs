@@ -288,6 +288,15 @@ func (fs *MemFileSystem) AddMemFile(f MemFile, modified time.Time) (File, error)
 	return fs.JoinCleanFile(pathParts...), nil
 }
 
+// closedErr returns an ErrFileSystemClosed error if the file system was closed.
+// Must be called with fs.mtx held.
+func (fs *MemFileSystem) closedErr() error {
+	if fs.root.Dir == nil {
+		return fmt.Errorf("%s: %w", fs.Name(), ErrFileSystemClosed)
+	}
+	return nil
+}
+
 func (fs *MemFileSystem) pathNodeOrNil(filePath string) (node, parent *memFileNode) {
 	if filePath == "" {
 		return nil, nil
@@ -303,6 +312,27 @@ func (fs *MemFileSystem) pathNodeOrNil(filePath string) (node, parent *memFileNo
 		node = subNode
 	}
 	return node, parent
+}
+
+// resolveSymlinks follows symbolic links starting at node,
+// which was found at filePath, and returns the target node
+// or nil if a link target does not exist. Link targets are
+// interpreted as absolute paths or relative to the directory of the link.
+// Must be called with fs.mtx held.
+func (fs *MemFileSystem) resolveSymlinks(node *memFileNode, filePath string) *memFileNode {
+	for depth := 0; node != nil && node.IsSymlink(); depth++ {
+		if depth > 40 {
+			return nil // too many levels of symbolic links
+		}
+		target := node.SymlinkTarget
+		if !fs.IsAbsPath(target) {
+			dir, _ := fs.SplitDirAndName(filePath)
+			target = fs.JoinCleanPath(dir, target)
+		}
+		node, _ = fs.pathNodeOrNil(target)
+		filePath = target
+	}
+	return node
 }
 
 // pathParentDirNode returns the directory node that filePath should live
@@ -456,17 +486,25 @@ func (fs *MemFileSystem) CleanPathFromURI(uri string) string {
 	return strings.TrimPrefix(uri, fs.prefix)
 }
 
+// JoinCleanPath joins the uriParts with the separator of the file system,
+// URL-unescapes the result and cleans it like path.Clean but using the
+// separator of the file system. The passed uriParts slice is not modified.
 func (fs *MemFileSystem) JoinCleanPath(uriParts ...string) string {
-	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], fs.prefix)
+	if len(uriParts) == 0 {
+		return ""
 	}
-	cleanPath := strings.Join(uriParts, fs.sep)
+	cleanPath := strings.TrimPrefix(uriParts[0], fs.prefix)
+	if len(uriParts) > 1 {
+		cleanPath += fs.sep + strings.Join(uriParts[1:], fs.sep)
+	}
 	unescPath, err := url.PathUnescape(cleanPath)
 	if err == nil {
 		cleanPath = unescPath
 	}
-	cleanPath = path.Clean(cleanPath) // TODO use sep
-	return cleanPath
+	if fs.sep == "/" {
+		return path.Clean(cleanPath)
+	}
+	return strings.ReplaceAll(path.Clean(strings.ReplaceAll(cleanPath, fs.sep, "/")), "/", fs.sep)
 }
 
 func (fs *MemFileSystem) SplitPath(filePath string) []string {
@@ -503,7 +541,11 @@ func (fs *MemFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
+	if err := fs.closedErr(); err != nil {
+		return nil, err
+	}
 	node, _ := fs.pathNodeOrNil(filePath)
+	node = fs.resolveSymlinks(node, filePath)
 	if node == nil {
 		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
 	}
@@ -628,6 +670,9 @@ func (fs *MemFileSystem) dirInfoSnapshot(dirPath string, patterns []string) ([]*
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
+	if err := fs.closedErr(); err != nil {
+		return nil, err
+	}
 	node, _ := fs.pathNodeOrNil(dirPath)
 	if node == nil {
 		return nil, NewErrDoesNotExist(fs.RootDir().Join(dirPath))
@@ -1045,9 +1090,16 @@ func (fs *MemFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, 
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
+	if err := fs.closedErr(); err != nil {
+		return nil, err
+	}
 	node, _ := fs.pathNodeOrNil(filePath)
+	node = fs.resolveSymlinks(node, filePath)
 	if node == nil {
 		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	}
+	if node.IsDir() {
+		return nil, NewErrIsDirectory(fs.RootDir().Join(filePath))
 	}
 	return node.FileData, nil
 }
@@ -1133,7 +1185,11 @@ func (fs *MemFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
+	if err := fs.closedErr(); err != nil {
+		return nil, err
+	}
 	node, _ := fs.pathNodeOrNil(filePath)
+	node = fs.resolveSymlinks(node, filePath)
 	if node == nil {
 		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
 	}
@@ -1555,6 +1611,10 @@ func (fs *MemFileSystem) Remove(filePath string) error {
 	if parent == nil {
 		fs.mtx.Unlock()
 		return errors.New("cannot remove root directory")
+	}
+	if node.IsDir() && len(node.Dir) > 0 {
+		fs.mtx.Unlock()
+		return fmt.Errorf("directory not empty: %s", fs.RootDir().Join(filePath))
 	}
 
 	// Remove from parent directory

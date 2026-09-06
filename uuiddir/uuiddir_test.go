@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	fs "github.com/ungerik/go-fs"
 )
@@ -224,4 +225,37 @@ func idsEqual(a, b map[[16]byte]struct{}) bool {
 		}
 	}
 	return true
+}
+
+func Test_Make(t *testing.T) {
+	baseDir := fs.MustMakeTempDir()
+	t.Cleanup(func() { _ = baseDir.RemoveRecursive() })
+
+	id := mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628")
+	uuidDir, err := Make(baseDir, id)
+	require.NoError(t, err, "Make")
+	require.Equal(t, Join(baseDir, id), uuidDir, "Make must return the UUID directory")
+	require.True(t, uuidDir.IsDir(), "Make must create the UUID directory, not just baseDir")
+
+	parsed, err := Parse(uuidDir)
+	require.NoError(t, err)
+	require.Equal(t, id, parsed)
+
+	// Make on an existing directory must not fail
+	_, err = Make(baseDir, id)
+	require.NoError(t, err, "Make on an existing UUID directory")
+}
+
+func Test_RemoveDir_BoundaryCheck(t *testing.T) {
+	tempDir := fs.MustMakeTempDir()
+	t.Cleanup(func() { _ = tempDir.RemoveRecursive() })
+
+	baseDir := tempDir.Join("base")
+	sibling := tempDir.Join("basement", "x")
+	require.NoError(t, baseDir.MakeAllDirs())
+	require.NoError(t, sibling.MakeAllDirs())
+
+	err := RemoveDir(baseDir, sibling)
+	require.Error(t, err, "a directory that merely shares the path prefix must be rejected")
+	require.True(t, sibling.IsDir(), "the rejected directory must not be removed")
 }
