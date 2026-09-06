@@ -275,10 +275,28 @@ func TestFile_Watch(t *testing.T) {
 
 	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
 
+	// The order in which fsnotify delivers the events differs between
+	// platforms (inotify reports the RENAME of newFile before the CREATE
+	// of renamedFile, kqueue the other way round), so compare as a set.
+	type fileEvent struct {
+		file  File
+		event Event
+	}
 	mtx.Lock()
 	defer mtx.Unlock()
-	assert.Equal(t, []File{newFile, renamedFile, newFile, renamedFile}, gotFiles)
-	assert.Equal(t, []Event{eventCreate, eventCreate, eventRename, eventRemove}, gotEvents)
+	var got []fileEvent
+	for i := range gotFiles {
+		got = append(got, fileEvent{gotFiles[i], gotEvents[i]})
+	}
+	assert.ElementsMatch(t,
+		[]fileEvent{
+			{newFile, eventCreate},
+			{newFile, eventRename},
+			{renamedFile, eventCreate},
+			{renamedFile, eventRemove},
+		},
+		got,
+	)
 
 	err = cancel()
 	assert.NoError(t, err, "cancel watch")
