@@ -19,7 +19,6 @@ const OverlayFileSystemPrefix = "overlay://"
 var (
 	_ FileSystem             = new(OverlayFileSystem)
 	_ WriteFileSystem        = new(OverlayFileSystem)
-	_ ExistsFileSystem       = new(OverlayFileSystem)
 	_ ReadAllFileSystem      = new(OverlayFileSystem)
 	_ WriteAllFileSystem     = new(OverlayFileSystem)
 	_ AppendFileSystem       = new(OverlayFileSystem)
@@ -144,7 +143,7 @@ func (o *OverlayFileSystem) overlayPath(layer FileSystem, layerPath string) stri
 
 // overlayFile translates a File of a layer to the overlay.
 func (o *OverlayFileSystem) overlayFile(layer FileSystem, layerFile File) File {
-	return File(o.JoinCleanURI(o.overlayPath(layer, layerFile.Path())))
+	return File(o.JoinCleanURI(o.overlayPath(layer, layer.CleanPath(string(layerFile)))))
 }
 
 // overlayInfo translates a FileInfo of a layer to the overlay.
@@ -156,29 +155,7 @@ func (o *OverlayFileSystem) overlayInfo(layer FileSystem, info *FileInfo) *FileI
 
 // overlayErr translates the file of typed layer errors to the overlay.
 func (o *OverlayFileSystem) overlayErr(layer FileSystem, err error) error {
-	var (
-		notExist ErrDoesNotExist
-		exists   ErrAlreadyExists
-		isDir    ErrIsDirectory
-		isNotDir ErrIsNotDirectory
-	)
-	switch {
-	case errors.As(err, &notExist):
-		if f, ok := notExist.file.(File); ok {
-			return NewErrDoesNotExist(o.overlayFile(layer, f))
-		}
-	case errors.As(err, &exists):
-		return NewErrAlreadyExists(o.overlayFile(layer, exists.file))
-	case errors.As(err, &isDir):
-		if f, ok := isDir.file.(File); ok {
-			return NewErrIsDirectory(o.overlayFile(layer, f))
-		}
-	case errors.As(err, &isNotDir):
-		if f, ok := isNotDir.file.(File); ok {
-			return NewErrIsNotDirectory(o.overlayFile(layer, f))
-		}
-	}
-	return err
+	return translateErrFile(err, func(f File) File { return o.overlayFile(layer, f) })
 }
 
 // hidden reports whether the base entry at the overlay path
@@ -186,6 +163,9 @@ func (o *OverlayFileSystem) overlayErr(layer FileSystem, err error) error {
 func (o *OverlayFileSystem) hidden(filePath string) bool {
 	o.mtx.RLock()
 	defer o.mtx.RUnlock()
+	if len(o.whiteouts) == 0 {
+		return false
+	}
 	p := o.CleanPath(filePath)
 	for {
 		if _, ok := o.whiteouts[p]; ok {
@@ -232,45 +212,38 @@ func (o *OverlayFileSystem) checkClosed() error {
 ///////////////////////////////////////////////////////////////////////////////
 // Reading
 
-// stat returns the FileInfo of the upper layer, or of the base layer
-// if the upper layer has no entry and the base entry is not hidden.
-func (o *OverlayFileSystem) stat(filePath string) (*FileInfo, error) {
+// statLayer returns the FileInfo of the upper layer, or of the base layer
+// if the upper layer has no entry and the base entry is not hidden,
+// together with the layer that answered and the path within that layer.
+func (o *OverlayFileSystem) statLayer(filePath string) (info *FileInfo, layer FileSystem, layerPath string, err error) {
 	if err := o.checkClosed(); err != nil {
-		return nil, err
+		return nil, nil, "", err
 	}
 	if filePath == "" {
-		return nil, ErrEmptyPath
+		return nil, nil, "", ErrEmptyPath
 	}
-	info, err := fsStat(o.upper, o.upperPath(filePath))
+	layerPath = o.upperPath(filePath)
+	info, err = fsStat(o.upper, layerPath)
 	if err == nil {
-		return o.overlayInfo(o.upper, info), nil
+		return o.overlayInfo(o.upper, info), o.upper, layerPath, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return nil, o.overlayErr(o.upper, err)
+		return nil, nil, "", o.overlayErr(o.upper, err)
 	}
 	if o.hidden(filePath) {
-		return nil, NewErrDoesNotExist(File(o.JoinCleanURI(filePath)))
+		return nil, nil, "", NewErrDoesNotExist(File(o.JoinCleanURI(filePath)))
 	}
-	info, err = fsStat(o.base, o.basePath(filePath))
+	layerPath = o.basePath(filePath)
+	info, err = fsStat(o.base, layerPath)
 	if err != nil {
-		return nil, o.overlayErr(o.base, err)
+		return nil, nil, "", o.overlayErr(o.base, err)
 	}
-	return o.overlayInfo(o.base, info), nil
+	return o.overlayInfo(o.base, info), o.base, layerPath, nil
 }
 
 func (o *OverlayFileSystem) Stat(filePath string) (*FileInfo, error) {
-	return o.stat(filePath)
-}
-
-func (o *OverlayFileSystem) Exists(filePath string) (bool, error) {
-	_, err := o.stat(filePath)
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, os.ErrNotExist):
-		return false, nil
-	}
-	return false, err
+	info, _, _, err := o.statLayer(filePath)
+	return info, err
 }
 
 // ListDir lists the union of both layers sorted by name,
@@ -282,7 +255,7 @@ func (o *OverlayFileSystem) ListDir(ctx context.Context, dirPath string, pattern
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
-	info, err := o.stat(dirPath)
+	info, err := o.Stat(dirPath)
 	if err != nil {
 		return err
 	}
@@ -325,49 +298,28 @@ func (o *OverlayFileSystem) ListDir(ctx context.Context, dirPath string, pattern
 	return nil
 }
 
-// inUpper reports whether the path exists in the upper layer.
-func (o *OverlayFileSystem) inUpper(filePath string) (bool, error) {
-	return fsExists(o.upper, o.upperPath(filePath))
-}
-
 func (o *OverlayFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
-	info, err := o.stat(filePath)
+	info, layer, layerPath, err := o.statLayer(filePath)
 	if err != nil {
 		return nil, err
 	}
 	if info.IsDir {
 		return nil, NewErrIsDirectory(info.File)
 	}
-	upper, err := o.inUpper(filePath)
-	if err != nil {
-		return nil, err
-	}
-	if upper {
-		r, err := fsOpenReader(o.upper, o.upperPath(filePath))
-		return r, o.overlayErr(o.upper, err)
-	}
-	r, err := fsOpenReader(o.base, o.basePath(filePath))
-	return r, o.overlayErr(o.base, err)
+	r, err := fsOpenReader(layer, layerPath)
+	return r, o.overlayErr(layer, err)
 }
 
 func (o *OverlayFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	info, err := o.stat(filePath)
+	info, layer, layerPath, err := o.statLayer(filePath)
 	if err != nil {
 		return nil, err
 	}
 	if info.IsDir {
 		return nil, NewErrIsDirectory(info.File)
 	}
-	upper, err := o.inUpper(filePath)
-	if err != nil {
-		return nil, err
-	}
-	if upper {
-		data, err := fsReadAll(ctx, o.upper, o.upperPath(filePath))
-		return data, o.overlayErr(o.upper, err)
-	}
-	data, err := fsReadAll(ctx, o.base, o.basePath(filePath))
-	return data, o.overlayErr(o.base, err)
+	data, err := fsReadAll(ctx, layer, layerPath)
+	return data, o.overlayErr(layer, err)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -378,7 +330,7 @@ func (o *OverlayFileSystem) ReadAll(ctx context.Context, filePath string) ([]byt
 // the path because it is about to exist in the upper layer.
 func (o *OverlayFileSystem) prepareUpper(filePath string) error {
 	parent := o.CleanPath(filePath, "..")
-	info, err := o.stat(parent)
+	info, err := o.Stat(parent)
 	if err != nil {
 		return err
 	}
@@ -394,32 +346,43 @@ func (o *OverlayFileSystem) prepareUpper(filePath string) error {
 }
 
 // copyUp copies a file that only exists in the base layer to the upper
-// layer, so it can be modified in place. Files that already exist in the
-// upper layer or don't exist at all are left alone.
-func (o *OverlayFileSystem) copyUp(ctx context.Context, filePath string) error {
-	upper, err := o.inUpper(filePath)
-	if err != nil || upper {
-		return err
-	}
-	info, err := o.stat(filePath)
+// layer, so it can be modified in place, and reports whether it did so.
+// Files that already exist in the upper layer or don't exist at all are
+// left alone.
+func (o *OverlayFileSystem) copyUp(ctx context.Context, filePath string) (copied bool, err error) {
+	info, layer, layerPath, err := o.statLayer(filePath)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
-	if err != nil {
-		return err
+	if err != nil || layer == o.upper {
+		return false, err
 	}
 	if info.IsDir {
-		return NewErrIsDirectory(info.File)
+		return false, NewErrIsDirectory(info.File)
 	}
-	data, err := fsReadAll(ctx, o.base, o.basePath(filePath))
+	data, err := fsReadAll(ctx, layer, layerPath)
 	if err != nil {
-		return o.overlayErr(o.base, err)
+		return false, o.overlayErr(layer, err)
 	}
 	err = o.prepareUpper(filePath)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return o.overlayErr(o.upper, fsWriteAll(ctx, o.upper, o.upperPath(filePath), data, info.Permissions))
+	err = fsWriteAll(ctx, o.upper, o.upperPath(filePath), data, info.Permissions)
+	if err != nil {
+		return false, o.overlayErr(o.upper, err)
+	}
+	return true, nil
+}
+
+// prepareWrite copies a base only file up and prepares
+// the upper layer for writing the file in place.
+func (o *OverlayFileSystem) prepareWrite(ctx context.Context, filePath string) error {
+	copied, err := o.copyUp(ctx, filePath)
+	if err != nil || copied {
+		return err // copyUp already prepared the upper layer
+	}
+	return o.prepareUpper(filePath)
 }
 
 func (o *OverlayFileSystem) OpenWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
@@ -456,10 +419,7 @@ func (o *OverlayFileSystem) Append(ctx context.Context, filePath string, data []
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	if err := o.copyUp(ctx, filePath); err != nil {
-		return err
-	}
-	if err := o.prepareUpper(filePath); err != nil {
+	if err := o.prepareWrite(ctx, filePath); err != nil {
 		return err
 	}
 	return o.overlayErr(o.upper, fsAppend(ctx, o.upper, o.upperPath(filePath), data, perm))
@@ -472,10 +432,7 @@ func (o *OverlayFileSystem) OpenAppendWriter(filePath string, perm Permissions) 
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	if err := o.copyUp(context.Background(), filePath); err != nil {
-		return nil, err
-	}
-	if err := o.prepareUpper(filePath); err != nil {
+	if err := o.prepareWrite(context.Background(), filePath); err != nil {
 		return nil, err
 	}
 	w, err := fsOpenAppendWriter(o.upper, o.upperPath(filePath), perm)
@@ -489,10 +446,7 @@ func (o *OverlayFileSystem) OpenReadWriter(filePath string, perm Permissions) (R
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	if err := o.copyUp(context.Background(), filePath); err != nil {
-		return nil, err
-	}
-	if err := o.prepareUpper(filePath); err != nil {
+	if err := o.prepareWrite(context.Background(), filePath); err != nil {
 		return nil, err
 	}
 	rw, err := fsOpenReadWriter(o.upper, o.upperPath(filePath), perm)
@@ -506,7 +460,7 @@ func (o *OverlayFileSystem) Truncate(filePath string, size int64) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	if err := o.copyUp(context.Background(), filePath); err != nil {
+	if _, err := o.copyUp(context.Background(), filePath); err != nil {
 		return err
 	}
 	return o.overlayErr(o.upper, fsTruncate(context.Background(), o.upper, o.upperPath(filePath), size))
@@ -519,10 +473,7 @@ func (o *OverlayFileSystem) Touch(filePath string, perm Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	if err := o.copyUp(context.Background(), filePath); err != nil {
-		return err
-	}
-	if err := o.prepareUpper(filePath); err != nil {
+	if err := o.prepareWrite(context.Background(), filePath); err != nil {
 		return err
 	}
 	return o.overlayErr(o.upper, fsTouch(o.upper, o.upperPath(filePath), perm))
@@ -535,7 +486,7 @@ func (o *OverlayFileSystem) MakeDir(dirPath string, perm Permissions) error {
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
-	if info, err := o.stat(dirPath); err == nil {
+	if info, err := o.Stat(dirPath); err == nil {
 		return NewErrAlreadyExists(info.File)
 	}
 	if err := o.prepareUpper(dirPath); err != nil {
@@ -551,7 +502,7 @@ func (o *OverlayFileSystem) MakeAllDirs(dirPath string, perm Permissions) error 
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
-	if info, err := o.stat(dirPath); err == nil {
+	if info, err := o.Stat(dirPath); err == nil {
 		if !info.IsDir {
 			return NewErrIsNotDirectory(info.File)
 		}
@@ -570,7 +521,7 @@ func (o *OverlayFileSystem) Remove(filePath string) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	info, err := o.stat(filePath)
+	info, layer, layerPath, err := o.statLayer(filePath)
 	if err != nil {
 		return err
 	}
@@ -590,14 +541,10 @@ func (o *OverlayFileSystem) Remove(filePath string) error {
 			return fmt.Errorf("directory not empty: %s", info.File)
 		}
 	}
-	upper, err := o.inUpper(filePath)
-	if err != nil {
-		return err
-	}
-	if upper {
-		err = fsRemove(o.upper, o.upperPath(filePath))
+	if layer == o.upper {
+		err = fsRemove(layer, layerPath)
 		if err != nil {
-			return o.overlayErr(o.upper, err)
+			return o.overlayErr(layer, err)
 		}
 	}
 	o.hide(filePath)

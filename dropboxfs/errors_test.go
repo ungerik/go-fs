@@ -115,14 +115,7 @@ func TestClosedFileSystem(t *testing.T) {
 
 	ctx := t.Context()
 
-	exists, err := dbfs.Exists("/file")
-	assert.False(t, exists, "Exists must be false on a closed filesystem")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	_, err = dbfs.Stat("/file")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	_, err = dbfs.ReadAll(ctx, "/file")
+	_, err := dbfs.Stat("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	err = dbfs.WriteAll(ctx, "/file", []byte("x"), 0)

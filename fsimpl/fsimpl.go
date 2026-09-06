@@ -5,7 +5,6 @@ package fsimpl
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"net/url"
 	"path"
 	"strings"
 )
@@ -114,34 +113,10 @@ func MatchAnyPattern(name string, patterns []string) (bool, error) {
 	return false, nil
 }
 
-// JoinCleanPath trims trimPrefix from the first of the uriParts,
-// joins all parts with path.Join, URL-unescapes the result,
-// ensures it begins with a slash and returns it cleaned by path.Clean.
-// The passed uriParts slice is not modified.
-//
-// The slash "/" is always used as path separator because the joining
-// and cleaning is done by the path package of the standard library.
-func JoinCleanPath(uriParts []string, trimPrefix string) string {
-	var cleanPath string
-	if len(uriParts) > 0 {
-		// Don't modify the passed slice
-		cleanPath = path.Join(append([]string{strings.TrimPrefix(uriParts[0], trimPrefix)}, uriParts[1:]...)...)
-	}
-	unescPath, err := url.PathUnescape(cleanPath)
-	if err == nil {
-		cleanPath = unescPath
-	}
-	if !strings.HasPrefix(cleanPath, "/") {
-		cleanPath = "/" + cleanPath
-	}
-	return path.Clean(cleanPath)
-}
-
-// SplitPath trims prefix and any leading or trailing separator from filePath
+// SplitPath trims any leading or trailing separator from filePath
 // and splits the remaining path into its elements using separator.
 // It returns nil if nothing is left after trimming.
-func SplitPath(filePath, prefix, separator string) []string {
-	filePath = strings.TrimPrefix(filePath, prefix)
+func SplitPath(filePath, separator string) []string {
 	filePath = strings.Trim(filePath, separator)
 	if filePath == "" {
 		return nil

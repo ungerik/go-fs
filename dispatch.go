@@ -69,7 +69,7 @@ func fsSplitDirAndName(fileSystem FileSystem, filePath string) (dir, name string
 // fsSplitPath returns the elements of filePath without prefix and volume.
 func fsSplitPath(fileSystem FileSystem, filePath string) []string {
 	filePath = strings.TrimPrefix(filePath, fileSystem.Prefix())
-	return fsimpl.SplitPath(filePath[fsVolumeLen(fileSystem, filePath):], "", fileSystem.Separator())
+	return fsimpl.SplitPath(filePath[fsVolumeLen(fileSystem, filePath):], fileSystem.Separator())
 }
 
 // fsIsHidden returns if filePath is hidden using HiddenFileSystem

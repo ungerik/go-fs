@@ -180,8 +180,6 @@ func TestOverlayFileSystem_Closed(t *testing.T) {
 
 	_, err := overlay.Stat("/base.txt")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-	_, err = overlay.Exists("/base.txt")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 	err = overlay.ListDir(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 	_, err = overlay.OpenReader("/base.txt")
@@ -215,11 +213,6 @@ func TestOverlayFileSystem_EmptyPath(t *testing.T) {
 
 	_, err := overlay.Stat("")
 	assert.ErrorIs(t, err, fs.ErrEmptyPath)
-	// Exists reports false without an error, because ErrEmptyPath
-	// wraps os.ErrNotExist
-	exists, err := overlay.Exists("")
-	assert.NoError(t, err)
-	assert.False(t, exists)
 	err = overlay.ListDir(ctx, "", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrEmptyPath)
 	_, err = overlay.OpenReader("")

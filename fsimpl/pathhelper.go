@@ -122,17 +122,6 @@ func (h PathHelper) CleanPath(uriParts ...string) string {
 	return volume + rest
 }
 
-// JoinCleanPath is an alias for CleanPath
-// implementing the fs.FileSystem method of that name.
-func (h PathHelper) JoinCleanPath(uriParts ...string) string {
-	return h.CleanPath(uriParts...)
-}
-
-// CleanPathFromURI returns the cleaned file system path of a URI.
-func (h PathHelper) CleanPathFromURI(uri string) string {
-	return h.CleanPath(uri)
-}
-
 // URL returns the URI of a file system path: URIPrefix + cleanPath,
 // without doubling the separator if URIPrefix ends with one.
 func (h PathHelper) URL(cleanPath string) string {
@@ -144,8 +133,6 @@ func (h PathHelper) URL(cleanPath string) string {
 }
 
 // JoinCleanURI returns the URI of the cleaned and joined uriParts.
-// Implementations of fs.FileSystem return it as fs.File
-// from their JoinCleanFile method.
 func (h PathHelper) JoinCleanURI(uriParts ...string) string {
 	return h.URL(h.CleanPath(uriParts...))
 }
@@ -154,7 +141,7 @@ func (h PathHelper) JoinCleanURI(uriParts ...string) string {
 // and leading or trailing separators, or nil for an empty or root path.
 func (h PathHelper) SplitPath(filePath string) []string {
 	filePath = h.TrimPrefix(filePath)
-	return SplitPath(filePath[h.volumeLen(filePath):], "", h.Separator())
+	return SplitPath(filePath[h.volumeLen(filePath):], h.Separator())
 }
 
 // SplitDirAndName returns the parent directory of filePath
@@ -191,11 +178,4 @@ func (h PathHelper) AbsPath(filePath string) string {
 func (h PathHelper) IsHidden(filePath string) bool {
 	_, name := h.SplitDirAndName(filePath)
 	return strings.HasPrefix(name, ".")
-}
-
-// MatchAnyPattern returns true if name matches any of patterns,
-// or if len(patterns) == 0.
-// The match per pattern works like path.Match.
-func (PathHelper) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return MatchAnyPattern(name, patterns)
 }

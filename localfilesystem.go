@@ -113,14 +113,10 @@ func (local *LocalFileSystem) RootDir() File {
 // the statfs f_fsid on Unix, the volume serial number on Windows.
 // It is looked up once and cached.
 func (local *LocalFileSystem) ID() string {
-	localIDOnce.Do(func() { localID = localFileSystemID() })
-	return localID
+	return localID()
 }
 
-var (
-	localIDOnce sync.Once
-	localID     string
-)
+var localID = sync.OnceValue(localFileSystemID)
 
 // Prefix returns [LocalPrefix] ("file://").
 func (local *LocalFileSystem) Prefix() string {
@@ -135,11 +131,6 @@ func (local *LocalFileSystem) Name() string {
 // String implements [fmt.Stringer] and returns the [Name] followed by " with prefix " and [Prefix].
 func (local *LocalFileSystem) String() string {
 	return local.Name() + " with prefix " + local.Prefix()
-}
-
-// JoinCleanFile is a thin wrapper over [LocalFileSystem.JoinCleanPath] that returns a [File].
-func (local *LocalFileSystem) JoinCleanFile(uri ...string) File {
-	return File(local.JoinCleanPath(uri...))
 }
 
 // IsAbsPath reports whether filePath is absolute using [filepath.IsAbs],
@@ -172,7 +163,7 @@ func (local *LocalFileSystem) URL(cleanPath string) string {
 	return LocalPrefix + filepath.ToSlash(local.AbsPath(cleanPath))
 }
 
-// JoinCleanPath strips a leading [LocalPrefix] from the first element,
+// CleanPath strips a leading [LocalPrefix] from the first element,
 // joins the parts with [filepath.Join], URL-unescapes the result on a best-effort
 // basis (a decoding error keeps the escaped form), cleans it, and finally
 // expands a leading "~".
@@ -185,11 +176,6 @@ func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 	cleanPath = filepath.Clean(cleanPath)
 	cleanPath = expandTilde(cleanPath)
 	return cleanPath
-}
-
-// JoinCleanPath is an alias for CleanPath.
-func (local *LocalFileSystem) JoinCleanPath(uriParts ...string) string {
-	return local.CleanPath(uriParts...)
 }
 
 // SplitPath trims an optional [LocalPrefix], expands a leading "~",
@@ -565,7 +551,7 @@ func (local *LocalFileSystem) MakeAllDirs(dirPath string, perm Permissions) erro
 		parts := local.SplitPath(dirPath)
 		for i := range parts {
 			// On Linux need additional chmod because os.Mkdir does not set OthersWrite bit
-			subPath := local.JoinCleanPath(parts[0 : i+1]...)
+			subPath := local.CleanPath(parts[0 : i+1]...)
 			err = os.Chmod(subPath, p.FileMode(true))
 			if err != nil {
 				return fmt.Errorf("LocalFileSystem.MakeAllDirs(%#v): can't chmod to %0o: %w", subPath, p, err)

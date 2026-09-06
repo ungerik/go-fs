@@ -255,6 +255,38 @@ func (err ErrIsNotDirectory) FileReader() (file FileReader, ok bool) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// translateErrFile
+
+// translateErrFile returns err with the File of typed errors
+// translated by mapFile, or err unchanged if it is not a typed
+// error with a File.
+func translateErrFile(err error, mapFile func(File) File) error {
+	var (
+		notExist ErrDoesNotExist
+		exists   ErrAlreadyExists
+		isDir    ErrIsDirectory
+		isNotDir ErrIsNotDirectory
+	)
+	switch {
+	case errors.As(err, &notExist):
+		if f, ok := notExist.file.(File); ok {
+			return NewErrDoesNotExist(mapFile(f))
+		}
+	case errors.As(err, &exists):
+		return NewErrAlreadyExists(mapFile(exists.file))
+	case errors.As(err, &isDir):
+		if f, ok := isDir.file.(File); ok {
+			return NewErrIsDirectory(mapFile(f))
+		}
+	case errors.As(err, &isNotDir):
+		if f, ok := isNotDir.file.(File); ok {
+			return NewErrIsNotDirectory(mapFile(f))
+		}
+	}
+	return err
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // ErrUnsupported
 
 type ErrUnsupported struct {

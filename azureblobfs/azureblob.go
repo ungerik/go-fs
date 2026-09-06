@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"sync/atomic"
@@ -154,7 +155,7 @@ func (f *fileSystem) checkWritable() error {
 // blobName returns the blob name of a file system path,
 // the empty string for the root.
 func blobName(filePath string) string {
-	return strings.Trim(path.Clean("/"+filePath), Separator)
+	return strings.Trim(filePath, Separator)
 }
 
 // dirPrefix returns the blob name prefix of a directory path:
@@ -254,21 +255,19 @@ func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 		Prefix:     new(name + Separator),
 		MaxResults: new(int32(1)),
 	})
-	if pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if len(page.Segment.BlobItems) > 0 {
-			item := page.Segment.BlobItems[0]
-			var modified time.Time
-			if deref(item.Name) == name+Separator && item.Properties != nil {
-				modified = deref(item.Properties.LastModified)
-			}
-			return f.dirInfo(name, modified), nil
-		}
+	page, err := pager.NextPage(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fs.NewErrDoesNotExist(f.file(filePath))
+	if len(page.Segment.BlobItems) == 0 {
+		return nil, fs.NewErrDoesNotExist(f.file(filePath))
+	}
+	item := page.Segment.BlobItems[0]
+	var modified time.Time
+	if deref(item.Name) == name+Separator && item.Properties != nil {
+		modified = deref(item.Properties.LastModified)
+	}
+	return f.dirInfo(name, modified), nil
 }
 
 // ListDir lists the blobs and directories directly below dirPath
@@ -303,29 +302,39 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 				return err
 			}
 		}
-		for _, item := range page.Segment.BlobItems {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			name := deref(item.Name)
-			if name == "" || strings.HasSuffix(name, Separator) {
-				continue // directory marker
-			}
-			match, err := fsimpl.MatchAnyPattern(path.Base(name), patterns)
-			if err != nil {
-				return err
-			}
-			if !match {
-				continue
-			}
-			var size int64
-			var modified time.Time
-			if item.Properties != nil {
-				size, modified = deref(item.Properties.ContentLength), deref(item.Properties.LastModified)
-			}
-			if err := callback(f.fileInfo(name, size, modified)); err != nil {
-				return err
-			}
+		err = f.callbackBlobItems(ctx, page.Segment.BlobItems, patterns, callback)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// callbackBlobItems calls callback with the FileInfo of every
+// listed blob that matches patterns, skipping directory markers.
+func (f *fileSystem) callbackBlobItems(ctx context.Context, items []*container.BlobItem, patterns []string, callback func(*fs.FileInfo) error) error {
+	for _, item := range items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name := deref(item.Name)
+		if name == "" || strings.HasSuffix(name, Separator) {
+			continue // directory marker
+		}
+		match, err := fsimpl.MatchAnyPattern(path.Base(name), patterns)
+		if err != nil {
+			return err
+		}
+		if !match {
+			continue
+		}
+		var size int64
+		var modified time.Time
+		if item.Properties != nil {
+			size, modified = deref(item.Properties.ContentLength), deref(item.Properties.LastModified)
+		}
+		if err := callback(f.fileInfo(name, size, modified)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -345,29 +354,9 @@ func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patte
 		if err != nil {
 			return err
 		}
-		for _, item := range page.Segment.BlobItems {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			name := deref(item.Name)
-			if name == "" || strings.HasSuffix(name, Separator) {
-				continue // directory marker
-			}
-			match, err := fsimpl.MatchAnyPattern(path.Base(name), patterns)
-			if err != nil {
-				return err
-			}
-			if !match {
-				continue
-			}
-			var size int64
-			var modified time.Time
-			if item.Properties != nil {
-				size, modified = deref(item.Properties.ContentLength), deref(item.Properties.LastModified)
-			}
-			if err := callback(f.fileInfo(name, size, modified)); err != nil {
-				return err
-			}
+		err = f.callbackBlobItems(ctx, page.Segment.BlobItems, patterns, callback)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -382,101 +371,20 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if info.IsDir {
 		return nil, fs.NewErrIsDirectory(info.File)
 	}
-	return &rangeReader{blob: f.client.NewBlobClient(blobName(filePath)), size: info.Size}, nil
-}
-
-// rangeReader reads a blob with download requests. A Read after a Seek
-// downloads the remaining bytes from the position.
-type rangeReader struct {
-	blob   *blob.Client
-	size   int64
-	pos    int64
-	body   io.ReadCloser // nil before the first Read and after Seek
-	closed bool
-}
-
-func (r *rangeReader) Read(p []byte) (int, error) {
-	if r.closed {
-		return 0, fs.ErrFileSystemClosed
-	}
-	if r.pos >= r.size {
-		return 0, io.EOF
-	}
-	if r.body == nil {
-		response, err := r.blob.DownloadStream(context.Background(), &blob.DownloadStreamOptions{
-			Range: blob.HTTPRange{Offset: r.pos},
-		})
-		if err != nil {
-			return 0, err
-		}
-		r.body = response.Body
-	}
-	n, err := r.body.Read(p)
-	r.pos += int64(n)
-	if n > 0 && err == io.EOF {
-		err = nil
-	}
-	return n, err
-}
-
-func (r *rangeReader) Seek(offset int64, whence int) (int64, error) {
-	var pos int64
-	switch whence {
-	case io.SeekStart:
-		pos = offset
-	case io.SeekCurrent:
-		pos = r.pos + offset
-	case io.SeekEnd:
-		pos = r.size + offset
-	default:
-		return 0, fmt.Errorf("invalid whence: %d", whence)
-	}
-	if pos < 0 {
-		return 0, fmt.Errorf("negative seek position: %d", pos)
-	}
-	if pos != r.pos && r.body != nil {
-		_ = r.body.Close()
-		r.body = nil
-	}
-	r.pos = pos
-	return pos, nil
-}
-
-// ReadAt downloads len(p) bytes at offset off with a single range request.
-func (r *rangeReader) ReadAt(p []byte, off int64) (int, error) {
-	if r.closed {
-		return 0, fs.ErrFileSystemClosed
-	}
-	if off < 0 {
-		return 0, fmt.Errorf("negative offset: %d", off)
-	}
-	if off >= r.size || len(p) == 0 {
-		return 0, io.EOF
-	}
-	count := min(int64(len(p)), r.size-off)
-	response, err := r.blob.DownloadStream(context.Background(), &blob.DownloadStreamOptions{
-		Range: blob.HTTPRange{Offset: off, Count: count},
-	})
-	if err != nil {
-		return 0, err
-	}
-	defer response.Body.Close()
-	n, err := io.ReadFull(response.Body, p[:count])
-	if err == io.ErrUnexpectedEOF || (err == nil && int64(n) < int64(len(p))) {
-		err = io.EOF
-	}
-	return n, err
-}
-
-func (r *rangeReader) Close() error {
-	if r.closed {
-		return nil
-	}
-	r.closed = true
-	if r.body != nil {
-		return r.body.Close()
-	}
-	return nil
+	blobClient := f.client.NewBlobClient(blobName(filePath))
+	return &fsimpl.RangeReader{
+		Size: info.Size,
+		Open: func(offset, count int64) (io.ReadCloser, error) {
+			// A zero Count downloads from Offset to the end
+			response, err := blobClient.DownloadStream(context.Background(), &blob.DownloadStreamOptions{
+				Range: blob.HTTPRange{Offset: offset, Count: max(count, 0)},
+			})
+			if err != nil {
+				return nil, err
+			}
+			return response.Body, nil
+		},
+	}, nil
 }
 
 // ReadAll downloads the blob.
@@ -537,17 +445,12 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 		return nil, fs.ErrEmptyPath
 	}
 	data, err := f.ReadAll(context.Background(), filePath)
-	if err != nil && !isNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	return fsimpl.NewWriteOnCloseFileBuffer(data, func(data []byte) error {
 		return f.WriteAll(context.Background(), filePath, data, perm)
 	}), nil
-}
-
-func isNotExist(err error) bool {
-	var notExist fs.ErrDoesNotExist
-	return errors.As(err, &notExist)
 }
 
 // Touch updates the modification time of an existing blob by setting its
@@ -562,7 +465,7 @@ func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	}
 	info, err := f.Stat(filePath)
 	switch {
-	case isNotExist(err):
+	case errors.Is(err, os.ErrNotExist):
 		return f.WriteAll(context.Background(), filePath, nil, perm)
 	case err != nil:
 		return err
@@ -586,7 +489,7 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	switch {
 	case err == nil:
 		return fs.NewErrAlreadyExists(info.File)
-	case !isNotExist(err):
+	case !errors.Is(err, os.ErrNotExist):
 		return err
 	}
 	_, err = f.client.NewBlockBlobClient(dirPrefix(dirPath)).UploadBuffer(context.Background(), nil, nil)
@@ -616,15 +519,13 @@ func (f *fileSystem) Remove(filePath string) error {
 	}
 	marker := name + Separator
 	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(marker), MaxResults: new(int32(2))})
-	if pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return err
-		}
-		for _, item := range page.Segment.BlobItems {
-			if deref(item.Name) != marker {
-				return fmt.Errorf("directory not empty: %s", info.File)
-			}
+	page, err := pager.NextPage(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range page.Segment.BlobItems {
+		if deref(item.Name) != marker {
+			return fmt.Errorf("directory not empty: %s", info.File)
 		}
 	}
 	_, err = f.client.NewBlobClient(marker).Delete(ctx, nil)

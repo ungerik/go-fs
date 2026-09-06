@@ -51,11 +51,11 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 	case File:
 		// Use same file system copy if possible
 		if srcFS, srcPath := f.ParseRawURI(); srcFS == dest.FileSystem() {
-			if copyFS, ok := srcFS.(CopyFileSystem); ok {
-				return copyFS.CopyFile(ctx, srcPath, dest.Path())
-			}
 			if srcPath == dest.Path() {
 				return nil // Copying a file onto itself is a no-op
+			}
+			if copyFS, ok := srcFS.(CopyFileSystem); ok {
+				return copyFS.CopyFile(ctx, srcPath, dest.Path())
 			}
 		}
 		// Else use at least same permissions

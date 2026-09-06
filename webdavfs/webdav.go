@@ -218,7 +218,8 @@ func (f *fileSystem) request(ctx context.Context, method, filePath string, dir b
 	return nil, f.statusError(method, filePath, response.StatusCode, response.Status)
 }
 
-// statusError maps an HTTP error status to the fs error types.
+// statusError maps an HTTP error status to the fs error types,
+// other statuses are returned as *StatusError.
 func (f *fileSystem) statusError(method, filePath string, statusCode int, status string) error {
 	switch statusCode {
 	case http.StatusNotFound, http.StatusGone:
@@ -227,9 +228,22 @@ func (f *fileSystem) statusError(method, filePath string, statusCode int, status
 		return fs.NewErrPermission(f.file(filePath))
 	case http.StatusConflict:
 		// The parent collection does not exist
-		return fs.NewErrDoesNotExist(f.file(path.Dir(path.Clean("/" + filePath))))
+		return fs.NewErrDoesNotExist(f.file(path.Dir(filePath)))
 	}
-	return fmt.Errorf("webdavfs: %s %s: %s", method, f.file(filePath), status)
+	return &StatusError{Method: method, File: f.file(filePath), StatusCode: statusCode, Status: status}
+}
+
+// StatusError is returned for HTTP error statuses
+// that don't map to an fs error type.
+type StatusError struct {
+	Method     string
+	File       fs.File
+	StatusCode int
+	Status     string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("webdavfs: %s %s: %s", e.Method, e.File, e.Status)
 }
 
 // discard closes a response after draining it, so the connection is reused.
@@ -282,7 +296,7 @@ func (f *fileSystem) propfind(ctx context.Context, filePath string, depth string
 	if err != nil {
 		return nil, fmt.Errorf("webdavfs: PROPFIND %s: %w", f.file(filePath), err)
 	}
-	self := path.Clean("/" + filePath)
+	self := filePath
 	var (
 		infos    []*fs.FileInfo
 		selfSeen bool
@@ -402,119 +416,36 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if info.IsDir {
 		return nil, fs.NewErrIsDirectory(info.File)
 	}
-	return &rangeReader{fs: f, filePath: filePath, size: info.Size}, nil
+	return &fsimpl.RangeReader{
+		Size: info.Size,
+		Open: func(offset, count int64) (io.ReadCloser, error) {
+			return f.getRange(filePath, offset, count)
+		},
+	}, nil
 }
 
-// rangeReader reads a file with GET requests. A Read after a Seek
-// requests the remaining bytes with a Range header.
-type rangeReader struct {
-	fs       *fileSystem
-	filePath string
-	size     int64
-	pos      int64
-	body     io.ReadCloser // nil before the first Read and after Seek
-	closed   bool
-}
-
-func (r *rangeReader) Read(p []byte) (int, error) {
-	if r.closed {
-		return 0, fs.ErrFileSystemClosed
+// getRange returns the body of a GET request for the byte range
+// from offset, limited to count bytes if count is not negative.
+// If the server ignores the Range header the body is skipped to offset.
+func (f *fileSystem) getRange(filePath string, offset, count int64) (io.ReadCloser, error) {
+	header := map[string]string{}
+	switch {
+	case count >= 0:
+		header["Range"] = fmt.Sprintf("bytes=%d-%d", offset, offset+count-1)
+	case offset > 0:
+		header["Range"] = fmt.Sprintf("bytes=%d-", offset)
 	}
-	if r.pos >= r.size {
-		return 0, io.EOF
-	}
-	if r.body == nil {
-		header := map[string]string{}
-		if r.pos > 0 {
-			header["Range"] = fmt.Sprintf("bytes=%d-", r.pos)
-		}
-		response, err := r.fs.request(context.Background(), http.MethodGet, r.filePath, false, nil, header)
-		if err != nil {
-			return 0, err
-		}
-		r.body = response.Body
-		if r.pos > 0 && response.StatusCode != http.StatusPartialContent {
-			// The server ignored the range, skip to the position
-			_, err = io.CopyN(io.Discard, r.body, r.pos)
-			if err != nil {
-				return 0, err
-			}
-		}
-	}
-	n, err := r.body.Read(p)
-	r.pos += int64(n)
-	if n > 0 && err == io.EOF {
-		err = nil // report EOF with the next Read like bufio does not
-	}
-	return n, err
-}
-
-func (r *rangeReader) Seek(offset int64, whence int) (int64, error) {
-	var pos int64
-	switch whence {
-	case io.SeekStart:
-		pos = offset
-	case io.SeekCurrent:
-		pos = r.pos + offset
-	case io.SeekEnd:
-		pos = r.size + offset
-	default:
-		return 0, fmt.Errorf("invalid whence: %d", whence)
-	}
-	if pos < 0 {
-		return 0, fmt.Errorf("negative seek position: %d", pos)
-	}
-	if pos != r.pos && r.body != nil {
-		_ = r.body.Close()
-		r.body = nil
-	}
-	r.pos = pos
-	return pos, nil
-}
-
-// ReadAt reads len(p) bytes at offset off with a single Range request,
-// independent of the position of the sequential reads.
-func (r *rangeReader) ReadAt(p []byte, off int64) (int, error) {
-	if r.closed {
-		return 0, fs.ErrFileSystemClosed
-	}
-	if off < 0 {
-		return 0, fmt.Errorf("negative offset: %d", off)
-	}
-	if off >= r.size || len(p) == 0 {
-		return 0, io.EOF
-	}
-	end := min(off+int64(len(p)), r.size) - 1
-	response, err := r.fs.request(context.Background(), http.MethodGet, r.filePath, false, nil, map[string]string{
-		"Range": fmt.Sprintf("bytes=%d-%d", off, end),
-	})
+	response, err := f.request(context.Background(), http.MethodGet, filePath, false, nil, header)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusPartialContent {
-		// The server ignored the range, skip to the offset
-		_, err = io.CopyN(io.Discard, response.Body, off)
+	if offset > 0 && response.StatusCode != http.StatusPartialContent {
+		_, err = io.CopyN(io.Discard, response.Body, offset)
 		if err != nil {
-			return 0, err
+			return nil, errors.Join(err, response.Body.Close())
 		}
 	}
-	n, err := io.ReadFull(response.Body, p[:end-off+1])
-	if err == io.ErrUnexpectedEOF || (err == nil && int64(n) < int64(len(p))) {
-		err = io.EOF
-	}
-	return n, err
-}
-
-func (r *rangeReader) Close() error {
-	if r.closed {
-		return nil
-	}
-	r.closed = true
-	if r.body != nil {
-		return r.body.Close()
-	}
-	return nil
+	return response.Body, nil
 }
 
 // ReadAll downloads the file with a single GET request.
@@ -566,13 +497,14 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
-	if path.Clean("/"+dirPath) == "/" {
+	if dirPath == "/" {
 		return fs.NewErrAlreadyExists(f.RootDir())
 	}
 	response, err := f.request(context.Background(), "MKCOL", dirPath, true, nil, nil)
 	if err != nil {
 		// MKCOL on an existing path is 405 Method Not Allowed
-		if !strings.Contains(err.Error(), "405") {
+		var statusErr *StatusError
+		if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusMethodNotAllowed {
 			return err
 		}
 		if _, statErr := f.Stat(dirPath); statErr == nil {
@@ -594,7 +526,7 @@ func (f *fileSystem) Remove(filePath string) error {
 		return err
 	}
 	if infos[0].IsDir {
-		if path.Clean("/"+filePath) == "/" {
+		if filePath == "/" {
 			return fmt.Errorf("can't remove root directory of %s", f)
 		}
 		if len(infos) > 1 {
@@ -614,22 +546,14 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	if path.Clean("/"+filePath) == "/" {
+	if filePath == "/" {
 		return fmt.Errorf("can't remove root directory of %s", f)
 	}
 	response, err := f.request(ctx, http.MethodDelete, filePath, false, nil, nil)
 	if err != nil {
-		if errors.Is(err, fs.ErrDoesNotExist{}) || isNotExist(err) {
-			return nil
-		}
-		return err
+		return fs.RemoveErrDoesNotExist(err)
 	}
 	return discard(response)
-}
-
-func isNotExist(err error) bool {
-	var notExist fs.ErrDoesNotExist
-	return errors.As(err, &notExist)
 }
 
 // Move moves or renames a file or collection with the MOVE method,
@@ -638,7 +562,7 @@ func (f *fileSystem) Move(filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return fs.ErrEmptyPath
 	}
-	if path.Clean("/"+filePath) == path.Clean("/"+destPath) {
+	if filePath == destPath {
 		return nil
 	}
 	response, err := f.request(context.Background(), "MOVE", filePath, false, nil, map[string]string{
@@ -657,7 +581,7 @@ func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 	if srcFile == "" || destFile == "" {
 		return fs.ErrEmptyPath
 	}
-	if path.Clean("/"+srcFile) == path.Clean("/"+destFile) {
+	if srcFile == destFile {
 		return nil
 	}
 	response, err := f.request(ctx, "COPY", srcFile, false, nil, map[string]string{

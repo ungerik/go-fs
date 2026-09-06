@@ -151,6 +151,11 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 	if err != nil {
 		return nil, err
 	}
+	return dialPrepared(ctx, u, username, password, prefix, secure, address, credentialsCallback, opts)
+}
+
+// dialPrepared dials a file system with the results of prepareDial.
+func dialPrepared(ctx context.Context, u *url.URL, username, password, prefix string, secure bool, address string, credentialsCallback CredentialsCallback, opts *Options) (fs.FileSystem, error) {
 	f := &fileSystem{
 		PathHelper:          pathHelper(prefix),
 		secure:              secure,
@@ -158,6 +163,7 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 		address:             address,
 		credentialsCallback: credentialsCallback,
 	}
+	var err error
 	f.conn, err = f.dial(ctx, u.Host, username, password)
 	if err != nil {
 		return nil, err
@@ -185,7 +191,7 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 // reference count and close it when the reference count reaches 0.
 // The returned free function will never be nil.
 func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, opts *Options) (free func() error, err error) {
-	_, _, _, prefix, _, err := prepareDial(address, credentialsCallback)
+	u, username, password, prefix, secure, err := prepareDial(address, credentialsCallback)
 	if err != nil {
 		return nop, err
 	}
@@ -194,7 +200,7 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return func() error { return f.Close() }, nil
 	}
 
-	newFS, err := Dial(ctx, address, credentialsCallback, opts)
+	newFS, err := dialPrepared(ctx, u, username, password, prefix, secure, address, credentialsCallback, opts)
 	if err != nil {
 		return nop, err
 	}
@@ -335,8 +341,8 @@ func (f *fileSystem) acquire(ctx context.Context, filePath string) (conn *ftp.Se
 		return nil, "", nop, err
 	}
 	if !f.reconnectable() {
-		if f.closed {
-			return nil, "", nop, fs.ErrFileSystemClosed
+		if err = f.checkClosed(); err != nil {
+			return nil, "", nop, err
 		}
 		conn, clientPath, err = f.dialURL(ctx, filePath)
 		if err != nil {
@@ -368,11 +374,8 @@ func (f *fileSystem) acquireDedicated(ctx context.Context, filePath string) (con
 	if !f.reconnectable() {
 		return f.acquire(ctx, filePath)
 	}
-	f.mtx.Lock()
-	closed := f.closed
-	f.mtx.Unlock()
-	if closed {
-		return nil, "", nop, fs.ErrFileSystemClosed
+	if err = f.checkClosed(); err != nil {
+		return nil, "", nop, err
 	}
 	conn, err = f.dialStored(ctx)
 	if err != nil {
@@ -410,9 +413,6 @@ func (f *fileSystem) do(ctx context.Context, filePath string, op func(conn *ftp.
 
 // isConnectionError returns true if the error indicates a connection loss
 func isConnectionError(err error) bool {
-	if err == nil {
-		return false
-	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
 		return true
 	}
@@ -659,16 +659,12 @@ func callInfos(ctx context.Context, infos []*fs.FileInfo, callback func(*fs.File
 }
 
 type fileReader struct {
-	response *ftp.Response
-	release  func() error
-}
-
-func (r *fileReader) Read(buf []byte) (int, error) {
-	return r.response.Read(buf)
+	*ftp.Response
+	release func() error
 }
 
 func (r *fileReader) Close() error {
-	return errors.Join(r.response.Close(), r.release())
+	return errors.Join(r.Response.Close(), r.release())
 }
 
 // OpenReader streams the file with a RETR command
@@ -682,7 +678,7 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, errors.Join(f.notExist(filePath, err), release())
 	}
-	return &fileReader{response: response, release: release}, nil
+	return &fileReader{Response: response, release: release}, nil
 }
 
 // ReadAll downloads the complete content of the file at filePath
@@ -855,12 +851,6 @@ func isNotExist(err error) bool {
 }
 
 func (f *fileSystem) checkClosed() error {
-	if !f.reconnectable() {
-		if f.closed {
-			return fs.ErrFileSystemClosed
-		}
-		return nil
-	}
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if f.closed {
@@ -880,10 +870,7 @@ func (f *fileSystem) Close() error {
 	if !f.reconnectable() {
 		return nil // the plain prefix file systems are never closed
 	}
-	f.mtx.Lock()
-	alreadyClosed := f.closed
-	f.mtx.Unlock()
-	if alreadyClosed {
+	if f.checkClosed() != nil {
 		return nil
 	}
 	if fs.Unregister(f) > 0 {

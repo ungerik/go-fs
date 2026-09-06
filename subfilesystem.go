@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -173,34 +172,12 @@ func (s *SubFileSystem) Stat(filePath string) (*FileInfo, error) {
 
 // subFile translates a File of the parent below the root directory.
 func (s *SubFileSystem) subFile(parentFile File) File {
-	return File(s.JoinCleanURI(s.subPath(parentFile.Path())))
+	return File(s.JoinCleanURI(s.subPath(s.parent.CleanPath(string(parentFile)))))
 }
 
 // subErr translates the file of typed parent errors to this file system.
 func (s *SubFileSystem) subErr(err error) error {
-	var (
-		notExist ErrDoesNotExist
-		exists   ErrAlreadyExists
-		isDir    ErrIsDirectory
-		isNotDir ErrIsNotDirectory
-	)
-	switch {
-	case errors.As(err, &notExist):
-		if f, ok := notExist.file.(File); ok {
-			return NewErrDoesNotExist(s.subFile(f))
-		}
-	case errors.As(err, &exists):
-		return NewErrAlreadyExists(s.subFile(exists.file))
-	case errors.As(err, &isDir):
-		if f, ok := isDir.file.(File); ok {
-			return NewErrIsDirectory(s.subFile(f))
-		}
-	case errors.As(err, &isNotDir):
-		if f, ok := isNotDir.file.(File); ok {
-			return NewErrIsNotDirectory(s.subFile(f))
-		}
-	}
-	return err
+	return translateErrFile(err, s.subFile)
 }
 
 func (s *SubFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -268,10 +245,11 @@ func (s *SubFileSystem) Remove(filePath string) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	if s.parentPath(filePath) == s.dir {
+	parentPath := s.parentPath(filePath)
+	if parentPath == s.dir {
 		return fmt.Errorf("can't remove root directory of %s", s)
 	}
-	return s.subErr(fsRemove(s.parent, s.parentPath(filePath)))
+	return s.subErr(fsRemove(s.parent, parentPath))
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -378,10 +356,11 @@ func (s *SubFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	if s.parentPath(filePath) == s.dir {
+	parentPath := s.parentPath(filePath)
+	if parentPath == s.dir {
 		return fmt.Errorf("can't remove root directory of %s", s)
 	}
-	return s.subErr(fsRemoveAll(ctx, s.parent, s.parentPath(filePath)))
+	return s.subErr(fsRemoveAll(ctx, s.parent, parentPath))
 }
 
 func (s *SubFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {

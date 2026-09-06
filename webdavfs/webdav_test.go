@@ -12,6 +12,7 @@ import (
 	"golang.org/x/net/webdav"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 	"github.com/ungerik/go-fs/fstest"
 )
 
@@ -75,7 +76,7 @@ func TestRangedRead(t *testing.T) {
 	r, err := file.OpenReadSeeker()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
-	_, isRangeReader := r.(*rangeReader)
+	_, isRangeReader := r.(*fsimpl.RangeReader)
 	assert.True(t, isRangeReader, "the native range reader must be used")
 
 	pos, err := r.Seek(-3, io.SeekEnd)

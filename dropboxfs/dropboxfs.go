@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"strings"
 	"sync/atomic"
@@ -48,11 +49,8 @@ var (
 	// Compile-time interface checks
 	_ fs.FileSystem                 = new(fileSystem)
 	_ fs.WriteFileSystem            = new(fileSystem)
-	_ fs.ExistsFileSystem           = new(fileSystem)
-	_ fs.ReadAllFileSystem          = new(fileSystem)
 	_ fs.WriteAllFileSystem         = new(fileSystem)
 	_ fs.ReadWriterFileSystem       = new(fileSystem)
-	_ fs.TouchFileSystem            = new(fileSystem)
 	_ fs.CopyFileSystem             = new(fileSystem)
 	_ fs.MoveFileSystem             = new(fileSystem)
 	_ fs.RemoveAllFileSystem        = new(fileSystem)
@@ -120,9 +118,6 @@ func lookupNotFound(l *files.LookupError) bool {
 // would make existing files appear to vanish, which is dangerous for
 // callers that check existence before overwriting or deleting.
 func isNotExistError(err error) bool {
-	if err == nil {
-		return false
-	}
 	if e, ok := errors.AsType[files.GetMetadataAPIError](err); ok {
 		return e.EndpointError != nil && lookupNotFound(e.EndpointError.Path)
 	}
@@ -286,22 +281,6 @@ func (dbfs *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	return info, nil
 }
 
-// Exists uses the cached metadata when available.
-func (dbfs *fileSystem) Exists(filePath string) (bool, error) {
-	_, err := dbfs.Stat(filePath)
-	switch {
-	case err == nil:
-		return true, nil
-	case isNotExist(err):
-		return false, nil
-	}
-	return false, err
-}
-
-func isNotExist(err error) bool {
-	return errors.Is(err, fs.ErrDoesNotExist{}) || errors.As(err, new(fs.ErrDoesNotExist))
-}
-
 func (dbfs *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	return dbfs.listDir(ctx, dirPath, patterns, callback, false)
 }
@@ -340,7 +319,7 @@ func (dbfs *fileSystem) listDir(ctx context.Context, dirPath string, patterns []
 			if info == nil || (recursive && info.IsDir) {
 				continue
 			}
-			dbfs.cache.Put(apiPath(info.File.Path()), info)
+			dbfs.cache.Put(apiPath(dbfs.CleanPath(string(info.File))), info)
 			match, err := fsimpl.MatchAnyPattern(info.Name, patterns)
 			if err != nil {
 				return err
@@ -384,19 +363,6 @@ func (dbfs *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return body, nil
 }
 
-// ReadAll downloads the complete content of the file.
-func (dbfs *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	if err := dbfs.check(ctx); err != nil {
-		return nil, err
-	}
-	body, err := dbfs.OpenReader(filePath)
-	if err != nil {
-		return nil, err
-	}
-	defer body.Close()
-	return fs.ReadAllContext(ctx, body)
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // Writing
 
@@ -438,27 +404,13 @@ func (dbfs *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.Wri
 // OpenReadWriter downloads the file (or starts empty for a missing one)
 // into a memory buffer that is uploaded on Close.
 func (dbfs *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	data, err := dbfs.ReadAll(context.Background(), filePath)
-	if err != nil && !isNotExist(err) {
+	data, err := dbfs.file(filePath).ReadAll(context.Background())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	return fsimpl.NewWriteOnCloseFileBuffer(data, func(data []byte) error {
 		return dbfs.WriteAll(context.Background(), filePath, data, perm)
 	}), nil
-}
-
-// Touch creates an empty file if it does not exist.
-// Dropbox can't update the modification time of an existing file,
-// so Touch returns an ErrUnsupported error for an existing path.
-func (dbfs *fileSystem) Touch(filePath string, perm fs.Permissions) error {
-	exists, err := dbfs.Exists(filePath)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return fs.NewErrUnsupported(dbfs, "Touch of an existing file")
-	}
-	return dbfs.WriteAll(context.Background(), filePath, nil, perm)
 }
 
 // MakeDir creates a folder. It returns an error wrapping

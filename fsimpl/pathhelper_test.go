@@ -65,16 +65,16 @@ func TestPathHelper_URL(t *testing.T) {
 	rooted := PathHelper{URIPrefix: "s3://bucket", Rooted: true}
 	assert.Equal(t, "s3://bucket/a/b", rooted.URL("/a/b"))
 	assert.Equal(t, "s3://bucket/a/b", rooted.JoinCleanURI("a", "b"))
-	assert.Equal(t, "/a/b", rooted.CleanPathFromURI(rooted.URL("/a/b")), "CleanPathFromURI(URL(p)) == p")
+	assert.Equal(t, "/a/b", rooted.CleanPath(rooted.URL("/a/b")), "CleanPath(URL(p)) == p")
 
 	slashPrefix := PathHelper{URIPrefix: "sftp://", Rooted: true}
 	assert.Equal(t, "sftp://host/a", slashPrefix.URL("/host/a"), "no doubled separator after a prefix ending with a separator")
-	assert.Equal(t, "/host/a", slashPrefix.CleanPathFromURI("sftp://host/a"))
+	assert.Equal(t, "/host/a", slashPrefix.CleanPath("sftp://host/a"))
 
 	unrooted := PathHelper{URIPrefix: "http://"}
 	assert.Equal(t, "http://example.com/a", unrooted.URL("example.com/a"))
 	assert.Equal(t, "http://example.com/a", unrooted.JoinCleanURI("example.com", "a"))
-	assert.Equal(t, "example.com/a", unrooted.CleanPathFromURI("http://example.com/a"))
+	assert.Equal(t, "example.com/a", unrooted.CleanPath("http://example.com/a"))
 }
 
 func TestPathHelper_Split(t *testing.T) {
@@ -123,7 +123,4 @@ func TestPathHelper_Defaults(t *testing.T) {
 	h := PathHelper{URIPrefix: "x://"}
 	require.Equal(t, "/", h.Separator())
 	require.Equal(t, "x://", h.Prefix())
-	matched, err := h.MatchAnyPattern("a.txt", []string{"*.txt"})
-	require.NoError(t, err)
-	require.True(t, matched)
 }

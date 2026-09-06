@@ -205,11 +205,6 @@ func (f *fileSystem) wrapErr(filePath string, err error) error {
 	return err
 }
 
-// shareCtx returns the share bound to ctx.
-func (f *fileSystem) shareCtx(ctx context.Context) *smb2.Share {
-	return f.share.WithContext(ctx)
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // Reading
 
@@ -259,7 +254,7 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
-	infos, err := f.shareCtx(ctx).ReadDir(sharePath(dirPath))
+	infos, err := f.share.WithContext(ctx).ReadDir(sharePath(dirPath))
 	if err != nil {
 		if info, statErr := f.Stat(dirPath); statErr == nil && !info.IsDir {
 			return fs.NewErrIsNotDirectory(info.File)
@@ -324,7 +319,7 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	data, err := f.shareCtx(ctx).ReadFile(sharePath(filePath))
+	data, err := f.share.WithContext(ctx).ReadFile(sharePath(filePath))
 	return data, f.wrapErr(filePath, err)
 }
 
@@ -338,7 +333,7 @@ func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	return f.wrapErr(filePath, f.shareCtx(ctx).WriteFile(sharePath(filePath), data, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false)))
+	return f.wrapErr(filePath, f.share.WithContext(ctx).WriteFile(sharePath(filePath), data, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false)))
 }
 
 func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
@@ -483,7 +478,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if p == "" {
 		return fmt.Errorf("can't remove root directory of %s", f)
 	}
-	err := f.shareCtx(ctx).RemoveAll(p)
+	err := f.share.WithContext(ctx).RemoveAll(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -508,7 +503,7 @@ func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
 	err := f.share.Symlink(sharePath(targetPath), sharePath(linkPath))
 	if err != nil {
 		err = f.wrapErr(linkPath, err)
-		if isNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		// Most servers reject symbolic links over SMB
@@ -516,10 +511,6 @@ func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
 		return fmt.Errorf("%w: %w", fs.NewErrUnsupported(f, "CreateSymbolicLink"), err)
 	}
 	return nil
-}
-
-func isNotExist(err error) bool {
-	return errors.Is(err, os.ErrNotExist)
 }
 
 func (f *fileSystem) ReadSymbolicLink(linkPath string) (targetPath string, err error) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	iofs "io/fs"
+	"slices"
 )
 
 var _ iofs.File = new(ReadonlyFileBuffer)
@@ -182,10 +183,13 @@ func (buf *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 	}
 	pos := int(off)
 	writeEnd := pos + len(p)
-	if writeEnd > len(buf.data) {
-		newData := make([]byte, writeEnd)
-		copy(newData, buf.data)
-		buf.data = newData
+	if oldLen := len(buf.data); writeEnd > oldLen {
+		// Grow with amortized reallocation, streaming writes
+		// would otherwise copy the whole buffer on every call
+		buf.data = slices.Grow(buf.data, writeEnd-oldLen)[:writeEnd]
+		if pos > oldLen {
+			clear(buf.data[oldLen:pos]) // spare capacity may hold stale data
+		}
 	}
 	n = copy(buf.data[pos:], p)
 	if n < len(p) {

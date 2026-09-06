@@ -90,14 +90,11 @@ func (d *stdDirFile) Close() error {
 // n entries at a time for n > 0 and all remaining entries otherwise.
 func (d *stdDirFile) ReadDir(n int) ([]iofs.DirEntry, error) {
 	if !d.loaded {
-		err := d.file.ListDir(context.Background(), func(file File) error {
-			d.entries = append(d.entries, file.StdDirEntry())
-			return nil
-		})
+		entries, err := stdReadDir(d.file)
 		if err != nil {
 			return nil, err
 		}
-		sort.Slice(d.entries, func(i, j int) bool { return d.entries[i].Name() < d.entries[j].Name() })
+		d.entries = entries
 		d.loaded = true
 	}
 	remaining := d.entries[d.offset:]
@@ -133,8 +130,13 @@ func (f StdFS) ReadDir(name string) ([]iofs.DirEntry, error) {
 	if err := checkStdFSName(name); err != nil {
 		return nil, err
 	}
+	return stdReadDir(f.File.Join(name))
+}
+
+// stdReadDir lists the entries of dir sorted by name like io/fs.ReadDir.
+func stdReadDir(dir File) ([]iofs.DirEntry, error) {
 	var entries []iofs.DirEntry
-	err := f.File.Join(name).ListDir(context.Background(), func(file File) error {
+	err := dir.ListDir(context.Background(), func(file File) error {
 		entries = append(entries, file.StdDirEntry())
 		return nil
 	})

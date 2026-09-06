@@ -46,9 +46,6 @@ func Move(ctx context.Context, source, destination File) error {
 	if destination.IsDir() {
 		destination = destination.Join(source.Name())
 		destFS, destPath = destination.ParseRawURI()
-		if srcFS == destFS && srcPath == destPath {
-			return nil
-		}
 	}
 	if srcFS == destFS {
 		return fsMove(ctx, srcFS, srcPath, destPath)

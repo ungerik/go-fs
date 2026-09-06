@@ -123,6 +123,11 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 	if err != nil {
 		return nil, err
 	}
+	return dialPrepared(ctx, u, username, password, prefix, address, credentialsCallback, hostKeyCallback, connLogger)
+}
+
+// dialPrepared dials a file system with the results of prepareDial.
+func dialPrepared(ctx context.Context, u *url.URL, username, password, prefix, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (fs.FileSystem, error) {
 	f := &fileSystem{
 		PathHelper:          pathHelper(prefix),
 		connLogger:          connLogger,
@@ -130,6 +135,7 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 		credentialsCallback: credentialsCallback,
 		hostKeyCallback:     hostKeyCallback,
 	}
+	var err error
 	f.client, err = dialRetry(ctx, u.Host, username, password, hostKeyCallback, connLogger)
 	if err != nil {
 		return nil, err
@@ -212,7 +218,7 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 // The connLogger parameter is optional (can be nil) and will be used
 // to log connection events like dialing and reconnecting.
 func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (free func() error, err error) {
-	_, _, _, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
+	u, username, password, prefix, err := prepareDial(address, credentialsCallback, hostKeyCallback)
 	if err != nil {
 		return nop, err
 	}
@@ -221,7 +227,7 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return func() error { return f.Close() }, nil
 	}
 
-	newFS, err := Dial(ctx, address, credentialsCallback, hostKeyCallback, connLogger)
+	newFS, err := dialPrepared(ctx, u, username, password, prefix, address, credentialsCallback, hostKeyCallback, connLogger)
 	if err != nil {
 		return nop, err
 	}
@@ -422,21 +428,31 @@ func (f *fileSystem) reconnect(ctx context.Context) (*sftp.Client, error) {
 	return client, nil
 }
 
-// do runs op with the SFTP client. If op fails with a connection
-// error on a reconnectable file system, it reconnects and retries once.
-func (f *fileSystem) do(ctx context.Context, filePath string, op func(client *sftp.Client, clientPath string) error) error {
+// retry runs op with the SFTP client. op owns the release function
+// and must call it when it is done with the client. If op fails with
+// a connection error on a reconnectable file system, retry reconnects
+// and runs op once more.
+func (f *fileSystem) retry(ctx context.Context, filePath string, op func(client *sftp.Client, clientPath string, release func() error) error) error {
 	for attempt := 0; ; attempt++ {
 		client, clientPath, release, err := f.getClient(ctx, filePath)
 		if err != nil {
 			return err
 		}
-		err = errors.Join(op(client, clientPath), release())
+		err = op(client, clientPath, release)
 		if err != nil && attempt == 0 && f.reconnectable() && isConnectionError(err) {
 			f.dropClient(client)
 			continue
 		}
 		return err
 	}
+}
+
+// do runs op with the SFTP client and releases the client afterwards,
+// reconnecting and retrying once on a connection error, see retry.
+func (f *fileSystem) do(ctx context.Context, filePath string, op func(client *sftp.Client, clientPath string) error) error {
+	return f.retry(ctx, filePath, func(client *sftp.Client, clientPath string, release func() error) error {
+		return errors.Join(op(client, clientPath), release())
+	})
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
@@ -572,13 +588,8 @@ func (f *sftpFile) Close() error {
 
 // openFile opens a file with the flags. A file created by the
 // call gets the permissions perm if perm is not zero.
-func (f *fileSystem) openFile(filePath string, flags int, perm fs.Permissions) (*sftpFile, error) {
-	ctx := context.Background()
-	for attempt := 0; ; attempt++ {
-		client, clientPath, release, err := f.getClient(ctx, filePath)
-		if err != nil {
-			return nil, err
-		}
+func (f *fileSystem) openFile(filePath string, flags int, perm fs.Permissions) (opened *sftpFile, err error) {
+	err = f.retry(context.Background(), filePath, func(client *sftp.Client, clientPath string, release func() error) error {
 		created := false
 		if perm != 0 && flags&os.O_CREATE != 0 {
 			_, statErr := client.Stat(clientPath)
@@ -586,21 +597,21 @@ func (f *fileSystem) openFile(filePath string, flags int, perm fs.Permissions) (
 		}
 		file, err := client.OpenFile(clientPath, flags)
 		if err != nil {
-			err = errors.Join(err, release())
-			if attempt == 0 && f.reconnectable() && isConnectionError(err) {
-				f.dropClient(client)
-				continue
-			}
-			return nil, err
+			return errors.Join(err, release())
 		}
 		if created {
 			err = file.Chmod(os.FileMode(perm))
 			if err != nil {
-				return nil, errors.Join(err, file.Close(), release())
+				return errors.Join(err, file.Close(), release())
 			}
 		}
-		return &sftpFile{file, release}, nil
+		opened = &sftpFile{file, release}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	return opened, nil
 }
 
 func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
