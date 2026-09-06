@@ -517,6 +517,7 @@ route to the right backend.
 | `sftpfs`      | `sftp://<user>@<host>`  | `sftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes  |
 | `ftpfs`       | `ftp://`, `ftps://`     | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
 | `dropboxfs`   | `dropbox://<account>`   | `dropboxfs.NewAndRegister`                         | yes  | yes    |
+| `webdavfs`    | `webdav://<host>/<base>` | `webdavfs.New`, `webdavfs.NewAndRegister`         | yes  | yes    |
 | `zipfs`       | `zip://`                | `zipfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
 | `tarfs`       | `tar://`                | `tarfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
 | `multipartfs` | `multipart://`          | `multipartfs.FromRequestForm`                      | yes  | no     |
@@ -543,23 +544,24 @@ capable than that emulation.
 only exposes on Unix). For the remote backends, as verified by the
 conformance suite in `fstest`:
 
-| Capability             | s3  | sftp | ftp | dropbox | http |
-| ---------------------- | :-: | :--: | :-: | :-----: | :--: |
-| CopyFile (server-side) | ✓   | –    | –   | ✓       | –    |
-| Move                   | –   | ✓    | ✓   | ✓       | –    |
-| Exists                 | –   | –    | –   | ✓       | ✓    |
-| ReadAll                | ✓   | –    | ✓   | ✓       | ✓    |
-| WriteAll               | ✓   | –    | ✓   | ✓       | r/o  |
-| Append                 | –   | –    | ✓   | –       | r/o  |
-| OpenAppendWriter       | –   | ✓    | ✓   | –       | r/o  |
-| OpenReadWriter         | ✓   | ✓    | ✓   | ✓       | r/o  |
-| Touch                  | ✓   | ✓    | ✓   | ✓       | r/o  |
-| Truncate               | –   | ✓    | –   | –       | r/o  |
-| MakeAllDirs            | –   | ✓    | –   | –       | r/o  |
-| RemoveAll              | ✓   | ✓    | ✓   | ✓       | r/o  |
-| ListDirRecursive       | ✓   | ✓    | ✓   | ✓       | –    |
-| SetPermissions         | –   | ✓    | –   | –       | r/o  |
-| Symbolic links         | –   | ✓    | –   | –       | –    |
+| Capability             | s3  | sftp | ftp | dropbox | webdav | http |
+| ---------------------- | :-: | :--: | :-: | :-----: | :----: | :--: |
+| CopyFile (server-side) | ✓   | –    | –   | ✓       | ✓      | –    |
+| Move                   | –   | ✓    | ✓   | ✓       | ✓      | –    |
+| Exists                 | –   | –    | –   | ✓       | –      | ✓    |
+| ReadAll                | ✓   | –    | ✓   | ✓       | ✓      | ✓    |
+| WriteAll               | ✓   | –    | ✓   | ✓       | ✓      | r/o  |
+| Append                 | –   | –    | ✓   | –       | –      | r/o  |
+| OpenAppendWriter       | –   | ✓    | ✓   | –       | –      | r/o  |
+| OpenReadWriter         | ✓   | ✓    | ✓   | ✓       | –      | r/o  |
+| Touch                  | ✓   | ✓    | ✓   | ✓       | –      | r/o  |
+| Truncate               | –   | ✓    | –   | –       | –      | r/o  |
+| MakeAllDirs            | –   | ✓    | –   | –       | –      | r/o  |
+| RemoveAll              | ✓   | ✓    | ✓   | ✓       | ✓      | r/o  |
+| ListDirRecursive       | ✓   | ✓    | ✓   | ✓       | –      | –    |
+| SetPermissions         | –   | ✓    | –   | –       | –      | r/o  |
+| Symbolic links         | –   | ✓    | –   | –       | –      | –    |
+| Seeking reads          | –   | ✓    | –   | –       | ✓      | –    |
 
 `✓` native implementation · `–` falls back to the generic emulation (works the
 same, just not specialized) · `r/o` read-only backend, so the write operation
@@ -663,6 +665,22 @@ err = dbxFS.RootDir().Join("Apps", "MyApp", "notes.md").WriteAllString(ctx, "...
 
 The second argument is the metadata cache timeout (zero disables the cache),
 the third mutes the notifications Dropbox sends for changed files.
+
+### webdavfs
+
+```go
+import "github.com/ungerik/go-fs/webdavfs"
+
+davFS, err := webdavfs.NewAndRegister(ctx, "https://cloud.example.com/remote.php/dav/files/alice",
+    &webdavfs.Options{Username: "alice", Password: "app-password"})
+defer davFS.Close()
+
+notes, err := fs.File("webdav://cloud.example.com/remote.php/dav/files/alice/notes.txt").ReadAllString(ctx)
+```
+
+Standard library only, so one module covers every WebDAV server. Paths map
+to URL paths below the base URL, `PROPFIND` backs `Stat` and `ListDir`,
+`MOVE` and `COPY` are native, and readers seek with `Range` requests.
 
 ### zipfs
 

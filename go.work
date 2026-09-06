@@ -7,4 +7,5 @@ use (
 	./s3fs
 	./sftpfs
 	./tools
+	./webdavfs
 )

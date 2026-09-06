@@ -117,6 +117,10 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 - `fs.SubFileSystem` is a view of a directory of another file system with
   the prefix `sub://<id>`, forwarding every operation (including the
   optional interfaces) to the parent with translated paths.
+- `webdavfs` module: a WebDAV client file system with the standard library
+  only (`PROPFIND` for `Stat` and `ListDir`, `PUT`, `MKCOL`, `DELETE`,
+  native `MOVE` and `COPY`, seeking reads with `Range` requests), tested
+  against an in-process `golang.org/x/net/webdav` server.
 - `fs.OverlayFileSystem` stacks a writable upper layer on a read-only base
   with the prefix `overlay://<id>`: reads fall through, listings are the
   union, writes go to the upper layer with copy-up for in-place changes,
