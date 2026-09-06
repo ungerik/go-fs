@@ -1466,10 +1466,10 @@ func TestMemFileSystem_Concurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < opsPerWorker; i++ {
+			for i := range opsPerWorker {
 				path := "/shared/" + string(rune('a'+(id%26))) + "-" + string(rune('a'+(i%26))) + ".txt"
 				_ = memFS.WriteAll(t.Context(), path, []byte("x"), nil)
 				_, _ = memFS.ReadAll(t.Context(), path)

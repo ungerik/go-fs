@@ -17,3 +17,6 @@ Public, dependency-light Go library. Repo-specific rules that override the globa
   must be gated behind an environment variable (`GOFS_ONLINE_TESTS=1`,
   `DROPBOX_ACCESS_TOKEN`).
 - Prefer `t.Context()` over `context.Background()` in test bodies.
+- **Go version policy:** the `go` directive of every module (and `go.work`) is one
+  minor version behind the currently released Go (Go 1.27 released → modules on
+  `go 1.26.0`). Bump all modules together when a new Go version is released.

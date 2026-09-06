@@ -143,8 +143,7 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 
 	// Find fs with longest matching prefix
 	// by iterating in reverse order of sorted registry
-	for i := len(registrySorted) - 1; i >= 0; i-- {
-		fs = registrySorted[i]
+	for _, fs = range slices.Backward(registrySorted) {
 		if strings.HasPrefix(uri, fs.Prefix()) {
 			return fs, fs.CleanPathFromURI(uri)
 		}

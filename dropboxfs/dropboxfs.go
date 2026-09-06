@@ -89,8 +89,7 @@ func isNotExistError(err error) bool {
 	}
 	// Typed detection for the get_metadata route used by info():
 	// only a LookupError with the not_found tag means the path is missing.
-	var metaErr files.GetMetadataAPIError
-	if errors.As(err, &metaErr) {
+	if metaErr, ok := errors.AsType[files.GetMetadataAPIError](err); ok {
 		return metaErr.EndpointError != nil &&
 			metaErr.EndpointError.Path != nil &&
 			metaErr.EndpointError.Path.Tag == files.LookupErrorNotFound

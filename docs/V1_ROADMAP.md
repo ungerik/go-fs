@@ -44,6 +44,9 @@ Taken 2026-09-05/06:
   semantics.
 - **Delivery:** this roadmap lives in the repo; each phase is its own PR
   (backends: one PR each).
+- **Go version policy:** every module (and `go.work`) declares one minor
+  version behind the currently released Go: Go 1.27 is current, so all modules
+  are on `go 1.26.0`. Bump all modules together on each Go release.
 
 ## What bounds the breakage
 

@@ -835,8 +835,7 @@ func (f *fileSystem) convertResultError(err *error, path string) {
 	if err == nil || *err == nil {
 		return
 	}
-	var e *textproto.Error
-	if errors.As(*err, &e) {
+	if e, ok := errors.AsType[*textproto.Error](*err); ok {
 		if e.Code == ftp.StatusFileUnavailable {
 			*err = fs.NewErrDoesNotExist(f.JoinCleanFile(path))
 			return

@@ -302,8 +302,7 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 		}
 	}
 
-	var notFound *types.NotFound
-	if errors.As(err, &notFound) {
+	if _, ok := errors.AsType[*types.NotFound](err); ok {
 		return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
 	}
 	return nil, err
@@ -654,8 +653,7 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		Key:    &filePath,
 	})
 	if err != nil {
-		var notFound *types.NotFound
-		if errors.As(err, &notFound) {
+		if _, ok := errors.AsType[*types.NotFound](err); ok {
 			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
 		}
 		return nil, err
@@ -779,8 +777,7 @@ func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 		Key:    &filePath,
 	})
 	if err != nil {
-		var notFound *types.NotFound
-		if errors.As(err, &notFound) {
+		if _, ok := errors.AsType[*types.NotFound](err); ok {
 			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
 		}
 		return nil, err
