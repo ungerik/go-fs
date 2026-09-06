@@ -22,8 +22,8 @@ func TestConformance(t *testing.T) {
 			tarFile := tempDir.Join(name)
 
 			t.Run("Writer", func(t *testing.T) {
-				writer, err := NewWriterFileSystem(tarFile)
-				require.NoError(t, err, "NewWriterFileSystem")
+				writer, err := NewWriter(tarFile)
+				require.NoError(t, err, "NewWriter")
 				fstest.RunConformance(t, writer, fstest.Config{
 					Name:    "Tar writer filesystem",
 					Prefix:  writer.Prefix(),
@@ -35,8 +35,8 @@ func TestConformance(t *testing.T) {
 				if !tarFile.Exists() {
 					writeSeedArchive(t, tarFile, "/seed")
 				}
-				reader, err := NewReaderFileSystem(tarFile)
-				require.NoError(t, err, "NewReaderFileSystem")
+				reader, err := NewReader(tarFile)
+				require.NoError(t, err, "NewReader")
 				fstest.RunConformance(t, reader, fstest.Config{
 					Name:    "Tar reader filesystem",
 					Prefix:  reader.Prefix(),
@@ -50,8 +50,8 @@ func TestConformance(t *testing.T) {
 // writeSeedArchive writes the default seed below dir into a new archive.
 func writeSeedArchive(t *testing.T, tarFile fs.File, dir string) {
 	t.Helper()
-	writer, err := NewWriterFileSystem(tarFile)
-	require.NoError(t, err, "NewWriterFileSystem")
+	writer, err := NewWriter(tarFile)
+	require.NoError(t, err, "NewWriter")
 	for name, content := range fstest.DefaultSeed() {
 		w, err := writer.OpenWriter(writer.CleanPath(dir, name), 0)
 		require.NoError(t, err, "OpenWriter")
@@ -70,7 +70,7 @@ func TestImplicitDirectories(t *testing.T) {
 	t.Cleanup(func() { _ = tempDir.RemoveRecursive(context.Background()) })
 	tarFile := tempDir.Join("implicit.tgz")
 
-	writer, err := NewWriterFileSystem(tarFile)
+	writer, err := NewWriter(tarFile)
 	require.NoError(t, err)
 	readable, writable := writer.ReadableWritable()
 	assert.False(t, readable)
@@ -84,7 +84,7 @@ func TestImplicitDirectories(t *testing.T) {
 	_, err = writer.Stat("/a")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	reader, err := NewReaderFileSystem(tarFile)
+	reader, err := NewReader(tarFile)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, reader.Close()) })
 	readable, writable = reader.ReadableWritable()
@@ -103,8 +103,10 @@ func TestImplicitDirectories(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []fs.File{root.Join("a", "b"), root.Join("a", "empty.txt")}, names, "directories first")
 
+	// Reader has no write methods, the package rejects writes
+	// based on ReadableWritable.
 	err = root.Join("a", "b", "c.txt").Remove()
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
-	err = reader.Remove("/a/b/c.txt")
+	err = root.Join("newdir").MakeDir()
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
 }

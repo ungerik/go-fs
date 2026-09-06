@@ -22,8 +22,8 @@ func TestZipFileSystem(t *testing.T) {
 
 	// Create a zip file with test content
 	t.Run("CreateZipFile", func(t *testing.T) {
-		zipWriter, err := NewWriterFileSystem(zipFile)
-		require.NoError(t, err, "NewWriterFileSystem should not error")
+		zipWriter, err := NewWriter(zipFile)
+		require.NoError(t, err, "NewWriter should not error")
 
 		t.Cleanup(func() {
 			assert.NoError(t, zipWriter.Close(), "zipWriter.Close() should not error")
@@ -35,7 +35,7 @@ func TestZipFileSystem(t *testing.T) {
 		require.NoError(t, err, "MakeDir should not error")
 
 		// Write some test files
-		testFilePath := zipWriter.JoinCleanPath(testDir, "test-file.txt")
+		testFilePath := zipWriter.CleanPath(testDir, "test-file.txt")
 		writer, err := zipWriter.OpenWriter(testFilePath, 0)
 		require.NoError(t, err, "OpenWriter should not error")
 
@@ -48,7 +48,7 @@ func TestZipFileSystem(t *testing.T) {
 		require.NoError(t, err, "Close writer should not error")
 
 		// Write another file
-		testFile2Path := zipWriter.JoinCleanPath(testDir, "test-file-2.txt")
+		testFile2Path := zipWriter.CleanPath(testDir, "test-file-2.txt")
 		writer2, err := zipWriter.OpenWriter(testFile2Path, 0)
 		require.NoError(t, err, "OpenWriter should not error for second file")
 
@@ -62,8 +62,8 @@ func TestZipFileSystem(t *testing.T) {
 
 	// Now test reading from the zip file
 	t.Run("ReadZipFile", func(t *testing.T) {
-		zipReader, err := NewReaderFileSystem(zipFile)
-		require.NoError(t, err, "NewReaderFileSystem should not error")
+		zipReader, err := NewReader(zipFile)
+		require.NoError(t, err, "NewReader should not error")
 
 		t.Cleanup(func() {
 			assert.NoError(t, zipReader.Close(), "zipReader.Close() should not error")
@@ -85,7 +85,7 @@ func TestZipFileSystem(t *testing.T) {
 		})
 
 		t.Run("Stat", func(t *testing.T) {
-			testFilePath := zipReader.JoinCleanPath("test", "test-file.txt")
+			testFilePath := zipReader.CleanPath("test", "test-file.txt")
 			info, err := zipReader.Stat(testFilePath)
 			require.NoError(t, err, "Stat should not error")
 			assert.False(t, info.IsDir, "test-file.txt should not be a directory")
@@ -111,7 +111,7 @@ func TestZipFileSystem(t *testing.T) {
 		})
 
 		t.Run("OpenReader", func(t *testing.T) {
-			testFilePath := zipReader.JoinCleanPath("test", "test-file.txt")
+			testFilePath := zipReader.CleanPath("test", "test-file.txt")
 			reader, err := zipReader.OpenReader(testFilePath)
 			require.NoError(t, err, "OpenReader should not error")
 			defer reader.Close()
@@ -136,8 +136,8 @@ func TestZipFileSystem(t *testing.T) {
 
 	t.Run("WriteOnlyZipFile", func(t *testing.T) {
 		writeOnlyZipFile := tempDir.Join("write-only.zip")
-		zipWriter, err := NewWriterFileSystem(writeOnlyZipFile)
-		require.NoError(t, err, "NewWriterFileSystem should not error")
+		zipWriter, err := NewWriter(writeOnlyZipFile)
+		require.NoError(t, err, "NewWriter should not error")
 
 		t.Cleanup(func() {
 			assert.NoError(t, zipWriter.Close(), "zipWriter.Close() should not error")
@@ -156,7 +156,7 @@ func TestZipWriter_SequentialEnforcement(t *testing.T) {
 		assert.NoError(t, tempDir.RemoveRecursive(context.Background()))
 	})
 
-	zipWriter, err := NewWriterFileSystem(tempDir.Join("seq.zip"))
+	zipWriter, err := NewWriter(tempDir.Join("seq.zip"))
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, zipWriter.Close()) })
 
@@ -202,7 +202,7 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	})
 
 	zipFile := tempDir.Join("ro.zip")
-	zipWriter, err := NewWriterFileSystem(zipFile)
+	zipWriter, err := NewWriter(zipFile)
 	require.NoError(t, err)
 	w, err := zipWriter.OpenWriter("f.txt", 0)
 	require.NoError(t, err)
@@ -211,7 +211,7 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	require.NoError(t, w.Close())
 	require.NoError(t, zipWriter.Close())
 
-	zipReader, err := NewReaderFileSystem(zipFile)
+	zipReader, err := NewReader(zipFile)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, zipReader.Close()) })
 
@@ -223,7 +223,7 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 }
 
 // TestZipWriter_ReadRejected verifies that the read methods of a
-// WriterFileSystem report fs.ErrWriteOnlyFileSystem while the archive is
+// Writer report fs.ErrWriteOnlyFileSystem while the archive is
 // open and fs.ErrFileSystemClosed after it was closed. archive/zip has
 // no way to read back what was written, so returning empty results
 // instead of an error would silently hide data.
@@ -234,7 +234,7 @@ func TestZipWriter_ReadRejected(t *testing.T) {
 	})
 	ctx := t.Context()
 
-	zipWriter, err := NewWriterFileSystem(tempDir.Join("writeonly.zip"))
+	zipWriter, err := NewWriter(tempDir.Join("writeonly.zip"))
 	require.NoError(t, err)
 
 	// Touch writes an empty entry without handing out a writer

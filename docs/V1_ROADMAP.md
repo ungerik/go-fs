@@ -275,8 +275,8 @@ to return `ErrUnsupported` (the s3fs `Watch` stub goes away).
 - **multipartfs:** real `Size`/`Modified` from the `FileHeader`; delete the
   `EscapePath` stub (or apply it consistently); idempotent `Close`;
   `FileInfo.File` carries the prefix; real tests.
-- **zipfs:** split into `ReaderFileSystem` and `WriterFileSystem` types (no
-  mode branches); `dirtree` panics become errors and handle `a` + `a/b` and
+- **zipfs:** split into `Reader` and `Writer` types (no mode branches);
+  `dirtree` panics become errors and handle `a` + `a/b` and
   trailing-slash entries; entry map built at open (no O(n) `findFile`);
   `FileInfo.File` carries the prefix; `Stat` reports `ErrFileSystemClosed`
   after `Close`.

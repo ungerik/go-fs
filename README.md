@@ -520,8 +520,8 @@ route to the right backend.
 | `webdavfs`    | `webdav://<host>/<base>` | `webdavfs.New`, `webdavfs.NewAndRegister`         | yes  | yes    |
 | `smbfs`       | `smb://<user>@<host>/<share>` | `smbfs.Dial`, `smbfs.DialAndRegister`         | yes  | yes    |
 | `azureblobfs` | `azblob://<host>/<container>` | `azureblobfs.NewAndRegister`, `NewFromConnectionString` | yes | yes/ro |
-| `zipfs`       | `zip://`                | `zipfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
-| `tarfs`       | `tar://`                | `tarfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
+| `zipfs`       | `zip://`                | `zipfs.NewReader`, `zipfs.NewWriter`               | reader | writer |
+| `tarfs`       | `tar://`                | `tarfs.NewReader`, `tarfs.NewWriter`               | reader | writer |
 | `multipartfs` | `multipart://`          | `multipartfs.FromRequestForm`                      | yes  | no     |
 | (built-in)    | `mem://`                | `fs.NewMemFileSystem`                              | yes  | yes    |
 | (built-in)    | `stdfs://<id>`          | `fs.NewStdFileSystem(iofs.FS)`: embed.FS, os.DirFS, zip.Reader, MapFS | yes | no |
@@ -726,7 +726,7 @@ updates the modification time by setting the blob metadata.
 import "github.com/ungerik/go-fs/zipfs"
 
 // Read a ZIP archive as a file system
-zipFS, err := zipfs.NewReaderFileSystem(fs.File("archive.zip"))
+zipFS, err := zipfs.NewReader(fs.File("archive.zip"))
 defer zipFS.Close()
 
 err = zipFS.RootDir().ListDir(ctx, func(f fs.File) error {
@@ -735,12 +735,12 @@ err = zipFS.RootDir().ListDir(ctx, func(f fs.File) error {
 })
 
 // Write a new ZIP archive
-out, err := zipfs.NewWriterFileSystem(fs.File("out.zip"))
+out, err := zipfs.NewWriter(fs.File("out.zip"))
 defer out.Close()
 ```
 
-`ReaderFileSystem` is a `StdFileSystem` over the `io/fs.FS` of
-`archive/zip.Reader`; `WriterFileSystem` writes entries sequentially.
+`Reader` is a `StdFileSystem` over the `io/fs.FS` of `archive/zip.Reader`;
+`Writer` writes entries sequentially.
 
 ### tarfs
 
@@ -749,10 +749,10 @@ The same for tar archives, optionally gzip compressed (`.tar.gz`, `.tgz`):
 ```go
 import "github.com/ungerik/go-fs/tarfs"
 
-tarFS, err := tarfs.NewReaderFileSystem(fs.File("backup.tar.gz"))
+tarFS, err := tarfs.NewReader(fs.File("backup.tar.gz"))
 defer tarFS.Close()
 
-out, err := tarfs.NewWriterFileSystem(fs.File("out.tgz"))
+out, err := tarfs.NewWriter(fs.File("out.tgz"))
 err = out.RootDir().Join("notes.txt").WriteAllString(ctx, "...")
 err = out.Close() // finishes the archive
 ```

@@ -1,9 +1,9 @@
 // Package zipfs implements read-only and write-only file systems
 // for ZIP archives.
 //
-// NewReaderFileSystem opens an existing archive for reading; it is a
+// NewReader opens an existing archive for reading; it is a
 // fs.StdFileSystem over the io/fs.FS of archive/zip.Reader.
-// NewWriterFileSystem creates a new archive that receives files
+// NewWriter creates a new archive that receives files
 // until it is closed. Because archive/zip writes entries
 // sequentially, only one file of a writer file system can be
 // open for writing at a time.
@@ -33,27 +33,27 @@ const (
 )
 
 var (
-	_ fs.FileSystem      = new(ReaderFileSystem)
-	_ fs.FileSystem      = new(WriterFileSystem)
-	_ fs.WriteFileSystem = new(WriterFileSystem)
-	_ fs.TouchFileSystem = new(WriterFileSystem)
+	_ fs.FileSystem      = new(Reader)
+	_ fs.FileSystem      = new(Writer)
+	_ fs.WriteFileSystem = new(Writer)
+	_ fs.TouchFileSystem = new(Writer)
 )
 
 ///////////////////////////////////////////////////////////////////////////////
 // Reader
 
-// ReaderFileSystem is a read-only file system for a ZIP archive.
+// Reader is a read-only file system for a ZIP archive.
 // It is a fs.StdFileSystem over the io/fs.FS of archive/zip.Reader,
 // which synthesizes the directories implied by the entry names.
-type ReaderFileSystem struct {
+type Reader struct {
 	*fs.StdFileSystem
 
 	closer io.Closer
 }
 
-// NewReaderFileSystem opens a ZIP archive for reading
+// NewReader opens a ZIP archive for reading
 // and registers the file system.
-func NewReaderFileSystem(file fs.FileReader) (*ReaderFileSystem, error) {
+func NewReader(file fs.FileReader) (*Reader, error) {
 	fileReader, err := file.OpenReadSeeker()
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func NewReaderFileSystem(file fs.FileReader) (*ReaderFileSystem, error) {
 		return nil, errors.Join(err, fileReader.Close())
 	}
 	id := fsimpl.RandomString()
-	zipfs := &ReaderFileSystem{
+	zipfs := &Reader{
 		StdFileSystem: fs.NewStdFileSystemWithPrefix(zipReader, Prefix+id, "Zip reader filesystem "+id),
 		closer:        fileReader,
 	}
@@ -72,7 +72,7 @@ func NewReaderFileSystem(file fs.FileReader) (*ReaderFileSystem, error) {
 }
 
 // Close unregisters the file system and closes the archive file.
-func (f *ReaderFileSystem) Close() error {
+func (f *Reader) Close() error {
 	if f.closer == nil {
 		return nil
 	}
@@ -84,8 +84,8 @@ func (f *ReaderFileSystem) Close() error {
 ///////////////////////////////////////////////////////////////////////////////
 // Writer
 
-// WriterFileSystem is a write-only file system that writes a ZIP archive.
-type WriterFileSystem struct {
+// Writer is a write-only file system that writes a ZIP archive.
+type Writer struct {
 	fsimpl.PathHelper
 
 	// mtx guards the fields below. archive/zip.Writer is not safe for
@@ -97,9 +97,9 @@ type WriterFileSystem struct {
 	activeWriter *zipEntryWriter
 }
 
-// NewWriterFileSystem creates a ZIP archive for writing
+// NewWriter creates a ZIP archive for writing
 // and registers the file system.
-func NewWriterFileSystem(file fs.File) (*WriterFileSystem, error) {
+func NewWriter(file fs.File) (*Writer, error) {
 	fileWriter, err := file.OpenWriter()
 	if err != nil {
 		return nil, err
@@ -108,7 +108,7 @@ func NewWriterFileSystem(file fs.File) (*WriterFileSystem, error) {
 	zipWriter.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
 		return flate.NewWriter(out, flate.BestCompression)
 	})
-	zipfs := &WriterFileSystem{
+	zipfs := &Writer{
 		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
 		zipWriter:  zipWriter,
 		fileWriter: fileWriter,
@@ -117,34 +117,34 @@ func NewWriterFileSystem(file fs.File) (*WriterFileSystem, error) {
 	return zipfs, nil
 }
 
-func (f *WriterFileSystem) ReadableWritable() (readable, writable bool) {
+func (f *Writer) ReadableWritable() (readable, writable bool) {
 	return false, true
 }
 
-func (f *WriterFileSystem) RootDir() fs.File {
+func (f *Writer) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
-func (f *WriterFileSystem) ID() string {
+func (f *Writer) ID() string {
 	return f.URIPrefix
 }
 
-func (f *WriterFileSystem) Name() string {
+func (f *Writer) Name() string {
 	return "Zip writer filesystem " + path.Base(f.URIPrefix)
 }
 
-func (f *WriterFileSystem) String() string {
+func (f *Writer) String() string {
 	return f.Name() + " with prefix " + f.Prefix()
 }
 
 // checkClosed returns fs.ErrFileSystemClosed if the archive was closed.
-func (f *WriterFileSystem) checkClosed() error {
+func (f *Writer) checkClosed() error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	return f.checkClosedLocked()
 }
 
-func (f *WriterFileSystem) checkClosedLocked() error {
+func (f *Writer) checkClosedLocked() error {
 	if f.fileWriter == nil {
 		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
 	}
@@ -155,7 +155,7 @@ func (f *WriterFileSystem) checkClosedLocked() error {
 // still open. archive/zip only allows writing to the most recently created
 // entry, so a new entry must not be created until the previous writer is
 // closed. f.mtx must be held.
-func (f *WriterFileSystem) checkNoOpenWriterLocked() error {
+func (f *Writer) checkNoOpenWriterLocked() error {
 	if f.activeWriter != nil && !f.activeWriter.closed {
 		return fmt.Errorf("%s: previous zip entry writer must be closed before opening another (zip entries are written sequentially)", f.Name())
 	}
@@ -163,7 +163,7 @@ func (f *WriterFileSystem) checkNoOpenWriterLocked() error {
 }
 
 // Stat is not possible for an archive that is being written.
-func (f *WriterFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
+func (f *Writer) Stat(filePath string) (*fs.FileInfo, error) {
 	if err := f.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func (f *WriterFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 }
 
 // ListDir is not possible for an archive that is being written.
-func (f *WriterFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+func (f *Writer) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	if err := f.checkClosed(); err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func (f *WriterFileSystem) ListDir(ctx context.Context, dirPath string, patterns
 }
 
 // OpenReader is not possible for an archive that is being written.
-func (f *WriterFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (f *Writer) OpenReader(filePath string) (io.ReadCloser, error) {
 	if err := f.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func (f *WriterFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 }
 
 // Touch writes an empty entry.
-func (f *WriterFileSystem) Touch(filePath string, perm fs.Permissions) error {
+func (f *Writer) Touch(filePath string, perm fs.Permissions) error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if err := f.checkClosedLocked(); err != nil {
@@ -204,13 +204,13 @@ func (f *WriterFileSystem) Touch(filePath string, perm fs.Permissions) error {
 
 // MakeDir is a no-op: ZIP directories are implicit and created
 // from the path of any file written below them.
-func (f *WriterFileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
+func (f *Writer) MakeDir(dirPath string, perm fs.Permissions) error {
 	return f.checkClosed()
 }
 
 // OpenWriter creates an entry and returns its writer,
 // which must be closed before the next entry is created.
-func (f *WriterFileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+func (f *Writer) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if err := f.checkClosedLocked(); err != nil {
@@ -229,7 +229,7 @@ func (f *WriterFileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.
 }
 
 // Remove is not possible: entries can't be removed from an archive that is being written.
-func (f *WriterFileSystem) Remove(filePath string) error {
+func (f *Writer) Remove(filePath string) error {
 	if err := f.checkClosed(); err != nil {
 		return err
 	}
@@ -238,7 +238,7 @@ func (f *WriterFileSystem) Remove(filePath string) error {
 
 // Close finalizes the archive, closes the underlying file
 // and unregisters the file system. Close is idempotent.
-func (f *WriterFileSystem) Close() error {
+func (f *Writer) Close() error {
 	f.mtx.Lock()
 	if f.fileWriter == nil {
 		f.mtx.Unlock()
@@ -263,7 +263,7 @@ func (f *WriterFileSystem) Close() error {
 // been closed or superseded by a newer OpenWriter or Touch call, turning
 // what used to be silent archive corruption into a clear error.
 type zipEntryWriter struct {
-	zipfs  *WriterFileSystem
+	zipfs  *Writer
 	w      io.Writer
 	closed bool
 }

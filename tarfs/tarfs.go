@@ -1,8 +1,8 @@
 // Package tarfs implements read-only and write-only file systems
 // for tar archives, optionally gzip compressed (.tar.gz, .tgz).
 //
-// NewReaderFileSystem indexes an existing archive for reading,
-// NewWriterFileSystem creates a new archive that receives files
+// NewReader indexes an existing archive for reading,
+// NewWriter creates a new archive that receives files
 // until it is closed. The package mirrors zipfs.
 package tarfs
 
@@ -36,33 +36,14 @@ var (
 	DefaultDirPermissions = fs.UserAndGroupReadWrite | fs.AllRead | fs.AllExecute
 
 	// Compile-time interface checks
-	_ fs.FileSystem                 = new(TarFileSystem)
-	_ fs.WriteFileSystem            = new(TarFileSystem)
-	_ fs.ExistsFileSystem           = new(TarFileSystem)
-	_ fs.WriteAllFileSystem         = new(TarFileSystem)
-	_ fs.TouchFileSystem            = new(TarFileSystem)
-	_ fs.ListDirRecursiveFileSystem = new(TarFileSystem)
+	_ fs.FileSystem                 = new(Reader)
+	_ fs.ExistsFileSystem           = new(Reader)
+	_ fs.ListDirRecursiveFileSystem = new(Reader)
+	_ fs.FileSystem                 = new(Writer)
+	_ fs.WriteFileSystem            = new(Writer)
+	_ fs.WriteAllFileSystem         = new(Writer)
+	_ fs.TouchFileSystem            = new(Writer)
 )
-
-// TarFileSystem is a file system for a tar archive,
-// either in reader or in writer mode depending on the constructor.
-type TarFileSystem struct {
-	fsimpl.PathHelper
-
-	mtx    sync.Mutex
-	closed bool
-
-	// Reader mode
-	archive io.ReadSeeker
-	closer  io.Closer
-	tree    *fsimpl.DirTreeNode
-	offsets map[string]int64 // data offset of file entries by tree path
-
-	// Writer mode
-	tarWriter  *tar.Writer
-	gzipWriter *gzip.Writer
-	fileWriter io.WriteCloser
-}
 
 // isGzip reports whether the file name has a gzip extension.
 func isGzip(name string) bool {
@@ -70,12 +51,32 @@ func isGzip(name string) bool {
 	return strings.HasSuffix(name, ".gz") || strings.HasSuffix(name, ".tgz")
 }
 
-// NewReaderFileSystem opens a tar archive for reading and registers
+// entryName returns the archive entry name of a file system path.
+func entryName(filePath string) string {
+	return strings.Trim(path.Clean(filePath), Separator)
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Reader
+
+// Reader is a read-only file system for a tar archive.
+type Reader struct {
+	fsimpl.PathHelper
+
+	mtx     sync.Mutex
+	closed  bool
+	archive io.ReadSeeker
+	closer  io.Closer
+	tree    *fsimpl.DirTreeNode
+	offsets map[string]int64 // data offset of file entries by tree path
+}
+
+// NewReader opens a tar archive for reading and registers
 // the file system. The archive is scanned once to index its entries;
 // the content of a file is read from the archive on demand.
 // A gzip compressed archive (.tar.gz, .tgz) is decompressed into
 // memory, because gzip streams can't be read at an offset.
-func NewReaderFileSystem(file fs.FileReader) (*TarFileSystem, error) {
+func NewReader(file fs.FileReader) (*Reader, error) {
 	reader, err := file.OpenReadSeeker()
 	if err != nil {
 		return nil, err
@@ -99,7 +100,7 @@ func NewReaderFileSystem(file fs.FileReader) (*TarFileSystem, error) {
 		}
 		archive, closer = bytes.NewReader(data), io.NopCloser(nil)
 	}
-	tarfs := &TarFileSystem{
+	tarfs := &Reader{
 		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
 		archive:    archive,
 		closer:     closer,
@@ -137,7 +138,7 @@ func (r *offsetReadSeeker) Seek(offset int64, whence int) (int64, error) {
 // index scans the archive and builds the directory tree.
 // After tar.Reader.Next returned a header, the archive
 // position is the offset of the entry's data.
-func (f *TarFileSystem) index() error {
+func (f *Reader) index() error {
 	_, err := f.archive.Seek(0, io.SeekStart)
 	if err != nil {
 		return err
@@ -168,57 +169,31 @@ func (f *TarFileSystem) index() error {
 	}
 }
 
-// NewWriterFileSystem creates a tar archive for writing and registers
-// the file system. The archive is gzip compressed if the file name has
-// a .gz or .tgz extension. Files are buffered in memory until their
-// writer is closed, because tar needs the size before the content.
-func NewWriterFileSystem(file fs.File) (*TarFileSystem, error) {
-	fileWriter, err := file.OpenWriter()
-	if err != nil {
-		return nil, err
-	}
-	tarfs := &TarFileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
-		fileWriter: fileWriter,
-	}
-	var w io.Writer = fileWriter
-	if isGzip(file.Name()) {
-		tarfs.gzipWriter = gzip.NewWriter(fileWriter)
-		w = tarfs.gzipWriter
-	}
-	tarfs.tarWriter = tar.NewWriter(w)
-	fs.Register(tarfs)
-	return tarfs, nil
+func (f *Reader) ReadableWritable() (readable, writable bool) {
+	return true, false
 }
 
-func (f *TarFileSystem) ReadableWritable() (readable, writable bool) {
-	return f.tree != nil, f.tarWriter != nil
-}
-
-func (f *TarFileSystem) RootDir() fs.File {
+func (f *Reader) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
-func (f *TarFileSystem) ID() string {
+func (f *Reader) ID() string {
 	return f.URIPrefix
 }
 
-func (f *TarFileSystem) Name() string {
-	if f.tarWriter != nil {
-		return "Tar writer filesystem"
-	}
+func (f *Reader) Name() string {
 	return "Tar reader filesystem"
 }
 
-func (f *TarFileSystem) String() string {
+func (f *Reader) String() string {
 	return f.Name() + " with prefix " + f.URIPrefix
 }
 
-func (f *TarFileSystem) file(filePath string) fs.File {
+func (f *Reader) file(filePath string) fs.File {
 	return fs.File(f.JoinCleanURI(filePath))
 }
 
-func (f *TarFileSystem) checkClosed() error {
+func (f *Reader) checkClosed() error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if f.closed {
@@ -227,13 +202,8 @@ func (f *TarFileSystem) checkClosed() error {
 	return nil
 }
 
-// entryName returns the archive entry name of a file system path.
-func entryName(filePath string) string {
-	return strings.Trim(path.Clean(filePath), Separator)
-}
-
 // nodeInfo returns the FileInfo of a tree node.
-func (f *TarFileSystem) nodeInfo(node *fsimpl.DirTreeNode) *fs.FileInfo {
+func (f *Reader) nodeInfo(node *fsimpl.DirTreeNode) *fs.FileInfo {
 	if node.Path == "" {
 		return &fs.FileInfo{
 			File:        f.RootDir(),
@@ -261,12 +231,9 @@ func (f *TarFileSystem) nodeInfo(node *fsimpl.DirTreeNode) *fs.FileInfo {
 }
 
 // lookup returns the tree node of a path or an error wrapping os.ErrNotExist.
-func (f *TarFileSystem) lookup(filePath string) (*fsimpl.DirTreeNode, error) {
+func (f *Reader) lookup(filePath string) (*fsimpl.DirTreeNode, error) {
 	if err := f.checkClosed(); err != nil {
 		return nil, err
-	}
-	if f.tree == nil {
-		return nil, fs.ErrWriteOnlyFileSystem
 	}
 	node := f.tree.Lookup(entryName(filePath))
 	if node == nil {
@@ -275,7 +242,7 @@ func (f *TarFileSystem) lookup(filePath string) (*fsimpl.DirTreeNode, error) {
 	return node, nil
 }
 
-func (f *TarFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
+func (f *Reader) Stat(filePath string) (*fs.FileInfo, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -286,26 +253,26 @@ func (f *TarFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	return f.nodeInfo(node), nil
 }
 
-func (f *TarFileSystem) Exists(filePath string) (bool, error) {
+func (f *Reader) Exists(filePath string) (bool, error) {
 	if err := f.checkClosed(); err != nil {
 		return false, err
 	}
-	if f.tree == nil || filePath == "" {
+	if filePath == "" {
 		return false, nil
 	}
 	return f.tree.Lookup(entryName(filePath)) != nil, nil
 }
 
-func (f *TarFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+func (f *Reader) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	return f.listDir(ctx, dirPath, patterns, callback, false)
 }
 
 // ListDirRecursive lists all files (not directories) below dirPath.
-func (f *TarFileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+func (f *Reader) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	return f.listDir(ctx, dirPath, patterns, callback, true)
 }
 
-func (f *TarFileSystem) listDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error, recursive bool) error {
+func (f *Reader) listDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error, recursive bool) error {
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -346,7 +313,7 @@ func (f *TarFileSystem) listDir(ctx context.Context, dirPath string, patterns []
 
 // OpenReader reads the file content from the archive into memory
 // and returns a reader that implements io/fs.File.
-func (f *TarFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (f *Reader) OpenReader(filePath string) (io.ReadCloser, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -374,15 +341,115 @@ func (f *TarFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(data, f.nodeInfo(node).StdFileInfo()), nil
 }
 
-// writeEntry writes a complete archive entry.
-func (f *TarFileSystem) writeEntry(header *tar.Header, data []byte) error {
+// Close closes the archive file and unregisters
+// the file system. Close is idempotent.
+func (f *Reader) Close() error {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
+		return nil
+	}
+	f.closed = true
+	fs.Unregister(f)
+	return f.closer.Close()
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Writer
+
+// Writer is a write-only file system that writes a tar archive.
+type Writer struct {
+	fsimpl.PathHelper
+
+	mtx        sync.Mutex
+	closed     bool
+	tarWriter  *tar.Writer
+	gzipWriter *gzip.Writer // nil for an uncompressed archive
+	fileWriter io.WriteCloser
+}
+
+// NewWriter creates a tar archive for writing and registers
+// the file system. The archive is gzip compressed if the file name has
+// a .gz or .tgz extension. Files are buffered in memory until their
+// writer is closed, because tar needs the size before the content.
+func NewWriter(file fs.File) (*Writer, error) {
+	fileWriter, err := file.OpenWriter()
+	if err != nil {
+		return nil, err
+	}
+	tarfs := &Writer{
+		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
+		fileWriter: fileWriter,
+	}
+	var w io.Writer = fileWriter
+	if isGzip(file.Name()) {
+		tarfs.gzipWriter = gzip.NewWriter(fileWriter)
+		w = tarfs.gzipWriter
+	}
+	tarfs.tarWriter = tar.NewWriter(w)
+	fs.Register(tarfs)
+	return tarfs, nil
+}
+
+func (f *Writer) ReadableWritable() (readable, writable bool) {
+	return false, true
+}
+
+func (f *Writer) RootDir() fs.File {
+	return fs.File(f.URIPrefix + Separator)
+}
+
+func (f *Writer) ID() string {
+	return f.URIPrefix
+}
+
+func (f *Writer) Name() string {
+	return "Tar writer filesystem"
+}
+
+func (f *Writer) String() string {
+	return f.Name() + " with prefix " + f.URIPrefix
+}
+
+func (f *Writer) checkClosed() error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if f.closed {
 		return fs.ErrFileSystemClosed
 	}
-	if f.tarWriter == nil {
-		return fs.ErrReadOnlyFileSystem
+	return nil
+}
+
+// Stat is not possible for an archive that is being written.
+func (f *Writer) Stat(filePath string) (*fs.FileInfo, error) {
+	if err := f.checkClosed(); err != nil {
+		return nil, err
+	}
+	return nil, fs.ErrWriteOnlyFileSystem
+}
+
+// ListDir is not possible for an archive that is being written.
+func (f *Writer) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	if err := f.checkClosed(); err != nil {
+		return err
+	}
+	return fs.ErrWriteOnlyFileSystem
+}
+
+// OpenReader is not possible for an archive that is being written.
+func (f *Writer) OpenReader(filePath string) (io.ReadCloser, error) {
+	if err := f.checkClosed(); err != nil {
+		return nil, err
+	}
+	return nil, fs.ErrWriteOnlyFileSystem
+}
+
+// writeEntry writes a complete archive entry.
+func (f *Writer) writeEntry(header *tar.Header, data []byte) error {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
+		return fs.ErrFileSystemClosed
 	}
 	err := f.tarWriter.WriteHeader(header)
 	if err != nil {
@@ -403,7 +470,7 @@ func fileHeader(filePath string, size int64, perm fs.Permissions) *tar.Header {
 }
 
 // WriteAll writes a file entry to the archive.
-func (f *TarFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
+func (f *Writer) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -415,15 +482,12 @@ func (f *TarFileSystem) WriteAll(ctx context.Context, filePath string, data []by
 
 // OpenWriter returns a writer that buffers the file in memory
 // and writes it as archive entry on Close.
-func (f *TarFileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+func (f *Writer) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
 	if err := f.checkClosed(); err != nil {
 		return nil, err
-	}
-	if f.tarWriter == nil {
-		return nil, fs.ErrReadOnlyFileSystem
 	}
 	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
 		return f.writeEntry(fileHeader(filePath, int64(len(data)), perm), data)
@@ -431,7 +495,7 @@ func (f *TarFileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.Wri
 }
 
 // Touch writes an empty file entry.
-func (f *TarFileSystem) Touch(filePath string, perm fs.Permissions) error {
+func (f *Writer) Touch(filePath string, perm fs.Permissions) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -439,15 +503,12 @@ func (f *TarFileSystem) Touch(filePath string, perm fs.Permissions) error {
 }
 
 // MakeDir writes a directory entry.
-func (f *TarFileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
+func (f *Writer) MakeDir(dirPath string, perm fs.Permissions) error {
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
 	if err := f.checkClosed(); err != nil {
 		return err
-	}
-	if f.tarWriter == nil {
-		return fs.ErrReadOnlyFileSystem
 	}
 	name := entryName(dirPath)
 	if name == "" {
@@ -461,20 +522,17 @@ func (f *TarFileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	}, nil)
 }
 
-// Remove is not possible: entries of a tar archive can't be removed.
-func (f *TarFileSystem) Remove(filePath string) error {
+// Remove is not possible: entries can't be removed from an archive that is being written.
+func (f *Writer) Remove(filePath string) error {
 	if err := f.checkClosed(); err != nil {
 		return err
-	}
-	if f.tarWriter == nil {
-		return fs.ErrReadOnlyFileSystem
 	}
 	return fs.NewErrUnsupported(f, "Remove")
 }
 
-// Close finishes the archive in writer mode, closes the underlying
-// file and unregisters the file system. Close is idempotent.
-func (f *TarFileSystem) Close() error {
+// Close finishes the archive, closes the underlying file
+// and unregisters the file system. Close is idempotent.
+func (f *Writer) Close() error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if f.closed {
@@ -482,12 +540,9 @@ func (f *TarFileSystem) Close() error {
 	}
 	f.closed = true
 	fs.Unregister(f)
-	if f.tarWriter != nil {
-		err := f.tarWriter.Close()
-		if f.gzipWriter != nil {
-			err = errors.Join(err, f.gzipWriter.Close())
-		}
-		return errors.Join(err, f.fileWriter.Close())
+	err := f.tarWriter.Close()
+	if f.gzipWriter != nil {
+		err = errors.Join(err, f.gzipWriter.Close())
 	}
-	return f.closer.Close()
+	return errors.Join(err, f.fileWriter.Close())
 }

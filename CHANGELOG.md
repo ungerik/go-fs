@@ -62,9 +62,9 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 - The test suite is green on Windows and the Windows CI job is blocking:
   `StdFS` rejects names containing `\` or `:` on Windows like `os.DirFS`,
   `LocalFileSystem` XAttr methods return `ErrUnsupported` on platforms
-  without extended attributes, `zipfs.NewWriterFileSystem` closes the
-  underlying file on `Close` (the handle used to leak), and `fs.Glob` yields
-  files cleaned for their file system's separator.
+  without extended attributes, `zipfs.NewWriter` closes the underlying
+  file on `Close` (the handle used to leak), and `fs.Glob` yields files
+  cleaned for their file system's separator.
 
 - **s3fs rework (Phase 5).** Object keys are derived consistently from the
   rooted file system paths (objects used to be written with a leading slash
@@ -136,14 +136,15 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
   union, writes go to the upper layer with copy-up for in-place changes,
   removed base entries are hidden by in-memory whiteouts.
 - `fs.NewStdFileSystemWithPrefix` builds a `StdFileSystem` with a scheme of
-  its own; zipfs uses it: `zipfs.ReaderFileSystem` is a `StdFileSystem` over
-  `archive/zip.Reader` and `zipfs.WriterFileSystem` the sequential writer,
+  its own; zipfs uses it: `zipfs.Reader` is a `StdFileSystem` over
+  `archive/zip.Reader` and `zipfs.Writer` the sequential writer,
   replacing the mode-switching `ZipFileSystem` type. Reader listings are
   sorted by name and report the modes stored in the archive.
 - `tarfs`: read-only and write-only file systems for tar archives,
-  optionally gzip compressed, mirroring `zipfs` (root module, standard
-  library only). `fsimpl.DirTree` is the directory tree of archive entries
-  (formerly internal to zipfs).
+  optionally gzip compressed, mirroring `zipfs` with separate `tarfs.Reader`
+  and `tarfs.Writer` types (root module, standard library only).
+  `fsimpl.DirTree` is the directory tree of archive entries (formerly
+  internal to zipfs).
 - `fs.CreateTempFile` creates a temporary file atomically (`fs.TempFile` only
   returns a path).
 - **`fstest.RunConformance`** replaces `fs.RunFileSystemTests` and the `tests`
