@@ -410,9 +410,9 @@ Symbolic links
 --------------
 
 File systems opt into symbolic link support by implementing the
-`SymbolicLinkFileSystem` interface. `LocalFileSystem`, `MemFileSystem` and
-`sftpfs` opt in; the other backends do not, so calling these methods on
-files from those backends returns an `ErrUnsupported` error, and
+`SymbolicLinkFileSystem` interface. `LocalFileSystem`, `MemFileSystem`,
+`sftpfs` and `smbfs` opt in; the other backends do not, so calling these
+methods on files from those backends returns an `ErrUnsupported` error, and
 `IsSymbolicLink` is false.
 
 ```go
@@ -502,12 +502,12 @@ File system implementations
 ---------------------------
 
 `go-fs` ships with the local file system and several remote / virtual
-backends. The network backends (`s3fs`, `sftpfs`, `ftpfs`, `dropboxfs`) are
-independent Go modules under their own sub-directory with their own
-dependencies; the lighter ones (`httpfs`, `zipfs`, `multipartfs`) are packages
-in the root module. Importing the package registers a `FileSystem` for its
-URI prefix, after which `File` values with that prefix transparently
-route to the right backend.
+backends. The network backends (`s3fs`, `azureblobfs`, `sftpfs`, `ftpfs`,
+`smbfs`, `dropboxfs`, `webdavfs`) are independent Go modules under their own
+sub-directory with their own dependencies; the lighter ones (`httpfs`,
+`zipfs`, `tarfs`, `multipartfs`) are packages in the root module. Importing
+the package registers a `FileSystem` for its URI prefix, after which `File`
+values with that prefix transparently route to the right backend.
 
 | Package       | URI prefix              | Constructor                                        | Read | Write  |
 | ------------- | ----------------------- | -------------------------------------------------- | :--: | :----: |
@@ -530,7 +530,8 @@ route to the right backend.
 
 Every registered file system has a stable `ID()`: the file system id of the
 root volume for the local file system, the bucket for s3fs, `user@host` for
-sftpfs and ftpfs, the account id for dropboxfs.
+sftpfs and ftpfs, the account id for dropboxfs, and the host with the base
+path, share or container for webdavfs, smbfs and azureblobfs.
 
 ### Optional interface support
 
@@ -541,22 +542,24 @@ still works through a generic emulation built on the core methods — a backend
 only implements an optional interface when doing so is more efficient or more
 capable than that emulation.
 
-`LocalFileSystem` and `MemFileSystem` implement the full set natively
-(`MemFileSystem` additionally `User`/`Group`, which the local file system
-only exposes on Unix). For the remote backends, as verified by the
-conformance suite in `fstest`:
+`LocalFileSystem` and `MemFileSystem` implement almost every optional
+interface natively; what they leave to the emulation is what the emulation
+already does best (`Exists` is a `Stat`, and the local file system has no
+recursive listing faster than the generic walk). `MemFileSystem` additionally
+implements `User`/`Group`, which the local file system only exposes on Unix.
+For the remote backends, as verified by the conformance suite in `fstest`:
 
 | Capability             | s3  | azblob | sftp | ftp | smb | dropbox | webdav | http |
 | ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
 | CopyFile (server-side) | ✓   | ✓      | –    | –   | –   | ✓       | ✓      | –    |
 | Move                   | –   | –      | ✓    | ✓   | ✓   | ✓       | ✓      | –    |
-| Exists                 | –   | –      | –    | –   | –   | ✓       | –      | ✓    |
-| ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | ✓    |
+| Exists                 | –   | –      | –    | –   | –   | –       | –      | ✓    |
+| ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | –       | ✓      | ✓    |
 | WriteAll               | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | r/o  |
 | Append                 | –   | –      | –    | ✓   | –   | –       | –      | r/o  |
 | OpenAppendWriter       | –   | –      | ✓    | ✓   | ✓   | –       | –      | r/o  |
 | OpenReadWriter         | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | –      | r/o  |
-| Touch                  | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | –      | r/o  |
+| Touch                  | ✓   | ✓      | ✓    | ✓   | ✓   | –       | –      | r/o  |
 | Truncate               | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
 | MakeAllDirs            | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
 | RemoveAll              | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  |
@@ -570,9 +573,10 @@ same, just not specialized) · `r/o` read-only backend, so the write operation
 does not apply.
 
 The archive and request-scoped backends implement a mode-dependent subset:
-`zipfs` and `tarfs` provide `Exists`, `Touch` and `ListDirRecursive` (Touch
-only in writer mode, Exists/listing only in reader mode), and `multipartfs`
-is read-only and provides `Exists` and `ReadAll`.
+`zipfs.Reader` is a `StdFileSystem` and provides `ReadAll` and
+`ListDirRecursive`, `tarfs.Reader` provides `Exists` and `ListDirRecursive`,
+the writers provide `Touch` (`tarfs.Writer` also `WriteAll`), and
+`multipartfs` is read-only and provides `Exists` and `ReadAll`.
 
 Every backend follows the same error contract: `errors.Is(err, os.ErrNotExist)`
 for missing files, `os.ErrExist` for `MakeDir` on an existing path,
@@ -611,6 +615,8 @@ Multipart upload/download is used automatically for files larger than
 `s3fs.MultipartUploadThreshold` / `s3fs.MultipartDownloadThreshold`
 (5 MB / 10 MB). Directories are object key prefixes; `MakeDir` creates a
 zero-byte marker object so empty directories exist too.
+[s3fs/README.md](s3fs/README.md) has the credential setup, the
+S3-compatible service configuration and the full concept mapping.
 
 ### sftpfs
 
@@ -794,8 +800,8 @@ ms, file, err := fs.NewSingleMemFileSystem(fs.NewMemFile("a.txt", []byte("a")))
 defer ms.Close()
 ```
 
-`MemFileSystem` implements every optional `FileSystem` interface the
-local backend does — including `RenameFileSystem`, `MoveFileSystem`,
+`MemFileSystem` implements nearly every optional `FileSystem`
+interface — including `RenameFileSystem`, `MoveFileSystem`,
 `WatchFileSystem`, `PermissionsFileSystem`, `UserFileSystem`,
 `GroupFileSystem`, `ListDirMaxFileSystem`, `ListDirRecursiveFileSystem`,
 `XAttrFileSystem`, and `SymbolicLinkFileSystem` — so it can stand in
@@ -860,8 +866,11 @@ A backend implements `FileSystem` (metadata, paths, `Stat`, `ListDir`,
 generic emulation in this package, to be implemented only when the backend
 can do it more efficiently. `fsimpl.PathHelper` provides the path methods
 for a URI prefix, `fsimpl.NewWriteOnCloseFileBuffer` a writer for backends
-without random access, and `fstest.RunConformance` verifies a backend
-against the contract of every method:
+without random access, `fsimpl.RangeReader` a seekable reader for backends
+that read with byte range requests (`webdavfs`, `azureblobfs`),
+`fsimpl.NewDirTree` a directory index for archives that have none (`tarfs`),
+and `fstest.RunConformance` verifies a backend against the contract of every
+method:
 
 ```go
 func TestMyFS(t *testing.T) {

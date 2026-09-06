@@ -9,7 +9,8 @@ Public, dependency-light Go library. Repo-specific rules that override the globa
 - **Roadmap:** `docs/V1_ROADMAP.md` is the plan of record for the v1.0 work. Update it
   when a phase lands or a decision changes.
 - **Multi-module workspace:** `go.work` lists the root module and the backend modules
-  (`dropboxfs`, `ftpfs`, `s3fs`, `sftpfs`) plus `tools`. Run `./test-workspace.sh` to test
+  (`azureblobfs`, `dropboxfs`, `ftpfs`, `s3fs`, `sftpfs`, `smbfs`, `webdavfs`) plus
+  `tools`. Run `./test-workspace.sh` to test
   and lint every module. Keep the `replace github.com/ungerik/go-fs => ..` + placeholder
   pseudo-version pattern in the backend `go.mod` files.
 - **Tests:** unit tests must run offline. Tests needing Docker (MinIO, sshd) must

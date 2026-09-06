@@ -66,6 +66,19 @@ took a context.
   context and returns `(fs.FileSystem, error)`; the prefix is
   `dropbox://<account id>` instead of a random string, so URIs can be
   persisted.
+- `zipfs`: the mode-switching `ZipFileSystem` is split into `zipfs.Reader`
+  and `zipfs.Writer`; `NewReaderFileSystem` is `zipfs.NewReader` and
+  `NewWriterFileSystem` is `zipfs.NewWriter`. A `Reader` has no write
+  methods and a `Writer` no read methods, so the wrong direction reports
+  `fs.ErrReadOnlyFileSystem` / `fs.ErrWriteOnlyFileSystem` instead of
+  "does not exist".
+- `multipartfs`: `EscapePath` is removed (it was never applied
+  consistently); files uploaded under an already used name now get a unique
+  name (`a.txt`, `a (2).txt`, ...) instead of shadowing each other, and
+  names that are not path elements (`.`, `..`) become `unnamed`. Every
+  method returns `fs.ErrFileSystemClosed` after `Close`; parts small enough
+  to stay in memory used to be served afterwards. The new `multipartfs.New`
+  wraps a `*multipart.Form` the caller parsed.
 
 ## Removed
 

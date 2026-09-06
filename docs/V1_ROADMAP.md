@@ -526,9 +526,49 @@ One PR per phase unless noted.
 - [ ] Tag all modules in lockstep after the PR is merged
       (`v1.0.0-beta.1`, `s3fs/v1.0.0-beta.1`, `sftpfs/v1.0.0-beta.1`,
       `ftpfs/v1.0.0-beta.1`, `dropboxfs/v1.0.0-beta.1`,
-      `tools/v1.0.0-beta.1`). The intermediate tags `v0.2.0`/`v0.3.0` were
-      not created because everything lands in one PR.
+      `webdavfs/v1.0.0-beta.1`, `smbfs/v1.0.0-beta.1`,
+      `azureblobfs/v1.0.0-beta.1`, `tools/v1.0.0-beta.1`). The intermediate
+      tags `v0.2.0`/`v0.3.0` were not created because everything lands in
+      one PR.
 - [ ] v1.0.0: after the beta iterations in follow-up PRs.
+
+### Beta iterations (after Phase 6)
+
+Landed on the same branch after Phase 6, one commit each. All of it stays
+inside the API surface v1.0.0 freezes: new file systems and implementer
+helpers, no change to the `File` API.
+
+- [x] `StdFileSystem` adapts any `io/fs.FS` as a read-only file system
+      (`embed.FS`, `os.DirFS`, `zip.Reader`, `testing/fstest.MapFS`);
+      `SubFileSystem` is a view of a directory of another file system that
+      forwards every operation with translated paths, so the parent's
+      native implementations are used and paths cannot escape.
+- [x] `OverlayFileSystem`: a writable upper layer over a read-only base
+      with union listings, copy-up on write and in-memory whiteouts for
+      removed base entries.
+- [x] `tarfs` (tar, `.tar.gz`, `.tgz`) on the new shared archive index
+      `fsimpl.NewDirTree`; `zipfs.Reader` became a `StdFileSystem` over
+      `archive/zip.Reader`; both packages split their mode-switching file
+      system into `Reader` and `Writer` types (`NewReader`/`NewWriter`), so
+      the wrong direction reports `ErrReadOnlyFileSystem` /
+      `ErrWriteOnlyFileSystem` instead of "does not exist".
+- [x] Three new backend modules: `webdavfs` (standard library only,
+      `PROPFIND`/`MOVE`/`COPY`, range reads), `smbfs` (SMB2/3 via go-smb2,
+      nearly every optional interface native) and `azureblobfs` (Azure Blob
+      Storage, marker blobs and range reads like s3fs).
+- [x] multipartfs: `ErrFileSystemClosed` from every method after `Close`,
+      an existing root directory, `ListDir` patterns applied on the form
+      field level, unique names for files uploaded under the same name, and
+      `New` for a `*multipart.Form` parsed by the caller.
+- [x] Backends keep only the optional interfaces they do better than the
+      generic emulation in `dispatch.go`; the rest was dropped (-475 lines
+      across the core and all seven backends). `fsimpl` gained
+      `RangeReader`, shared by webdavfs and azureblobfs instead of two
+      copies of an unexported `rangeReader`, and lost `JoinCleanPath`,
+      which moved into `PathHelper`.
+- [x] Test coverage for the `slices` helpers, the closed and empty-path
+      guards of `SubFileSystem`/`OverlayFileSystem`, `fsimpl.DirTree` and
+      the generic emulations in `dispatch.go`.
 
 ## Verification (overall)
 
