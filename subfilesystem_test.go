@@ -2,8 +2,10 @@ package fs_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -101,4 +103,165 @@ func TestSubFileSystem_View(t *testing.T) {
 	assert.False(t, fs.IsRegistered(subFS))
 	assert.True(t, root.Join("data", "new.txt").Exists())
 	_ = context.Background()
+}
+
+// newSubTestFS returns a registered SubFileSystem rooted at "/root"
+// of a MemFileSystem containing the file "/root/a.txt".
+func newSubTestFS(t *testing.T) *fs.SubFileSystem {
+	t.Helper()
+	memFS, err := fs.NewMemFileSystem("/")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memFS.Close() })
+	require.NoError(t, memFS.MakeDir("/root", 0))
+	require.NoError(t, memFS.WriteAll(t.Context(), "/root/a.txt", []byte("a"), 0))
+
+	subFS, err := fs.NewSubFileSystemAndRegister(memFS, "/root", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = subFS.Close() })
+	return subFS
+}
+
+// TestSubFileSystem_Closed verifies that every method of a closed view
+// reports fs.ErrFileSystemClosed instead of forwarding the operation to
+// the still-open parent file system.
+func TestSubFileSystem_Closed(t *testing.T) {
+	ctx := t.Context()
+	subFS := newSubTestFS(t)
+	require.NoError(t, subFS.Close())
+	require.NoError(t, subFS.Close(), "Close must be idempotent")
+
+	_, err := subFS.Stat("/a.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	err = subFS.ListDir(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = subFS.ListDirMax(ctx, "/", -1, nil)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	err = subFS.ListDirRecursive(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = subFS.OpenReader("/a.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = subFS.OpenWriter("/a.txt", 0)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = subFS.OpenAppendWriter("/a.txt", 0)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = subFS.OpenReadWriter("/a.txt", 0)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = subFS.Exists("/a.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = subFS.ReadAll(ctx, "/a.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.WriteAll(ctx, "/a.txt", []byte("x"), 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.Append(ctx, "/a.txt", []byte("x"), 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.Truncate("/a.txt", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.Touch("/a.txt", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.MakeDir("/dir", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.MakeAllDirs("/dir/sub", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.Remove("/a.txt"), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.RemoveAll(ctx, "/a.txt"), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.CopyFile(ctx, "/a.txt", "/b.txt"), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.Move("/a.txt", "/b.txt"), fs.ErrFileSystemClosed)
+	_, err = subFS.Rename("/a.txt", "b.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.SetPermissions("/a.txt", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, subFS.CreateSymbolicLink("/a.txt", "/link"), fs.ErrFileSystemClosed)
+	_, err = subFS.ReadSymbolicLink("/link")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = subFS.Watch("/", func(fs.File, fs.Event) {})
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.False(t, subFS.IsSymbolicLink("/a.txt"), "a closed view has no symbolic links")
+
+	// The parent is untouched by closing the view
+	assert.True(t, subFS.Dir().Join("a.txt").Exists())
+}
+
+// TestSubFileSystem_EmptyPath verifies that an empty path is rejected
+// with fs.ErrEmptyPath instead of being cleaned to the root directory,
+// which would make a typo operate on the whole view.
+func TestSubFileSystem_EmptyPath(t *testing.T) {
+	ctx := t.Context()
+	subFS := newSubTestFS(t)
+
+	_, err := subFS.Stat("")
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	err = subFS.ListDir(ctx, "", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = subFS.ListDirMax(ctx, "", -1, nil)
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	err = subFS.ListDirRecursive(ctx, "", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = subFS.OpenReader("")
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = subFS.OpenWriter("", 0)
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = subFS.OpenAppendWriter("", 0)
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = subFS.OpenReadWriter("", 0)
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = subFS.ReadAll(ctx, "")
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.WriteAll(ctx, "", []byte("x"), 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.Append(ctx, "", []byte("x"), 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.Truncate("", 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.Touch("", 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.MakeDir("", 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.MakeAllDirs("", 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.Remove(""), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.RemoveAll(ctx, ""), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.CopyFile(ctx, "", "/b.txt"), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.CopyFile(ctx, "/a.txt", ""), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.Move("", "/b.txt"), fs.ErrEmptyPath)
+	assert.ErrorIs(t, subFS.Move("/a.txt", ""), fs.ErrEmptyPath)
+	_, err = subFS.Rename("", "b.txt")
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+
+	// Exists reports false without an error, like fsExists does
+	exists, err := subFS.Exists("")
+	assert.NoError(t, err)
+	assert.False(t, exists)
+}
+
+// TestSubFileSystem_UnsupportedByParent verifies that the optional
+// operations a parent doesn't implement are reported as unsupported
+// instead of panicking or silently doing nothing.
+func TestSubFileSystem_UnsupportedByParent(t *testing.T) {
+	// MockFileSystem implements only FileSystem and WriteFileSystem
+	parent := &fstest.MockFileSystem{
+		MockPrefix: "mock-sub://",
+		MockStat: func(filePath string) (*fs.FileInfo, error) {
+			return &fs.FileInfo{File: fs.File("mock-sub://" + filePath), Name: "root", Exists: true, IsDir: true}, nil
+		},
+	}
+	fs.Register(parent)
+	t.Cleanup(func() { fs.Unregister(parent) })
+
+	subFS, err := fs.NewSubFileSystem(parent, "/root", "unsupported")
+	require.NoError(t, err)
+
+	assert.ErrorIs(t, subFS.SetPermissions("/a.txt", 0), errors.ErrUnsupported)
+	assert.ErrorIs(t, subFS.CreateSymbolicLink("/a.txt", "/link"), errors.ErrUnsupported)
+	_, err = subFS.ReadSymbolicLink("/link")
+	assert.ErrorIs(t, err, errors.ErrUnsupported)
+	_, err = subFS.Watch("/", func(fs.File, fs.Event) {})
+	assert.ErrorIs(t, err, errors.ErrUnsupported)
+	assert.False(t, subFS.IsSymbolicLink("/a.txt"), "a parent without symlink support has none")
+}
+
+// TestSubFileSystem_Watch verifies that watch events of the parent are
+// forwarded with the file translated to the view, so callers never see
+// a parent path leak through.
+func TestSubFileSystem_Watch(t *testing.T) {
+	subFS := newSubTestFS(t)
+	events := make(chan fs.File, 8)
+	cancel, err := subFS.Watch("/a.txt", func(file fs.File, _ fs.Event) { events <- file })
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cancel() })
+
+	require.NoError(t, subFS.WriteAll(t.Context(), "/a.txt", []byte("changed"), 0))
+
+	select {
+	case file := <-events:
+		assert.Equal(t, fs.File(subFS.Prefix()+"/a.txt"), file, "the event file must be a view path")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a watch event for /a.txt")
+	}
 }

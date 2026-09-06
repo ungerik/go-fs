@@ -2,6 +2,7 @@ package zipfs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -219,4 +220,49 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
 	err = zipReader.RootDir().Join("f.txt").Remove()
 	require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
+}
+
+// TestZipWriter_ReadRejected verifies that the read methods of a
+// WriterFileSystem report fs.ErrWriteOnlyFileSystem while the archive is
+// open and fs.ErrFileSystemClosed after it was closed. archive/zip has
+// no way to read back what was written, so returning empty results
+// instead of an error would silently hide data.
+func TestZipWriter_ReadRejected(t *testing.T) {
+	tempDir := fs.MustMakeTempDir()
+	t.Cleanup(func() {
+		assert.NoError(t, tempDir.RemoveRecursive(context.Background()))
+	})
+	ctx := t.Context()
+
+	zipWriter, err := NewWriterFileSystem(tempDir.Join("writeonly.zip"))
+	require.NoError(t, err)
+
+	// Touch writes an empty entry without handing out a writer
+	require.NoError(t, zipWriter.Touch("/empty.txt", 0))
+
+	_, err = zipWriter.Stat("/empty.txt")
+	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem)
+	_, err = zipWriter.OpenReader("/empty.txt")
+	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem)
+	err = zipWriter.ListDir(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem)
+
+	// Entries can't be taken back out of an archive being written
+	err = zipWriter.Remove("/empty.txt")
+	assert.ErrorIs(t, err, errors.ErrUnsupported)
+
+	require.NoError(t, zipWriter.Close())
+	require.NoError(t, zipWriter.Close(), "Close must be idempotent")
+
+	_, err = zipWriter.Stat("/empty.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = zipWriter.OpenReader("/empty.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	err = zipWriter.ListDir(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, zipWriter.Touch("/other.txt", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, zipWriter.MakeDir("/dir", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, zipWriter.Remove("/empty.txt"), fs.ErrFileSystemClosed)
+	_, err = zipWriter.OpenWriter("/other.txt", 0)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 }

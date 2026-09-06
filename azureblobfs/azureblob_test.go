@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 	"github.com/ungerik/go-fs/fstest"
 )
 
@@ -153,4 +154,63 @@ func TestRangedRead(t *testing.T) {
 
 func isContainerExists(err error) bool {
 	return bloberror.HasCode(err, bloberror.ContainerAlreadyExists)
+}
+
+// TestNew_Errors verifies that a missing client is rejected instead of
+// producing a file system that panics on first use.
+func TestNew_Errors(t *testing.T) {
+	_, err := New(t.Context(), nil, false)
+	assert.Error(t, err, "nil container client")
+	_, err = NewAndRegister(t.Context(), nil, false)
+	assert.Error(t, err, "nil container client must not be registered")
+	_, err = NewFromConnectionString(t.Context(), "not-a-connection-string", testContainer, false)
+	assert.Error(t, err, "invalid connection string")
+}
+
+// TestClosedFileSystem verifies that a closed file system reports
+// fs.ErrFileSystemClosed from every operation instead of using the
+// released container client, and that a read-only file system reports
+// fs.ErrReadOnlyFileSystem for every write.
+func TestClosedFileSystem(t *testing.T) {
+	ctx := t.Context()
+	f := &fileSystem{
+		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + "account.example.com/container", Rooted: true},
+	}
+	f.closed.Store(true)
+
+	_, err := f.Stat("/blob.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	err = f.ListDir(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	err = f.ListDirRecursive(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = f.OpenReader("/blob.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = f.ReadAll(ctx, "/blob.txt")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = f.OpenWriter("/blob.txt", 0)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	_, err = f.OpenReadWriter("/blob.txt", 0)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.WriteAll(ctx, "/blob.txt", []byte("x"), 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.Touch("/blob.txt", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.MakeDir("/dir", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.Remove("/blob.txt"), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.RemoveAll(ctx, "/dir"), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.CopyFile(ctx, "/a.txt", "/b.txt"), fs.ErrFileSystemClosed)
+	assert.NoError(t, f.Close(), "Close must be idempotent")
+
+	readOnly := &fileSystem{
+		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + "account.example.com/container", Rooted: true},
+		readOnly:   true,
+	}
+	readable, writable := readOnly.ReadableWritable()
+	assert.True(t, readable)
+	assert.False(t, writable)
+	assert.ErrorIs(t, readOnly.WriteAll(ctx, "/blob.txt", []byte("x"), 0), fs.ErrReadOnlyFileSystem)
+	assert.ErrorIs(t, readOnly.MakeDir("/dir", 0), fs.ErrReadOnlyFileSystem)
+	assert.ErrorIs(t, readOnly.Remove("/blob.txt"), fs.ErrReadOnlyFileSystem)
+	assert.ErrorIs(t, readOnly.Touch("/blob.txt", 0), fs.ErrReadOnlyFileSystem)
+	assert.ErrorIs(t, readOnly.RemoveAll(ctx, "/dir"), fs.ErrReadOnlyFileSystem)
+	assert.ErrorIs(t, readOnly.CopyFile(ctx, "/a.txt", "/b.txt"), fs.ErrReadOnlyFileSystem)
 }
