@@ -520,6 +520,8 @@ route to the right backend.
 | `zipfs`       | `zip://`                | `zipfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
 | `multipartfs` | `multipart://`          | `multipartfs.FromRequestForm`                      | yes  | no     |
 | (built-in)    | `mem://`                | `fs.NewMemFileSystem`                              | yes  | yes    |
+| (built-in)    | `stdfs://<id>`          | `fs.NewStdFileSystem(iofs.FS)`: embed.FS, os.DirFS, zip.Reader, MapFS | yes | no |
+| (built-in)    | `sub://<id>`            | `fs.NewSubFileSystem(parent, dir)`: view rooted at a directory | as parent | as parent |
 
 Every registered file system has a stable `ID()`: the file system id of the
 root volume for the local file system, the bucket for s3fs, `user@host` for
@@ -713,6 +715,37 @@ local backend does — including `RenameFileSystem`, `MoveFileSystem`,
 for any other backend in tests. Watch events are synthesized from
 every mutation that goes through the FS API; direct mutation of a
 `MemFile.FileData` byte slice obtained outside the API is not observable.
+
+Standard library file systems and sub views
+--------------------------------------------
+
+`StdFileSystem` is the counterpart of `StdFS`: it adapts any `io/fs.FS`
+as a read-only go-fs file system, so embedded assets, an `os.DirFS`
+sandbox, a `zip.Reader` or a `testing/fstest.MapFS` work with the `File`
+API:
+
+```go
+//go:embed templates/*
+var templates embed.FS
+
+tmplFS := fs.NewStdFileSystemAndRegister(templates, "templates")
+defer tmplFS.Close()
+
+html, err := fs.File("stdfs://templates/templates/index.html").ReadAllString(ctx)
+```
+
+`SubFileSystem` is a view of a directory of another file system as a file
+system of its own. Every operation is forwarded to the parent with
+translated paths, so the parent's native implementations are used and
+paths can't escape the directory:
+
+```go
+subFS, err := fs.NewSubFileSystemAndRegister(fs.Local, "/srv/data", "data")
+defer subFS.Close()
+
+files, err := fs.File("sub://data/").ListDirMax(ctx, -1)
+err = fs.File("sub://data/report.txt").WriteAllString(ctx, "...") // writes /srv/data/report.txt
+```
 
 Implementing a file system
 --------------------------

@@ -1142,7 +1142,7 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 			info, err := c.fs.Stat(path)
 			require.NoError(t, err)
 			want := fs.UserRead | fs.UserWrite | fs.GroupRead
-			if _, isLocal := c.fs.(*fs.LocalFileSystem); isLocal && runtime.GOOS == "windows" {
+			if isLocal(c.fs) && runtime.GOOS == "windows" {
 				// os.Chmod on Windows only toggles the read-only attribute
 				assert.Equal(t, want&fs.UserWrite, info.Permissions&fs.UserWrite, "user write permission after SetPermissions")
 			} else {
@@ -1350,5 +1350,20 @@ func (c *conformance) testClose(t *testing.T) {
 	}
 	if _, err := c.fs.Stat(c.path("")); err != nil {
 		assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "errors after Close must wrap fs.ErrFileSystemClosed")
+	}
+}
+
+// isLocal reports whether fileSystem is the local file system
+// or a SubFileSystem view of it.
+func isLocal(fileSystem fs.FileSystem) bool {
+	for {
+		switch f := fileSystem.(type) {
+		case *fs.LocalFileSystem:
+			return true
+		case *fs.SubFileSystem:
+			fileSystem = f.Parent()
+		default:
+			return false
+		}
 	}
 }

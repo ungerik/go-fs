@@ -111,6 +111,12 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 
 ### Added
 
+- `fs.StdFileSystem` adapts any `io/fs.FS` (`embed.FS`, `os.DirFS`,
+  `zip.Reader`, `testing/fstest.MapFS`) as a read-only file system with the
+  prefix `stdfs://<id>`; the counterpart of `StdFS`.
+- `fs.SubFileSystem` is a view of a directory of another file system with
+  the prefix `sub://<id>`, forwarding every operation (including the
+  optional interfaces) to the parent with translated paths.
 - `fs.CreateTempFile` creates a temporary file atomically (`fs.TempFile` only
   returns a path).
 - **`fstest.RunConformance`** replaces `fs.RunFileSystemTests` and the `tests`

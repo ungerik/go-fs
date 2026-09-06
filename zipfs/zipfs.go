@@ -301,36 +301,36 @@ func (f *ZipFileSystem) ListDirRecursive(ctx context.Context, dirPath string, pa
 		return err
 	}
 
-	root := newDirTreeRoot()
+	root := fsimpl.NewDirTree()
 	for _, file := range f.zipReader.File {
-		err := root.add(file.Name, file.Modified, int64(file.UncompressedSize64)) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
+		err := root.Add(file.Name, file.Modified, int64(file.UncompressedSize64)) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
 		if err != nil {
 			return err
 		}
 	}
 
-	dir := root.lookup(dirPath)
+	dir := root.Lookup(dirPath)
 	if dir == nil {
 		return fs.NewErrDoesNotExist(f.File(dirPath))
 	}
-	if !dir.isDir {
+	if !dir.IsDir {
 		return fs.NewErrIsNotDirectory(f.File(dirPath))
 	}
 
-	var listFiles func(parent *dirTreeNode) error
-	listFiles = func(parent *dirTreeNode) error {
-		for _, child := range parent.sortedChildren() {
+	var listFiles func(parent *fsimpl.DirTreeNode) error
+	listFiles = func(parent *fsimpl.DirTreeNode) error {
+		for _, child := range parent.SortedChildren() {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if child.isDir {
+			if child.IsDir {
 				err := listFiles(child)
 				if err != nil {
 					return err
 				}
 				continue
 			}
-			matched, err := f.MatchAnyPattern(child.name, patterns)
+			matched, err := f.MatchAnyPattern(child.Name, patterns)
 			if err != nil {
 				return err
 			}
@@ -338,13 +338,13 @@ func (f *ZipFileSystem) ListDirRecursive(ctx context.Context, dirPath string, pa
 				continue
 			}
 			err = callback(&fs.FileInfo{
-				File:        f.JoinCleanFile(child.path),
-				Name:        child.name,
+				File:        f.JoinCleanFile(child.Path),
+				Name:        child.Name,
 				Exists:      true,
 				IsRegular:   true,
-				IsHidden:    strings.HasPrefix(child.name, "."),
-				Size:        child.size,
-				Modified:    child.modified,
+				IsHidden:    strings.HasPrefix(child.Name, "."),
+				Size:        child.Size,
+				Modified:    child.Modified,
 				Permissions: fs.AllRead,
 			})
 			if err != nil {
