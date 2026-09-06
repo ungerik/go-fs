@@ -8,4 +8,6 @@ use (
 	./sftpfs
 	./tools
 	./webdavfs
+	./smbfs
+	./azureblobfs
 )

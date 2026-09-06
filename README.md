@@ -518,6 +518,8 @@ route to the right backend.
 | `ftpfs`       | `ftp://`, `ftps://`     | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
 | `dropboxfs`   | `dropbox://<account>`   | `dropboxfs.NewAndRegister`                         | yes  | yes    |
 | `webdavfs`    | `webdav://<host>/<base>` | `webdavfs.New`, `webdavfs.NewAndRegister`         | yes  | yes    |
+| `smbfs`       | `smb://<user>@<host>/<share>` | `smbfs.Dial`, `smbfs.DialAndRegister`         | yes  | yes    |
+| `azureblobfs` | `azblob://<host>/<container>` | `azureblobfs.NewAndRegister`, `NewFromConnectionString` | yes | yes/ro |
 | `zipfs`       | `zip://`                | `zipfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
 | `tarfs`       | `tar://`                | `tarfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
 | `multipartfs` | `multipart://`          | `multipartfs.FromRequestForm`                      | yes  | no     |
@@ -544,24 +546,24 @@ capable than that emulation.
 only exposes on Unix). For the remote backends, as verified by the
 conformance suite in `fstest`:
 
-| Capability             | s3  | sftp | ftp | dropbox | webdav | http |
-| ---------------------- | :-: | :--: | :-: | :-----: | :----: | :--: |
-| CopyFile (server-side) | ✓   | –    | –   | ✓       | ✓      | –    |
-| Move                   | –   | ✓    | ✓   | ✓       | ✓      | –    |
-| Exists                 | –   | –    | –   | ✓       | –      | ✓    |
-| ReadAll                | ✓   | –    | ✓   | ✓       | ✓      | ✓    |
-| WriteAll               | ✓   | –    | ✓   | ✓       | ✓      | r/o  |
-| Append                 | –   | –    | ✓   | –       | –      | r/o  |
-| OpenAppendWriter       | –   | ✓    | ✓   | –       | –      | r/o  |
-| OpenReadWriter         | ✓   | ✓    | ✓   | ✓       | –      | r/o  |
-| Touch                  | ✓   | ✓    | ✓   | ✓       | –      | r/o  |
-| Truncate               | –   | ✓    | –   | –       | –      | r/o  |
-| MakeAllDirs            | –   | ✓    | –   | –       | –      | r/o  |
-| RemoveAll              | ✓   | ✓    | ✓   | ✓       | ✓      | r/o  |
-| ListDirRecursive       | ✓   | ✓    | ✓   | ✓       | –      | –    |
-| SetPermissions         | –   | ✓    | –   | –       | –      | r/o  |
-| Symbolic links         | –   | ✓    | –   | –       | –      | –    |
-| Seeking reads          | –   | ✓    | –   | –       | ✓      | –    |
+| Capability             | s3  | azblob | sftp | ftp | smb | dropbox | webdav | http |
+| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
+| CopyFile (server-side) | ✓   | ✓      | –    | –   | –   | ✓       | ✓      | –    |
+| Move                   | –   | –      | ✓    | ✓   | ✓   | ✓       | ✓      | –    |
+| Exists                 | –   | –      | –    | –   | –   | ✓       | –      | ✓    |
+| ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | ✓    |
+| WriteAll               | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | r/o  |
+| Append                 | –   | –      | –    | ✓   | –   | –       | –      | r/o  |
+| OpenAppendWriter       | –   | –      | ✓    | ✓   | ✓   | –       | –      | r/o  |
+| OpenReadWriter         | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | –      | r/o  |
+| Touch                  | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | –      | r/o  |
+| Truncate               | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
+| MakeAllDirs            | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
+| RemoveAll              | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  |
+| ListDirRecursive       | ✓   | ✓      | ✓    | ✓   | –   | ✓       | –      | –    |
+| SetPermissions         | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
+| Symbolic links         | –   | –      | ✓    | –   | ✓   | –       | –      | –    |
+| Seeking reads          | –   | ✓      | ✓    | –   | ✓   | –       | ✓      | –    |
 
 `✓` native implementation · `–` falls back to the generic emulation (works the
 same, just not specialized) · `r/o` read-only backend, so the write operation
@@ -681,6 +683,42 @@ notes, err := fs.File("webdav://cloud.example.com/remote.php/dav/files/alice/not
 Standard library only, so one module covers every WebDAV server. Paths map
 to URL paths below the base URL, `PROPFIND` backs `Stat` and `ListDir`,
 `MOVE` and `COPY` are native, and readers seek with `Range` requests.
+
+### smbfs
+
+```go
+import "github.com/ungerik/go-fs/smbfs"
+
+smbFS, err := smbfs.DialAndRegister(ctx, "smb://alice@nas.local/documents",
+    &smbfs.Options{Password: "secret", Domain: "WORKGROUP"})
+defer smbFS.Close()
+
+files, err := fs.File("smb://alice@nas.local/documents/").ListDirMax(ctx, -1, "*.pdf")
+```
+
+SMB2/3 for Windows shares, Samba and NAS devices with the pure Go
+[go-smb2](https://github.com/hirochachacha/go-smb2). Real directories and
+random access file handles, so nearly every optional interface is native:
+append and read-write handles, `Truncate`, `Touch`, `MakeAllDirs`,
+`RemoveAll`, server-side `Move`, symbolic links. Permissions are the SMB
+read-only attribute, so only the user write bit is stored.
+
+### azureblobfs
+
+```go
+import "github.com/ungerik/go-fs/azureblobfs"
+
+blobFS, err := azureblobfs.NewFromConnectionString(ctx, os.Getenv("AZURE_STORAGE_CONNECTION_STRING"), "assets", false)
+defer blobFS.Close()
+
+err = blobFS.RootDir().Join("images", "logo.png").WriteAll(ctx, logo)
+```
+
+Azure Blob Storage with the Azure SDK for Go; `azureblobfs.NewAndRegister`
+takes a configured `container.Client` for other credential types.
+Directories are blob name prefixes with marker blobs like in s3fs, reads
+seek with range requests, `CopyFile` is a server-side copy and `Touch`
+updates the modification time by setting the blob metadata.
 
 ### zipfs
 

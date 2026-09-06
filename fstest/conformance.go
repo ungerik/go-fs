@@ -133,6 +133,12 @@ type Config struct {
 
 	// SkipClose keeps the suite from calling FileSystem.Close at the end.
 	SkipClose bool
+
+	// PermissionMask are the permission bits the file system stores;
+	// SetPermissions is only checked for these bits. Zero means all bits.
+	// SMB shares for example only keep a read-only flag, so their
+	// mask is fs.UserWrite.
+	PermissionMask fs.Permissions
 }
 
 // RunConformance runs the go-fs conformance suite against a FileSystem.
@@ -1142,12 +1148,15 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 			info, err := c.fs.Stat(path)
 			require.NoError(t, err)
 			want := fs.UserRead | fs.UserWrite | fs.GroupRead
+			mask := c.cfg.PermissionMask
+			if mask == 0 {
+				mask = fs.AllReadWrite | fs.AllExecute
+			}
 			if isLocal(c.fs) && runtime.GOOS == "windows" {
 				// os.Chmod on Windows only toggles the read-only attribute
-				assert.Equal(t, want&fs.UserWrite, info.Permissions&fs.UserWrite, "user write permission after SetPermissions")
-			} else {
-				assert.Equal(t, want, info.Permissions, "permissions after SetPermissions")
+				mask = fs.UserWrite
 			}
+			assert.Equal(t, want&mask, info.Permissions&mask, "permissions after SetPermissions (masked with %o)", mask)
 		}
 	}
 }

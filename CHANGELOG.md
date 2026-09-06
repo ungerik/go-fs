@@ -117,6 +117,16 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 - `fs.SubFileSystem` is a view of a directory of another file system with
   the prefix `sub://<id>`, forwarding every operation (including the
   optional interfaces) to the parent with translated paths.
+- `smbfs` module: an SMB2/3 client file system on the pure Go go-smb2,
+  with native append and read-write handles, `Truncate`, `Touch`,
+  `MakeAllDirs`, `RemoveAll`, server-side `Move`, `SetPermissions`
+  (read-only attribute) and symbolic links where the server allows them;
+  tested against a Samba container.
+- `azureblobfs` module: Azure Blob Storage with marker-blob directories,
+  seeking reads via range requests, server-side `CopyFile` and `Touch` via
+  metadata; tested against the Azurite emulator.
+- `fstest.Config.PermissionMask` declares which permission bits a file
+  system stores, so the suite checks `SetPermissions` for those bits only.
 - `webdavfs` module: a WebDAV client file system with the standard library
   only (`PROPFIND` for `Stat` and `ListDir`, `PUT`, `MKCOL`, `DELETE`,
   native `MOVE` and `COPY`, seeking reads with `Range` requests), tested
