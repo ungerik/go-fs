@@ -31,14 +31,15 @@ const (
 )
 
 var (
-	FileSystem    = &fileSystem{prefix: Prefix}
-	FileSystemTLS = &fileSystem{prefix: PrefixTLS}
+	FileSystem    = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: Prefix}}
+	FileSystemTLS = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: PrefixTLS}}
 )
 
+// fileSystem paths are not rooted, they start with the host name:
+// Prefix()+path is the URL.
 type fileSystem struct {
 	fs.ReadOnlyBase
-
-	prefix string
+	fsimpl.PathHelper
 }
 
 func (*fileSystem) RootDir() fs.File {
@@ -46,58 +47,25 @@ func (*fileSystem) RootDir() fs.File {
 }
 
 func (f *fileSystem) ID() (string, error) {
-	return strings.TrimSuffix(f.prefix, "://"), nil
-}
-
-func (f *fileSystem) Prefix() string {
-	return f.prefix
+	return strings.TrimSuffix(f.URIPrefix, "://"), nil
 }
 
 func (f *fileSystem) Name() string {
-	return strings.ToUpper(strings.TrimSuffix(f.prefix, "://"))
+	return strings.ToUpper(strings.TrimSuffix(f.URIPrefix, "://"))
 }
 
 func (f *fileSystem) String() string {
 	return f.Name() + " read-only file system"
 }
 
-func (f *fileSystem) URL(cleanPath string) string {
-	return f.prefix + cleanPath
-}
-
-func (f *fileSystem) CleanPathFromURI(uri string) string {
-	return path.Clean(strings.TrimPrefix(uri, f.prefix))
+// MatchAnyPattern resolves the ambiguity between the embedded
+// fs.ReadOnlyBase and fsimpl.PathHelper implementations.
+func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	return f.PathHelper.MatchAnyPattern(name, patterns)
 }
 
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
-}
-
-// JoinCleanPath returns the joined and cleaned path without a leading
-// slash, because HTTP paths start with the host name: Prefix()+path is the URL.
-func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
-	return strings.TrimPrefix(fsimpl.JoinCleanPath(uriParts, f.prefix), Separator)
-}
-
-func (f *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.Prefix(), f.Separator())
-}
-
-func (f *fileSystem) Separator() string { return Separator }
-
-func (f *fileSystem) IsAbsPath(filePath string) bool {
-	return strings.HasPrefix(filePath, f.prefix)
-}
-
-func (f *fileSystem) AbsPath(filePath string) string {
-	if f.IsAbsPath(filePath) {
-		return filePath
-	}
-	return f.prefix + strings.TrimPrefix(filePath, Separator)
-}
-
-func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
+	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
 // info determines whether filePath exists and, if so, returns its FileInfo.
@@ -227,13 +195,6 @@ func (f *fileSystem) Exists(filePath string) bool {
 	return err == nil && info.Exists
 }
 
-func (f *fileSystem) IsHidden(filePath string) bool       { return false }
-func (f *fileSystem) IsSymbolicLink(filePath string) bool { return false }
-
-func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	return fs.NewErrUnsupported(f, "ListDirInfo")
-}
-
 func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -270,4 +231,10 @@ func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
 
 func (f *fileSystem) Close() error {
 	return nil
+}
+
+func (f *fileSystem) IsSymbolicLink(filePath string) bool { return false }
+
+func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+	return fs.NewErrUnsupported(f, "ListDirInfo")
 }

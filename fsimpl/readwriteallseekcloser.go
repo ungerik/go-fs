@@ -60,14 +60,6 @@ func (rw *ReadWriteAllSeekCloser) ensureBuffer() error {
 	return nil
 }
 
-// InvalidateBuffer discards the buffered data and marks the buffer as uninitialized.
-// The next read or write operation will reload the data from the file.
-// This is useful when the underlying file has been modified externally.
-func (rw *ReadWriteAllSeekCloser) InvalidateBuffer() {
-	rw.buffer = nil
-	rw.modified = false
-}
-
 // Read reads up to len(p) bytes into p from the buffered file content.
 func (rw *ReadWriteAllSeekCloser) Read(p []byte) (n int, err error) {
 	if err := rw.ensureBuffer(); err != nil {

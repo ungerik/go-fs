@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	iofs "io/fs"
-	"path"
 	"strings"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -54,50 +53,42 @@ func (fs InvalidFileSystem) String() string {
 	return "invalid file system" + " " + string(fs)
 }
 
+// paths returns the PathHelper for the prefix of the file system
+func (fs InvalidFileSystem) paths() fsimpl.PathHelper {
+	// The prefix ends with a slash, so paths are not rooted (like httpfs)
+	return fsimpl.PathHelper{URIPrefix: fs.Prefix()}
+}
+
 func (fs InvalidFileSystem) JoinCleanFile(uri ...string) File {
 	if fs == "" && strings.Join(uri, "") == "" {
 		return "" // InvalidFile
 	}
-	return File(fs.Prefix() + fs.JoinCleanPath(uri...))
+	return File(fs.paths().JoinCleanURI(uri...))
 }
 
-func (InvalidFileSystem) IsAbsPath(filePath string) bool {
-	return path.IsAbs(filePath)
-}
-
-func (fs InvalidFileSystem) AbsPath(filePath string) string {
-	return fs.JoinCleanPath(filePath)
-}
-
-func (fs InvalidFileSystem) URL(cleanPath string) string {
-	return fs.Prefix() + cleanPath
-}
-
+func (fs InvalidFileSystem) IsAbsPath(filePath string) bool { return fs.paths().IsAbsPath(filePath) }
+func (fs InvalidFileSystem) AbsPath(filePath string) string { return fs.paths().AbsPath(filePath) }
+func (fs InvalidFileSystem) URL(cleanPath string) string    { return fs.paths().URL(cleanPath) }
 func (fs InvalidFileSystem) CleanPathFromURI(uri string) string {
-	return path.Clean(strings.TrimPrefix(uri, fs.Prefix()))
+	return fs.paths().CleanPathFromURI(uri)
 }
-
 func (fs InvalidFileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, fs.Prefix())
+	return fs.paths().JoinCleanPath(uriParts...)
 }
-
 func (fs InvalidFileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, fs.Prefix(), fs.Separator())
+	return fs.paths().SplitPath(filePath)
 }
-
-func (InvalidFileSystem) Separator() string {
-	return "/"
-}
-
-func (InvalidFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return false, ErrInvalidFileSystem
-}
+func (InvalidFileSystem) Separator() string { return "/" }
 
 func (fs InvalidFileSystem) SplitDirAndName(filePath string) (dir, name string) {
 	if fs == "" {
 		return "", ""
 	}
-	return fsimpl.SplitDirAndName(filePath, 0, fs.Separator())
+	return fs.paths().SplitDirAndName(filePath)
+}
+
+func (InvalidFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	return false, ErrInvalidFileSystem
 }
 
 func (InvalidFileSystem) VolumeName(filePath string) string {

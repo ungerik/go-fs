@@ -1212,11 +1212,9 @@ func (file File) OpenAppendWriter(perm ...Permissions) (WriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	var fileBuffer *fsimpl.FileBuffer
-	fileBuffer = fsimpl.NewFileBufferWithClose(current, func() error {
-		return file.WriteAll(fileBuffer.Bytes(), perm...)
-	})
-	return fileBuffer, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(current, func(data []byte) error {
+		return file.WriteAll(data, perm...)
+	}), nil
 
 }
 

@@ -30,7 +30,7 @@ const (
 func init() {
 	// Register with prefix sftp:// for URLs with
 	// sftp://username:password@host:port schema.
-	fs.Register(&fileSystem{prefix: Prefix})
+	fs.Register(&fileSystem{PathHelper: pathHelper(Prefix)})
 }
 
 // CredentialsCallback is called by Dial to get the username and password for a SFTP connection.
@@ -60,7 +60,8 @@ func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error
 }
 
 type fileSystem struct {
-	prefix    string
+	fsimpl.PathHelper
+
 	client    *sftp.Client
 	closed    bool
 	clientMtx sync.RWMutex
@@ -95,11 +96,21 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 	return &fileSystem{
 		client:              client,
 		connLogger:          connLogger,
-		prefix:              prefix,
+		PathHelper:          pathHelper(prefix),
 		address:             address,
 		credentialsCallback: credentialsCallback,
 		hostKeyCallback:     hostKeyCallback,
 	}, nil
+}
+
+// pathHelper returns the PathHelper for a file system prefix.
+// URIs with the default SFTP port 22 are accepted as well.
+func pathHelper(prefix string) fsimpl.PathHelper {
+	return fsimpl.PathHelper{
+		URIPrefix:   prefix,
+		AltPrefixes: []string{prefix + ":22"},
+		Rooted:      true,
+	}
 }
 
 func prepareDial(address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (u *url.URL, username, password, prefix string, err error) {
@@ -182,7 +193,7 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	newFS := &fileSystem{
 		client:              client,
 		connLogger:          connLogger,
-		prefix:              prefix,
+		PathHelper:          pathHelper(prefix),
 		address:             address,
 		credentialsCallback: credentialsCallback,
 		hostKeyCallback:     hostKeyCallback,
@@ -373,75 +384,19 @@ func (f *fileSystem) ReadableWritable() (readable, writable bool) {
 }
 
 func (f *fileSystem) RootDir() fs.File {
-	return fs.File(f.prefix + Separator)
+	return fs.File(f.URIPrefix + Separator)
 }
 
 func (f *fileSystem) ID() (string, error) {
-	return f.prefix, nil
-}
-
-func (f *fileSystem) Prefix() string {
-	return f.prefix
-}
-
-func (f *fileSystem) Separator() string { return Separator }
-
-func (f *fileSystem) Name() string {
-	return "SFTP"
+	return f.URIPrefix, nil
 }
 
 func (f *fileSystem) String() string {
-	return f.prefix + " file system"
-}
-
-func (f *fileSystem) URL(cleanPath string) string {
-	return f.prefix + cleanPath
-}
-
-func (f *fileSystem) CleanPathFromURI(uri string) string {
-	return path.Clean(
-		strings.TrimPrefix(
-			strings.TrimPrefix(uri, f.prefix),
-			":22", // In case f.prefix has no port number and url has the default port number
-		),
-	)
-}
-
-func (*fileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, Prefix)
+	return f.URIPrefix + " file system"
 }
 
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	path := f.JoinCleanPath(uriParts...)
-	if strings.HasSuffix(f.prefix, Separator) && strings.HasPrefix(path, Separator) {
-		// For example: "sftp://" + "/example.com/absolute/path"
-		// should not result in 3 slashes: "sftp:///example.com/absolute/path"
-		path = path[len(Separator):]
-	}
-	return fs.File(f.prefix + path)
-}
-
-func (f *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.prefix, Separator)
-}
-
-func (f *fileSystem) IsAbsPath(filePath string) bool {
-	return strings.HasPrefix(filePath, Prefix)
-}
-
-func (f *fileSystem) AbsPath(filePath string) string {
-	if f.IsAbsPath(filePath) {
-		return filePath
-	}
-	return Prefix + strings.TrimPrefix(filePath, Separator)
-}
-
-func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
-}
-
-func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
+	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
 func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
@@ -471,47 +426,6 @@ func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	defer release()
 
 	return client.Stat(filePath)
-}
-
-func (f *fileSystem) IsHidden(filePath string) bool       { return false }
-func (f *fileSystem) IsSymbolicLink(filePath string) bool { return false }
-
-func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	client, dirPath, release, err := f.getClient(ctx, dirPath)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	infos, err := client.ReadDirContext(ctx, dirPath)
-	if err != nil {
-		// Distinguish a missing directory from a path that is not a directory
-		info, statErr := client.Stat(dirPath)
-		switch {
-		case statErr == nil && !info.IsDir():
-			return fs.NewErrIsNotDirectory(f.JoinCleanFile(dirPath))
-		case errors.Is(err, os.ErrNotExist) || errors.Is(statErr, os.ErrNotExist):
-			return fs.NewErrDoesNotExist(f.JoinCleanFile(dirPath))
-		}
-		return err
-	}
-	for _, info := range infos {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		match, err := fsimpl.MatchAnyPattern(info.Name(), patterns)
-		if err != nil {
-			return err
-		}
-		if !match {
-			continue
-		}
-		err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, info.Name()), info, false))
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 type sftpFile struct {
@@ -656,4 +570,48 @@ func (f *fileSystem) closeConn() error {
 	f.client = nil
 	f.closed = true
 	return err
+}
+
+func (f *fileSystem) Name() string {
+	return "SFTP"
+}
+
+func (f *fileSystem) IsSymbolicLink(filePath string) bool { return false }
+
+func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+	client, dirPath, release, err := f.getClient(ctx, dirPath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	infos, err := client.ReadDirContext(ctx, dirPath)
+	if err != nil {
+		// Distinguish a missing directory from a path that is not a directory
+		info, statErr := client.Stat(dirPath)
+		switch {
+		case statErr == nil && !info.IsDir():
+			return fs.NewErrIsNotDirectory(f.JoinCleanFile(dirPath))
+		case errors.Is(err, os.ErrNotExist) || errors.Is(statErr, os.ErrNotExist):
+			return fs.NewErrDoesNotExist(f.JoinCleanFile(dirPath))
+		}
+		return err
+	}
+	for _, info := range infos {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		match, err := fsimpl.MatchAnyPattern(info.Name(), patterns)
+		if err != nil {
+			return err
+		}
+		if !match {
+			continue
+		}
+		err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, info.Name()), info, f.IsHidden(info.Name())))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

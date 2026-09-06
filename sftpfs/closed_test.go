@@ -16,7 +16,7 @@ import (
 // closed state takes precedence over the auto-reconnect logic.
 func TestClosedFileSystem(t *testing.T) {
 	f := &fileSystem{
-		prefix:              "sftp://user@example.com",
+		PathHelper:          pathHelper("sftp://user@example.com"),
 		closed:              true,
 		address:             "sftp://user@example.com",
 		credentialsCallback: UsernameAndPassword("user", "password"),

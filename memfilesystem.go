@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	iofs "io/fs"
-	"net/url"
-	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -117,6 +115,8 @@ func (n *memFileNode) Sys() any { return nil }
 // Useful as a mock file system for tests or for caching of slow file systems.
 // All data is lost when the file system is closed or the process terminates.
 type MemFileSystem struct {
+	fsimpl.PathHelper // Path methods for the current prefix, separator and volume
+
 	id       string       // Unique identifier for this file system instance
 	sep      string       // Path separator ("/" or "\")
 	volume   string       // Optional volume name (e.g., "C:")
@@ -446,10 +446,17 @@ func (fs *MemFileSystem) updatePrefix() {
 	} else {
 		fs.prefix = "mem://" + fs.id
 	}
-}
-
-func (fs *MemFileSystem) Prefix() string {
-	return fs.prefix
+	fs.PathHelper = fsimpl.PathHelper{
+		URIPrefix: fs.prefix,
+		PathSep:   fs.sep,
+		Rooted:    true,
+		VolumeLen: func(filePath string) int {
+			if fs.volume != "" && strings.HasPrefix(filePath, fs.volume) {
+				return len(fs.volume)
+			}
+			return 0
+		},
+	}
 }
 
 func (*MemFileSystem) Name() string {
@@ -461,7 +468,7 @@ func (fs *MemFileSystem) String() string {
 }
 
 func (fs *MemFileSystem) JoinCleanFile(uri ...string) File {
-	return File(fs.prefix + fs.JoinCleanPath(uri...))
+	return File(fs.JoinCleanURI(uri...))
 }
 
 func (fs *MemFileSystem) IsAbsPath(filePath string) bool {
@@ -476,51 +483,6 @@ func (fs *MemFileSystem) IsAbsPath(filePath string) bool {
 
 func (fs *MemFileSystem) AbsPath(filePath string) string {
 	return fs.JoinCleanPath(filePath)
-}
-
-func (fs *MemFileSystem) URL(cleanPath string) string {
-	return fs.prefix + cleanPath
-}
-
-func (fs *MemFileSystem) CleanPathFromURI(uri string) string {
-	return strings.TrimPrefix(uri, fs.prefix)
-}
-
-// JoinCleanPath joins the uriParts with the separator of the file system,
-// URL-unescapes the result and cleans it like path.Clean but using the
-// separator of the file system. The passed uriParts slice is not modified.
-func (fs *MemFileSystem) JoinCleanPath(uriParts ...string) string {
-	if len(uriParts) == 0 {
-		return ""
-	}
-	cleanPath := strings.TrimPrefix(uriParts[0], fs.prefix)
-	if len(uriParts) > 1 {
-		cleanPath += fs.sep + strings.Join(uriParts[1:], fs.sep)
-	}
-	unescPath, err := url.PathUnescape(cleanPath)
-	if err == nil {
-		cleanPath = unescPath
-	}
-	if fs.sep == "/" {
-		return path.Clean(cleanPath)
-	}
-	return strings.ReplaceAll(path.Clean(strings.ReplaceAll(cleanPath, fs.sep, "/")), "/", fs.sep)
-}
-
-func (fs *MemFileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, fs.prefix, fs.sep)
-}
-
-func (fs *MemFileSystem) Separator() string {
-	return fs.sep
-}
-
-func (*MemFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
-}
-
-func (fs *MemFileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, fs.sep)
 }
 
 func (fs *MemFileSystem) VolumeName(filePath string) string {
@@ -561,10 +523,6 @@ func (fs *MemFileSystem) Exists(filePath string) bool {
 
 	node, _ := fs.pathNodeOrNil(filePath)
 	return node != nil
-}
-
-func (*MemFileSystem) IsHidden(filePath string) bool {
-	return false
 }
 
 func (fs *MemFileSystem) IsSymbolicLink(filePath string) bool {
@@ -696,7 +654,7 @@ func (fs *MemFileSystem) dirInfoSnapshot(dirPath string, patterns []string) ([]*
 			Exists:      true,
 			IsDir:       childNode.IsDir(),
 			IsRegular:   !childNode.IsDir() && !childNode.IsSymlink(),
-			IsHidden:    false,
+			IsHidden:    strings.HasPrefix(name, "."),
 			Size:        int64(len(childNode.FileData)),
 			Modified:    childNode.Modified,
 			Permissions: childNode.Permissions,

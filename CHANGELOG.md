@@ -21,10 +21,23 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
   httpfs, zipfs and multipartfs now run it too.
 - CI runs build, vet, race tests, staticcheck and gosec for every module on
   ubuntu, macOS and Windows (Windows tests non-blocking for now).
+- **`fsimpl.PathHelper`** implements the path methods of a `FileSystem`
+  (prefix stripping, joining, cleaning, splitting, URL, hidden check) for a URI
+  prefix, separator and optional volume; every backend embeds it instead of
+  duplicating the same code. sftpfs and ftpfs now also resolve URIs that carry
+  the default port (`sftp://u@h:22/x`, `ftp://h:21/x`, `ftps://h:990/x`).
+- `fsimpl.NewWriteOnCloseFileBuffer` for file systems that upload whole files
+  on Close; `fsimpl.FileBuffer.Truncate`.
 
 ### Fixed
 
 - `JoinCleanPath` no longer modifies the passed slice (all file systems).
+- `fsimpl.FileBuffer.WriteAt` no longer panics on a negative offset and honors
+  the `io.WriterAt` contract; `Stat` of a buffer without a `FileInfo` returns an
+  error instead of a nil `FileInfo`.
+- `CleanPathFromURI` returns a cleaned path on every file system; `IsHidden`
+  applies the dot rule on sftpfs, ftpfs and httpfs (was always false); `AbsPath`
+  on sftpfs and ftpfs returns a rooted path instead of a URI.
 - `MemFileSystem`: paths with the `\` separator are cleaned correctly,
   `Remove` refuses non-empty directories, `Stat`/`OpenReader`/`ReadAll` follow
   symbolic links, and operations after `Close` return `ErrFileSystemClosed`.
@@ -46,6 +59,8 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
 ### Removed
 
 - `fs.RunFileSystemTests` and the `tests` package (use `fstest.RunConformance`).
+- `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
+  `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
 - `fs.MemFileSystem.ReadAll` on a directory returns `ErrIsDirectory` instead
   of empty data.
 

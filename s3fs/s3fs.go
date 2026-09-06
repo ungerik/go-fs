@@ -46,9 +46,10 @@ var (
 )
 
 type fileSystem struct {
+	fsimpl.PathHelper
+
 	client     *s3.Client
 	bucketName string
-	prefix     string
 	readOnly   bool
 	closed     bool
 }
@@ -93,9 +94,9 @@ func derefTime(p *time.Time) time.Time {
 // which is compatible with AWS CLI and SDK tools.
 func NewAndRegister(client *s3.Client, bucketName string, readOnly bool) fs.FileSystem {
 	s3fs := &fileSystem{
+		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + bucketName, Rooted: true},
 		client:     client,
 		bucketName: bucketName,
-		prefix:     Prefix + bucketName,
 		readOnly:   readOnly,
 	}
 	fs.Register(s3fs)
@@ -131,7 +132,7 @@ func (s *fileSystem) ReadableWritable() (readable, writable bool) {
 //
 // Format: "s3://bucket-name/"
 func (s *fileSystem) RootDir() fs.File {
-	return fs.File(s.prefix + Separator)
+	return fs.File(s.URIPrefix + Separator)
 }
 
 // ID returns the bucket name as the filesystem identifier.
@@ -141,15 +142,6 @@ func (s *fileSystem) ID() (string, error) {
 	return s.bucketName, nil
 }
 
-// Prefix returns the URL prefix used by this filesystem.
-//
-// Format: "s3://bucket-name" (without trailing slash)
-//
-// This prefix is used to construct full S3 URIs compatible with AWS CLI and SDKs.
-func (s *fileSystem) Prefix() string {
-	return s.prefix
-}
-
 // Name returns a human-readable name for the filesystem.
 func (s *fileSystem) Name() string {
 	return "S3 file system for bucket: " + s.bucketName
@@ -157,87 +149,14 @@ func (s *fileSystem) Name() string {
 
 // String returns a detailed string representation of the filesystem.
 func (s *fileSystem) String() string {
-	return s.Name() + " with prefix " + s.prefix
-}
-
-// URL constructs a full S3 URI from a clean path.
-//
-// The returned URL follows the standard S3 URI format: s3://bucket-name/path/to/file
-// This format is compatible with AWS CLI, SDKs, and most S3-compatible tools.
-//
-// Example: URL("/path/file.txt") returns "s3://bucket-name/path/file.txt"
-func (s *fileSystem) URL(cleanPath string) string {
-	return s.prefix + cleanPath
-}
-
-// CleanPathFromURI extracts the clean path from a full S3 URI.
-//
-// Strips the filesystem prefix (s3://bucket-name) from the URI, leaving only the path.
-//
-// Example: CleanPathFromURI("s3://bucket-name/path/file.txt") returns "/path/file.txt"
-func (f *fileSystem) CleanPathFromURI(uri string) string {
-	return strings.TrimPrefix(uri, f.prefix)
+	return s.Name() + " with prefix " + s.URIPrefix
 }
 
 // JoinCleanFile joins path parts into a File with this filesystem's prefix.
 //
 // The parts are cleaned and joined with forward slashes, then prefixed with s3://bucket-name
 func (s *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(s.prefix + s.JoinCleanPath(uriParts...))
-}
-
-// JoinCleanPath joins path parts into a clean path string.
-//
-// Cleans redundant separators and resolves . and .. components.
-// Always uses forward slash (/) as the separator, regardless of OS.
-func (s *fileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, s.prefix)
-}
-
-// SplitPath splits a file path into its components.
-//
-// Removes the filesystem prefix and splits on forward slashes.
-func (s *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, s.prefix, Separator)
-}
-
-// Separator returns the path separator used by S3 (always forward slash).
-//
-// S3 always uses "/" regardless of the client OS.
-func (s *fileSystem) Separator() string {
-	return Separator
-}
-
-// IsAbsPath returns whether the path is absolute (starts with /).
-//
-// In S3, absolute paths start with /, relative paths don't.
-func (s *fileSystem) IsAbsPath(filePath string) bool {
-	return path.IsAbs(filePath)
-}
-
-// AbsPath converts a relative path to absolute by prepending /.
-//
-// If the path is already absolute, returns it unchanged.
-func (s *fileSystem) AbsPath(filePath string) string {
-	if path.IsAbs(filePath) {
-		return filePath
-	}
-	return Separator + filePath
-}
-
-// MatchAnyPattern checks if a name matches any of the given glob patterns.
-//
-// Supports standard glob patterns: *, ?, [chars], [!chars]
-// If patterns is empty or nil, returns true (matches all).
-func (s *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
-}
-
-// SplitDirAndName splits a file path into directory and filename.
-//
-// Example: SplitDirAndName("/path/to/file.txt") returns ("/path/to", "file.txt")
-func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
+	return fs.File(s.JoinCleanURI(uriParts...))
 }
 
 // VolumeName returns the bucket name as the volume name.
@@ -303,7 +222,7 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	}
 
 	if _, ok := errors.AsType[*types.NotFound](err); ok {
-		return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
+		return nil, fs.NewErrDoesNotExist(fs.File(s.URIPrefix + filePath))
 	}
 	return nil, err
 }
@@ -331,17 +250,6 @@ func (s *fileSystem) Exists(filePath string) bool {
 		},
 	)
 	return err == nil
-}
-
-// IsHidden returns true if the file name starts with a dot.
-//
-// S3 limitation:
-//   - S3 doesn't have a concept of "hidden" files
-//   - This follows Unix convention: names starting with '.' are hidden
-//   - Based only on the filename, not object metadata
-func (s *fileSystem) IsHidden(filePath string) bool {
-	name := path.Base(filePath)
-	return len(name) > 0 && name[0] == '.'
 }
 
 // IsSymbolicLink always returns false for S3.
@@ -451,7 +359,7 @@ func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback f
 				}
 
 				// Create FileInfo for directory
-				dirFile := fs.File(s.prefix + "/" + strings.TrimSuffix(*commonPrefix.Prefix, "/"))
+				dirFile := fs.File(s.URIPrefix + "/" + strings.TrimSuffix(*commonPrefix.Prefix, "/"))
 				info := &fs.FileInfo{
 					File:        dirFile,
 					Name:        baseName,
@@ -508,7 +416,7 @@ func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback f
 				modTime = *obj.LastModified
 			}
 
-			fileFile := fs.File(s.prefix + "/" + *obj.Key)
+			fileFile := fs.File(s.URIPrefix + "/" + *obj.Key)
 			info := &fs.FileInfo{
 				File:        fileFile,
 				Name:        baseName,
@@ -654,7 +562,7 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 	})
 	if err != nil {
 		if _, ok := errors.AsType[*types.NotFound](err); ok {
-			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
+			return nil, fs.NewErrDoesNotExist(fs.File(s.URIPrefix + filePath))
 		}
 		return nil, err
 	}
@@ -778,7 +686,7 @@ func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 	})
 	if err != nil {
 		if _, ok := errors.AsType[*types.NotFound](err); ok {
-			return nil, fs.NewErrDoesNotExist(fs.File(s.prefix + filePath))
+			return nil, fs.NewErrDoesNotExist(fs.File(s.URIPrefix + filePath))
 		}
 		return nil, err
 	}
@@ -849,11 +757,9 @@ func (s *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Writ
 	if s.readOnly {
 		return nil, fs.ErrReadOnlyFileSystem
 	}
-	var fileBuffer *fsimpl.FileBuffer
-	fileBuffer = fsimpl.NewFileBufferWithClose(nil, func() error {
-		return s.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), perm)
-	})
-	return fileBuffer, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+		return s.WriteAll(context.Background(), filePath, data, perm)
+	}), nil
 }
 
 // OpenReadWriter opens a file for both reading and writing.
@@ -892,10 +798,9 @@ func (s *fileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileBuf
 	if err != nil {
 		return nil, err
 	}
-	fileBuffer = fsimpl.NewFileBufferWithClose(current, func() error {
-		return s.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), nil)
-	})
-	return fileBuffer, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(current, func(data []byte) error {
+		return s.WriteAll(context.Background(), filePath, data, nil)
+	}), nil
 }
 
 // CopyFile copies a file within the same S3 bucket.
@@ -938,7 +843,7 @@ func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 	)
 	var notFound *types.NotFound
 	if err != nil && errors.As(err, &notFound) {
-		err = fs.NewErrDoesNotExist(fs.File(s.prefix + srcFile))
+		err = fs.NewErrDoesNotExist(fs.File(s.URIPrefix + srcFile))
 	}
 	return err
 }

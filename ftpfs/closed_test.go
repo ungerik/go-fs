@@ -18,8 +18,8 @@ import (
 // returned writer is closed, so for those the error surfaces from Close.
 func TestClosedFileSystem(t *testing.T) {
 	f := &fileSystem{
-		prefix: "ftp://user@example.com",
-		closed: true,
+		PathHelper: pathHelper("ftp://user@example.com", false),
+		closed:     true,
 	}
 	ctx := t.Context()
 

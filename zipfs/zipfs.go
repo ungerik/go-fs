@@ -30,7 +30,8 @@ var (
 
 // ZipFileSystem
 type ZipFileSystem struct {
-	prefix    string
+	fsimpl.PathHelper
+
 	closer    io.Closer // will be nil after Close()
 	zipReader *zip.Reader
 	zipWriter *zip.Writer
@@ -52,9 +53,9 @@ func NewReaderFileSystem(file fs.FileReader) (zipfs *ZipFileSystem, err error) {
 		return nil, err
 	}
 	zipfs = &ZipFileSystem{
-		prefix:    Prefix + fsimpl.RandomString(),
-		closer:    fileReader,
-		zipReader: zipReader,
+		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
+		closer:     fileReader,
+		zipReader:  zipReader,
 	}
 	fs.Register(zipfs)
 	return zipfs, err
@@ -70,9 +71,9 @@ func NewWriterFileSystem(file fs.File) (zipfs *ZipFileSystem, err error) {
 		return flate.NewWriter(out, flate.BestCompression)
 	})
 	zipfs = &ZipFileSystem{
-		prefix:    Prefix + fsimpl.RandomString(),
-		closer:    zipWriter,
-		zipWriter: zipWriter,
+		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
+		closer:     zipWriter,
+		zipWriter:  zipWriter,
 	}
 	fs.Register(zipfs)
 	return zipfs, err
@@ -83,23 +84,18 @@ func (f *ZipFileSystem) ReadableWritable() (readable, writable bool) {
 }
 
 func (f *ZipFileSystem) RootDir() fs.File {
-	return fs.File(f.prefix + Separator)
+	return fs.File(f.URIPrefix + Separator)
 }
 
 func (f *ZipFileSystem) ID() (string, error) {
-	return f.prefix, nil
-}
-
-// Prefix for the ZipFileSystem
-func (f *ZipFileSystem) Prefix() string {
-	return f.prefix
+	return f.URIPrefix, nil
 }
 
 func (f *ZipFileSystem) Name() string {
 	if f.zipWriter != nil {
-		return "Zip writer filesystem " + path.Base(f.prefix)
+		return "Zip writer filesystem " + path.Base(f.URIPrefix)
 	}
-	return "Zip reader filesystem " + path.Base(f.prefix)
+	return "Zip reader filesystem " + path.Base(f.URIPrefix)
 }
 
 // String implements the fmt.Stringer interface.
@@ -112,49 +108,7 @@ func (f *ZipFileSystem) File(filePath string) fs.File {
 }
 
 func (f *ZipFileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
-}
-
-func (f *ZipFileSystem) URL(cleanPath string) string {
-	return f.prefix + cleanPath
-}
-
-func (f *ZipFileSystem) CleanPathFromURI(uri string) string {
-	return path.Clean(strings.TrimPrefix(uri, f.prefix))
-}
-
-func (f *ZipFileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, f.prefix)
-}
-
-func (f *ZipFileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.prefix, Separator)
-}
-
-func (*ZipFileSystem) Separator() string {
-	return Separator
-}
-
-// MatchAnyPattern returns true if name matches any of patterns,
-// or if len(patterns) == 0.
-// The match per pattern works like path.Match or filepath.Match
-func (*ZipFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
-}
-
-func (*ZipFileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
-}
-
-func (f *ZipFileSystem) IsAbsPath(filePath string) bool {
-	return path.IsAbs(filePath)
-}
-
-func (f *ZipFileSystem) AbsPath(filePath string) string {
-	if !path.IsAbs(filePath) {
-		filePath = Separator + filePath
-	}
-	return path.Clean(filePath)
+	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
 // checkClosed returns an fs.ErrFileSystemClosed error if the archive was closed.
@@ -228,11 +182,6 @@ func (f *ZipFileSystem) Exists(filePath string) bool {
 	}
 	zipFile, _ := f.findFile(filePath)
 	return zipFile != nil
-}
-
-func (f *ZipFileSystem) IsHidden(filePath string) bool {
-	name := path.Base(filePath)
-	return len(name) > 0 && name[0] == '.'
 }
 
 func (f *ZipFileSystem) IsSymbolicLink(filePath string) bool {

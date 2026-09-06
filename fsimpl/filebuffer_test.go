@@ -540,7 +540,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 		}
 
 		data := []byte("Test data")
-		buf := NewReadonlyFileBufferWithClose(data, nil, closeFunc)
+		buf := NewFileBufferWithClose(data, closeFunc)
 
 		// Close should call the callback
 		err := buf.Close()

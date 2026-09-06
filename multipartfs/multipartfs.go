@@ -30,9 +30,9 @@ var (
 // MultipartFileSystem wraps the files in a MIME multipart message as fs.FileSystem
 type MultipartFileSystem struct {
 	fs.ReadOnlyBase
+	fsimpl.PathHelper
 
-	prefix string
-	Form   *multipart.Form
+	Form *multipart.Form
 
 	closeMtx sync.Mutex
 	closed   bool
@@ -45,8 +45,8 @@ func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSyst
 		return nil, err
 	}
 	f := &MultipartFileSystem{
-		prefix: Prefix + fsimpl.RandomString(),
-		Form:   request.MultipartForm,
+		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
+		Form:       request.MultipartForm,
 	}
 	fs.Register(f)
 	return f, err
@@ -91,20 +91,15 @@ func (f *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multipar
 }
 
 func (f *MultipartFileSystem) RootDir() fs.File {
-	return fs.File(f.prefix + Separator)
+	return fs.File(f.URIPrefix + Separator)
 }
 
 func (f *MultipartFileSystem) ID() (string, error) {
-	return f.prefix, nil
-}
-
-// Prefix for the MultipartFileSystem
-func (f *MultipartFileSystem) Prefix() string {
-	return f.prefix
+	return f.URIPrefix, nil
 }
 
 func (f *MultipartFileSystem) Name() string {
-	return "multipart file system " + path.Base(f.prefix)
+	return "multipart file system " + path.Base(f.URIPrefix)
 }
 
 // String implements the fmt.Stringer interface.
@@ -116,41 +111,14 @@ func (f *MultipartFileSystem) File(filePath string) fs.File {
 	return f.JoinCleanFile(filePath)
 }
 
+// MatchAnyPattern resolves the ambiguity between the embedded
+// fs.ReadOnlyBase and fsimpl.PathHelper implementations.
+func (f *MultipartFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
+	return f.PathHelper.MatchAnyPattern(name, patterns)
+}
+
 func (f *MultipartFileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(f.prefix + f.JoinCleanPath(uriParts...))
-}
-
-func (f *MultipartFileSystem) URL(cleanPath string) string {
-	return f.prefix + cleanPath
-}
-
-func (f *MultipartFileSystem) CleanPathFromURI(uri string) string {
-	return strings.TrimPrefix(uri, f.prefix)
-}
-
-func (f *MultipartFileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, f.prefix)
-}
-
-func (f *MultipartFileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.prefix, Separator)
-}
-
-func (*MultipartFileSystem) Separator() string { return Separator }
-
-func (*MultipartFileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
-}
-
-func (f *MultipartFileSystem) IsAbsPath(filePath string) bool {
-	return path.IsAbs(filePath)
-}
-
-func (f *MultipartFileSystem) AbsPath(filePath string) string {
-	if !path.IsAbs(filePath) {
-		filePath = Separator + filePath
-	}
-	return path.Clean(filePath)
+	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
 func (f *MultipartFileSystem) info(filePath string) *fs.FileInfo {
@@ -211,10 +179,6 @@ func (f *MultipartFileSystem) Exists(filePath string) bool {
 		}
 	}
 	return false
-}
-
-func (f *MultipartFileSystem) IsHidden(filePath string) bool {
-	return strings.HasPrefix(path.Base(filePath), ".")
 }
 
 func (f *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }

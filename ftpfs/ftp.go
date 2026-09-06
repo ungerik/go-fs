@@ -31,8 +31,8 @@ const (
 func init() {
 	// Register with prefix ftp:// and ftps:// for URLs with
 	// ftp(s)://username:password@host:port schema.
-	fs.Register(&fileSystem{secure: false, prefix: Prefix})
-	fs.Register(&fileSystem{secure: true, prefix: PrefixTLS})
+	fs.Register(&fileSystem{secure: false, PathHelper: pathHelper(Prefix, false)})
+	fs.Register(&fileSystem{secure: true, PathHelper: pathHelper(PrefixTLS, true)})
 }
 
 // CredentialsCallback is called by Dial to get the username and password for a SFTP connection.
@@ -66,10 +66,25 @@ func UsernameAndPassword(username, password string) CredentialsCallback {
 // }
 
 type fileSystem struct {
+	fsimpl.PathHelper
+
 	conn   *ftp.ServerConn
-	prefix string
 	secure bool
 	closed bool
+}
+
+// pathHelper returns the PathHelper for a file system prefix.
+// URIs with the default port 21 (FTP) or 990 (FTPS) are accepted as well.
+func pathHelper(prefix string, secure bool) fsimpl.PathHelper {
+	port := ":21"
+	if secure {
+		port = ":990"
+	}
+	return fsimpl.PathHelper{
+		URIPrefix:   prefix,
+		AltPrefixes: []string{prefix + port},
+		Rooted:      true,
+	}
 }
 
 // Dial a new FTP or FTPS connection and registers it as file system.
@@ -85,9 +100,9 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 		return nil, err
 	}
 	return &fileSystem{
-		conn:   conn,
-		prefix: prefix,
-		secure: secure,
+		conn:       conn,
+		PathHelper: pathHelper(prefix, secure),
+		secure:     secure,
 	}, nil
 }
 
@@ -161,9 +176,9 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return nop, err
 	}
 	newFS := &fileSystem{
-		conn:   conn,
-		prefix: prefix,
-		secure: secure,
+		conn:       conn,
+		PathHelper: pathHelper(prefix, secure),
+		secure:     secure,
 	}
 	// Register dedups by prefix. If another caller registered a file system
 	// with the same prefix while we were dialing, our freshly dialed connection
@@ -262,84 +277,19 @@ func (f *fileSystem) ReadableWritable() (readable, writable bool) {
 }
 
 func (f *fileSystem) RootDir() fs.File {
-	return fs.File(f.prefix + Separator)
+	return fs.File(f.URIPrefix + Separator)
 }
 
 func (f *fileSystem) ID() (string, error) {
-	return f.prefix, nil
-}
-
-func (f *fileSystem) Prefix() string {
-	return f.prefix
-}
-
-func (f *fileSystem) Separator() string { return Separator }
-
-func (f *fileSystem) Name() string {
-	if f.secure {
-		return "FTPS"
-	}
-	return "FTP"
+	return f.URIPrefix, nil
 }
 
 func (f *fileSystem) String() string {
-	return f.prefix + " file system"
-}
-
-func (f *fileSystem) URL(cleanPath string) string {
-	return f.prefix + cleanPath
-}
-
-func (f *fileSystem) CleanPathFromURI(uri string) string {
-	port := ":21"
-	if f.secure {
-		port = ":990"
-	}
-	return path.Clean(
-		strings.TrimPrefix(
-			strings.TrimPrefix(uri, f.prefix),
-			port, // In case f.prefix has no port number and url has the default port number
-		),
-	)
-}
-
-func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
-	if f.secure {
-		return fsimpl.JoinCleanPath(uriParts, PrefixTLS)
-	}
-	return fsimpl.JoinCleanPath(uriParts, Prefix)
+	return f.URIPrefix + " file system"
 }
 
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	path := f.JoinCleanPath(uriParts...)
-	if strings.HasSuffix(f.prefix, Separator) && strings.HasPrefix(path, Separator) {
-		// For example: "sftp://" + "/example.com/absolute/path"
-		// should not result in 3 slashes: "sftp:///example.com/absolute/path"
-		path = path[len(Separator):]
-	}
-	return fs.File(f.prefix + path)
-}
-
-func (f *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.prefix, Separator)
-}
-
-func (f *fileSystem) IsAbsPath(filePath string) bool {
-	if f.secure {
-		return strings.HasPrefix(filePath, PrefixTLS)
-	}
-	return strings.HasPrefix(filePath, Prefix)
-}
-
-func (f *fileSystem) AbsPath(filePath string) string {
-	if f.IsAbsPath(filePath) {
-		return filePath
-	}
-	return Prefix + strings.TrimPrefix(filePath, Separator)
-}
-
-func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
+	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
 type fileInfo struct {
@@ -404,40 +354,6 @@ func (f *fileSystem) Stat(filePath string) (info iofs.FileInfo, err error) {
 	return fileInfo{entry}, nil
 }
 
-func (f *fileSystem) IsHidden(filePath string) bool { return false }
-
-func (f *fileSystem) IsSymbolicLink(filePath string) bool {
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
-		return false
-	}
-	defer release()
-
-	// Try GetEntry first
-	entry, err := conn.GetEntry(filePath)
-	if err != nil {
-		// Fall back to List if GetEntry fails
-		dir, name := f.SplitDirAndName(filePath)
-		if dir == "" {
-			dir = "/"
-		}
-
-		entries, listErr := conn.List(dir)
-		if listErr != nil {
-			return false
-		}
-
-		// Find the entry in the list
-		for _, e := range entries {
-			if e.Name == name {
-				return e.Type == ftp.EntryTypeLink
-			}
-		}
-		return false
-	}
-	return entry.Type == ftp.EntryTypeLink
-}
-
 func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
 	defer f.convertResultError(&err, dirPath)
 
@@ -471,10 +387,6 @@ func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback f
 		}
 	}
 	return nil
-}
-
-func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
 }
 
 func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) (err error) {
@@ -682,11 +594,9 @@ func (f *fileSystem) Append(ctx context.Context, filePath string, data []byte, p
 // writer is closed. For bulk data prefer WriteAll, which streams directly
 // to the server without buffering the whole file in memory.
 func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	var buf *fsimpl.FileBuffer
-	buf = fsimpl.NewFileBufferWithClose(nil, func() error {
-		return f.WriteAll(context.Background(), filePath, buf.Bytes(), perm)
-	})
-	return buf, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+		return f.WriteAll(context.Background(), filePath, data, perm)
+	}), nil
 }
 
 // OpenAppendWriter opens the file at filePath for appending,
@@ -696,11 +606,9 @@ func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Writ
 // with a single APPE command when the returned writer is closed. Only the
 // appended data is held in memory, not the whole file.
 func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	var buf *fsimpl.FileBuffer
-	buf = fsimpl.NewFileBufferWithClose(nil, func() error {
-		return f.Append(context.Background(), filePath, buf.Bytes(), perm)
-	})
-	return buf, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+		return f.Append(context.Background(), filePath, data, perm)
+	}), nil
 }
 
 // OpenReadWriter opens the file at filePath for reading and writing.
@@ -716,11 +624,9 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (rw 
 	if err != nil {
 		return nil, err
 	}
-	var buf *fsimpl.FileBuffer
-	buf = fsimpl.NewFileBufferWithClose(data, func() error {
-		return f.WriteAll(context.Background(), filePath, buf.Bytes(), perm)
-	})
-	return buf, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(data, func(data []byte) error {
+		return f.WriteAll(context.Background(), filePath, data, perm)
+	}), nil
 }
 
 // Move renames filePath to destPath via the FTP RNFR/RNTO commands.
@@ -846,4 +752,43 @@ func (f *fileSystem) convertResultError(err *error, path string) {
 			return
 		}
 	}
+}
+
+func (f *fileSystem) Name() string {
+	if f.secure {
+		return "FTPS"
+	}
+	return "FTP"
+}
+
+func (f *fileSystem) IsSymbolicLink(filePath string) bool {
+	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+	if err != nil {
+		return false
+	}
+	defer release()
+
+	// Try GetEntry first
+	entry, err := conn.GetEntry(filePath)
+	if err != nil {
+		// Fall back to List if GetEntry fails
+		dir, name := f.SplitDirAndName(filePath)
+		if dir == "" {
+			dir = "/"
+		}
+
+		entries, listErr := conn.List(dir)
+		if listErr != nil {
+			return false
+		}
+
+		// Find the entry in the list
+		for _, e := range entries {
+			if e.Name == name {
+				return e.Type == ftp.EntryTypeLink
+			}
+		}
+		return false
+	}
+	return entry.Type == ftp.EntryTypeLink
 }

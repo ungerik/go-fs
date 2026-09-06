@@ -356,12 +356,27 @@ One PR per phase unless noted.
 
 ### Phase 2 — `fsimpl.PathHelper` and de-duplication
 
-- [ ] `fsimpl/pathhelper.go` with tests for `/`, `\`, volume, rooted/unrooted,
-      alt prefixes, non-mutation.
-- [ ] Every backend's path methods switched to it, behaviour-preserving apart
-      from the input-mutation and unescape fixes.
-- [ ] Write-on-close buffer and closed guard helpers; `FileBuffer` fixes.
-- [ ] Verify: conformance and `fsimpl` tests green.
+- [x] `fsimpl/pathhelper.go` (`fsimpl.PathHelper`: `URIPrefix`, `AltPrefixes`,
+      `PathSep`, `Rooted`, `VolumeLen`) with tests for `/`, `\`, volume,
+      rooted/unrooted, alt prefixes, non-mutation, idempotence.
+- [x] s3fs, sftpfs, ftpfs, dropboxfs, httpfs, multipartfs, zipfs and
+      `MemFileSystem` embed it; `InvalidFileSystem` delegates to it. Removed
+      ~90 duplicated path methods. Behaviour changes: `CleanPathFromURI`
+      always cleans; sftpfs/ftpfs accept URIs with the default port; `AbsPath`
+      of sftpfs/ftpfs returns a rooted path instead of a URI; sftpfs, ftpfs
+      and httpfs use the dot rule for `IsHidden` (was always false);
+      `InvalidFileSystem` paths are unrooted like httpfs. URL unescaping
+      still happens in `CleanPath`; moving it to `ParseRawURI` is part of
+      Phase 3.
+- [x] `fsimpl.NewWriteOnCloseFileBuffer` replaces the seven self-referential
+      closures; `FileBuffer.WriteAt` rejects negative offsets and honors the
+      `io.WriterAt` contract, `FileBuffer.Truncate` added, `Stat` without a
+      `FileInfo` returns an error; dead exports removed
+      (`DirEntryFromFileInfo`, `NewReadonlyFileBufferWithClose`,
+      `InvalidateBuffer`). A shared closed-state guard was not worth a helper
+      (two identical one-liners); revisit with the Phase 3 interface flip.
+- [x] Verify: conformance (Local, Mem, httpfs, zipfs, multipartfs, sftpfs and
+      ftpfs via Docker) and `fsimpl` tests green.
 
 ### Phase 3 — `FileSystem` interface flip (implementer-facing)
 

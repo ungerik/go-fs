@@ -43,8 +43,9 @@ var (
 
 // fileSystem implements fs.FileSystem for a Dropbox app.
 type fileSystem struct {
+	fsimpl.PathHelper
+
 	id            string
-	prefix        string
 	config        dropbox.Config
 	filesClient   files.Client
 	usersClient   users.Client
@@ -65,7 +66,7 @@ func NewAndRegister(accessToken string, cacheTimeout time.Duration, mute bool) f
 	}
 
 	dbfs := &fileSystem{
-		prefix:        Prefix + fsimpl.RandomString(),
+		PathHelper:    fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
 		config:        config,
 		filesClient:   files.New(config),
 		usersClient:   users.New(config),
@@ -131,7 +132,7 @@ func (dbfs *fileSystem) ReadableWritable() (readable, writable bool) {
 // RootDir returns the root directory of the Dropbox filesystem.
 // This represents the root of the user's Dropbox account, not the API root.
 func (dbfs *fileSystem) RootDir() fs.File {
-	return fs.File(dbfs.prefix + Separator)
+	return fs.File(dbfs.URIPrefix + Separator)
 }
 
 // ID returns the Dropbox account ID for this filesystem.
@@ -149,12 +150,6 @@ func (dbfs *fileSystem) ID() (string, error) {
 		dbfs.id = account.AccountId
 	}
 	return dbfs.id, nil
-}
-
-// Prefix returns the URI prefix for this Dropbox filesystem.
-// This is used to identify files belonging to this filesystem instance.
-func (dbfs *fileSystem) Prefix() string {
-	return dbfs.prefix
 }
 
 // Name returns the human-readable name of this filesystem.
@@ -178,64 +173,7 @@ func (dbfs *fileSystem) File(filePath string) fs.File {
 // JoinCleanFile joins multiple path parts into a clean File path.
 // All parts are cleaned and joined with the filesystem prefix.
 func (dbfs *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(dbfs.prefix + dbfs.JoinCleanPath(uriParts...))
-}
-
-// URL creates a full URI from a clean path.
-// Combines the filesystem prefix with the provided path.
-func (dbfs *fileSystem) URL(cleanPath string) string {
-	return dbfs.prefix + cleanPath
-}
-
-// CleanPathFromURI extracts the clean path from a full URI.
-// Removes the filesystem prefix to get the actual Dropbox path.
-func (dbfs *fileSystem) CleanPathFromURI(uri string) string {
-	return strings.TrimPrefix(uri, dbfs.prefix)
-}
-
-// JoinCleanPath joins multiple path parts into a clean path string.
-// Uses "/" as the separator, which is standard for Dropbox paths.
-func (dbfs *fileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, dbfs.prefix)
-}
-
-// SplitPath splits a file path into its component parts.
-// Uses "/" as the separator for Dropbox paths.
-func (dbfs *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, dbfs.prefix, Separator)
-}
-
-// Separator returns the path separator used by Dropbox.
-// Always returns "/" as Dropbox uses Unix-style paths.
-func (dbfs *fileSystem) Separator() string {
-	return Separator
-}
-
-// MatchAnyPattern checks if a filename matches any of the given patterns.
-// Uses standard shell-style pattern matching (e.g., "*.txt", "file.*").
-func (*fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
-}
-
-// SplitDirAndName splits a file path into directory and filename components.
-// Uses "/" as the separator for Dropbox paths.
-func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
-}
-
-// IsAbsPath checks if a path is absolute.
-// Uses Go's standard path.IsAbs which considers paths starting with "/" as absolute.
-func (dbfs *fileSystem) IsAbsPath(filePath string) bool {
-	return path.IsAbs(filePath)
-}
-
-// AbsPath converts a relative path to an absolute path.
-// Prepends "/" to relative paths and cleans the result.
-func (dbfs *fileSystem) AbsPath(filePath string) string {
-	if !path.IsAbs(filePath) {
-		filePath = Separator + filePath
-	}
-	return path.Clean(filePath)
+	return fs.File(dbfs.JoinCleanURI(uriParts...))
 }
 
 // metadataToFileInfo converts Dropbox metadata to fs.FileInfo.
@@ -344,13 +282,6 @@ func (dbfs *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 func (dbfs *fileSystem) Exists(filePath string) bool {
 	info, err := dbfs.info(filePath)
 	return err == nil && info.Exists
-}
-
-// IsHidden checks if a file is hidden.
-// Files starting with "." are considered hidden, following Unix conventions.
-func (dbfs *fileSystem) IsHidden(filePath string) bool {
-	name := path.Base(filePath)
-	return len(name) > 0 && name[0] == '.'
 }
 
 // IsSymbolicLink always returns false.
@@ -544,11 +475,9 @@ func (dbfs *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.W
 	if !dirInfo.IsDir {
 		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
 	}
-	var fileBuffer *fsimpl.FileBuffer
-	fileBuffer = fsimpl.NewFileBufferWithClose(nil, func() error {
-		return dbfs.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), nil)
-	})
-	return fileBuffer, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+		return dbfs.WriteAll(context.Background(), filePath, data, nil)
+	}), nil
 }
 
 // OpenReadWriter opens a file for both reading and writing.
@@ -559,11 +488,9 @@ func (dbfs *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (
 	if err != nil {
 		return nil, err
 	}
-	var fileBuffer *fsimpl.FileBuffer
-	fileBuffer = fsimpl.NewFileBufferWithClose(data, func() error {
-		return dbfs.WriteAll(context.Background(), filePath, fileBuffer.Bytes(), nil)
-	})
-	return fileBuffer, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(data, func(data []byte) error {
+		return dbfs.WriteAll(context.Background(), filePath, data, nil)
+	}), nil
 }
 
 // CopyFile copies a file from srcFile to destFile within Dropbox.

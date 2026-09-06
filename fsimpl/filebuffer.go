@@ -38,15 +38,13 @@ func NewReadonlyFileBufferReadAll(reader io.Reader, info iofs.FileInfo) (*Readon
 	return NewReadonlyFileBuffer(data, info), nil
 }
 
-// NewReadonlyFileBufferWithClose returns a new ReadonlyFileBuffer
-// that calls the passed close function when its Close method is called.
-func NewReadonlyFileBufferWithClose(data []byte, info iofs.FileInfo, close func() error) *ReadonlyFileBuffer {
-	return &ReadonlyFileBuffer{data: data, info: info, close: close}
-}
-
 // Stat returns the iofs.FileInfo of the buffer,
 // implementing the io/fs.File interface.
+// An error is returned if the buffer was created without a FileInfo.
 func (buf *ReadonlyFileBuffer) Stat() (iofs.FileInfo, error) {
+	if buf.info == nil {
+		return nil, errors.New("ReadonlyFileBuffer.Stat: no FileInfo available")
+	}
 	return buf.info, nil
 }
 
@@ -150,8 +148,19 @@ func NewFileBuffer(data []byte) *FileBuffer {
 }
 
 // NewFileBufferWithClose returns a new FileBuffer
+// that calls the passed close function when its Close method is called.
 func NewFileBufferWithClose(data []byte, close func() error) *FileBuffer {
 	return &FileBuffer{ReadonlyFileBuffer: ReadonlyFileBuffer{data: data, close: close}}
+}
+
+// NewWriteOnCloseFileBuffer returns a new FileBuffer initialized with data
+// that passes its complete content to the write function when it is closed.
+// This is the building block for file systems without random access writes
+// (object stores, FTP, ZIP archives) that have to upload whole files.
+func NewWriteOnCloseFileBuffer(data []byte, write func(data []byte) error) *FileBuffer {
+	buf := NewFileBuffer(data)
+	buf.close = func() error { return write(buf.data) }
+	return buf
 }
 
 // Write writes len(p) bytes from p to the underlying data stream.
@@ -168,13 +177,38 @@ func (buf *FileBuffer) Write(p []byte) (n int, err error) {
 // and any error encountered that caused the write to stop early.
 // WriteAt must return a non-nil error if it returns n < len(p).
 func (buf *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
-	numBytes := len(p)
+	if off < 0 {
+		return 0, errors.New("FileBuffer.WriteAt: negative offset")
+	}
 	pos := int(off)
-	writeEnd := pos + numBytes
+	writeEnd := pos + len(p)
 	if writeEnd > len(buf.data) {
 		newData := make([]byte, writeEnd)
 		copy(newData, buf.data)
 		buf.data = newData
 	}
-	return copy(buf.data[pos:], p), nil
+	n = copy(buf.data[pos:], p)
+	if n < len(p) {
+		return n, io.ErrShortWrite
+	}
+	return n, nil
+}
+
+// Truncate changes the size of the buffered data.
+// If the buffer is larger than size, the extra data is lost.
+// If the buffer is smaller, it is extended with zeros.
+func (buf *FileBuffer) Truncate(size int64) error {
+	if size < 0 {
+		return errors.New("FileBuffer.Truncate: negative size")
+	}
+	switch {
+	case size < int64(len(buf.data)):
+		buf.data = buf.data[:size]
+	case size > int64(len(buf.data)):
+		buf.data = append(buf.data, make([]byte, size-int64(len(buf.data)))...)
+	}
+	if buf.pos > size {
+		buf.pos = size
+	}
+	return nil
 }
