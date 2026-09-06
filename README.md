@@ -518,6 +518,7 @@ route to the right backend.
 | `ftpfs`       | `ftp://`, `ftps://`     | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
 | `dropboxfs`   | `dropbox://<account>`   | `dropboxfs.NewAndRegister`                         | yes  | yes    |
 | `zipfs`       | `zip://`                | `zipfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
+| `tarfs`       | `tar://`                | `tarfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
 | `multipartfs` | `multipart://`          | `multipartfs.FromRequestForm`                      | yes  | no     |
 | (built-in)    | `mem://`                | `fs.NewMemFileSystem`                              | yes  | yes    |
 | (built-in)    | `stdfs://<id>`          | `fs.NewStdFileSystem(iofs.FS)`: embed.FS, os.DirFS, zip.Reader, MapFS | yes | no |
@@ -564,9 +565,9 @@ same, just not specialized) · `r/o` read-only backend, so the write operation
 does not apply.
 
 The archive and request-scoped backends implement a mode-dependent subset:
-`zipfs` provides `Exists`, `Touch` and `ListDirRecursive` (Touch only in writer
-mode, Exists/listing only in reader mode), and `multipartfs` is read-only and
-provides `Exists` and `ReadAll`.
+`zipfs` and `tarfs` provide `Exists`, `Touch` and `ListDirRecursive` (Touch
+only in writer mode, Exists/listing only in reader mode), and `multipartfs`
+is read-only and provides `Exists` and `ReadAll`.
 
 Every backend follows the same error contract: `errors.Is(err, os.ErrNotExist)`
 for missing files, `os.ErrExist` for `MakeDir` on an existing path,
@@ -683,6 +684,26 @@ defer out.Close()
 
 A `ZipFileSystem` is either reader- or writer-mode depending on the
 constructor used.
+
+### tarfs
+
+The same for tar archives, optionally gzip compressed (`.tar.gz`, `.tgz`):
+
+```go
+import "github.com/ungerik/go-fs/tarfs"
+
+tarFS, err := tarfs.NewReaderFileSystem(fs.File("backup.tar.gz"))
+defer tarFS.Close()
+
+out, err := tarfs.NewWriterFileSystem(fs.File("out.tgz"))
+err = out.RootDir().Join("notes.txt").WriteAllString(ctx, "...")
+err = out.Close() // finishes the archive
+```
+
+A reader indexes the archive once and reads file content on demand; a
+gzip compressed archive is decompressed into memory. A writer buffers each
+file until its writer is closed, because tar needs the size before the
+content.
 
 ### multipartfs
 
