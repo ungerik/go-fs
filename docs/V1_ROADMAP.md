@@ -42,8 +42,9 @@ Taken 2026-09-05/06:
   (see `CLAUDE.md`).
 - **`MemDir` is dropped**; `MemFile` keeps its trailing-slash directory
   semantics.
-- **Delivery:** this roadmap lives in the repo; each phase is its own PR
-  (backends: one PR each).
+- **Delivery:** this roadmap lives in the repo; all of the v1.0 work lands
+  in one pull request (#18, the v1.0 PR), one commit per phase (backends:
+  one commit each), so master jumps from v0.1.0 to v1.0.0 in one step.
 - **Go version policy:** every module (and `go.work`) declares one minor
   version behind the currently released Go: Go 1.27 is current, so all modules
   are on `go 1.26.0`. Bump all modules together on each Go release.
