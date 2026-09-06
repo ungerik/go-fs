@@ -37,6 +37,12 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
   `FullyFeaturedFileSystem` are gone. `FileInfo` gained `IsSymlink` and `Sys`.
   `ParseRawURI` decodes URL escapes only for URIs with a scheme, so a local
   file literally named `a%20b` is reachable.
+- **Backends implement only the optional interfaces they do better than the
+  generic emulation.** `dispatch.go` already emulates `Exists`, `ReadAll`,
+  `Touch`, `Append`, `OpenAppendWriter`, `OpenReadWriter` and `Truncate` on top
+  of the core primitives, so a backend that had no native advantage now drops
+  its implementation rather than restating the emulation. Behaviour is
+  unchanged for callers, who reach these through the `File` API either way.
 - `LocalFileSystem.ID()` returns the real id of the root file system (statfs
   `f_fsid` on Unix, the volume serial number on Windows); `Stat` follows
   symbolic links and reports `IsSymlink`; the default permissions come from the
@@ -164,6 +170,9 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
   the default port (`sftp://u@h:22/x`, `ftp://h:21/x`, `ftps://h:990/x`).
 - `fsimpl.NewWriteOnCloseFileBuffer` for file systems that upload whole files
   on Close; `fsimpl.FileBuffer.Truncate`.
+- **`fsimpl.RangeReader`** implements `io.ReadSeekCloser` and `io.ReaderAt`
+  over a backend that serves byte ranges; webdavfs and azureblobfs share it
+  instead of each carrying a private copy.
 - `multipartfs.New` wraps a `*multipart.Form` that was parsed by the caller
   (`FromRequestForm` uses it); `MultipartFileSystem.FormValue` and
   `FormValues` read the non file form fields.
