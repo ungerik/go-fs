@@ -72,6 +72,14 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
   object, `CopyFile` URL-encodes the copy source. `MultipartUploadThreshold`
   and `MultipartDownloadThreshold` are variables now. The `Watch` stub and
   the `Exists` method are gone (the generic emulations cover both).
+- **sftpfs rework (Phase 5).** A lost connection is reconnected with the
+  stored credentials and host key callback and the operation retried once;
+  the old reconnect code was unreachable and would have accepted any host
+  key. URIs with embedded credentials (`sftp://user:pw@host/…`) now require
+  `sftpfs.URLHostKeyCallback` to be set (use `sftpfs.AcceptAnyHostKey` for
+  the old behaviour). Native `MakeAllDirs`, `ListDirRecursive`, `RemoveAll`,
+  `SetPermissions` and symbolic link support; `Stat` reports symlinks; the
+  `perm` argument is applied to created files and directories.
 
 ### Added
 

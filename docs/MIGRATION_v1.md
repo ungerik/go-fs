@@ -50,6 +50,13 @@ took a context.
 `MemFile` implements the same `FileReader` interface, so `MemFile.ReadAll`,
 `ReadAllString` and `ContentHash` take a context too.
 
+## Backends
+
+- `sftpfs`: `fs.File("sftp://user:password@host/path")` (credentials in the
+  URI) needs `sftpfs.URLHostKeyCallback` to be set, for example to
+  `sftpfs.AcceptAnyHostKey` for the previous unverified behaviour. `Dial`,
+  `DialAndRegister` and `EnsureRegistered` are unchanged.
+
 ## Removed
 
 - `File.ListDirChan` / `File.ListDirRecursiveChan`: use `ListDirIter` or

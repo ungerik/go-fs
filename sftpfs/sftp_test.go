@@ -136,6 +136,9 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 }
 
 func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
+	if os.Getenv("GOFS_ONLINE_TESTS") == "" {
+		t.Skip("set GOFS_ONLINE_TESTS=1 to run tests against public internet SFTP servers")
+	}
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("test.rebex.net", func(t *testing.T) {
 		sftpFS, err := DialAndRegister(t.Context(), "demo@test.rebex.net:22", Password("password"), AcceptAnyHostKey, nil)
@@ -177,6 +180,13 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 }
 
 func TestPasswordURLWithPublicOnlineServers(t *testing.T) {
+	if os.Getenv("GOFS_ONLINE_TESTS") == "" {
+		t.Skip("set GOFS_ONLINE_TESTS=1 to run tests against public internet SFTP servers")
+	}
+	// URLs with embedded credentials dial per operation and
+	// need a host key callback for the servers they dial.
+	URLHostKeyCallback = AcceptAnyHostKey
+	t.Cleanup(func() { URLHostKeyCallback = nil })
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("demo.wftpserver.com", func(t *testing.T) {
 		// http://demo.wftpserver.com/main.html

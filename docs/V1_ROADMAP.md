@@ -457,7 +457,17 @@ One PR per phase unless noted.
       fixed (it was `0660 + 0666`). `Test_fileSystem` is no longer gated.
       Found on the way: the `OpenAppendWriter` emulation in `dispatch.go`
       wrote at offset 0 instead of appending.
-- [ ] sftpfs: per the backend list above.
+- [x] sftpfs: every operation goes through `do`, which reconnects with the
+      stored credentials and host key callback and retries once on a
+      connection error; a `Wait` goroutine drops a dead client early; the
+      initial dial retries with backoff (`MaxConnectRetries`,
+      `InitialRetryBackoff`). URIs with embedded credentials verify host keys
+      with the new `URLHostKeyCallback` (nil by default, so they fail closed
+      instead of accepting any host key). Native `MakeAllDirs`,
+      `ListDirRecursive` (`Walk`), `RemoveAll`, `SetPermissions`, symbolic
+      links; `Stat` reports `IsSymlink`; `perm` honoured for created files
+      and directories. The public-server tests are gated behind
+      `GOFS_ONLINE_TESTS=1`.
 - [ ] ftpfs: per the backend list above.
 - [ ] dropboxfs: per the backend list above.
 
