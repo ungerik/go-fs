@@ -189,6 +189,9 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 }
 
 func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
+	if os.Getenv("GOFS_ONLINE_TESTS") == "" {
+		t.Skip("set GOFS_ONLINE_TESTS=1 to run tests against public internet FTP servers")
+	}
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("ftp://demo@test.rebex.net", func(t *testing.T) {
 		ftpFS, err := DialAndRegister(t.Context(), "ftp://demo@test.rebex.net", Password("password"), os.Stdout)

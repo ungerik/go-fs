@@ -180,9 +180,9 @@ func Test_fileSystem(t *testing.T) {
 		ctx,
 		t,
 		s3fs,
-		fmt.Sprintf("S3 file system for bucket: s.bucketName"), // name - matches Name() method
-		expectedPrefix,                                           // prefix
-		testDataDir,                                              // testDir
+		fmt.Sprintf("S3 file system for bucket: %s", testBucketName), // name - matches Name() method
+		expectedPrefix, // prefix
+		testDataDir,    // testDir
 	)
 
 	// Clean up after tests

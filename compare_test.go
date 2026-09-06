@@ -3,7 +3,7 @@ package fs
 import (
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -20,7 +20,7 @@ func randDirCount() int {
 func writeRandomFileContent(file File) error {
 	size := 1 + int(rand.Float64()*1024*1024)
 	buffer := make([]byte, size)
-	rand.Read(buffer)
+	_, _ = rand.NewChaCha8([32]byte{}).Read(buffer)
 	return file.WriteAll(buffer)
 }
 

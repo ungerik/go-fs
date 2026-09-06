@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	iofs "io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -249,10 +247,13 @@ func TestFile_Watch(t *testing.T) {
 	const sleepDurationForCallback = time.Millisecond * 10
 	var (
 		dir       = File(t.TempDir())
+		mtx       sync.Mutex // the callback runs on the watcher goroutine
 		gotFiles  []File
 		gotEvents []Event
 	)
 	cancel, err := dir.Watch(func(file File, event Event) {
+		mtx.Lock()
+		defer mtx.Unlock()
 		gotFiles = append(gotFiles, file)
 		gotEvents = append(gotEvents, event)
 	})
@@ -274,6 +275,8 @@ func TestFile_Watch(t *testing.T) {
 
 	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
 
+	mtx.Lock()
+	defer mtx.Unlock()
 	assert.Equal(t, []File{newFile, renamedFile, newFile, renamedFile}, gotFiles)
 	assert.Equal(t, []Event{eventCreate, eventCreate, eventRename, eventRemove}, gotEvents)
 
@@ -734,48 +737,6 @@ func TestGlob(t *testing.T) {
 			require.Equal(t, tt.want, got, "file path sorted results")
 		})
 	}
-}
-
-// mockFileInfo implements io/fs.FileInfo for testing
-type mockFileInfo struct {
-	name    string
-	size    int64
-	mode    os.FileMode
-	modTime time.Time
-	isDir   bool
-}
-
-func (m *mockFileInfo) Name() string       { return m.name }
-func (m *mockFileInfo) Size() int64        { return m.size }
-func (m *mockFileInfo) Mode() os.FileMode  { return m.mode }
-func (m *mockFileInfo) ModTime() time.Time { return m.modTime }
-func (m *mockFileInfo) IsDir() bool        { return m.isDir }
-func (m *mockFileInfo) Sys() any           { return nil }
-
-// mockReadCloser implements iofs.File for testing
-type mockReadCloser struct {
-	io.ReadCloser
-}
-
-func (m *mockReadCloser) Stat() (iofs.FileInfo, error) {
-	return &mockFileInfo{name: "test.txt", size: 12}, nil
-}
-
-func (m *mockReadCloser) ReadDir(n int) ([]iofs.DirEntry, error) {
-	return nil, errors.New("not a directory")
-}
-
-// mockWriteCloser implements WriteCloser for testing
-type mockWriteCloser struct {
-	io.Writer
-}
-
-func (m *mockWriteCloser) Close() error {
-	return nil
-}
-
-func (m *mockWriteCloser) Write(p []byte) (n int, err error) {
-	return len(p), nil
 }
 
 // noRenameMoveFS wraps a FileSystem but only exposes the base FileSystem

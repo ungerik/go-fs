@@ -374,7 +374,7 @@ func (local *LocalFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 			if !hidden {
 				hidden, err = hasLocalFileAttributeHidden(filePath)
 				if err != nil {
-					return fmt.Errorf("hasLocalFileAttributeHidden(%#v): %+v\n", filePath, err)
+					return fmt.Errorf("hasLocalFileAttributeHidden(%#v): %w", filePath, err)
 				}
 			}
 			err = callback(NewFileInfo(File(filePath), info, hidden))
