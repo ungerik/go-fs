@@ -522,7 +522,6 @@ func fsRemoveDirContents(ctx context.Context, w WriteFileSystem, dirPath string)
 	})
 }
 
-
 // fsMove moves srcPath to destPath within one file system,
 // destPath being the final path.
 func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string) error {

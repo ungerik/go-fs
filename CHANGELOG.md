@@ -44,8 +44,28 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
   `RemoveAll` where available; `File.IsSymbolicLink` is false on file systems
   without symbolic link support.
 
+- **`File`, `FileReader` and `MemFile` follow the context rule (Phase 4).**
+  A method takes `ctx` first only if it is a potentially long-running read or
+  write: content transfer (`ReadAll`, `ReadAllString`, `ContentHash`,
+  `WriteAll`, `WriteAllString`, `Truncate`, `MoveTo`), directory iteration
+  (`ListDir*`, `Glob`, `MustGlob`, `RemoveRecursive`, `RemoveDirContents*`) and
+  `TempFileCopy`, `uuiddir.Remove`, `uuiddir.RemoveDir`. The `*Context` twins
+  are gone. See `docs/MIGRATION_v1.md` for the rename table and sed recipes.
+- `File.IsWritable` is true for an existing writable directory as well;
+  `StdFS` accepts every `io/fs.ValidPath` name (like `dir/.gitignore`);
+  `MakeTempDir` uses `os.MkdirTemp`; `LocalFileSystem.Close` stops the watcher
+  goroutine; `MemFileSystem` ids are random strings instead of heap addresses.
+- The test suite is green on Windows and the Windows CI job is blocking:
+  `StdFS` rejects names containing `\` or `:` on Windows like `os.DirFS`,
+  `LocalFileSystem` XAttr methods return `ErrUnsupported` on platforms
+  without extended attributes, `zipfs.NewWriterFileSystem` closes the
+  underlying file on `Close` (the handle used to leak), and `fs.Glob` yields
+  files cleaned for their file system's separator.
+
 ### Added
 
+- `fs.CreateTempFile` creates a temporary file atomically (`fs.TempFile` only
+  returns a path).
 - **`fstest.RunConformance`** replaces `fs.RunFileSystemTests` and the `tests`
   package. The suite seeds one directory tree, reads it back through the
   `FileSystem` methods and the `File` API on every backend including the
@@ -94,6 +114,9 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
 ### Removed
 
 - `fs.RunFileSystemTests` and the `tests` package (use `fstest.RunConformance`).
+- `File.ListDirChan`, `File.ListDirRecursiveChan`, `File.GobEncode`/`GobDecode`
+  (`FileReader` no longer requires `GobEncode`; `MemFile` keeps it), `fs.MemDir`,
+  `fs.FileInfoCache`, all `*Context` method twins.
 - `fs.ReadOnlyBase`, `fs.FullyFeaturedFileSystem`, `fs.RelPathFileSystem`
   (merged into `fs.AbsPathFileSystem`), `s3fs` `Watch` and `VolumeName` stubs,
   `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,

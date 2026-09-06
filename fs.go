@@ -57,7 +57,7 @@ func Move(ctx context.Context, source, destination File) error {
 	if err != nil {
 		return err
 	}
-	return source.RemoveRecursiveContext(ctx)
+	return source.RemoveRecursive(ctx)
 }
 
 // Remove removes all files with fileURIs.

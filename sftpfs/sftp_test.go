@@ -130,7 +130,7 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 
 	assert.True(t, f.Exists(), "Exists")
 	assert.False(t, f.IsDir(), "not IsDir")
-	data, err := f.ReadAll()
+	data, err := f.ReadAll(t.Context())
 	assert.NoError(t, err)
 	return data
 }

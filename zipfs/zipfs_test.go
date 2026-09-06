@@ -1,6 +1,7 @@
 package zipfs
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,7 +13,7 @@ func TestZipFileSystem(t *testing.T) {
 	// Create a temporary zip file for testing
 	tempDir := fs.MustMakeTempDir()
 	t.Cleanup(func() {
-		assert.NoError(t, tempDir.RemoveRecursive(), "tempDir.RemoveRecursive() should not return an error")
+		assert.NoError(t, tempDir.RemoveRecursive(context.Background()), "tempDir.RemoveRecursive(context.Background()) should not return an error")
 	})
 
 	zipFile := tempDir.Join("test.zip")
@@ -155,7 +156,7 @@ func TestZipFileSystem(t *testing.T) {
 func TestZipWriter_SequentialEnforcement(t *testing.T) {
 	tempDir := fs.MustMakeTempDir()
 	t.Cleanup(func() {
-		assert.NoError(t, tempDir.RemoveRecursive())
+		assert.NoError(t, tempDir.RemoveRecursive(context.Background()))
 	})
 
 	zipWriter, err := NewWriterFileSystem(tempDir.Join("seq.zip"))
@@ -200,7 +201,7 @@ func TestZipWriter_SequentialEnforcement(t *testing.T) {
 func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	tempDir := fs.MustMakeTempDir()
 	t.Cleanup(func() {
-		assert.NoError(t, tempDir.RemoveRecursive())
+		assert.NoError(t, tempDir.RemoveRecursive(context.Background()))
 	})
 
 	zipFile := tempDir.Join("ro.zip")

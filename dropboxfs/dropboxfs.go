@@ -48,7 +48,7 @@ type fileSystem struct {
 	config        dropbox.Config
 	filesClient   files.Client
 	usersClient   users.Client
-	fileInfoCache *fs.FileInfoCache
+	fileInfoCache *fileInfoCache
 	mute          bool // If true, file modifications won't trigger user notifications
 	closed        bool // Set by Close, guards against using a closed file system
 }
@@ -69,7 +69,7 @@ func NewAndRegister(accessToken string, cacheTimeout time.Duration, mute bool) f
 		config:        config,
 		filesClient:   files.New(config),
 		usersClient:   users.New(config),
-		fileInfoCache: fs.NewFileInfoCache(cacheTimeout),
+		fileInfoCache: newFileInfoCache(cacheTimeout),
 		mute:          mute,
 	}
 	fs.Register(dbfs)

@@ -45,7 +45,7 @@ var (
 // it as a '/' separated path. A FileName ending with a slash marks the
 // MemFile as a directory (see IsDir), in which case FileData is ignored.
 //
-// Note that the ReadAll and ReadAllContext methods return FileData
+// Note that the ReadAll method returns FileData
 // directly without copying it to optimize performance.
 // So be careful when modifying the FileData bytes of a MemFile.
 // Since MemFile implements FileReader, any function accepting a FileReader
@@ -123,7 +123,7 @@ func NewMemFileWriteXML(name string, input any, indent ...string) (MemFile, erro
 // If the passed fileReader is a MemFile then
 // its FileData is used directly without copying it.
 func ReadMemFile(ctx context.Context, fileReader FileReader) (MemFile, error) {
-	data, err := fileReader.ReadAllContext(ctx) // Does not copy in case of fileReader.(MemFile)
+	data, err := fileReader.ReadAll(ctx) // Does not copy in case of fileReader.(MemFile)
 	if err != nil {
 		return MemFile{}, fmt.Errorf("ReadMemFile: error reading from FileReader: %w", err)
 	}
@@ -134,7 +134,7 @@ func ReadMemFile(ctx context.Context, fileReader FileReader) (MemFile, error) {
 // If the passed fileReader is a MemFile then
 // its FileData is used directly without copying it.
 func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) (MemFile, error) {
-	data, err := fileReader.ReadAllContext(ctx) // Does not copy in case of fileReader.(MemFile)
+	data, err := fileReader.ReadAll(ctx) // Does not copy in case of fileReader.(MemFile)
 	if err != nil {
 		return MemFile{}, fmt.Errorf("ReadMemFileRename: error reading from FileReader: %w", err)
 	}
@@ -142,7 +142,7 @@ func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) 
 }
 
 // ReadAllMemFile returns a new MemFile by value with the data
-// from ReadAllContext(r) and the passed name.
+// from ReadAllContext(ctx, r) and the passed name.
 // It reads all data from r until EOF is reached,
 // another error is returned, or the context got canceled.
 func ReadAllMemFile(ctx context.Context, r io.Reader, name string) (MemFile, error) {
@@ -223,6 +223,14 @@ func (f MemFile) DirAndName() (dir MemFile, name string) {
 // using '/' as separator. An empty FileName returns an empty string.
 func (f MemFile) CleanPath() string {
 	return cleanPath(f.FileName)
+}
+
+// cleanPath cleans a '/' separated path and trims trailing slashes.
+func cleanPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	return strings.TrimRight(path.Clean(p), "/")
 }
 
 // WithName returns a MemFile with the passed name as its complete
@@ -308,13 +316,7 @@ func (f MemFile) CheckIsDir() error {
 
 // ContentHash returns the DefaultContentHash for the file,
 // or an empty string if the MemFile is a directory.
-func (f MemFile) ContentHash() (string, error) {
-	return f.ContentHashContext(context.Background())
-}
-
-// ContentHashContext returns the DefaultContentHash for the file,
-// or an empty string if the MemFile is a directory.
-func (f MemFile) ContentHashContext(ctx context.Context) (string, error) {
+func (f MemFile) ContentHash(ctx context.Context) (string, error) {
 	if f.IsDir() {
 		return "", nil
 	}
@@ -326,19 +328,7 @@ func (f MemFile) ContentHashContext(ctx context.Context) (string, error) {
 //
 // Be careful when modifying the returned data as it shares
 // the same underlying array with the MemFile's FileData.
-func (f MemFile) ReadAll() (data []byte, err error) {
-	if f.IsDir() {
-		return nil, NewErrIsDirectory(f)
-	}
-	return f.FileData, nil
-}
-
-// ReadAllContext returns the FileData without copying it,
-// or an ErrIsDirectory error if the MemFile is a directory.
-//
-// Be careful when modifying the returned data as it shares
-// the same underlying array with the MemFile's FileData.
-func (f MemFile) ReadAllContext(ctx context.Context) (data []byte, err error) {
+func (f MemFile) ReadAll(ctx context.Context) (data []byte, err error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -367,16 +357,7 @@ func (f MemFile) ReadAllContentHash(ctx context.Context) (data []byte, hash stri
 
 // ReadAllString returns the FileData as string,
 // or an ErrIsDirectory error if the MemFile is a directory.
-func (f MemFile) ReadAllString() (string, error) {
-	if f.IsDir() {
-		return "", NewErrIsDirectory(f)
-	}
-	return string(f.FileData), nil
-}
-
-// ReadAllStringContext returns the FileData as string,
-// or an ErrIsDirectory error if the MemFile is a directory.
-func (f MemFile) ReadAllStringContext(ctx context.Context) (string, error) {
+func (f MemFile) ReadAllString(ctx context.Context) (string, error) {
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}

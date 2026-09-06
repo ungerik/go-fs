@@ -3,7 +3,6 @@ package fs
 import (
 	"bytes"
 	"context"
-	"encoding/gob"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -21,10 +20,8 @@ import (
 )
 
 var (
-	_ FileReader     = File("")
-	_ fmt.Stringer   = File("")
-	_ gob.GobEncoder = File("")
-	_ gob.GobDecoder = File("")
+	_ FileReader   = File("")
+	_ fmt.Stringer = File("")
 )
 
 // InvalidFile is a file with an empty path and thus invalid.
@@ -215,9 +212,12 @@ func (file File) IsReadable() bool {
 	return (info.IsDir || info.IsRegular) && info.Permissions&UserRead != 0
 }
 
-// IsWritable returns if the file exists and is writable,
+// IsWritable returns if the file or directory exists and is writable,
 // or in case it doesn't exist,
 // if the parent directory exists and is writable.
+//
+// Only the user write permission bit is checked, not whether the
+// current process can actually write to the file.
 //
 // It does not return an error by design: any error, including the file and
 // its parent directory not existing or not being accessible, results in false.
@@ -231,7 +231,7 @@ func (file File) IsWritable() bool {
 	}
 	info, err := fsStat(fileSystem, filePath)
 	if err == nil {
-		return info.IsRegular && info.Permissions&UserWrite != 0
+		return (info.IsRegular || info.IsDir) && info.Permissions&UserWrite != 0
 	}
 	// File does not exist, check if parent directory is writable
 	parentDir, _ := fsSplitDirAndName(fileSystem, filePath)
@@ -380,7 +380,7 @@ func (file File) IsRegular() bool {
 // It does not return an error by design: any error, including the directory
 // not existing or not being accessible, results in false.
 func (file File) IsEmptyDir() bool {
-	l, err := file.ListDirMax(1)
+	l, err := file.ListDirMax(context.Background(), 1)
 	return len(l) == 0 && err == nil
 }
 
@@ -470,15 +470,7 @@ func (file File) Size() int64 {
 // If the FileSystem implementation does not have this hash pre-computed,
 // then the whole file is read to compute it.
 // If the file is a directory, then an empty string will be returned.
-func (file File) ContentHash() (string, error) {
-	return file.ContentHashContext(context.Background())
-}
-
-// ContentHashContext returns the DefaultContentHash for the file.
-// If the FileSystem implementation does not have this hash pre-computed,
-// then the whole file is read to compute it.
-// If the file is a directory, then an empty string will be returned.
-func (file File) ContentHashContext(ctx context.Context) (string, error) {
+func (file File) ContentHash(ctx context.Context) (string, error) {
 	if file == "" {
 		return "", ErrEmptyPath
 	}
@@ -530,19 +522,12 @@ func (file File) SetPermissions(perm Permissions) error {
 	return NewErrUnsupported(fileSystem, "SetPermissions")
 }
 
-// ListDir calls the passed callback function for every file and directory.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDir(callback func(File) error, patterns ...string) error {
-	return file.ListDirContext(context.Background(), callback, patterns...)
-}
-
-// ListDirContext calls the passed callback function for every file and directory in the directory.
+// ListDir calls the passed callback function for every file and directory in the directory.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
 // Canceling the context or returning an error from the callback
 // will stop the listing and return the context or callback error.
-func (file File) ListDirContext(ctx context.Context, callback func(File) error, patterns ...string) error {
+func (file File) ListDir(ctx context.Context, callback func(File) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
 	return fsListDir(ctx, fileSystem, path, patterns, FileInfoToFileCallback(callback))
 }
@@ -552,19 +537,10 @@ func (file File) ListDirContext(ctx context.Context, callback func(File) error, 
 // at least one of the patterns are returned.
 // In case of an error, the iterator will yield InvalidFile and the error
 // as last key and value and then stop the iteration.
-func (file File) ListDirIter(patterns ...string) iter.Seq2[File, error] {
-	return file.ListDirIterContext(context.Background(), patterns...)
-}
-
-// ListDirIterContext returns an iterator that yields every file and directory in the directory.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-// In case of an error, the iterator will yield InvalidFile and the error
-// as last key and value and then stop the iteration.
 // Canceling the context will stop the iteration and yield the context error.
-func (file File) ListDirIterContext(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
+func (file File) ListDirIter(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
 	return func(yield func(File, error) bool) {
-		err := file.ListDirContext(ctx,
+		err := file.ListDir(ctx,
 			func(listedFile File) error {
 				if !yield(listedFile, nil) {
 					return errStopListing
@@ -598,8 +574,8 @@ func (file File) ListDirIterContext(ctx context.Context, patterns ...string) ite
 //
 // MustGlob ignores file system errors such as I/O errors reading directories.
 // The only possible panic is in case of a malformed pattern.
-func MustGlob(pattern string) iter.Seq2[File, []string] {
-	globIter, err := Glob(pattern)
+func MustGlob(ctx context.Context, pattern string) iter.Seq2[File, []string] {
+	globIter, err := Glob(ctx, pattern)
 	if err != nil {
 		panic(err)
 	}
@@ -611,8 +587,8 @@ func MustGlob(pattern string) iter.Seq2[File, []string] {
 //
 // See [File.Glob] for the pattern syntax.
 // The only possible panic is in case of a malformed pattern.
-func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
-	globIter, err := file.Glob(pattern)
+func (file File) MustGlob(ctx context.Context, pattern string) iter.Seq2[File, []string] {
+	globIter, err := file.Glob(ctx, pattern)
 	if err != nil {
 		panic(err)
 	}
@@ -641,22 +617,22 @@ func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
 // Glob ignores file system errors such as I/O errors reading directories.
 // The only possible returned error is [path.ErrBadPattern],
 // reporting that the pattern is malformed.
-func Glob(pattern string) (iter.Seq2[File, []string], error) {
+func Glob(ctx context.Context, pattern string) (iter.Seq2[File, []string], error) {
 	// Find the first wildcard
 	i := strings.IndexAny(pattern, `*?[\`)
 	if i == -1 {
-		// No wildcard in pattern, yield the pattern as File
-		return File(path.Clean(pattern)).Glob("")
+		// No wildcard in pattern, yield the cleaned pattern as File
+		return CleanFilePath(path.Clean(pattern)).Glob(ctx, "")
 	}
 	// Find the last path separator before the first wildcard
 	i = strings.LastIndexByte(pattern[:i], '/')
 	if i == -1 {
 		// No path separator before the first wildcard
 		// means that the pattern is relative to the current directory
-		return CurrentWorkingDir().Glob(pattern)
+		return CurrentWorkingDir().Glob(ctx, pattern)
 	}
 	// Split pattern into base directory and glob pattern
-	return File(pattern[:i+1]).Glob(pattern[i+1:])
+	return File(pattern[:i+1]).Glob(ctx, pattern[i+1:])
 }
 
 // Glob yields files and wildcard substituting path segments
@@ -678,7 +654,7 @@ func Glob(pattern string) (iter.Seq2[File, []string], error) {
 // Glob ignores file system errors such as I/O errors reading directories.
 // The only possible returned error is [path.ErrBadPattern],
 // reporting that the pattern is malformed.
-func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
+func (file File) Glob(ctx context.Context, pattern string) (iter.Seq2[File, []string], error) {
 	onlyDirs := strings.HasSuffix(pattern, "/")
 	pattern = strings.Trim(pattern, "/")
 	// Check if the pattern is valid
@@ -702,14 +678,14 @@ func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
 		file = file.Join(pSegments[:i]...)
 		pSegments = pSegments[i:]
 	}
-	return file.glob(onlyDirs, pSegments, nil), nil
+	return file.glob(ctx, onlyDirs, pSegments, nil), nil
 }
 
 func containsWildcard(pattern string) bool {
 	return strings.ContainsAny(pattern, `*?[\`)
 }
 
-func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, []string] {
+func (file File) glob(ctx context.Context, onlyDirs bool, segments, values []string) iter.Seq2[File, []string] {
 	return func(yield func(File, []string) bool) {
 		switch len(segments) {
 		case 0:
@@ -722,7 +698,7 @@ func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, 
 			// Last segment, yield all matching files
 			if pattern := segments[0]; containsWildcard(pattern) {
 				// Wildcard in last segment, list directory with segment as pattern
-				for f, err := range file.ListDirIter(pattern) {
+				for f, err := range file.ListDirIter(ctx, pattern) {
 					// If file is not a directory then ErrIsNotDirectory is expected
 					if err != nil {
 						return
@@ -745,16 +721,16 @@ func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, 
 		default:
 			if pattern := segments[0]; containsWildcard(pattern) {
 				// Wildcard in segment, list directory with segment as pattern
-				for matchedFile, err := range file.ListDirIter(pattern) {
+				for matchedFile, err := range file.ListDirIter(ctx, pattern) {
 					// If file is not a directory then ErrIsNotDirectory is expected
 					if err != nil {
 						return
 					}
-					matchedFile.glob(onlyDirs, segments[1:], append(slices.Clone(values), matchedFile.Name()))(yield)
+					matchedFile.glob(ctx, onlyDirs, segments[1:], append(slices.Clone(values), matchedFile.Name()))(yield)
 				}
 			} else {
 				// No wildcard in segment, join path and recurse
-				file.Join(segments[0]).glob(onlyDirs, segments[1:], values)(yield)
+				file.Join(segments[0]).glob(ctx, onlyDirs, segments[1:], values)(yield)
 			}
 		}
 	}
@@ -763,28 +739,16 @@ func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfo(callback func(*FileInfo) error, patterns ...string) error {
-	return file.ListDirInfoContext(context.Background(), callback, patterns...)
-}
-
-// ListDirInfoContext calls the passed callback function for every file and directory in dirPath.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirInfoContext(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfo(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
 	return fsListDir(ctx, fileSystem, path, patterns, callback)
 }
 
-// ListDirRecursive returns only files.
+// ListDirRecursive calls the passed callback function for every file (not directory)
+// recursing into all sub-directories.
 // patterns are only applied to files, not to directories
-func (file File) ListDirRecursive(callback func(File) error, patterns ...string) error {
-	return file.ListDirInfoRecursiveContext(context.Background(), FileInfoToFileCallback(callback), patterns...)
-}
-
-// ListDirRecursiveContext returns only files.
-// patterns are only applied to files, not to directories
-func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File) error, patterns ...string) error {
-	return file.ListDirInfoRecursiveContext(ctx, FileInfoToFileCallback(callback), patterns...)
+func (file File) ListDirRecursive(ctx context.Context, callback func(File) error, patterns ...string) error {
+	return file.ListDirInfoRecursive(ctx, FileInfoToFileCallback(callback), patterns...)
 }
 
 // ListDirRecursiveIter returns an iterator that yields every file
@@ -793,20 +757,10 @@ func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File
 // at least one of the patterns are returned.
 // In case of an error, the iterator will yield InvalidFile and the error
 // as last key and value and then stop the iteration.
-func (file File) ListDirRecursiveIter(patterns ...string) iter.Seq2[File, error] {
-	return file.ListDirRecursiveIterContext(context.Background(), patterns...)
-}
-
-// ListDirRecursiveIterContext returns an iterator that yields every file
-// recursively in the directory and sub-directories.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-// In case of an error, the iterator will yield InvalidFile and the error
-// as last key and value and then stop the iteration.
 // Canceling the context will stop the iteration and yield the context error.
-func (file File) ListDirRecursiveIterContext(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
+func (file File) ListDirRecursiveIter(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
 	return func(yield func(File, error) bool) {
-		err := file.ListDirRecursiveContext(ctx,
+		err := file.ListDirRecursive(ctx,
 			func(listedFile File) error {
 				if !yield(listedFile, nil) {
 					return errStopListing
@@ -821,19 +775,11 @@ func (file File) ListDirRecursiveIterContext(ctx context.Context, patterns ...st
 	}
 }
 
-// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
-// recursing into all sub-directories.
-// If any patterns are passed, then only files (not directories) with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirInfoRecursive(callback func(*FileInfo) error, patterns ...string) error {
-	return file.ListDirInfoRecursiveContext(context.Background(), callback, patterns...)
-}
-
-// ListDirInfoRecursiveContext calls the passed callback function for every file
+// ListDirInfoRecursive calls the passed callback function for every file
 // (not directory) in dirPath recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
+func (file File) ListDirInfoRecursive(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
 	return fsListDirRecursive(ctx, fileSystem, path, patterns, callback)
 }
@@ -842,15 +788,7 @@ func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(
 // A max value of -1 returns all files.
 // If any patterns are passed, then only files or directories with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {
-	return file.ListDirMaxContext(context.Background(), max, patterns...)
-}
-
-// ListDirMaxContext returns at most max files and directories in dirPath.
-// A max value of -1 returns all files.
-// If any patterns are passed, then only files or directories with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirMaxContext(ctx context.Context, max int, patterns ...string) (files []File, err error) {
+func (file File) ListDirMax(ctx context.Context, max int, patterns ...string) (files []File, err error) {
 	fileSystem, path := file.ParseRawURI()
 	return fsListDirMax(ctx, fileSystem, path, max, patterns)
 }
@@ -859,77 +797,13 @@ func (file File) ListDirMaxContext(ctx context.Context, max int, patterns ...str
 // A max value of -1 returns all files.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
-	return file.ListDirRecursiveMaxContext(context.Background(), max, patterns...)
-}
-
-// ListDirRecursiveMaxContext returns at most max files from the directory and its sub-directories.
-// A max value of -1 returns all files.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirRecursiveMaxContext(ctx context.Context, max int, patterns ...string) (files []File, err error) {
+func (file File) ListDirRecursiveMax(ctx context.Context, max int, patterns ...string) (files []File, err error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
 	return listDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
-		return file.ListDirRecursiveContext(ctx, callback, patterns...)
+		return file.ListDirRecursive(ctx, callback, patterns...)
 	})
-}
-
-// ListDirChan returns listed files over a channel.
-// An error or nil will returned from the error channel.
-// The file channel will be closed after sending all files.
-// If cancel is not nil and an error is sent to this channel, then the listing will be canceled
-// and the error returned in the error channel returned by the method.
-// See pipeline pattern: http://blog.golang.org/pipelines
-func (file File) ListDirChan(cancel <-chan error, patterns ...string) (<-chan File, <-chan error) {
-	files := make(chan File)
-	errs := make(chan error, 1)
-
-	go func() {
-		defer close(files)
-
-		callback := func(f File) error {
-			select {
-			case files <- f:
-				return nil
-			case err := <-cancel:
-				return err
-			}
-		}
-
-		errs <- file.ListDir(callback, patterns...)
-	}()
-
-	return files, errs
-}
-
-// ListDirRecursiveChan returns listed files over a channel.
-// An error or nil will returned from the error channel.
-// The file channel will be closed after sending all files.
-// If cancel is not nil and an error is sent to this channel, then the listing will be canceled
-// and the error returned in the error channel returned by the method.
-// See pipeline pattern: http://blog.golang.org/pipelines
-func (file File) ListDirRecursiveChan(cancel <-chan error, patterns ...string) (<-chan File, <-chan error) {
-	files := make(chan File)
-	errs := make(chan error, 1)
-
-	go func() {
-		defer close(files)
-
-		callback := func(f File) error {
-			select {
-			case files <- f:
-				return nil
-			case err := <-cancel:
-				return err
-			}
-		}
-
-		errs <- file.ListDirRecursive(callback, patterns...)
-	}()
-
-	return files, errs
 }
 
 // User returns the user owner of the file.
@@ -1131,12 +1005,7 @@ func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error
 }
 
 // ReadAll reads and returns all bytes of the file.
-func (file File) ReadAll() (data []byte, err error) {
-	return file.ReadAllContext(context.Background())
-}
-
-// ReadAllContext reads and returns all bytes of the file.
-func (file File) ReadAllContext(ctx context.Context) (data []byte, err error) {
+func (file File) ReadAll(ctx context.Context) (data []byte, err error) {
 	fileSystem, path := file.ParseRawURI()
 	return fsReadAll(ctx, fileSystem, path)
 }
@@ -1144,7 +1013,7 @@ func (file File) ReadAllContext(ctx context.Context) (data []byte, err error) {
 // ReadAllContentHash reads and returns all bytes of the file
 // together with the DefaultContentHash.
 func (file File) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
-	data, err = file.ReadAllContext(ctx)
+	data, err = file.ReadAll(ctx)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1156,13 +1025,8 @@ func (file File) ReadAllContentHash(ctx context.Context) (data []byte, hash stri
 }
 
 // ReadAllString reads the complete file and returns the content as string.
-func (file File) ReadAllString() (string, error) {
-	return file.ReadAllStringContext(context.Background())
-}
-
-// ReadAllStringContext reads the complete file and returns the content as string.
-func (file File) ReadAllStringContext(ctx context.Context) (string, error) {
-	data, err := file.ReadAllContext(ctx)
+func (file File) ReadAllString(ctx context.Context) (string, error) {
+	data, err := file.ReadAll(ctx)
 	if data == nil || err != nil {
 		return "", err
 	}
@@ -1170,24 +1034,14 @@ func (file File) ReadAllStringContext(ctx context.Context) (string, error) {
 }
 
 // WriteAll writes all data to the file.
-func (file File) WriteAll(data []byte, perm ...Permissions) error {
-	return file.WriteAllContext(context.Background(), data, perm...)
-}
-
-// WriteAllContext writes all data to the file.
-func (file File) WriteAllContext(ctx context.Context, data []byte, perm ...Permissions) error {
+func (file File) WriteAll(ctx context.Context, data []byte, perm ...Permissions) error {
 	fileSystem, path := file.ParseRawURI()
 	return fsWriteAll(ctx, fileSystem, path, data, JoinPermissions(perm, NoPermissions))
 }
 
 // WriteAllString writes a string to the file.
-func (file File) WriteAllString(str string, perm ...Permissions) error {
-	return file.WriteAllStringContext(context.Background(), str, perm...)
-}
-
-// WriteAllStringContext writes a string to the file.
-func (file File) WriteAllStringContext(ctx context.Context, str string, perm ...Permissions) error {
-	return file.WriteAllContext(ctx, []byte(str), perm...)
+func (file File) WriteAllString(ctx context.Context, str string, perm ...Permissions) error {
+	return file.WriteAll(ctx, []byte(str), perm...)
 }
 
 // Append appends data to the file.
@@ -1227,9 +1081,9 @@ func (file File) Watch(onEvent func(File, Event)) (cancel func() error, err erro
 // Truncate changes the size of the file.
 // If the file is larger than newSize, it is truncated.
 // If the file is smaller, it is extended with zeros.
-func (file File) Truncate(newSize int64) error {
+func (file File) Truncate(ctx context.Context, newSize int64) error {
 	fileSystem, path := file.ParseRawURI()
-	return fsTruncate(context.Background(), fileSystem, path, newSize)
+	return fsTruncate(ctx, fileSystem, path, newSize)
 }
 
 // Rename changes the name of a file where newName is the name part after file.Dir().
@@ -1262,8 +1116,8 @@ func (file File) Renamef(newNameFormat string, args ...any) (renamedFile File, e
 // When file and destination resolve to the same location, MoveTo
 // returns nil without touching the file, matching the no-op behavior
 // of [os.Rename]. See [Move] for the full contract.
-func (file File) MoveTo(destination File) error {
-	return Move(context.Background(), file, destination)
+func (file File) MoveTo(ctx context.Context, destination File) error {
+	return Move(ctx, file, destination)
 }
 
 // Remove deletes the file.
@@ -1274,40 +1128,23 @@ func (file File) Remove() error {
 
 // RemoveRecursive deletes the file or if it's a directory
 // the complete recursive directory tree.
-func (file File) RemoveRecursive() error {
-	return file.RemoveRecursiveContext(context.Background())
-}
-
-// RemoveRecursiveContext deletes the file or if it's a directory
-// the complete recursive directory tree.
 // No error is returned if the file does not exist.
-func (file File) RemoveRecursiveContext(ctx context.Context) error {
+func (file File) RemoveRecursive(ctx context.Context) error {
 	fileSystem, path := file.ParseRawURI()
 	return fsRemoveAll(ctx, fileSystem, path)
 }
 
 // RemoveDirContentsRecursive deletes all files and directories in this directory recursively.
-func (file File) RemoveDirContentsRecursive() error {
-	return file.RemoveDirContentsRecursiveContext(context.Background())
-}
-
-// RemoveDirContentsRecursiveContext deletes all files and directories in this directory recursively.
-func (file File) RemoveDirContentsRecursiveContext(ctx context.Context) error {
-	return file.ListDirContext(ctx, func(f File) error {
-		return f.RemoveRecursiveContext(ctx)
+func (file File) RemoveDirContentsRecursive(ctx context.Context) error {
+	return file.ListDir(ctx, func(f File) error {
+		return f.RemoveRecursive(ctx)
 	})
 }
 
 // RemoveDirContents deletes all files in this directory,
 // or if given all files with patterns from the this directory.
-func (file File) RemoveDirContents(patterns ...string) error {
-	return file.RemoveDirContentsContext(context.Background(), patterns...)
-}
-
-// RemoveDirContentsContext deletes all files in this directory,
-// or if given all files with patterns from the this directory.
-func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...string) error {
-	return file.ListDirContext(ctx, func(f File) error {
+func (file File) RemoveDirContents(ctx context.Context, patterns ...string) error {
+	return file.ListDir(ctx, func(f File) error {
 		err := f.Remove()
 		// Ignore files that have been deleted,
 		// after all we wanted to get rid of the in the first place,
@@ -1320,7 +1157,7 @@ func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...strin
 //
 // Returns a wrapped ErrUnmarshalJSON when the unmarshalling failed.
 func (file File) ReadJSON(ctx context.Context, output any) error {
-	data, err := file.ReadAllContext(ctx)
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return err
 	}
@@ -1348,14 +1185,14 @@ func (file File) WriteJSON(ctx context.Context, input any, indent ...string) (er
 	if err != nil {
 		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
-	return file.WriteAllContext(ctx, data)
+	return file.WriteAll(ctx, data)
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
 //
 // Returns a wrapped ErrUnmarshalXML when the unmarshalling failed.
 func (file File) ReadXML(ctx context.Context, output any) error {
-	data, err := file.ReadAllContext(ctx)
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return err
 	}
@@ -1384,58 +1221,7 @@ func (file File) WriteXML(ctx context.Context, input any, indent ...string) (err
 		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
 	data = append([]byte(xml.Header), data...)
-	return file.WriteAllContext(ctx, data)
-}
-
-// GobEncode reads and gob encodes the file name and content,
-// implementing encoding/gob.GobEncoder.
-func (file File) GobEncode() ([]byte, error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	fileName := file.Name()
-	fileData, err := file.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("File.GobEncode: error reading file data: %w", err)
-	}
-	buf := bytes.NewBuffer(make([]byte, 0, 16+len(fileName)+len(fileData)))
-	enc := gob.NewEncoder(buf)
-	err = enc.Encode(fileName)
-	if err != nil {
-		return nil, fmt.Errorf("File.GobEncode: error encoding file name: %w", err)
-	}
-	err = enc.Encode(fileData)
-	if err != nil {
-		return nil, fmt.Errorf("File.GobEncode: error encoding file data: %w", err)
-	}
-	return buf.Bytes(), nil
-}
-
-// GobDecode decodes a file name and content from gobBytes
-// and writes the content to this file ignoring the decoded name.
-// Implements encoding/gob.GobDecoder.
-func (file File) GobDecode(gobBytes []byte) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	var (
-		fileName string
-		fileData []byte
-	)
-	dec := gob.NewDecoder(bytes.NewReader(gobBytes))
-	err := dec.Decode(&fileName)
-	if err != nil {
-		return fmt.Errorf("File.GobDecode: error decoding file name: %w", err)
-	}
-	err = dec.Decode(&fileData)
-	if err != nil {
-		return fmt.Errorf("File.GobDecode: error decoding file data: %w", err)
-	}
-	err = file.WriteAll(fileData)
-	if err != nil {
-		return fmt.Errorf("File.GobDecode: error writing file data: %w", err)
-	}
-	return nil
+	return file.WriteAll(ctx, data)
 }
 
 // StdFS wraps the file as a StdFS struct that
@@ -1573,9 +1359,11 @@ func (file File) removeXAttr(name string, followSymlinks bool) error {
 // such as ZIP archives, where files must be completely rewritten.
 func NewFileReadWriteAllSeekCloser(file File, permissions ...Permissions) ReadWriteSeekCloser {
 	return fsimpl.NewReadWriteAllSeekCloser(
-		file.ReadAll,
+		func() ([]byte, error) {
+			return file.ReadAll(context.Background())
+		},
 		func(data []byte) error {
-			return file.WriteAll(data, permissions...)
+			return file.WriteAll(context.Background(), data, permissions...)
 		},
 		// File.ReadAll and File.WriteAll open and close their own handles
 		// internally, so there is no persistent handle to release here.

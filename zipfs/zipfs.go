@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"compress/flate"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -71,11 +72,22 @@ func NewWriterFileSystem(file fs.File) (zipfs *ZipFileSystem, err error) {
 	})
 	zipfs = &ZipFileSystem{
 		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
-		closer:     zipWriter,
+		closer:     &writerCloser{zipWriter: zipWriter, file: fileWriter},
 		zipWriter:  zipWriter,
 	}
 	fs.Register(zipfs)
 	return zipfs, err
+}
+
+// writerCloser finalizes the archive and then closes the underlying file,
+// so the file handle is released (required to remove the file on Windows).
+type writerCloser struct {
+	zipWriter *zip.Writer
+	file      io.Closer
+}
+
+func (c *writerCloser) Close() error {
+	return errors.Join(c.zipWriter.Close(), c.file.Close())
 }
 
 func (f *ZipFileSystem) ReadableWritable() (readable, writable bool) {
@@ -446,8 +458,8 @@ func (f *ZipFileSystem) Close() error {
 	f.mtx.Unlock()
 
 	fs.Unregister(f)
-	// For writer-mode archives closer is the zip.Writer, whose Close finalizes
-	// the central directory and flushes any pending entry.
+	// For writer-mode archives closer finalizes the central directory,
+	// flushes any pending entry and closes the underlying file.
 	return closer.Close()
 }
 

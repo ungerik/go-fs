@@ -1,8 +1,7 @@
 package fs
 
 import (
-	"crypto/rand"
-	"fmt"
+	"context"
 	"os"
 	"path"
 	"strings"
@@ -18,31 +17,41 @@ func TempDir() File {
 
 // TempFile returns a randomly named File with an optional extension
 // in the temp directory of the operating system.
-// The returned File does not exist yet, it's just a path.
+//
+// The returned File does not exist yet, it's just a path, so two
+// callers can in theory get the same path. Use CreateTempFile to
+// atomically create a temporary file.
 func TempFile(ext ...string) File {
 	return TempDir().Join(fsimpl.RandomString() + strings.Join(ext, ""))
 }
 
-// MakeTempDir makes and returns a new randomly named sub directory in TempDir().
+// CreateTempFile atomically creates a new empty file with a random name
+// and an optional extension in the temp directory of the operating system,
+// like os.CreateTemp, and returns it.
+func CreateTempFile(ext ...string) (File, error) {
+	f, err := os.CreateTemp("", "*"+strings.Join(ext, ""))
+	if err != nil {
+		return "", err
+	}
+	return File(f.Name()), f.Close()
+}
+
+// MakeTempDir makes and returns a new randomly named sub directory in TempDir()
+// using os.MkdirTemp, so the directory is guaranteed to be new.
 // Example:
 //
 //	tempDir, err := fs.MakeTempDir()
 //	if err != nil {
 //	    return err
 //	}
-//	defer tempDir.RemoveRecursive()
+//	defer tempDir.RemoveRecursive(ctx)
 //	doThingsWith(tempDir)
 func MakeTempDir() (File, error) {
-	name, err := tempDirName()
+	dir, err := os.MkdirTemp("", time.Now().Format("20060102-150405")+"_*")
 	if err != nil {
 		return "", err
 	}
-	dir := TempDir().Join(name)
-	err = dir.MakeDir()
-	if err != nil {
-		return "", err
-	}
-	return dir, nil
+	return File(dir), nil
 }
 
 // MustMakeTempDir makes and returns a new randomly named sub directory in TempDir().
@@ -50,7 +59,7 @@ func MakeTempDir() (File, error) {
 // Example:
 //
 //	tempDir := fs.MustMakeTempDir()
-//	defer tempDir.RemoveRecursive()
+//	defer tempDir.RemoveRecursive(ctx)
 //	doThingsWith(tempDir)
 func MustMakeTempDir() File {
 	dir, err := MakeTempDir()
@@ -60,23 +69,14 @@ func MustMakeTempDir() File {
 	return dir
 }
 
-func tempDirName() (string, error) {
-	var randomBytes [4]byte
-	_, err := rand.Read(randomBytes[:])
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s_%X", time.Now().Format("20060102-150405"), randomBytes), nil
-}
-
 // TempFileCopy copies the provided source file
 // to the temp directory of the operating system
 // using a random filename with the extension of the source file.
-func TempFileCopy(source FileReader) (File, error) {
-	data, err := source.ReadAll()
+func TempFileCopy(ctx context.Context, source FileReader) (File, error) {
+	data, err := source.ReadAll(ctx)
 	if err != nil {
 		return InvalidFile, err
 	}
 	f := TempFile(path.Ext(source.Name()))
-	return f, f.WriteAll(data)
+	return f, f.WriteAll(ctx, data)
 }

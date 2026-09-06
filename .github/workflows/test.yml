@@ -16,11 +16,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    # The Windows test suite has never run before and still has
-    # platform-specific failures in the local file system tests
-    # (tracked in docs/V1_ROADMAP.md); build and vet must pass,
-    # test failures are reported but do not fail the workflow yet.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
 

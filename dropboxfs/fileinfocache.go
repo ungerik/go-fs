@@ -1,36 +1,44 @@
-package fs
+package dropboxfs
 
-import "time"
+import (
+	"sync"
+	"time"
 
-// FileInfoCache is a cache with timeout for FileInfo data.
-type FileInfoCache struct {
+	fs "github.com/ungerik/go-fs"
+)
+
+// fileInfoCache is a cache with timeout for FileInfo data.
+type fileInfoCache struct {
+	mtx     sync.Mutex
 	infos   map[string]fileInfoCacheEntry
 	timeout time.Duration
 }
 
 type fileInfoCacheEntry struct {
-	*FileInfo
+	*fs.FileInfo
 	time time.Time
 }
 
-// NewFileInfoCache returns a new FileInfoCache with timeout,
+// newFileInfoCache returns a new fileInfoCache with timeout,
 // or nil if timeout is zero. It is valid to call the methods
-// of FileInfoCache for a nil pointer.
-func NewFileInfoCache(timeout time.Duration) *FileInfoCache {
+// of fileInfoCache for a nil pointer.
+func newFileInfoCache(timeout time.Duration) *fileInfoCache {
 	if timeout == 0 {
 		return nil
 	}
-	return &FileInfoCache{
+	return &fileInfoCache{
 		infos:   make(map[string]fileInfoCacheEntry),
 		timeout: timeout,
 	}
 }
 
 // Put puts or updates a FileInfo for a path.
-func (cache *FileInfoCache) Put(path string, info *FileInfo) {
+func (cache *fileInfoCache) Put(path string, info *fs.FileInfo) {
 	if cache == nil {
 		return
 	}
+	cache.mtx.Lock()
+	defer cache.mtx.Unlock()
 	cache.infos[path] = fileInfoCacheEntry{
 		FileInfo: info,
 		time:     time.Now(),
@@ -40,10 +48,12 @@ func (cache *FileInfoCache) Put(path string, info *FileInfo) {
 // Get returns the FileInfo for a path or nil and false
 // if there is no FileInfo for the path or the FileInfo
 // has timed out.
-func (cache *FileInfoCache) Get(path string) (info *FileInfo, ok bool) {
+func (cache *fileInfoCache) Get(path string) (info *fs.FileInfo, ok bool) {
 	if cache == nil {
 		return nil, false
 	}
+	cache.mtx.Lock()
+	defer cache.mtx.Unlock()
 	entry, ok := cache.infos[path]
 	if !ok {
 		return nil, false
@@ -56,9 +66,11 @@ func (cache *FileInfoCache) Get(path string) (info *FileInfo, ok bool) {
 }
 
 // Delete deletes the FileInfo with path if was cached.
-func (cache *FileInfoCache) Delete(path string) {
+func (cache *fileInfoCache) Delete(path string) {
 	if cache == nil {
 		return
 	}
+	cache.mtx.Lock()
+	defer cache.mtx.Unlock()
 	delete(cache.infos, path)
 }

@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -21,16 +22,16 @@ func writeRandomFileContent(file File) error {
 	size := 1 + int(rand.Float64()*1024*1024)
 	buffer := make([]byte, size)
 	_, _ = rand.NewChaCha8([32]byte{}).Read(buffer)
-	return file.WriteAll(buffer)
+	return file.WriteAll(context.Background(), buffer)
 }
 
 func writeEmptyFile(file File) error {
-	return file.WriteAllString("")
+	return file.WriteAllString(context.Background(), "")
 }
 
 func deleteRandomFileInDir(dir File) error {
 	var files []File
-	err := dir.ListDirInfo(func(info *FileInfo) error {
+	err := dir.ListDirInfo(context.Background(), func(info *FileInfo) error {
 		if !info.IsDir {
 			files = append(files, info.File)
 		}
@@ -48,7 +49,7 @@ func deleteRandomFileInDir(dir File) error {
 
 func deleteRandomSubDir(dir File) error {
 	var dirs []File
-	err := dir.ListDirInfo(func(info *FileInfo) error {
+	err := dir.ListDirInfo(context.Background(), func(info *FileInfo) error {
 		if info.IsDir {
 			dirs = append(dirs, info.File)
 		}
@@ -61,7 +62,7 @@ func deleteRandomSubDir(dir File) error {
 		return errors.New("no dirs")
 	}
 	i := int(rand.Float64() * float64(len(dirs)))
-	return dirs[i].RemoveRecursive()
+	return dirs[i].RemoveRecursive(context.Background())
 }
 
 func writeRandomDirFiles(dir File, subDirDepth int) (err error) {
@@ -112,23 +113,23 @@ func Test_IdenticalDirContents(t *testing.T) {
 	b.MakeDir()
 
 	recreateBasCopyOfA := func() error {
-		err := b.RemoveRecursive()
+		err := b.RemoveRecursive(context.Background())
 		if err != nil {
 			return err
 		}
 		b.MakeDir()
-		return CopyRecursive(t.Context(), a, b)
+		return CopyRecursive(context.Background(), a, b)
 	}
 
 	// Empty directories should be identical:
-	identical, err := IdenticalDirContents(t.Context(), a, b, false)
+	identical, err := IdenticalDirContents(context.Background(), a, b, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !identical {
 		t.Fail()
 	}
-	identical, err = IdenticalDirContents(t.Context(), a, b, true)
+	identical, err = IdenticalDirContents(context.Background(), a, b, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +147,7 @@ func Test_IdenticalDirContents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	identical, err = IdenticalDirContents(t.Context(), a, b, true)
+	identical, err = IdenticalDirContents(context.Background(), a, b, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func Test_IdenticalDirContents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	identical, err = IdenticalDirContents(t.Context(), a, b, true)
+	identical, err = IdenticalDirContents(context.Background(), a, b, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func Test_IdenticalDirContents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	identical, err = IdenticalDirContents(t.Context(), a, b, true)
+	identical, err = IdenticalDirContents(context.Background(), a, b, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +186,7 @@ func Test_IdenticalDirContents(t *testing.T) {
 		t.Fail()
 	}
 
-	err = testDir.RemoveRecursive()
+	err = testDir.RemoveRecursive(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

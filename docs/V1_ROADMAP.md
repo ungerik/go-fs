@@ -413,20 +413,36 @@ One PR per phase unless noted.
 
 ### Phase 4 — `File`/`FileReader`/`MemFile` v1 API (consumer-facing)
 
-- [ ] Apply the ctx rule to `File`, `FileReader`, `MemFile`; drop the twins,
-      `ListDirChan`, `MemDir`, `File` gob, `FileInfoCache`,
-      `FullyFeaturedFileSystem`; fix `SortByModified`; `IsWritable` semantics;
-      `Touch` fallback; `MoveTo` into-dir; `temp.go`/`copy.go`/`stdfs.go` items;
-      the `LocalFileSystem` and `MemFileSystem` fixes listed above.
-- [ ] Windows test suite green (see the Phase 0 list) and the Windows CI job
-      made blocking (`continue-on-error` removed).
-- [ ] `docs/MIGRATION_v1.md` with sed/gofmt recipes (`.ReadAllContext(` →
-      `.ReadAll(`, `.ReadAll()` → `.ReadAll(ctx)`, `.WriteAll(` →
-      `.WriteAll(ctx, `, `.ListDir(` → `.ListDir(ctx, `, `.ContentHash()` →
-      `.ContentHash(ctx)`, `.RemoveRecursive()` → `.RemoveRecursive(ctx)`, ...).
-- [ ] Verify: conformance green; smoke-compile domonda-service and go-docdb
-      against this branch via a temporary `replace` to validate the migration
-      recipes (do not commit the replace).
+- [x] ctx rule applied to `File`, `FileReader`, `MemFile` (the `*Context`
+      twins are gone, the ctx variant survives under the short name;
+      `Truncate`, `MoveTo`, `Glob`, `TempFileCopy`, `uuiddir.Remove`/`RemoveDir`
+      gained ctx). Dropped: `ListDirChan`/`ListDirRecursiveChan`, `MemDir`,
+      `File.GobEncode`/`GobDecode` (and `GobEncode` from `FileReader`),
+      public `FileInfoCache` (internal, mutex protected, in dropboxfs);
+      `SortByModified` signature fixed; `IsWritable` true for writable
+      directories; `checkStdFSName` uses `iofs.ValidPath`; `CreateTempFile`
+      added, `MakeTempDir` uses `os.MkdirTemp`.
+- [x] `LocalFileSystem`: tilde expansion only in `CleanPath`, `Close` stops
+      the watcher goroutine. `MemFileSystem`: random id instead of the heap
+      address, writer rejects writes after `Close`, `Seek` takes the lock.
+      Not done (deliberately): the mem prefix keeps no trailing separator
+      (the URL rule makes it unnecessary) and `WithID`/`WithVolume` stay
+      methods; reader aliasing of `FileData` is documented behaviour shared
+      with `MemFile`.
+- [x] Windows test suite green (see the Phase 0 list) and the Windows CI job
+      made blocking (`continue-on-error` removed). Fixes: separator-agnostic
+      test expectations, `StdFS` name validation like `os.DirFS`, local XAttr
+      methods return `ErrUnsupported` where the platform has no xattrs, the
+      conformance suite only checks the write bit for local `SetPermissions`
+      on Windows, `zipfs` writer mode closes its file handle, `fs.Glob`
+      cleans the yielded file for its file system.
+- [x] `docs/MIGRATION_v1.md` with the rename table, removals, behaviour
+      changes and sed recipes.
+- [x] Verify: conformance green; smoke-compiled go-docdb and domonda-service
+      copies against this branch after applying the recipes: the remaining
+      errors are the documented hand-fix class (call sites without a `ctx` in
+      scope, `WriteAll`/`ListDirMax`-style calls that need `ctx, ` inserted,
+      package-level functions that share a method name).
 
 ### Phase 5 — Backends (one PR each: s3fs, sftpfs, ftpfs, dropboxfs)
 

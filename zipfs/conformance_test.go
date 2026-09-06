@@ -1,6 +1,7 @@
 package zipfs
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,7 +12,7 @@ import (
 
 func TestConformance(t *testing.T) {
 	tempDir := fs.MustMakeTempDir()
-	t.Cleanup(func() { _ = tempDir.RemoveRecursive() })
+	t.Cleanup(func() { _ = tempDir.RemoveRecursive(context.Background()) })
 	zipFile := tempDir.Join("conformance.zip")
 
 	t.Run("Writer", func(t *testing.T) {

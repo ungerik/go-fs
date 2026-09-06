@@ -2,6 +2,7 @@ package uuiddir
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,17 +21,17 @@ func Test_Join(t *testing.T) {
 
 	baseDir := fs.File("/")
 	uuidDir := Join(baseDir, uuid)
-	expected := fs.File("/f0/498/fad/437c4954/ad828ec2cc202628")
+	expected := fs.File(filepath.FromSlash("/f0/498/fad/437c4954/ad828ec2cc202628"))
 	assert.Equal(t, expected, uuidDir, "Join")
 
 	baseDir = fs.File("/my/base/dir")
 	uuidDir = Join(baseDir, uuid)
-	expected = fs.File("/my/base/dir/f0/498/fad/437c4954/ad828ec2cc202628")
+	expected = fs.File(filepath.FromSlash("/my/base/dir/f0/498/fad/437c4954/ad828ec2cc202628"))
 	assert.Equal(t, expected, uuidDir, "Join")
 
 	baseDir = fs.File("relativ/dir/")
 	uuidDir = Join(baseDir, uuid)
-	expected = fs.File("relativ/dir/f0/498/fad/437c4954/ad828ec2cc202628")
+	expected = fs.File(filepath.FromSlash("relativ/dir/f0/498/fad/437c4954/ad828ec2cc202628"))
 	assert.Equal(t, expected, uuidDir, "Join")
 }
 
@@ -177,7 +178,7 @@ func makeTestDirs() (baseDir fs.File, dirs map[fs.File]bool, ids map[[16]byte]st
 func Test_Enum(t *testing.T) {
 	baseDir, dirs, ids, err := makeTestDirs()
 	assert.NoError(t, err, "makeTestDirs")
-	defer baseDir.RemoveRecursive()
+	defer baseDir.RemoveRecursive(context.Background())
 
 	Enum(t.Context(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
 		hasDir := dirs[uuidDir] && uuidDir.IsDir()
@@ -202,12 +203,12 @@ func findUUIDs(ctx context.Context, baseDir fs.File) map[[16]byte]struct{} {
 func Test_RemoveDir(t *testing.T) {
 	baseDir, _, ids, err := makeTestDirs()
 	assert.NoError(t, err, "makeTestDirs")
-	defer baseDir.RemoveRecursive()
+	defer baseDir.RemoveRecursive(context.Background())
 
 	for id := range ids {
 		idDir := Join(baseDir, id)
 		assert.True(t, idDir.IsDir(), "test dir exists")
-		err := RemoveDir(baseDir, idDir)
+		err := RemoveDir(t.Context(), baseDir, idDir)
 		assert.NoError(t, err, "RemoveDir")
 
 		delete(ids, id)
@@ -229,7 +230,7 @@ func idsEqual(a, b map[[16]byte]struct{}) bool {
 
 func Test_Make(t *testing.T) {
 	baseDir := fs.MustMakeTempDir()
-	t.Cleanup(func() { _ = baseDir.RemoveRecursive() })
+	t.Cleanup(func() { _ = baseDir.RemoveRecursive(context.Background()) })
 
 	id := mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628")
 	uuidDir, err := Make(baseDir, id)
@@ -248,14 +249,14 @@ func Test_Make(t *testing.T) {
 
 func Test_RemoveDir_BoundaryCheck(t *testing.T) {
 	tempDir := fs.MustMakeTempDir()
-	t.Cleanup(func() { _ = tempDir.RemoveRecursive() })
+	t.Cleanup(func() { _ = tempDir.RemoveRecursive(context.Background()) })
 
 	baseDir := tempDir.Join("base")
 	sibling := tempDir.Join("basement", "x")
 	require.NoError(t, baseDir.MakeAllDirs())
 	require.NoError(t, sibling.MakeAllDirs())
 
-	err := RemoveDir(baseDir, sibling)
+	err := RemoveDir(t.Context(), baseDir, sibling)
 	require.Error(t, err, "a directory that merely shares the path prefix must be rejected")
 	require.True(t, sibling.IsDir(), "the rejected directory must not be removed")
 }

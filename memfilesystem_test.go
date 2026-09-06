@@ -42,7 +42,7 @@ func TestNewSingleMemFileSystem(t *testing.T) {
 	require.True(t, strings.HasPrefix(fs.Prefix(), "mem://"))
 	require.True(t, fs.RootDir().Exists(), "root directory exists")
 	require.True(t, fs.RootDir().IsDir(), "root is a directory")
-	files, err := fs.RootDir().ListDirMax(-1)
+	files, err := fs.RootDir().ListDirMax(t.Context(), -1)
 	require.NoError(t, err, "ListDirMax")
 	require.Len(t, files, 1, "root directory contains one file")
 	require.Equal(t, "test.txt", files[0].Name(), "root directory contains test.txt")
@@ -57,7 +57,7 @@ func TestNewSingleMemFileSystem(t *testing.T) {
 	require.False(t, f.IsDir(), "test.txt is not a directory")
 	require.True(t, f.Dir().Exists(), "root directory exists")
 	require.True(t, f.Dir().IsDir(), "root is a directory")
-	content, err := f.ReadAllString()
+	content, err := f.ReadAllString(t.Context())
 	require.NoError(t, err, "ReadAllString")
 	require.Equal(t, "Hello, World!", content)
 
@@ -82,7 +82,7 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.True(t, renamed.Exists(), "new path exists")
 		require.False(t, src.Exists(), "old path gone")
 		require.Equal(t, "b.txt", renamed.Name())
-		content, err := renamed.ReadAllString()
+		content, err := renamed.ReadAllString(t.Context())
 		require.NoError(t, err)
 		require.Equal(t, "hello", content, "content preserved across rename")
 
@@ -143,7 +143,7 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		// LocalFileSystem and the MoveFileSystem contract.
 		require.NoError(t, memFS.WriteAll(t.Context(), "/same.txt", []byte("z"), 0))
 		require.NoError(t, memFS.Move("/same.txt", "/same.txt"), "Move(file, file) must be a no-op")
-		got, err := memFS.RootDir().Join("same.txt").ReadAllString()
+		got, err := memFS.RootDir().Join("same.txt").ReadAllString(t.Context())
 		require.NoError(t, err)
 		require.Equal(t, "z", got, "file content preserved")
 
@@ -987,7 +987,7 @@ func TestMemFileSystem_Remove_EdgeCases(t *testing.T) {
 		// File.RemoveRecursive is the way to drop a subtree.
 		require.Error(t, memFS.Remove("/d"))
 		require.True(t, memExists(memFS, "/d/sub/inner.txt"), "content must survive a refused Remove")
-		require.NoError(t, memFS.RootDir().Join("d").RemoveRecursive())
+		require.NoError(t, memFS.RootDir().Join("d").RemoveRecursive(context.Background()))
 		require.False(t, memExists(memFS, "/d"))
 		require.False(t, memExists(memFS, "/d/sub/inner.txt"))
 	})
@@ -1256,7 +1256,7 @@ func TestMemFileSystem_ListDir_PopulatesFileAndDoesNotDeadlock(t *testing.T) {
 		)
 
 		var names []string
-		err := memFS.RootDir().Join("dir").ListDir(func(f File) error {
+		err := memFS.RootDir().Join("dir").ListDir(t.Context(), func(f File) error {
 			require.NotEqual(t, File(""), f, "listed file must not be the empty/invalid file")
 			require.True(t, f.Exists(), "listed file %s must resolve to an existing file", f)
 			names = append(names, f.Name())
@@ -1273,7 +1273,7 @@ func TestMemFileSystem_ListDir_PopulatesFileAndDoesNotDeadlock(t *testing.T) {
 		)
 
 		var paths []string
-		err := memFS.RootDir().Join("dir").ListDirRecursive(func(f File) error {
+		err := memFS.RootDir().Join("dir").ListDirRecursive(t.Context(), func(f File) error {
 			require.True(t, f.Exists(), "listed file %s must exist", f)
 			paths = append(paths, f.Name())
 			return nil
@@ -1306,7 +1306,7 @@ func TestMemFileSystem_ListDir_PopulatesFileAndDoesNotDeadlock(t *testing.T) {
 
 func mustReadString(t *testing.T, file File) string {
 	t.Helper()
-	s, err := file.ReadAllString()
+	s, err := file.ReadAllString(t.Context())
 	require.NoError(t, err, "ReadAllString %s", file)
 	return s
 }

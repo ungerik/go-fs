@@ -48,7 +48,7 @@ multipartFS.Form.Value["email"]
 file, err := multipartFS.FormFile("file")
 
 // Use like any other fs.File
-bytes, err := file.ReadAllContext(ctx)
+bytes, err := file.ReadAll(ctx)
 ```
 
 fs.File
@@ -87,8 +87,7 @@ As a string type `File` naturally marshals/unmarshals as string path/URI
 without having to implement marshaling interfaces.
 
 But it implements `fmt.Stringer` to add the name of the path/URI filesystem
-as debug information and `gob.GobEncoder`, `gob.GobDecoder` to
-encode filename and content instead of the path/URI value.
+as debug information.
 
 Path related methods:
 
@@ -140,7 +139,7 @@ err = file.SetGroup("staff")
 Resizing existing files (where supported):
 
 ```go
-err := file.Truncate(1024) // resize to exactly 1024 bytes
+err := file.Truncate(ctx, 1024) // resize to exactly 1024 bytes
 ```
 
 Meta information:
@@ -151,7 +150,7 @@ isDir := dir.IsDir()      // true
 exists := file.Exists()   // true
 fileIsDir := file.IsDir() // false
 modTime := file.Modified()
-hash, err := file.ContentHash()  // Dropbox hash algo
+hash, err := file.ContentHash(ctx)  // Dropbox hash algo
 regular := file.Info().IsRegular // true
 info := file.Info().FSFileInfo() // io/fs.FileInfo
 ```
@@ -162,9 +161,9 @@ Reading and writing files
 Reading:
 
 ```go
-bytes, err := file.ReadAllContext(ctx)
+bytes, err := file.ReadAll(ctx)
 
-str, err := file.ReadAllStringContext(ctx)
+str, err := file.ReadAllString(ctx)
 
 var w io.Writer
 n, err := file.WriteTo(w)
@@ -177,9 +176,9 @@ r, err := file.OpenReadSeeker() // fs.ReadSeekCloser
 Writing:
 
 ```go
-err := file.WriteAllContext(ctx, []byte("Hello"))
+err := file.WriteAll(ctx, []byte("Hello"))
 
-err := file.WriteAllStringContext(ctx, "Hello")
+err := file.WriteAllString(ctx, "Hello")
 
 err := file.Append(ctx, []byte("Hello"))
 
@@ -285,37 +284,6 @@ patched := memFile.WithData(newBytes)       // same FileName, different data
 `WithName` replaces the whole `FileName` (like `WithData` replaces the whole `FileData`) including any path,
 so it is not symmetric with `Name` which only returns the last path element.
 
-fs.MemDir
----------
-
-`MemDir` is the directory counterpart of `MemFile`: an in-memory directory
-represented by nothing but its path string. Like `MemFile` it implements
-`fs.FileReader` and is passed by value.
-
-```go
-type MemDir string
-```
-
-Because a directory has no contents, every read method returns an
-`ErrIsDirectory` error, while `IsDir` returns true and `ContentHash`
-returns an empty string (matching `File` for a directory). All path
-methods use `/` as separator and ignore trailing slashes:
-
-```go
-dir := fs.MemDir("some/path/sub/")
-
-dir.Name()                  // "sub"        (trailing slash ignored)
-dir.Dir()                   // "some/path"  (parent directory)
-dir.Ext()                   // ""
-sub := dir.Join("a", "b")   // "some/path/sub/a/b"
-clean := fs.MemDir("a/b/../c/").CleanPath() // "a/c"
-
-reader, err := dir.OpenReader() // err is an ErrIsDirectory error
-```
-
-Like `MemFile`, `MemDir` implements `fmt.Stringer` and round-trips its
-path through `gob` without touching any file system.
-
 Listing directories
 -------------------
 
@@ -324,33 +292,32 @@ canceling the context):
 
 ```go
 // Print names of all entries in dir
-dir.ListDir(func(f fs.File) error {
+dir.ListDir(ctx, func(f fs.File) error {
 	_, err := fmt.Println(f.Name())
 	return err
 })
 
 // Print names of all JPEGs in dir and all recursive sub-dirs
-// with cancelable context
-dir.ListDirRecursiveContext(ctx, func(f fs.File) error {
+dir.ListDirRecursive(ctx, func(f fs.File) error {
 	_, err := fmt.Println(f.Name())
 	return err
 }, "*.jpg", "*.jpeg")
 
 // Get all files in dir without limit
-files, err := dir.ListDirMax(-1)
+files, err := dir.ListDirMax(ctx, -1)
 
 // Get the first 100 JPEGs in dir
-files, err := dir.ListDirMaxContext(ctx, 100, "*.jpg", "*.jpeg")
+files, err := dir.ListDirMax(ctx, 100, "*.jpg", "*.jpeg")
 
 // Recursive variant with a hard cap
-files, err := dir.ListDirRecursiveMax(1000, "*.go")
+files, err := dir.ListDirRecursiveMax(ctx, 1000, "*.go")
 ```
 
 Go 1.23+ iterator methods (`iter.Seq2[fs.File, error]`):
 
 ```go
 // Range directly over directory entries
-for file, err := range dir.ListDirIter("*.jpg", "*.jpeg") {
+for file, err := range dir.ListDirIter(ctx, "*.jpg", "*.jpeg") {
 	if err != nil {
 		return err
 	}
@@ -358,7 +325,7 @@ for file, err := range dir.ListDirIter("*.jpg", "*.jpeg") {
 }
 
 // Recursive iteration with a cancelable context
-for file, err := range dir.ListDirRecursiveIterContext(ctx, "*.go") {
+for file, err := range dir.ListDirRecursiveIter(ctx, "*.go") {
 	if err != nil {
 		return err
 	}
@@ -366,35 +333,17 @@ for file, err := range dir.ListDirRecursiveIterContext(ctx, "*.go") {
 }
 ```
 
-Channel-based listing for fan-out pipelines (the `cancel` channel stops
-the goroutine if any value is sent into it):
-
-```go
-cancel := make(chan error)
-files, errs := dir.ListDirChan(cancel, "*.log")
-
-for f := range files {
-	process(f)
-}
-if err := <-errs; err != nil {
-	return err
-}
-
-// Recursive variant
-files, errs = dir.ListDirRecursiveChan(cancel, "*.log")
-```
-
 Glob with wildcard substitution (Go 1.23+ iterator, the second yielded
 value is the list of substituted wildcard segments):
 
 ```go
 // All Go files under any "cmd/*" sub-directory
-for file, segments := range fs.MustGlob("cmd/*/*.go") {
+for file, segments := range fs.MustGlob(ctx, "cmd/*/*.go") {
 	fmt.Println(segments, file.Path()) // segments == ["mytool", "main.go"]
 }
 
 // Relative to a specific base directory
-iter, err := dir.Glob("**/*.png")
+iter, err := dir.Glob(ctx, "**/*.png")
 if err != nil {
 	return err
 }
@@ -452,25 +401,6 @@ The same helpers are also available as `MemFile` constructors:
 m, err := fs.NewMemFileWriteJSON("config.json", &cfg, "  ")
 m, err  = fs.NewMemFileWriteXML("config.xml", &cfg, "  ")
 ```
-
-Encoding files with `encoding/gob`
-----------------------------------
-
-`File` implements `gob.GobEncoder` / `gob.GobDecoder`. Unlike the default
-string marshaling (which only encodes the path/URI), gob encoding includes
-the file's **content** so the receiver can rematerialize the bytes:
-
-```go
-var buf bytes.Buffer
-err := gob.NewEncoder(&buf).Encode(fs.File("/tmp/data.bin"))
-
-// On the receiver, decoding into a File writes the bytes to that file.
-var dst fs.File = fs.TempDir().Join("decoded.bin")
-err = gob.NewDecoder(&buf).Decode(&dst)
-```
-
-`MemFile` implements the same interfaces and round-trips its name and
-data through gob without touching any file system.
 
 Symbolic links
 --------------
@@ -626,7 +556,7 @@ provides `Exists` and `ReadAll`.
 ```go
 import _ "github.com/ungerik/go-fs/httpfs"
 
-data, err := fs.File("https://example.com/file.txt").ReadAllContext(ctx)
+data, err := fs.File("https://example.com/file.txt").ReadAll(ctx)
 ```
 
 Read-only. Useful for treating remote files uniformly with local ones.
@@ -642,7 +572,7 @@ bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-bucket", false)
 // Or with an existing aws-sdk-go-v2 client
 bucket = s3fs.NewAndRegister(client, "my-bucket", false)
 
-err = fs.File("s3://my-bucket/path/file.txt").WriteAllStringContext(ctx, "Hello")
+err = fs.File("s3://my-bucket/path/file.txt").WriteAllString(ctx, "Hello")
 ```
 
 Multipart upload/download is used automatically for files larger than
@@ -661,7 +591,7 @@ sftpFS, err := sftpfs.DialAndRegister(
     nil,
 )
 
-data, err := fs.File("sftp://user@host:22/etc/hostname").ReadAllContext(ctx)
+data, err := fs.File("sftp://user@host:22/etc/hostname").ReadAll(ctx)
 ```
 
 ### ftpfs
@@ -686,7 +616,7 @@ import "github.com/ungerik/go-fs/dropboxfs"
 
 dbxFS := dropboxfs.NewAndRegister(accessToken, 5*time.Minute, false)
 
-err := fs.File("dropbox://Apps/MyApp/notes.md").WriteAllStringContext(ctx, "...")
+err := fs.File("dropbox://Apps/MyApp/notes.md").WriteAllString(ctx, "...")
 ```
 
 ### zipfs
@@ -698,7 +628,7 @@ import "github.com/ungerik/go-fs/zipfs"
 zipFS, err := zipfs.NewReaderFileSystem(fs.File("archive.zip"))
 defer zipFS.Close()
 
-err = zipFS.RootDir().ListDir(func(f fs.File) error {
+err = zipFS.RootDir().ListDir(ctx, func(f fs.File) error {
     fmt.Println(f.Path())
     return nil
 })
@@ -727,7 +657,7 @@ memFS, err := fs.NewMemFileSystem("/", fs.NewMemFile("hello.txt", []byte("hi")))
 defer memFS.Close()
 
 // Access through the global Registry using the URI prefix
-data, err := fs.File(memFS.Prefix() + "/hello.txt").ReadAllContext(ctx)
+data, err := fs.File(memFS.Prefix() + "/hello.txt").ReadAll(ctx)
 
 // Or create a one-shot single-file FS that gives you a ready-to-use File
 ms, file, err := fs.NewSingleMemFileSystem(fs.NewMemFile("a.txt", []byte("a")))

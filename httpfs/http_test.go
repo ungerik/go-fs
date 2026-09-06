@@ -52,7 +52,7 @@ func TestReadAll(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testFileContent, string(data))
 
-	data2, err := fs.File("http://" + addr + "/README.md").ReadAll()
+	data2, err := fs.File("http://" + addr + "/README.md").ReadAll(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, data, data2)
 

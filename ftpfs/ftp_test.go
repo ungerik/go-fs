@@ -183,7 +183,7 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 
 	assert.True(t, f.Exists(), "Exists")
 	assert.False(t, f.IsDir(), "not IsDir")
-	data, err := f.ReadAll()
+	data, err := f.ReadAll(t.Context())
 	require.NoError(t, err)
 	return data
 }
@@ -249,7 +249,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 
 		// Strategy 2: Try to read the file with multiple approaches
 		t.Log("Attempting to read file via FTPS...")
-		data, err = f.ReadAll()
+		data, err = f.ReadAll(t.Context())
 		if err != nil {
 			t.Logf("FTPS ReadAll failed: %v", err)
 			if strings.Contains(err.Error(), "425") ||
@@ -278,7 +278,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 			defer ftpFS.Close()
 
 			f = fs.File("ftp://demo@test.rebex.net/readme.txt")
-			data, err = f.ReadAll()
+			data, err = f.ReadAll(t.Context())
 			if err != nil {
 				t.Logf("FTP fallback read failed: %v", err)
 				t.Skip("Both FTPS and FTP file reads failed")

@@ -1,6 +1,7 @@
 package fs_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +14,7 @@ import (
 func TestLocalFileSystem_Conformance(t *testing.T) {
 	testDir := fs.MustMakeTempDir()
 	t.Cleanup(func() {
-		assert.NoError(t, testDir.RemoveRecursive(), "testDir.RemoveRecursive() should not return an error")
+		assert.NoError(t, testDir.RemoveRecursive(context.Background()), "testDir.RemoveRecursive(context.Background()) should not return an error")
 	})
 
 	fstest.RunConformance(t, fs.Local, fstest.Config{

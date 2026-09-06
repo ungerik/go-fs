@@ -97,15 +97,15 @@ func TestMemFile_DirReadsFail(t *testing.T) {
 		require.ErrorAs(t, err, &errIsDir)
 	}
 
-	_, err := d.ReadAll()
+	_, err := d.ReadAll(t.Context())
 	isDirErr(err)
-	_, err = d.ReadAllContext(ctx)
+	_, err = d.ReadAll(ctx)
 	isDirErr(err)
 	_, _, err = d.ReadAllContentHash(ctx)
 	isDirErr(err)
-	_, err = d.ReadAllString()
+	_, err = d.ReadAllString(t.Context())
 	isDirErr(err)
-	_, err = d.ReadAllStringContext(ctx)
+	_, err = d.ReadAllString(ctx)
 	isDirErr(err)
 	_, err = d.OpenReader()
 	isDirErr(err)
@@ -119,16 +119,16 @@ func TestMemFile_DirReadsFail(t *testing.T) {
 	isDirErr(d.ReadXML(ctx, new(any)))
 
 	// ContentHash returns an empty string for a directory, matching File and MemDir
-	hash, err := d.ContentHash()
+	hash, err := d.ContentHash(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "", hash)
-	hash, err = d.ContentHashContext(ctx)
+	hash, err = d.ContentHash(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "", hash)
 
 	// A regular file still reads its FileData
 	f := MemFile{FileName: "file.txt", FileData: []byte("hello")}
-	data, err := f.ReadAll()
+	data, err := f.ReadAll(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, []byte("hello"), data)
 }

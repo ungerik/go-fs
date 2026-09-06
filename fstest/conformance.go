@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -623,7 +624,7 @@ func (c *conformance) testFileAPI(t *testing.T) {
 
 		// Iterator and callback listing through the File API
 		var names []string
-		for f, err := range dir.ListDirIterContext(c.ctx) {
+		for f, err := range dir.ListDirIter(c.ctx) {
 			require.NoError(t, err, "ListDirIter")
 			names = append(names, f.Name())
 		}
@@ -634,7 +635,7 @@ func (c *conformance) testFileAPI(t *testing.T) {
 		assert.Equal(t, want, names, "File.ListDirIter entries")
 
 		var recursive []string
-		err := dir.ListDirRecursiveContext(c.ctx, func(f fs.File) error {
+		err := dir.ListDirRecursive(c.ctx, func(f fs.File) error {
 			rel, err := relPath(c.path(""), f.Path(), c.fs.Separator())
 			require.NoError(t, err)
 			recursive = append(recursive, rel)
@@ -649,11 +650,11 @@ func (c *conformance) testFileAPI(t *testing.T) {
 		sort.Strings(wantAll)
 		assert.Equal(t, wantAll, recursive, "File.ListDirRecursive must list every seed file")
 
-		max, err := dir.ListDirMaxContext(c.ctx, 1)
-		require.NoError(t, err, "File.ListDirMax(1)")
-		assert.Len(t, max, 1, "File.ListDirMax(1)")
+		max, err := dir.ListDirMax(c.ctx, 1)
+		require.NoError(t, err, "File.ListDirMax(c.ctx, 1)")
+		assert.Len(t, max, 1, "File.ListDirMax(c.ctx, 1)")
 
-		_, err = dir.ListDirMaxContext(canceled, -1)
+		_, err = dir.ListDirMax(canceled, -1)
 		assert.Error(t, err, "File.ListDirMax with a canceled context must fail")
 
 		// Relative paths
@@ -701,23 +702,23 @@ func (c *conformance) testFileAPI(t *testing.T) {
 		assert.Equal(t, info.Permissions, f.Permissions(), "Permissions() must equal Info().Permissions")
 		assert.True(t, stat.Mode().IsRegular(), "Stat().Mode().IsRegular()")
 
-		data, err := f.ReadAllContext(c.ctx)
+		data, err := f.ReadAll(c.ctx)
 		require.NoError(t, err, "ReadAll(%q)", name)
 		assert.True(t, bytes.Equal(content, data), "ReadAll(%q) content", name)
-		_, err = f.ReadAllContext(canceled)
+		_, err = f.ReadAll(canceled)
 		assert.Error(t, err, "ReadAll(%q) with a canceled context must fail", name)
 
-		str, err := f.ReadAllStringContext(c.ctx)
+		str, err := f.ReadAllString(c.ctx)
 		require.NoError(t, err, "ReadAllString(%q)", name)
 		assert.Equal(t, string(content), str, "ReadAllString(%q)", name)
 
-		hash, err := f.ContentHashContext(c.ctx)
+		hash, err := f.ContentHash(c.ctx)
 		require.NoError(t, err, "ContentHash(%q)", name)
 		assert.NotEmpty(t, hash, "ContentHash(%q)", name)
 		expectedHash, err := fs.DefaultContentHash(c.ctx, bytes.NewReader(content))
 		require.NoError(t, err)
 		assert.Equal(t, expectedHash, hash, "ContentHash(%q) must equal the hash of the content", name)
-		_, err = f.ContentHashContext(canceled)
+		_, err = f.ContentHash(canceled)
 		assert.Error(t, err, "ContentHash(%q) with a canceled context must fail", name)
 
 		data, hash, err = f.ReadAllContentHash(c.ctx)
@@ -750,7 +751,7 @@ func (c *conformance) testFileAPI(t *testing.T) {
 	assert.False(t, missing.Info().Exists, "Info().Exists of a missing file")
 	_, err := missing.Stat()
 	assert.ErrorIs(t, err, os.ErrNotExist, "Stat of a missing file")
-	_, err = missing.ReadAllContext(c.ctx)
+	_, err = missing.ReadAll(c.ctx)
 	assert.ErrorIs(t, err, os.ErrNotExist, "ReadAll of a missing file")
 	_, err = missing.OpenReader()
 	assert.ErrorIs(t, err, os.ErrNotExist, "OpenReader of a missing file")
@@ -805,11 +806,11 @@ func (c *conformance) testWriteOnly(t *testing.T) {
 	f := c.file("hello.txt")
 	_, err := f.OpenReader()
 	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "File.OpenReader on a write-only file system")
-	_, err = f.ReadAllContext(c.ctx)
+	_, err = f.ReadAll(c.ctx)
 	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "File.ReadAll on a write-only file system")
 	_, err = f.Stat()
 	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "File.Stat on a write-only file system")
-	err = c.file("").ListDirContext(c.ctx, func(fs.File) error { return nil })
+	err = c.file("").ListDir(c.ctx, func(fs.File) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "File.ListDir on a write-only file system")
 	assert.False(t, f.Exists(), "File.Exists on a write-only file system")
 	assert.False(t, f.IsReadable(), "File.IsReadable on a write-only file system")
@@ -825,7 +826,7 @@ func (c *conformance) testReadOnly(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.OpenAppendWriter on a read-only file system")
 	_, err = f.OpenReadWriter()
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.OpenReadWriter on a read-only file system")
-	err = f.WriteAllContext(c.ctx, []byte("x"))
+	err = f.WriteAll(c.ctx, []byte("x"))
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.WriteAll on a read-only file system")
 	err = f.Append(c.ctx, []byte("x"))
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Append on a read-only file system")
@@ -837,19 +838,19 @@ func (c *conformance) testReadOnly(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.MakeAllDirs on a read-only file system")
 	err = c.file("hello.txt").Remove()
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Remove on a read-only file system")
-	err = c.file("hello.txt").RemoveRecursiveContext(c.ctx)
+	err = c.file("hello.txt").RemoveRecursive(c.ctx)
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.RemoveRecursive on a read-only file system")
 	_, err = c.file("hello.txt").Rename("renamed.txt")
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Rename on a read-only file system")
-	err = c.file("hello.txt").MoveTo(f)
+	err = c.file("hello.txt").MoveTo(c.ctx, f)
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.MoveTo on a read-only file system")
-	err = c.file("hello.txt").Truncate(1)
+	err = c.file("hello.txt").Truncate(c.ctx, 1)
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Truncate on a read-only file system")
 	err = c.file("hello.txt").SetPermissions(fs.AllRead)
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.SetPermissions on a read-only file system")
 	assert.False(t, c.file("hello.txt").IsWritable(), "File.IsWritable on a read-only file system")
 	assert.True(t, c.file("hello.txt").Exists(), "the seed must still exist after rejected writes")
-	got, err := c.file("hello.txt").ReadAllContext(c.ctx)
+	got, err := c.file("hello.txt").ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, c.cfg.Seed["hello.txt"], got, "the seed content must be unchanged after rejected writes")
 }
@@ -1136,7 +1137,13 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 			require.NoError(t, err, "SetPermissions")
 			info, err := c.fs.Stat(path)
 			require.NoError(t, err)
-			assert.Equal(t, fs.UserRead|fs.UserWrite|fs.GroupRead, info.Permissions, "permissions after SetPermissions")
+			want := fs.UserRead | fs.UserWrite | fs.GroupRead
+			if _, isLocal := c.fs.(*fs.LocalFileSystem); isLocal && runtime.GOOS == "windows" {
+				// os.Chmod on Windows only toggles the read-only attribute
+				assert.Equal(t, want&fs.UserWrite, info.Permissions&fs.UserWrite, "user write permission after SetPermissions")
+			} else {
+				assert.Equal(t, want, info.Permissions, "permissions after SetPermissions")
+			}
 		}
 	}
 }
@@ -1149,9 +1156,9 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 
 	// WriteAll must truncate
 	f := dir.Join("file-writeall.txt")
-	require.NoError(t, f.WriteAllContext(c.ctx, []byte("0123456789ABCDEFGHIJ")), "File.WriteAll long")
-	require.NoError(t, f.WriteAllContext(c.ctx, []byte("xyz")), "File.WriteAll short")
-	got, err := f.ReadAllContext(c.ctx)
+	require.NoError(t, f.WriteAll(c.ctx, []byte("0123456789ABCDEFGHIJ")), "File.WriteAll long")
+	require.NoError(t, f.WriteAll(c.ctx, []byte("xyz")), "File.WriteAll short")
+	got, err := f.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("xyz"), got, "File.WriteAll must truncate previous larger content")
 	assert.True(t, f.IsWritable(), "File.IsWritable of an existing file")
@@ -1160,7 +1167,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	// Append and AppendString
 	require.NoError(t, f.Append(c.ctx, []byte("-appended")), "File.Append")
 	require.NoError(t, f.AppendString(c.ctx, "-string"), "File.AppendString")
-	got, err = f.ReadAllContext(c.ctx)
+	got, err = f.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("xyz-appended-string"), got, "File.Append content")
 
@@ -1170,24 +1177,24 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	_, err = w.Write([]byte("-writer"))
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
-	got, err = f.ReadAllContext(c.ctx)
+	got, err = f.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("xyz-appended-string-writer"), got, "File.OpenAppendWriter content")
 
 	// Append to a new file
 	newAppend := dir.Join("file-append-new.txt")
 	require.NoError(t, newAppend.Append(c.ctx, []byte("new")), "File.Append to a new file")
-	got, err = newAppend.ReadAllContext(c.ctx)
+	got, err = newAppend.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("new"), got, "File.Append to a new file content")
 
 	// Truncate
-	require.NoError(t, f.Truncate(3), "File.Truncate shrink")
-	got, err = f.ReadAllContext(c.ctx)
+	require.NoError(t, f.Truncate(c.ctx, 3), "File.Truncate shrink")
+	got, err = f.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("xyz"), got, "File.Truncate shrink content")
-	require.NoError(t, f.Truncate(5), "File.Truncate grow")
-	got, err = f.ReadAllContext(c.ctx)
+	require.NoError(t, f.Truncate(c.ctx, 5), "File.Truncate grow")
+	got, err = f.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("xyz\x00\x00"), got, "File.Truncate grow content")
 
@@ -1200,7 +1207,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	if err != nil {
 		assert.ErrorIs(t, err, errors.ErrUnsupported, "File.Touch of an existing file may only fail with ErrUnsupported")
 	}
-	got, err = f.ReadAllContext(c.ctx)
+	got, err = f.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("xyz\x00\x00"), got, "File.Touch must never modify the content")
 
@@ -1221,7 +1228,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	n, err := target.ReadFrom(strings.NewReader("from reader"))
 	require.NoError(t, err, "File.ReadFrom")
 	assert.Equal(t, int64(len("from reader")), n)
-	got, err = target.ReadAllContext(c.ctx)
+	got, err = target.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from reader"), got, "File.ReadFrom content")
 
@@ -1246,50 +1253,50 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	require.NoError(t, err, "File.Rename")
 	assert.Equal(t, dir.Join("file-renamed.txt"), renamed, "File.Rename result")
 	assert.False(t, target.Exists(), "File.Rename source must be gone")
-	got, err = renamed.ReadAllContext(c.ctx)
+	got, err = renamed.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from reader"), got, "File.Rename content")
 
 	srcDir := dir.Join("rename-dir-src")
 	require.NoError(t, srcDir.MakeDir())
-	require.NoError(t, srcDir.Join("child.txt").WriteAllContext(c.ctx, []byte("dir-content")))
+	require.NoError(t, srcDir.Join("child.txt").WriteAll(c.ctx, []byte("dir-content")))
 	renamedDir, err := srcDir.Rename("rename-dir-dst")
 	require.NoError(t, err, "File.Rename of a non-empty directory")
-	got, err = renamedDir.Join("child.txt").ReadAllContext(c.ctx)
+	got, err = renamedDir.Join("child.txt").ReadAll(c.ctx)
 	require.NoError(t, err, "child must exist at the new location")
 	assert.Equal(t, []byte("dir-content"), got, "child content preserved across directory rename")
 	assert.False(t, srcDir.Exists(), "source directory must be gone after rename")
 
 	// MoveTo with a final path and into a directory
 	moved := dir.Join("file-moved.txt")
-	require.NoError(t, renamed.MoveTo(moved), "File.MoveTo")
+	require.NoError(t, renamed.MoveTo(c.ctx, moved), "File.MoveTo")
 	assert.False(t, renamed.Exists(), "File.MoveTo source must be gone")
-	got, err = moved.ReadAllContext(c.ctx)
+	got, err = moved.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from reader"), got, "File.MoveTo content")
-	require.NoError(t, moved.MoveTo(moved), "File.MoveTo(self) must be a no-op")
-	assert.True(t, moved.Exists(), "File.MoveTo(self) must keep the file")
-	require.NoError(t, moved.MoveTo(renamedDir), "File.MoveTo(directory) moves into the directory")
-	assert.False(t, moved.Exists(), "File.MoveTo(directory) source must be gone")
+	require.NoError(t, moved.MoveTo(c.ctx, moved), "File.MoveTo(c.ctx, self) must be a no-op")
+	assert.True(t, moved.Exists(), "File.MoveTo(c.ctx, self) must keep the file")
+	require.NoError(t, moved.MoveTo(c.ctx, renamedDir), "File.MoveTo(c.ctx, directory) moves into the directory")
+	assert.False(t, moved.Exists(), "File.MoveTo(c.ctx, directory) source must be gone")
 	inDir := renamedDir.Join("file-moved.txt")
-	got, err = inDir.ReadAllContext(c.ctx)
-	require.NoError(t, err, "File.MoveTo(directory) must place the file into the directory")
-	assert.Equal(t, []byte("from reader"), got, "File.MoveTo(directory) content")
-	require.NoError(t, inDir.MoveTo(moved), "File.MoveTo back")
+	got, err = inDir.ReadAll(c.ctx)
+	require.NoError(t, err, "File.MoveTo(c.ctx, directory) must place the file into the directory")
+	assert.Equal(t, []byte("from reader"), got, "File.MoveTo(c.ctx, directory) content")
+	require.NoError(t, inDir.MoveTo(c.ctx, moved), "File.MoveTo back")
 
 	// CopyFile and CopyRecursive
 	copied := dir.Join("file-copied.txt")
 	require.NoError(t, fs.CopyFile(c.ctx, moved, copied), "fs.CopyFile")
-	got, err = copied.ReadAllContext(c.ctx)
+	got, err = copied.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from reader"), got, "fs.CopyFile content")
 	require.NoError(t, fs.CopyFile(c.ctx, copied, copied), "fs.CopyFile onto itself must be a no-op")
-	got, err = copied.ReadAllContext(c.ctx)
+	got, err = copied.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from reader"), got, "fs.CopyFile onto itself must keep the content")
 	copiedDir := dir.Join("copied-dir")
 	require.NoError(t, fs.CopyRecursive(c.ctx, renamedDir, copiedDir), "fs.CopyRecursive")
-	got, err = copiedDir.Join("child.txt").ReadAllContext(c.ctx)
+	got, err = copiedDir.Join("child.txt").ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("dir-content"), got, "fs.CopyRecursive content")
 
@@ -1297,10 +1304,10 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	require.NoError(t, copied.Remove(), "File.Remove")
 	assert.False(t, copied.Exists())
 	assert.ErrorIs(t, copied.Remove(), os.ErrNotExist, "File.Remove of a missing file")
-	require.NoError(t, copiedDir.RemoveRecursive(), "File.RemoveRecursive")
+	require.NoError(t, copiedDir.RemoveRecursive(c.ctx), "File.RemoveRecursive")
 	assert.False(t, copiedDir.Exists(), "removed directory must be gone")
-	assert.NoError(t, copiedDir.RemoveRecursive(), "File.RemoveRecursive of a missing path must not fail")
-	require.NoError(t, renamedDir.RemoveDirContentsRecursive(), "File.RemoveDirContentsRecursive")
+	assert.NoError(t, copiedDir.RemoveRecursive(c.ctx), "File.RemoveRecursive of a missing path must not fail")
+	require.NoError(t, renamedDir.RemoveDirContentsRecursive(c.ctx), "File.RemoveDirContentsRecursive")
 	assert.True(t, renamedDir.IsEmptyDir(), "directory must be empty after RemoveDirContentsRecursive")
 
 	// Cross file system copy into an in-memory file system
@@ -1309,21 +1316,21 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	t.Cleanup(func() { _ = memFS.Close() })
 	memFile := memFS.RootDir().Join("copied.txt")
 	require.NoError(t, fs.CopyFile(c.ctx, moved, memFile), "fs.CopyFile to another file system")
-	got, err = memFile.ReadAllContext(c.ctx)
+	got, err = memFile.ReadAll(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from reader"), got, "cross file system copy content")
 	identical, err := fs.IdenticalFileContents(c.ctx, moved, memFile)
 	require.NoError(t, err)
 	assert.True(t, identical, "IdenticalFileContents across file systems")
 	memDir := memFS.RootDir().Join("moved-dir")
-	require.NoError(t, renamedDir.MoveTo(memDir), "File.MoveTo to another file system")
+	require.NoError(t, renamedDir.MoveTo(c.ctx, memDir), "File.MoveTo to another file system")
 	assert.False(t, renamedDir.Exists(), "File.MoveTo to another file system must remove the source")
 	assert.True(t, memDir.IsDir(), "File.MoveTo to another file system must create the destination")
 }
 
 // cleanup removes everything the suite created below TestDir.
 func (c *conformance) cleanup(t *testing.T) {
-	err := c.file("").RemoveDirContentsRecursive()
+	err := c.file("").RemoveDirContentsRecursive(c.ctx)
 	require.NoError(t, err, "removing the suite files below TestDir")
 	if !c.cfg.NoDirectories {
 		assert.True(t, c.file("").IsEmptyDir(), "TestDir must be empty after cleanup")

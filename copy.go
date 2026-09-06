@@ -64,7 +64,7 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 		}
 	case MemFile:
 		// Don't use io.CopyBuffer in case of MemFile
-		return dest.WriteAllContext(ctx, f.FileData, perm...)
+		return dest.WriteAll(ctx, f.FileData, perm...)
 	}
 
 	r, err := src.OpenReader()
@@ -147,7 +147,7 @@ func copyRecursive(ctx context.Context, src, dest File, patterns []string, buf *
 	}
 
 	// Copy directories recursive
-	return src.ListDirContext(ctx, func(file File) error {
+	return src.ListDir(ctx, func(file File) error {
 		return copyRecursive(ctx, file, dest.Join(file.Name()), patterns, buf)
 	}, patterns...)
 }

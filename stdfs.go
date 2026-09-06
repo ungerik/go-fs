@@ -1,9 +1,10 @@
 package fs
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	iofs "io/fs"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -60,7 +61,7 @@ func (f StdFS) ReadFile(name string) ([]byte, error) {
 	if err := checkStdFSName(name); err != nil {
 		return nil, err
 	}
-	return f.File.Join(name).ReadAll()
+	return f.File.Join(name).ReadAll(context.Background())
 }
 
 // ReadDir reads the named directory
@@ -72,7 +73,7 @@ func (f StdFS) ReadDir(name string) ([]iofs.DirEntry, error) {
 		return nil, err
 	}
 	var entries []iofs.DirEntry
-	err := f.File.Join(name).ListDir(func(file File) error {
+	err := f.File.Join(name).ListDir(context.Background(), func(file File) error {
 		entries = append(entries, file.StdDirEntry())
 		return nil
 	})
@@ -83,12 +84,17 @@ func (f StdFS) ReadDir(name string) ([]iofs.DirEntry, error) {
 	return entries, nil
 }
 
+// checkStdFSName validates name like the io/fs package does,
+// so files like "dir/.gitignore" are accepted.
+// Like os.DirFS it rejects backslashes and colons on Windows,
+// because io/fs names are always slash separated and must not
+// be reinterpreted by the underlying file system.
 func checkStdFSName(name string) error {
 	if name == "" {
 		return errors.New("empty filename")
 	}
-	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.Contains(name, "/.") || strings.Contains(name, "//") {
-		return fmt.Errorf("invalid filename: %s", name)
+	if !iofs.ValidPath(name) || runtime.GOOS == "windows" && strings.ContainsAny(name, `\:`) {
+		return &iofs.PathError{Op: "open", Path: name, Err: iofs.ErrInvalid}
 	}
 	return nil
 }

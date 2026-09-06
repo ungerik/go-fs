@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/fsnotify/fsnotify"
 
@@ -161,7 +160,7 @@ func NewMemFileSystem(separator string, initialFiles ...MemFile) (*MemFileSystem
 			Dir:      make(map[string]*memFileNode, len(initialFiles)),
 		},
 	}
-	memFS.id = fmt.Sprintf("%x", unsafe.Pointer(memFS)) //#nosec G103 -- this is a valid use of unsafe.Pointer
+	memFS.id = fsimpl.RandomString()
 	memFS.updatePrefix()
 
 	// Add initial files
@@ -1693,6 +1692,9 @@ type memFileWriter struct {
 }
 
 func (w *memFileWriter) Write(p []byte) (n int, err error) {
+	if w.closed {
+		return 0, errors.New("write to closed file")
+	}
 	w.fs.mtx.Lock()
 	defer w.fs.mtx.Unlock()
 
@@ -1757,6 +1759,8 @@ func (rw *memFileReadWriter) WriteAt(p []byte, off int64) (n int, err error) {
 }
 
 func (rw *memFileReadWriter) Seek(offset int64, whence int) (int64, error) {
+	rw.fs.mtx.Lock()
+	defer rw.fs.mtx.Unlock()
 	return rw.buf.Seek(offset, whence)
 }
 

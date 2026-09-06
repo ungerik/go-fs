@@ -14,7 +14,7 @@ func TestParseRawURI(t *testing.T) {
 
 	fs, fsPath = ParseRawURI("/")
 	assert.Equal(t, Local, fs)
-	assert.Equal(t, "/", fsPath)
+	assert.Equal(t, string(filepath.Separator), fsPath)
 
 	fs, fsPath = ParseRawURI(filepath.Join(string(filepath.Separator), "a", "b"))
 	assert.Equal(t, Local, fs)
@@ -75,6 +75,6 @@ func TestParseRawURI_SchemeNotLocal(t *testing.T) {
 	} {
 		fs, fsPath := ParseRawURI(uri)
 		assert.Equalf(t, Local, fs, "scheme-less path %q must resolve to the local file system", uri)
-		assert.Equal(t, uri, fsPath)
+		assert.Equal(t, filepath.FromSlash(uri), fsPath)
 	}
 }

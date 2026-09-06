@@ -358,7 +358,7 @@ func TestFile(t *testing.T) {
 					return nil
 				}
 
-				err := file.WriteAll(testData, permTest.permissions...)
+				err := file.WriteAll(t.Context(), testData, permTest.permissions...)
 				require.NoError(t, err)
 				require.Equal(t, permTest.want, capturedPerm)
 			})
@@ -384,7 +384,7 @@ func TestFile(t *testing.T) {
 					return nil
 				}
 
-				err := file.WriteAllContext(t.Context(), testData, permTest.permissions...)
+				err := file.WriteAll(t.Context(), testData, permTest.permissions...)
 				require.NoError(t, err)
 				require.Equal(t, permTest.want, capturedPerm)
 			})
@@ -410,7 +410,7 @@ func TestFile(t *testing.T) {
 					return nil
 				}
 
-				err := file.WriteAllString(testStr, permTest.permissions...)
+				err := file.WriteAllString(t.Context(), testStr, permTest.permissions...)
 				require.NoError(t, err)
 				require.Equal(t, permTest.want, capturedPerm)
 			})
@@ -436,7 +436,7 @@ func TestFile(t *testing.T) {
 					return nil
 				}
 
-				err := file.WriteAllStringContext(t.Context(), testStr, permTest.permissions...)
+				err := file.WriteAllString(t.Context(), testStr, permTest.permissions...)
 				require.NoError(t, err)
 				require.Equal(t, permTest.want, capturedPerm)
 			})
@@ -590,37 +590,6 @@ func TestFile(t *testing.T) {
 				assert.Equal(t, Permissions(0644), capturedPerm)
 			})
 		}
-	})
-
-	t.Run("GobDecode", func(t *testing.T) {
-		// GobDecode doesn't accept permissions, so we just test it once
-		// Create mock file system for this test with only needed functions
-		mockFS := createMockFS("mock" + t.Name() + "://")
-		Register(mockFS)
-		t.Cleanup(func() { Unregister(mockFS) })
-
-		file := File("mock" + t.Name() + "://test/path/to/file.txt")
-
-		// First encode some data
-		mockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
-			return []byte("test content"), nil
-		}
-
-		encodedData, err := file.GobEncode()
-		require.NoError(t, err)
-
-		// Now decode it - GobDecode doesn't take permissions, but WriteAll does
-		capturedPerm := Permissions(0777) // Sentinel that must be overwritten
-		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
-			capturedPerm = perm
-			assert.Equal(t, []byte("test content"), data)
-			return nil
-		}
-
-		err = file.GobDecode(encodedData)
-		require.NoError(t, err)
-		// GobDecode doesn't support permissions, so it should pass the default
-		require.Equal(t, NoPermissions, capturedPerm)
 	})
 
 	// Test methods that don't take permissions but should still work
@@ -1040,7 +1009,7 @@ func TestFile(t *testing.T) {
 				return io.NopCloser(strings.NewReader("test content")), nil
 			}
 
-			hash, err := file.ContentHash()
+			hash, err := file.ContentHash(t.Context())
 			require.NoError(t, err)
 			assert.NotEmpty(t, hash)
 		})
@@ -1059,7 +1028,7 @@ func TestFile(t *testing.T) {
 				return io.NopCloser(strings.NewReader("test content")), nil
 			}
 
-			hash, err := file.ContentHashContext(t.Context())
+			hash, err := file.ContentHash(t.Context())
 			require.NoError(t, err)
 			assert.NotEmpty(t, hash)
 		})
@@ -1144,7 +1113,7 @@ func TestFile(t *testing.T) {
 			}
 
 			var listedFiles []File
-			err := testFile.ListDir(func(f File) error {
+			err := testFile.ListDir(t.Context(), func(f File) error {
 				listedFiles = append(listedFiles, f)
 				return nil
 			})
@@ -1177,7 +1146,7 @@ func TestFile(t *testing.T) {
 			}
 
 			var listedFiles []File
-			err := testFile.ListDirContext(t.Context(), func(f File) error {
+			err := testFile.ListDir(t.Context(), func(f File) error {
 				listedFiles = append(listedFiles, f)
 				return nil
 			})
@@ -1210,7 +1179,7 @@ func TestFile(t *testing.T) {
 			}
 
 			var listedFiles []File
-			for f, err := range testFile.ListDirIter() {
+			for f, err := range testFile.ListDirIter(t.Context()) {
 				require.NoError(t, err)
 				listedFiles = append(listedFiles, f)
 			}
@@ -1235,7 +1204,7 @@ func TestFile(t *testing.T) {
 				return expectedFiles, nil
 			}
 
-			files, err := testFile.ListDirMax(10)
+			files, err := testFile.ListDirMax(t.Context(), 10)
 			require.NoError(t, err)
 			assert.Equal(t, expectedFiles, files)
 		})
@@ -1392,7 +1361,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			data, err := testFile.ReadAll()
+			data, err := testFile.ReadAll(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, expectedData, data)
 		})
@@ -1410,7 +1379,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			data, err := testFile.ReadAllContext(t.Context())
+			data, err := testFile.ReadAll(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, expectedData, data)
 		})
@@ -1447,7 +1416,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			str, err := testFile.ReadAllString()
+			str, err := testFile.ReadAllString(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, "test content", str)
 		})
@@ -1465,7 +1434,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			str, err := testFile.ReadAllStringContext(t.Context())
+			str, err := testFile.ReadAllString(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, "test content", str)
 		})
@@ -1513,24 +1482,6 @@ func TestFile(t *testing.T) {
 			assert.Equal(t, 123, result.Value)
 		})
 
-		t.Run("GobEncode", func(t *testing.T) {
-			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
-			Register(mockFS)
-			t.Cleanup(func() { Unregister(mockFS) })
-
-			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
-
-			mockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
-				return []byte("test content"), nil
-			}
-
-			data, err := file.GobEncode()
-			require.NoError(t, err)
-			assert.NotEmpty(t, data)
-		})
-
 		t.Run("Watch", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
 			testMockFS := createMockFS("mock" + t.Name() + "://")
@@ -1558,7 +1509,7 @@ func TestFile(t *testing.T) {
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Truncate
-			err := testFile.Truncate(100)
+			err := testFile.Truncate(t.Context(), 100)
 			require.NoError(t, err)
 		})
 
@@ -1607,7 +1558,7 @@ func TestFile(t *testing.T) {
 				movedTo = destPath
 				return nil
 			}
-			err := testFile.MoveTo(dest)
+			err := testFile.MoveTo(t.Context(), dest)
 			require.NoError(t, err)
 			assert.Equal(t, "/test/path/to/destination.txt", movedTo)
 		})
@@ -1630,7 +1581,7 @@ func TestFile(t *testing.T) {
 				movedTo = destPath
 				return nil
 			}
-			err := testFile.MoveTo(destDir)
+			err := testFile.MoveTo(t.Context(), destDir)
 			require.NoError(t, err)
 			assert.Equal(t, "/test/other/file.txt", movedTo)
 		})
@@ -1641,14 +1592,14 @@ func TestFile(t *testing.T) {
 			// falling through to the copy+delete recursive fallback.
 			// The latter would silently destroy the file.
 			tmp := MustMakeTempDir()
-			t.Cleanup(func() { _ = tmp.RemoveRecursive() })
+			t.Cleanup(func() { _ = tmp.RemoveRecursive(context.Background()) })
 
 			file := tmp.Join("a.txt")
-			require.NoError(t, file.WriteAll([]byte("payload")))
+			require.NoError(t, file.WriteAll(t.Context(), []byte("payload")))
 
-			require.NoError(t, file.MoveTo(file), "File.MoveTo(self) must be a no-op")
+			require.NoError(t, file.MoveTo(t.Context(), file), "File.MoveTo(t.Context(), self) must be a no-op")
 			require.True(t, file.Exists(), "file survives same-path MoveTo")
-			got, err := file.ReadAllString()
+			got, err := file.ReadAllString(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, "payload", got, "content preserved")
 
@@ -1693,7 +1644,7 @@ func TestFile(t *testing.T) {
 				return nil
 			}
 
-			err := file.RemoveRecursive()
+			err := file.RemoveRecursive(context.Background())
 			require.NoError(t, err)
 			assert.Equal(t, "/test/path/to/file.txt", removed)
 		})
@@ -1784,7 +1735,7 @@ func TestFile_WriteAllContext_FallbackTruncates(t *testing.T) {
 
 	// Overwrite with a smaller JSON document.
 	small := []byte(`{"k":1}`)
-	err := file.WriteAll(small)
+	err := file.WriteAll(t.Context(), small)
 	require.NoError(t, err)
 
 	// The fallback must truncate: no stale trailing bytes from the larger file.
