@@ -80,6 +80,25 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
   the old behaviour). Native `MakeAllDirs`, `ListDirRecursive`, `RemoveAll`,
   `SetPermissions` and symbolic link support; `Stat` reports symlinks; the
   `perm` argument is applied to created files and directories.
+- **ftpfs rework (Phase 5).** `Dial`, `DialAndRegister` and
+  `EnsureRegistered` take `*ftpfs.Options` (nil for defaults) instead of a
+  debug writer; FTPS verifies the server certificate unless
+  `Options.InsecureSkipVerify` is set; `ftps://` is explicit TLS on port 21
+  and implicit TLS on port 990. Operations are serialised on the single
+  control connection, a lost connection is reconnected and the operation
+  retried once, `OpenReader` streams over a dedicated connection. FTP reply
+  codes are checked instead of reply texts; `Remove` no longer tries `RMD`
+  for a file that could not be deleted; `MakeDir` on an existing path wraps
+  `os.ErrExist`; native `RemoveAll` and `ListDirRecursive`. The ftpfs tests
+  run the conformance suite for FTP and FTPS against an in-process server
+  on every platform; the dockerized vsftpd is gone.
+- **dropboxfs rework (Phase 5).** `NewAndRegister(ctx, token, cacheTimeout,
+  mute)` fetches the account and returns an error; `ID()` and the prefix
+  are derived from the account id instead of a random string. Only typed
+  API errors are mapped to `os.ErrNotExist` / `os.ErrExist`; `Touch` of an
+  existing file returns `ErrUnsupported`; `Remove` refuses a non-empty
+  folder; native `RemoveAll`; `OpenReader` streams the download; the
+  metadata cache is invalidated on writes.
 
 ### Added
 

@@ -66,10 +66,33 @@ func TestIsNotExistError(t *testing.T) {
 		}
 	})
 
-	t.Run("string fallback path/not_found", func(t *testing.T) {
-		// Other Dropbox routes stringify their LookupError into the summary.
-		assert.True(t, isNotExistError(errors.New("path/not_found/.")))
+	t.Run("untyped not_found strings are not not-found", func(t *testing.T) {
+		// Only typed API errors are trusted, never error message contents.
+		assert.False(t, isNotExistError(errors.New("path/not_found/.")))
 	})
+
+	t.Run("typed download not_found", func(t *testing.T) {
+		err := files.DownloadAPIError{
+			EndpointError: &files.DownloadError{
+				Path: &files.LookupError{
+					Tagged: dropbox.Tagged{Tag: files.LookupErrorNotFound},
+				},
+			},
+		}
+		assert.True(t, isNotExistError(err))
+	})
+}
+
+func TestIsConflictError(t *testing.T) {
+	err := files.CreateFolderAPIError{
+		EndpointError: &files.CreateFolderError{
+			Path: &files.WriteError{
+				Tagged: dropbox.Tagged{Tag: files.WriteErrorConflict},
+			},
+		},
+	}
+	assert.True(t, isConflictError(err), "create_folder conflict means the path exists")
+	assert.False(t, isConflictError(errors.New("conflict")), "untyped errors are not conflicts")
 }
 
 // TestClosedFileSystem verifies that after Close every method that uses the
@@ -78,15 +101,13 @@ func TestIsNotExistError(t *testing.T) {
 func TestClosedFileSystem(t *testing.T) {
 	// A real (offline) client is fine: closed methods short-circuit before any
 	// network call, so no token or connectivity is required.
-	dbfs := NewAndRegister("offline-token", time.Minute, false).(*fileSystem)
+	dbfs := newFileSystem("dbid:test", files.New(dropbox.Config{Token: "offline-token"}), time.Minute, false)
+	fs.Register(dbfs)
 
 	require.True(t, fs.IsRegistered(dbfs), "filesystem should be registered before Close")
 
 	require.NoError(t, dbfs.Close())
 
-	// Regression: Close must unregister even though ID() was never called.
-	// The previous implementation used id=="" as the closed flag and would
-	// skip Unregister for a filesystem whose account ID had not been fetched.
 	assert.False(t, fs.IsRegistered(dbfs), "Close must unregister the filesystem")
 
 	// Close is idempotent.
@@ -126,5 +147,8 @@ func TestClosedFileSystem(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	err = dbfs.ListDir(ctx, "/dir", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+
+	err = dbfs.RemoveAll(ctx, "/dir")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 }

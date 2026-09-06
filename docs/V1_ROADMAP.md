@@ -468,8 +468,38 @@ One PR per phase unless noted.
       links; `Stat` reports `IsSymlink`; `perm` honoured for created files
       and directories. The public-server tests are gated behind
       `GOFS_ONLINE_TESTS=1`.
-- [ ] ftpfs: per the backend list above.
-- [ ] dropboxfs: per the backend list above.
+- [x] ftpfs: one control connection used by one operation at a time (mutex),
+      reconnect with the stored credentials and one retry on a connection
+      error; `OpenReader` streams over a dedicated connection so it never
+      blocks other operations; `Options{TLSConfig, InsecureSkipVerify,
+      DebugOut}` replaces the `debugOut` parameter and **TLS verification is
+      on by default** (`ftps://` = explicit TLS on port 21, implicit TLS on
+      port 990, alias prefix `:21`); reply codes instead of reply-text
+      matching (`ignoreSuccessReply`, 550 mapped to `ErrNotExist` only where
+      that is what it means); `Remove` stats first and never falls back to
+      `RMD` for files; `MakeDir` reports `ErrExist`; native `RemoveAll`
+      (`RemoveDirRecur`) and `ListDirRecursive` (`Walk`); `OpenReadWriter`
+      creates a missing file; `Stat` falls back to `SIZE` for servers
+      without listing support. Sharing the credentials layer with sftpfs via
+      `fsimpl` was deliberately not done: two small copies are simpler than
+      a cross-package abstraction. The in-process test server grew into a
+      small FTP(S) server with a directory tree, RFC 3659 listings and
+      AUTH TLS, and runs the full conformance suite for FTP and FTPS on
+      every platform. The dockerized vsftpd was removed: it had silently
+      been skipped (its 1024-bit certificate is rejected by OpenSSL 3) and,
+      once fixed, segfaulted on connection close on Docker Desktop, in the
+      Alpine and the Debian builds alike. TestMain of the remaining Docker
+      backed tests (s3fs, sftpfs) fails instead of skipping when Docker is
+      installed but the server can't be started (`fstest.DockerSetupFailed`).
+- [x] dropboxfs: `NewAndRegister(ctx, token, cacheTimeout, mute)` fetches the
+      account and uses the account id as `ID()` and prefix suffix, so the
+      same account always gets the same prefix; typed `not_found` and
+      `conflict` detection only (no error-string matching); `MakeDir` on an
+      existing path wraps `ErrExist`; `Touch` of an existing file returns
+      `ErrUnsupported`; `Remove` refuses a non-empty folder, native
+      `RemoveAll`; `OpenReader` streams the download; `OpenReadWriter`
+      creates a missing file; the metadata cache is invalidated by every
+      write; `closed` is atomic.
 
 ### Phase 6 — Docs and release
 

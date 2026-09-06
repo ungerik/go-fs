@@ -65,6 +65,16 @@ func (cache *fileInfoCache) Get(path string) (info *fs.FileInfo, ok bool) {
 	return entry.FileInfo, true
 }
 
+// Clear removes all cached FileInfos.
+func (cache *fileInfoCache) Clear() {
+	if cache == nil {
+		return
+	}
+	cache.mtx.Lock()
+	defer cache.mtx.Unlock()
+	clear(cache.infos)
+}
+
 // Delete deletes the FileInfo with path if was cached.
 func (cache *fileInfoCache) Delete(path string) {
 	if cache == nil {

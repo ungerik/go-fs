@@ -56,6 +56,16 @@ took a context.
   URI) needs `sftpfs.URLHostKeyCallback` to be set, for example to
   `sftpfs.AcceptAnyHostKey` for the previous unverified behaviour. `Dial`,
   `DialAndRegister` and `EnsureRegistered` are unchanged.
+- `ftpfs`: the last parameter of `Dial`, `DialAndRegister` and
+  `EnsureRegistered` is `*ftpfs.Options` instead of `debugOut io.Writer`;
+  `nil` keeps compiling and means defaults. FTPS servers with self-signed
+  certificates need `&ftpfs.Options{InsecureSkipVerify: true}` (the old code
+  never verified certificates). `ftps://host` connects with explicit TLS on
+  port 21; use `ftps://host:990` for implicit TLS.
+- `dropboxfs`: `NewAndRegister(ctx, token, cacheTimeout, mute)` takes a
+  context and returns `(fs.FileSystem, error)`; the prefix is
+  `dropbox://<account id>` instead of a random string, so URIs can be
+  persisted.
 
 ## Removed
 
