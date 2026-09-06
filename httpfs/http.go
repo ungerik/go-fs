@@ -3,6 +3,9 @@
 // Import it to register FileSystem and FileSystemTLS:
 //
 //	import _ "github.com/ungerik/go-fs/httpfs"
+//
+// Requests are made with Client, which can be replaced
+// to configure timeouts, proxies or transports.
 package httpfs
 
 import (
@@ -32,6 +35,9 @@ const (
 var (
 	FileSystem    = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: Prefix}}
 	FileSystemTLS = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: PrefixTLS}}
+
+	// Client is used for all HTTP requests of the file systems.
+	Client = http.DefaultClient
 )
 
 // fileSystem paths are not rooted, they start with the host name:
@@ -80,7 +86,7 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 		return fs.FileInfo{}, err
 	}
 	name := path.Base(request.URL.Path)
-	response, err := http.DefaultClient.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	response, err := Client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
 		return fs.FileInfo{}, err
 	}
@@ -116,7 +122,7 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 	}
 
 	// Fall back to a full GET request.
-	response, err = http.DefaultClient.Get(url) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	response, err = Client.Get(url) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
 		return fs.FileInfo{}, err
 	}
@@ -194,42 +200,46 @@ func (f *fileSystem) Exists(filePath string) (bool, error) {
 	return info.Exists, nil
 }
 
-func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	// TODO use HTTP GET with context
-	reader, err := f.OpenReader(filePath)
+// get returns the response of a GET request with ctx.
+// A 404 or 410 status is reported as an error wrapping os.ErrNotExist.
+func (f *fileSystem) get(ctx context.Context, filePath string) (*http.Response, error) {
+	url := f.URL(filePath)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("HTTPFileSystem.ReadAll: %w", err)
+		return nil, err
 	}
-
-	data, err = io.ReadAll(reader)
+	response, err := Client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
-		return nil, fmt.Errorf("HTTPFileSystem.ReadAll: %w", err)
+		return nil, err
 	}
-
-	return data, nil
+	switch {
+	case isNotExistStatus(response.StatusCode):
+		_ = response.Body.Close()
+		return nil, fs.NewErrDoesNotExist(fs.File(url))
+	case !isSuccessStatus(response.StatusCode):
+		_ = response.Body.Close()
+		return nil, fmt.Errorf("HTTPFileSystem: unexpected status %s for %s", response.Status, url)
+	}
+	return response, nil
 }
 
-func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
-	info, err := f.Stat(filePath)
+// ReadAll downloads the URL with a GET request using ctx.
+func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+	response, err := f.get(ctx, filePath)
 	if err != nil {
 		return nil, err
-	}
-	response, err := http.DefaultClient.Get(f.URL(filePath)) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
-	if err != nil {
-		return nil, fmt.Errorf("HTTPFileSystem.OpenReader: %w", err)
-	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, fmt.Errorf("HTTPFileSystem.OpenReader: %d: %s", response.StatusCode, response.Status)
 	}
 	defer response.Body.Close()
-	buffer, err := fsimpl.NewReadonlyFileBufferReadAll(response.Body, info.StdFileInfo())
+	return fs.ReadAllContext(ctx, response.Body)
+}
+
+// OpenReader streams the body of a GET request.
+func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+	response, err := f.get(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
-	return buffer, nil
+	return response.Body, nil
 }
 
 func (f *fileSystem) Close() error {

@@ -44,7 +44,8 @@ Taken 2026-09-05/06:
   semantics.
 - **Delivery:** this roadmap lives in the repo; all of the v1.0 work lands
   in one pull request (#18, the v1.0 PR), one commit per phase (backends:
-  one commit each), so master jumps from v0.1.0 to v1.0.0 in one step.
+  one commit each), so master jumps from v0.1.0 to v1.0.0-beta.1 in one
+  step; further beta releases in follow-up PRs iterate before v1.0.0.
 - **Go version policy:** every module (and `go.work`) declares one minor
   version behind the currently released Go: Go 1.27 is current, so all modules
   are on `go 1.26.0`. Bump all modules together on each Go release.
@@ -503,11 +504,25 @@ One PR per phase unless noted.
 
 ### Phase 6 — Docs and release
 
-- [ ] README rewrite for the v1 API (support matrix regenerated from
-      conformance), package docs, s3fs README.
-- [ ] CHANGELOG `v1.0.0` (Added/Changed/Removed + migration link), `VERSION` =
-      `v1.0.0`, tag all modules in lockstep (`v1.0.0`, `s3fs/v1.0.0`,
-      `sftpfs/v1.0.0`, `ftpfs/v1.0.0`, `dropboxfs/v1.0.0`, `tools/v1.0.0`).
+- [x] README updated for the v1 API: migration pointer, backend table with
+      constructors and ids, support matrix regenerated from the implemented
+      optional interfaces, error contract and context rule, backend examples
+      for the new constructors, implementer section (`fsimpl.PathHelper`,
+      `fstest.RunConformance`). Package docs for `fs` (`doc.go`), `zipfs`
+      and `multipartfs`; s3fs README rewritten for the v1 API.
+- [x] Remaining `TODO`s resolved: `httpfs` streams `OpenReader`, uses
+      `NewRequestWithContext` and an injectable `Client`;
+      `multipartfs.EscapePath` removed; `CopyRecursive` uses `MakeAllDirs`;
+      the local `ReadAll`/`WriteAll`/`Append` document that the OS call is not
+      cancelable. Commented-out `MemFile` JSON marshalling removed.
+- [x] CHANGELOG `v1.0.0-beta.1` with the migration link, `VERSION` =
+      `v1.0.0-beta.1`.
+- [ ] Tag all modules in lockstep after the PR is merged
+      (`v1.0.0-beta.1`, `s3fs/v1.0.0-beta.1`, `sftpfs/v1.0.0-beta.1`,
+      `ftpfs/v1.0.0-beta.1`, `dropboxfs/v1.0.0-beta.1`,
+      `tools/v1.0.0-beta.1`). The intermediate tags `v0.2.0`/`v0.3.0` were
+      not created because everything lands in one PR.
+- [ ] v1.0.0: after the beta iterations in follow-up PRs.
 
 ## Verification (overall)
 

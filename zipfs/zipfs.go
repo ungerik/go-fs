@@ -1,3 +1,11 @@
+// Package zipfs implements read-only and write-only file systems
+// for ZIP archives.
+//
+// NewReaderFileSystem opens an existing archive for reading,
+// NewWriterFileSystem creates a new archive that receives files
+// until it is closed. Because archive/zip writes entries
+// sequentially, only one file of a writer file system can be
+// open for writing at a time.
 package zipfs
 
 import (

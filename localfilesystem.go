@@ -580,7 +580,6 @@ func (local *LocalFileSystem) MakeAllDirs(dirPath string, perm Permissions) erro
 // checked before the read starts; the read itself is not cancelable.
 // OS errors are mapped through [wrapOSErr].
 func (local *LocalFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	// TODO make really large file op cancelable
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -596,7 +595,6 @@ func (local *LocalFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 // [LocalFileSystem.DefaultCreatePermissions]. ctx is only checked
 // before the write starts; the write itself is not cancelable.
 func (local *LocalFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm Permissions) error {
-	// TODO make really large file op cancelable
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -611,7 +609,6 @@ func (local *LocalFileSystem) WriteAll(ctx context.Context, filePath string, dat
 // and writes data. A short write is reported as [io.ErrShortWrite].
 // ctx is only checked before opening; the write itself is not cancelable.
 func (local *LocalFileSystem) Append(ctx context.Context, filePath string, data []byte, perm Permissions) error {
-	// TODO make really large file op cancelable
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

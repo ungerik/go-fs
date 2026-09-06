@@ -10,6 +10,10 @@ go-fs: A unified file system for Go
 The package is built around a `File` type that is a string underneath
 and interprets its value as a local file system path or as a URI.
 
+Version 1.0 is in beta; the v1 API is being iterated in beta releases
+before it is frozen. Upgrading from v0.x is mechanical, see
+[docs/MIGRATION_v1.md](docs/MIGRATION_v1.md).
+
 Introduction
 ------------
 
@@ -406,10 +410,10 @@ Symbolic links
 --------------
 
 File systems opt into symbolic link support by implementing the
-`SymbolicLinkFileSystem` interface. `LocalFileSystem` and `MemFileSystem`
-opt in; the cloud and archive backends (s3fs, httpfs, ftpfs, sftpfs,
-zipfs, dropboxfs, multipartfs) do not, so calling these methods on files
-from those backends returns an `ErrUnsupported` error.
+`SymbolicLinkFileSystem` interface. `LocalFileSystem`, `MemFileSystem` and
+`sftpfs` opt in; the other backends do not, so calling these methods on
+files from those backends returns an `ErrUnsupported` error, and
+`IsSymbolicLink` is false.
 
 ```go
 target := fs.File("/etc/hosts")
@@ -505,17 +509,21 @@ in the root module. Importing the package registers a `FileSystem` for its
 URI prefix, after which `File` values with that prefix transparently
 route to the right backend.
 
-| Package         | URI prefix       | Constructor                                      | Read | Write |
-| --------------- | ---------------- | ------------------------------------------------ | :--: | :---: |
-| (built-in)      | `file://`        | `fs.Local` (registered by default)               | yes  | yes   |
-| `httpfs`        | `http://`, `https://` | side-effect import: `import _ ".../httpfs"`  | yes  | no    |
-| `s3fs`          | `s3://<bucket>`  | `s3fs.NewAndRegister` / `s3fs.NewLoadDefaultConfig` | yes | yes/ro |
-| `sftpfs`        | `sftp://`        | `sftpfs.Dial` / `sftpfs.DialAndRegister`         | yes  | yes   |
-| `ftpfs`         | `ftp://`         | `ftpfs.Dial` / `ftpfs.DialAndRegister`           | yes  | yes   |
-| `dropboxfs`     | `dropbox://`     | `dropboxfs.NewAndRegister`                       | yes  | yes   |
-| `zipfs`         | `zip://`         | `zipfs.NewReaderFileSystem` / `NewWriterFileSystem` | yes/ro | yes/ro |
-| `multipartfs`   | (per-request)    | `multipartfs.FromRequestForm`                    | yes  | no    |
-| (built-in)      | `mem://`         | `fs.NewMemFileSystem`                            | yes  | yes   |
+| Package       | URI prefix              | Constructor                                        | Read | Write  |
+| ------------- | ----------------------- | -------------------------------------------------- | :--: | :----: |
+| (built-in)    | `file://` or none       | `fs.Local` (registered by default)                 | yes  | yes    |
+| `httpfs`      | `http://`, `https://`   | side-effect import: `import _ ".../httpfs"`        | yes  | no     |
+| `s3fs`        | `s3://<bucket>`         | `s3fs.NewAndRegister`, `s3fs.NewLoadDefaultConfig` | yes  | yes/ro |
+| `sftpfs`      | `sftp://<user>@<host>`  | `sftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes  |
+| `ftpfs`       | `ftp://`, `ftps://`     | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
+| `dropboxfs`   | `dropbox://<account>`   | `dropboxfs.NewAndRegister`                         | yes  | yes    |
+| `zipfs`       | `zip://`                | `zipfs.NewReaderFileSystem`, `NewWriterFileSystem` | reader | writer |
+| `multipartfs` | `multipart://`          | `multipartfs.FromRequestForm`                      | yes  | no     |
+| (built-in)    | `mem://`                | `fs.NewMemFileSystem`                              | yes  | yes    |
+
+Every registered file system has a stable `ID()`: the file system id of the
+root volume for the local file system, the bucket for s3fs, `user@host` for
+sftpfs and ftpfs, the account id for dropboxfs.
 
 ### Optional interface support
 
@@ -526,21 +534,28 @@ still works through a generic emulation built on the core methods — a backend
 only implements an optional interface when doing so is more efficient or more
 capable than that emulation.
 
-`LocalFileSystem` and `MemFileSystem` implement the full set natively. For the
-remote backends:
+`LocalFileSystem` and `MemFileSystem` implement the full set natively
+(`MemFileSystem` additionally `User`/`Group`, which the local file system
+only exposes on Unix). For the remote backends, as verified by the
+conformance suite in `fstest`:
 
 | Capability             | s3  | sftp | ftp | dropbox | http |
 | ---------------------- | :-: | :--: | :-: | :-----: | :--: |
 | CopyFile (server-side) | ✓   | –    | –   | ✓       | –    |
 | Move                   | –   | ✓    | ✓   | ✓       | –    |
-| Exists                 | ✓   | –    | –   | ✓       | ✓    |
+| Exists                 | –   | –    | –   | ✓       | ✓    |
 | ReadAll                | ✓   | –    | ✓   | ✓       | ✓    |
 | WriteAll               | ✓   | –    | ✓   | ✓       | r/o  |
 | Append                 | –   | –    | ✓   | –       | r/o  |
 | OpenAppendWriter       | –   | ✓    | ✓   | –       | r/o  |
+| OpenReadWriter         | ✓   | ✓    | ✓   | ✓       | r/o  |
 | Touch                  | ✓   | ✓    | ✓   | ✓       | r/o  |
 | Truncate               | –   | ✓    | –   | –       | r/o  |
-| ListDirRecursive       | ✓   | –    | –   | ✓       | –    |
+| MakeAllDirs            | –   | ✓    | –   | –       | r/o  |
+| RemoveAll              | ✓   | ✓    | ✓   | ✓       | r/o  |
+| ListDirRecursive       | ✓   | ✓    | ✓   | ✓       | –    |
+| SetPermissions         | –   | ✓    | –   | –       | r/o  |
+| Symbolic links         | –   | ✓    | –   | –       | –    |
 
 `✓` native implementation · `–` falls back to the generic emulation (works the
 same, just not specialized) · `r/o` read-only backend, so the write operation
@@ -551,6 +566,14 @@ The archive and request-scoped backends implement a mode-dependent subset:
 mode, Exists/listing only in reader mode), and `multipartfs` is read-only and
 provides `Exists` and `ReadAll`.
 
+Every backend follows the same error contract: `errors.Is(err, os.ErrNotExist)`
+for missing files, `os.ErrExist` for `MakeDir` on an existing path,
+`fs.ErrReadOnlyFileSystem` / `fs.ErrWriteOnlyFileSystem` for the wrong
+direction, `fs.ErrFileSystemClosed` after `Close`, and the context error when
+a context is cancelled. Methods only take a `context.Context` when they can
+take long: reading or writing content, listing directories and dialing
+connections.
+
 ### httpfs
 
 ```go
@@ -560,6 +583,7 @@ data, err := fs.File("https://example.com/file.txt").ReadAll(ctx)
 ```
 
 Read-only. Useful for treating remote files uniformly with local ones.
+`httpfs.Client` is the `*http.Client` used for all requests.
 
 ### s3fs
 
@@ -576,7 +600,9 @@ err = fs.File("s3://my-bucket/path/file.txt").WriteAllString(ctx, "Hello")
 ```
 
 Multipart upload/download is used automatically for files larger than
-5/10 MB.
+`s3fs.MultipartUploadThreshold` / `s3fs.MultipartDownloadThreshold`
+(5 MB / 10 MB). Directories are object key prefixes; `MakeDir` creates a
+zero-byte marker object so empty directories exist too.
 
 ### sftpfs
 
@@ -585,14 +611,20 @@ import "github.com/ungerik/go-fs/sftpfs"
 
 sftpFS, err := sftpfs.DialAndRegister(
     ctx,
-    "sftp://user@host:22/",
+    "sftp://user@host",
     sftpfs.Password("secret"),
-    ssh.InsecureIgnoreHostKey(), // use a real callback in production
-    nil,
+    knownhosts.New("~/.ssh/known_hosts"), // ssh.HostKeyCallback, or sftpfs.AcceptAnyHostKey
+    nil,                                  // optional fs.Logger for connection events
 )
+defer sftpFS.Close()
 
-data, err := fs.File("sftp://user@host:22/etc/hostname").ReadAll(ctx)
+data, err := fs.File("sftp://user@host/etc/hostname").ReadAll(ctx)
 ```
+
+A lost connection is re-dialed transparently. `EnsureRegistered` shares one
+connection per address between callers with reference counting. URIs with
+embedded credentials (`sftp://user:password@host/path`) dial a connection per
+operation and require `sftpfs.URLHostKeyCallback` to be set.
 
 ### ftpfs
 
@@ -601,23 +633,32 @@ import "github.com/ungerik/go-fs/ftpfs"
 
 ftpFS, err := ftpfs.DialAndRegister(
     ctx,
-    "ftp://example.com:21/",
-    ftpfs.AnonymousCredentials,
-    nil, // debug output
+    "ftps://example.com",
+    ftpfs.UsernameAndPassword("user", "secret"),
+    nil, // *ftpfs.Options: TLS config, InsecureSkipVerify, protocol debug output
 )
+defer ftpFS.Close()
 ```
 
-Supports plain FTP and FTPS.
+`ftp://` is plain FTP, `ftps://` is explicit TLS on port 21 (implicit TLS
+with port 990). Server certificates are verified unless
+`ftpfs.Options.InsecureSkipVerify` is set. The single control connection is
+used by one operation at a time; `OpenReader` streams over its own connection.
 
 ### dropboxfs
 
 ```go
 import "github.com/ungerik/go-fs/dropboxfs"
 
-dbxFS := dropboxfs.NewAndRegister(accessToken, 5*time.Minute, false)
+dbxFS, err := dropboxfs.NewAndRegister(ctx, accessToken, 5*time.Minute, false)
+defer dbxFS.Close()
 
-err := fs.File("dropbox://Apps/MyApp/notes.md").WriteAllString(ctx, "...")
+// The prefix is dropbox://<account id>, so it is stable per account
+err = dbxFS.RootDir().Join("Apps", "MyApp", "notes.md").WriteAllString(ctx, "...")
 ```
+
+The second argument is the metadata cache timeout (zero disables the cache),
+the third mutes the notifications Dropbox sends for changed files.
 
 ### zipfs
 
@@ -672,3 +713,25 @@ local backend does — including `RenameFileSystem`, `MoveFileSystem`,
 for any other backend in tests. Watch events are synthesized from
 every mutation that goes through the FS API; direct mutation of a
 `MemFile.FileData` byte slice obtained outside the API is not observable.
+
+Implementing a file system
+--------------------------
+
+A backend implements `FileSystem` (metadata, paths, `Stat`, `ListDir`,
+`OpenReader`, `Close`) and, if it can write, `WriteFileSystem` (`OpenWriter`,
+`MakeDir`, `Remove`). Everything else is an optional interface with a
+generic emulation in this package, to be implemented only when the backend
+can do it more efficiently. `fsimpl.PathHelper` provides the path methods
+for a URI prefix, `fsimpl.NewWriteOnCloseFileBuffer` a writer for backends
+without random access, and `fstest.RunConformance` verifies a backend
+against the contract of every method:
+
+```go
+func TestMyFS(t *testing.T) {
+	fstest.RunConformance(t, myFS, fstest.Config{
+		Name:    "My file system",
+		Prefix:  "myfs://",
+		TestDir: "/conformance", // an empty directory the suite may use
+	})
+}
+```

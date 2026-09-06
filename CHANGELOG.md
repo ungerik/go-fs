@@ -5,9 +5,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## Unreleased
+## v1.0.0-beta.1 - 2026-09-06
 
-Road to v1.0, see `docs/V1_ROADMAP.md`.
+First beta of the v1 API; further beta releases iterate on it before
+v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
+`docs/MIGRATION_v1.md`; the design decisions are recorded in
+`docs/V1_ROADMAP.md`. All modules (`s3fs`, `sftpfs`, `ftpfs`, `dropboxfs`,
+`tools`) are tagged in lockstep.
 
 ### Changed
 
@@ -92,6 +96,11 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
   `os.ErrExist`; native `RemoveAll` and `ListDirRecursive`. The ftpfs tests
   run the conformance suite for FTP and FTPS against an in-process server
   on every platform; the dockerized vsftpd is gone.
+- `httpfs` streams `OpenReader` from the GET body without a HEAD request
+  first, uses `http.NewRequestWithContext` for `ReadAll`, and makes the
+  `*http.Client` injectable via `httpfs.Client`. `multipartfs.EscapePath`
+  (a stub that only replaced quotes) is removed. `CopyRecursive` creates
+  missing destination directories with `MakeAllDirs`.
 - **dropboxfs rework (Phase 5).** `NewAndRegister(ctx, token, cacheTimeout,
   mute)` fetches the account and returns an error; `ID()` and the prefix
   are derived from the account id instead of a random string. Only typed

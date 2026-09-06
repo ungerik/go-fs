@@ -1,3 +1,10 @@
+// Package multipartfs implements a read-only file system
+// for the files of a parsed multipart HTTP form.
+//
+// FromRequestForm parses the form of a request; the uploaded
+// files are then accessible as fs.File values and the form
+// values via the Form field. Close removes the temporary files
+// of the form.
 package multipartfs
 
 import (
@@ -238,10 +245,6 @@ func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 }
 
 func (f *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
-	filePath, err := EscapePath(filePath)
-	if err != nil {
-		return nil, err
-	}
 	header, err := f.GetMultipartFileHeader(filePath)
 	if err != nil {
 		return nil, err
@@ -286,14 +289,3 @@ func (f multipartFileInfo) Mode() iofs.FileMode { return 0666 }
 func (f multipartFileInfo) ModTime() time.Time  { return time.Time{} }
 func (f multipartFileInfo) IsDir() bool         { return false }
 func (f multipartFileInfo) Sys() any            { return nil }
-
-func EscapePath(filePath string) (string, error) {
-	// TODO: properly escape paths
-
-	// parsedFilePath, err := url.Parse(filePath)
-	// if err != nil {
-	// 	return "", err
-	// }
-
-	return strings.Replace(filePath, "\"", "%22", -1), nil
-}
