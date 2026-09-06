@@ -2,6 +2,7 @@ package zipfs
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,15 +93,10 @@ func TestZipFileSystem(t *testing.T) {
 		})
 
 		t.Run("Exists", func(t *testing.T) {
-			testFilePath := zipReader.JoinCleanPath("test", "test-file.txt")
-			exists, err := zipReader.Exists(testFilePath)
-			require.NoError(t, err, "Exists should not error")
-			assert.True(t, exists, "test-file.txt should exist")
+			require.NoError(t, fs.File(zipReader.JoinCleanURI("test", "test-file.txt")).CheckExists(), "test-file.txt should exist")
 
-			nonExistentPath := zipReader.JoinCleanPath("test", "non-existent.txt")
-			exists, err = zipReader.Exists(nonExistentPath)
-			require.NoError(t, err, "Exists should not error")
-			assert.False(t, exists, "non-existent.txt should not exist")
+			err := fs.File(zipReader.JoinCleanURI("test", "non-existent.txt")).CheckExists()
+			assert.ErrorIs(t, err, os.ErrNotExist, "non-existent.txt should not exist")
 		})
 
 		t.Run("ListDir", func(t *testing.T) {
@@ -132,7 +128,7 @@ func TestZipFileSystem(t *testing.T) {
 			// A ZIP archive is opened either for reading or for writing,
 			// so random access read-write must be rejected as read-only
 			// by the fs package based on ReadableWritable.
-			_, err := zipReader.JoinCleanFile("test", "test-file.txt").OpenReadWriter()
+			_, err := fs.File(zipReader.JoinCleanURI("test", "test-file.txt")).OpenReadWriter()
 			require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "OpenReadWriter should error on read-only ZIP")
 		})
 	})
@@ -147,7 +143,7 @@ func TestZipFileSystem(t *testing.T) {
 		})
 
 		t.Run("OpenReadWriter_WriteOnly", func(t *testing.T) {
-			_, err := zipWriter.JoinCleanFile("test", "test-file.txt").OpenReadWriter()
+			_, err := fs.File(zipWriter.JoinCleanURI("test", "test-file.txt")).OpenReadWriter()
 			require.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "OpenReadWriter should error on write-only ZIP")
 		})
 	})
@@ -218,7 +214,9 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, zipReader.Close()) })
 
-	// MakeDir on a read-only archive must report read-only, not silently succeed.
-	err = zipReader.MakeDir("somedir", 0)
+	// Writes to a read-only archive must report read-only, not silently succeed.
+	err = zipReader.RootDir().Join("somedir").MakeDir()
+	require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
+	err = zipReader.RootDir().Join("f.txt").Remove()
 	require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
 }

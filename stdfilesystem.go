@@ -38,6 +38,7 @@ type StdFileSystem struct {
 
 	fsys   iofs.FS
 	id     string
+	name   string
 	closed atomic.Bool
 }
 
@@ -49,10 +50,20 @@ func NewStdFileSystem(fsys iofs.FS, id string) *StdFileSystem {
 	if id == "" {
 		id = fsimpl.RandomString()
 	}
+	return NewStdFileSystemWithPrefix(fsys, StdFileSystemPrefix+id, "io/fs file system")
+}
+
+// NewStdFileSystemWithPrefix returns a read-only FileSystem for fsys
+// with a custom URI prefix and name, for file systems that are built
+// on an io/fs.FS but have a scheme of their own like zipfs.
+// The id is the prefix without the scheme.
+func NewStdFileSystemWithPrefix(fsys iofs.FS, prefix, name string) *StdFileSystem {
+	_, id, _ := strings.Cut(prefix, "://")
 	return &StdFileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: StdFileSystemPrefix + id, Rooted: true},
+		PathHelper: fsimpl.PathHelper{URIPrefix: prefix, Rooted: true},
 		fsys:       fsys,
 		id:         id,
+		name:       name,
 	}
 }
 
@@ -116,7 +127,7 @@ func (s *StdFileSystem) ID() string {
 }
 
 func (s *StdFileSystem) Name() string {
-	return "io/fs file system"
+	return s.name
 }
 
 func (s *StdFileSystem) String() string {

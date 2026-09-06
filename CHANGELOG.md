@@ -117,10 +117,15 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 - `fs.SubFileSystem` is a view of a directory of another file system with
   the prefix `sub://<id>`, forwarding every operation (including the
   optional interfaces) to the parent with translated paths.
+- `fs.NewStdFileSystemWithPrefix` builds a `StdFileSystem` with a scheme of
+  its own; zipfs uses it: `zipfs.ReaderFileSystem` is a `StdFileSystem` over
+  `archive/zip.Reader` and `zipfs.WriterFileSystem` the sequential writer,
+  replacing the mode-switching `ZipFileSystem` type. Reader listings are
+  sorted by name and report the modes stored in the archive.
 - `tarfs`: read-only and write-only file systems for tar archives,
   optionally gzip compressed, mirroring `zipfs` (root module, standard
-  library only). `fsimpl.DirTree` is the directory tree shared by `zipfs`
-  and `tarfs`.
+  library only). `fsimpl.DirTree` is the directory tree of archive entries
+  (formerly internal to zipfs).
 - `fs.CreateTempFile` creates a temporary file atomically (`fs.TempFile` only
   returns a path).
 - **`fstest.RunConformance`** replaces `fs.RunFileSystemTests` and the `tests`

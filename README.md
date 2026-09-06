@@ -682,8 +682,8 @@ out, err := zipfs.NewWriterFileSystem(fs.File("out.zip"))
 defer out.Close()
 ```
 
-A `ZipFileSystem` is either reader- or writer-mode depending on the
-constructor used.
+`ReaderFileSystem` is a `StdFileSystem` over the `io/fs.FS` of
+`archive/zip.Reader`; `WriterFileSystem` writes entries sequentially.
 
 ### tarfs
 
