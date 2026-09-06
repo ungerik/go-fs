@@ -763,7 +763,7 @@ func TestGlob(t *testing.T) {
 // fallback branch for file systems that implement neither RenameFileSystem
 // nor MoveFileSystem (for example s3fs).
 type noRenameMoveFS struct {
-	FileSystem
+	WriteFileSystem
 }
 
 // registerNoRenameMoveFS creates an in-memory file system with the given
@@ -776,7 +776,7 @@ func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
 	// Replace the registered *MemFileSystem (which implements Rename and
 	// Move) with a wrapper that only exposes the base FileSystem interface.
 	Unregister(memFS)
-	wrapped := &noRenameMoveFS{FileSystem: memFS}
+	wrapped := &noRenameMoveFS{WriteFileSystem: memFS}
 	Register(wrapped)
 	t.Cleanup(func() {
 		Unregister(wrapped)

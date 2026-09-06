@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	iofs "io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -387,8 +386,8 @@ func (f *fileSystem) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
-func (f *fileSystem) ID() (string, error) {
-	return f.URIPrefix, nil
+func (f *fileSystem) ID() string {
+	return f.URIPrefix
 }
 
 func (f *fileSystem) String() string {
@@ -399,7 +398,7 @@ func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
-func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	client, dirPath, release, err := f.getClient(context.Background(), dirPath)
 	if err != nil {
 		return err
@@ -418,14 +417,18 @@ func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 	return nil
 }
 
-func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
-	client, filePath, release, err := f.getClient(context.Background(), filePath)
+func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
+	client, clientPath, release, err := f.getClient(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 
-	return client.Stat(filePath)
+	info, err := client.Stat(clientPath)
+	if err != nil {
+		return nil, err
+	}
+	return fs.NewFileInfo(f.JoinCleanFile(filePath), info, f.IsHidden(filePath)), nil
 }
 
 type sftpFile struct {
@@ -449,19 +452,19 @@ func (f *fileSystem) openFile(filePath string, flags int) (*sftpFile, error) {
 	return &sftpFile{file, release}, nil
 }
 
-func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
+func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return f.openFile(filePath, os.O_RDONLY)
 }
 
-func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	return f.openFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 }
 
-func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (f *fileSystem) OpenAppendWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	return f.openFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 }
 
-func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error) {
 	return f.openFile(filePath, os.O_RDWR|os.O_CREATE)
 }
 
@@ -487,7 +490,7 @@ var _ fs.TouchFileSystem = new(fileSystem)
 // existing file — this updates the modification time of an existing file in
 // place via the SFTP SETSTAT packet, and only creates an empty file when it
 // does not exist yet.
-func (f *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
+func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	client, filePath, release, err := f.getClient(context.Background(), filePath)
 	if err != nil {
 		return err
@@ -576,9 +579,7 @@ func (f *fileSystem) Name() string {
 	return "SFTP"
 }
 
-func (f *fileSystem) IsSymbolicLink(filePath string) bool { return false }
-
-func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	client, dirPath, release, err := f.getClient(ctx, dirPath)
 	if err != nil {
 		return err

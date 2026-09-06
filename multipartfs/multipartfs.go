@@ -2,6 +2,7 @@ package multipartfs
 
 import (
 	"context"
+	"io"
 	iofs "io/fs"
 	"mime/multipart"
 	"net/http"
@@ -29,7 +30,6 @@ var (
 
 // MultipartFileSystem wraps the files in a MIME multipart message as fs.FileSystem
 type MultipartFileSystem struct {
-	fs.ReadOnlyBase
 	fsimpl.PathHelper
 
 	Form *multipart.Form
@@ -94,8 +94,12 @@ func (f *MultipartFileSystem) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
-func (f *MultipartFileSystem) ID() (string, error) {
-	return f.URIPrefix, nil
+func (f *MultipartFileSystem) ID() string {
+	return f.URIPrefix
+}
+
+func (*MultipartFileSystem) ReadableWritable() (readable, writable bool) {
+	return true, false
 }
 
 func (f *MultipartFileSystem) Name() string {
@@ -109,12 +113,6 @@ func (f *MultipartFileSystem) String() string {
 
 func (f *MultipartFileSystem) File(filePath string) fs.File {
 	return f.JoinCleanFile(filePath)
-}
-
-// MatchAnyPattern resolves the ambiguity between the embedded
-// fs.ReadOnlyBase and fsimpl.PathHelper implementations.
-func (f *MultipartFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return f.PathHelper.MatchAnyPattern(name, patterns)
 }
 
 func (f *MultipartFileSystem) JoinCleanFile(uriParts ...string) fs.File {
@@ -155,35 +153,33 @@ func (f *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 	return &info
 }
 
-func (f *MultipartFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (f *MultipartFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	info := f.info(filePath)
 	if !info.Exists {
-		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
-	return info.StdFileInfo(), nil
+	return info, nil
 }
 
-func (f *MultipartFileSystem) Exists(filePath string) bool {
+func (f *MultipartFileSystem) Exists(filePath string) (bool, error) {
 	parts := f.SplitPath(filePath)
 	switch len(parts) {
 	case 1:
 		dir := parts[0]
-		return len(f.Form.File[dir]) > 0
+		return len(f.Form.File[dir]) > 0, nil
 	case 2:
 		dir, filename := parts[0], parts[1]
 		formFiles, _ := f.Form.File[dir]
 		for _, formFile := range formFiles {
 			if formFile.Filename == filename {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
-func (f *MultipartFileSystem) IsSymbolicLink(filePath string) bool { return false }
-
-func (f *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+func (f *MultipartFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -218,7 +214,7 @@ func (f *MultipartFileSystem) ListDirInfo(ctx context.Context, dirPath string, c
 			}
 		}
 	case 2:
-		if f.Exists(dirPath) {
+		if exists, _ := f.Exists(dirPath); exists {
 			return fs.NewErrIsNotDirectory(f.File(dirPath))
 		}
 		return fs.NewErrDoesNotExist(f.File(dirPath))
@@ -241,7 +237,7 @@ func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 	return fs.ReadAllContext(ctx, file)
 }
 
-func (f *MultipartFileSystem) OpenReader(filePath string) (iofs.File, error) {
+func (f *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	filePath, err := EscapePath(filePath)
 	if err != nil {
 		return nil, err

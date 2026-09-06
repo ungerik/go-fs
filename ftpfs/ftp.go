@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	iofs "io/fs"
 	"net/textproto"
 	"net/url"
 	"path"
@@ -280,8 +279,8 @@ func (f *fileSystem) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
-func (f *fileSystem) ID() (string, error) {
-	return f.URIPrefix, nil
+func (f *fileSystem) ID() string {
+	return f.URIPrefix
 }
 
 func (f *fileSystem) String() string {
@@ -292,34 +291,28 @@ func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
-type fileInfo struct {
-	entry *ftp.Entry
-}
-
-func (i fileInfo) Name() string        { return i.entry.Name }
-func (i fileInfo) Size() int64         { return int64(i.entry.Size) } //#nosec G115 -- int64 limit will not be exceeded in real world use cases
-func (i fileInfo) Mode() iofs.FileMode { return 0666 }
-func (i fileInfo) ModTime() time.Time  { return i.entry.Time }
-func (i fileInfo) IsDir() bool         { return i.entry.Type == ftp.EntryTypeFolder }
-func (i fileInfo) Sys() any            { return nil }
-
-func entryToFileInfo(entry *ftp.Entry, file fs.File) *fs.FileInfo {
+// entryToFileInfo converts an ftp.Entry to a fs.FileInfo
+// for the file with the passed URI.
+func (f *fileSystem) entryToFileInfo(entry *ftp.Entry, file fs.File) *fs.FileInfo {
+	isDir := entry.Type == ftp.EntryTypeFolder
 	return &fs.FileInfo{
 		File:        file,
 		Name:        entry.Name,
 		Exists:      true,
-		IsDir:       entry.Type == ftp.EntryTypeFolder,
-		IsRegular:   entry.Type != ftp.EntryTypeLink,
-		IsHidden:    false,
+		IsDir:       isDir,
+		IsRegular:   !isDir,
+		IsSymlink:   entry.Type == ftp.EntryTypeLink,
+		IsHidden:    f.IsHidden(entry.Name),
 		Size:        int64(entry.Size), //#nosec G115 -- int64 limit will not be exceeded in real world use cases
 		Modified:    entry.Time,
 		Permissions: 0666,
 	}
 }
 
-func (f *fileSystem) Stat(filePath string) (info iofs.FileInfo, err error) {
+func (f *fileSystem) Stat(filePath string) (info *fs.FileInfo, err error) {
 	defer f.convertResultError(&err, filePath)
 
+	file := f.JoinCleanFile(filePath)
 	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return nil, err
@@ -344,17 +337,17 @@ func (f *fileSystem) Stat(filePath string) (info iofs.FileInfo, err error) {
 		// Find the entry in the list
 		for _, e := range entries {
 			if e.Name == name {
-				return fileInfo{e}, nil
+				return f.entryToFileInfo(e, file), nil
 			}
 		}
 
 		// If not found in list, return original error
 		return nil, err
 	}
-	return fileInfo{entry}, nil
+	return f.entryToFileInfo(entry, file), nil
 }
 
-func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) (err error) {
 	defer f.convertResultError(&err, dirPath)
 
 	conn, dirPath, release, err := f.getConn(ctx, dirPath)
@@ -381,7 +374,7 @@ func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback f
 		if !match {
 			continue
 		}
-		err = callback(entryToFileInfo(entry, f.JoinCleanFile(dirPath, entry.Name)))
+		err = callback(f.entryToFileInfo(entry, f.JoinCleanFile(dirPath, entry.Name)))
 		if err != nil {
 			return err
 		}
@@ -389,7 +382,7 @@ func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback f
 	return nil
 }
 
-func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) (err error) {
+func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) (err error) {
 	defer f.convertResultError(&err, dirPath)
 
 	conn, dirPath, release, err := f.getConn(context.Background(), dirPath)
@@ -421,38 +414,8 @@ func ignoreFTPSuccessResponse(err error) error {
 }
 
 type fileReader struct {
-	path     string
-	conn     *ftp.ServerConn
 	response *ftp.Response
 	release  func() error
-}
-
-func (f *fileReader) Stat() (iofs.FileInfo, error) {
-	// Try GetEntry first
-	entry, err := f.conn.GetEntry(f.path)
-	if err != nil {
-		// Fall back to List if GetEntry fails
-		dir, name := path.Split(f.path)
-		if dir == "" {
-			dir = "/"
-		}
-
-		entries, listErr := f.conn.List(dir)
-		if listErr != nil {
-			return nil, err // Return original GetEntry error
-		}
-
-		// Find the entry in the list
-		for _, e := range entries {
-			if e.Name == name {
-				return fileInfo{e}, nil
-			}
-		}
-
-		// If not found in list, return original error
-		return nil, err
-	}
-	return fileInfo{entry}, nil
 }
 
 func (f *fileReader) Read(buf []byte) (int, error) {
@@ -463,7 +426,7 @@ func (f *fileReader) Close() error {
 	return errors.Join(f.response.Close(), f.release())
 }
 
-func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
+func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	conn, filePath, release, err := f.getConn(context.Background(), filePath)
 	if err != nil {
 		return nil, err
@@ -475,8 +438,6 @@ func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
 	}
 
 	return &fileReader{
-		path:     filePath,
-		conn:     conn,
 		response: response,
 		release:  release,
 	}, nil
@@ -503,7 +464,7 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte,
 
 // WriteAll writes data to the file at filePath with a single STOR command,
 // creating it if it does not exist or truncating it if it does exist.
-func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) (err error) {
+func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) (err error) {
 	defer f.convertResultError(&err, filePath)
 
 	conn, filePath, release, err := f.getConn(ctx, filePath)
@@ -525,7 +486,7 @@ var _ fs.TouchFileSystem = new(fileSystem)
 // existing file — this updates the modification time of an existing file in
 // place (via the FTP MFMT command, when the server advertises support) and
 // only creates an empty file when it does not exist yet.
-func (f *fileSystem) Touch(filePath string, perm []fs.Permissions) (err error) {
+func (f *fileSystem) Touch(filePath string, perm fs.Permissions) (err error) {
 	defer f.convertResultError(&err, filePath)
 
 	conn, filePath, release, err := f.getConn(context.Background(), filePath)
@@ -574,7 +535,7 @@ func (f *fileSystem) connFileExists(conn *ftp.ServerConn, filePath string) bool 
 
 // Append appends data to the file at filePath with a single APPE command,
 // creating it if it does not exist.
-func (f *fileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) (err error) {
+func (f *fileSystem) Append(ctx context.Context, filePath string, data []byte, perm fs.Permissions) (err error) {
 	defer f.convertResultError(&err, filePath)
 
 	conn, filePath, release, err := f.getConn(ctx, filePath)
@@ -593,7 +554,7 @@ func (f *fileSystem) Append(ctx context.Context, filePath string, data []byte, p
 // and flushed to the server with a single STOR command when the returned
 // writer is closed. For bulk data prefer WriteAll, which streams directly
 // to the server without buffering the whole file in memory.
-func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
 		return f.WriteAll(context.Background(), filePath, data, perm)
 	}), nil
@@ -605,7 +566,7 @@ func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Writ
 // The written bytes are buffered in memory and appended to the server file
 // with a single APPE command when the returned writer is closed. Only the
 // appended data is held in memory, not the whole file.
-func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (f *fileSystem) OpenAppendWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
 		return f.Append(context.Background(), filePath, data, perm)
 	}), nil
@@ -617,7 +578,7 @@ func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (f
 // in-memory buffer that supports Read, Write and Seek. The buffer is flushed
 // back to the server with a single STOR command when closed. The file must
 // already exist and this is not suitable for very large files.
-func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (rw fs.ReadWriteSeekCloser, err error) {
+func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (rw fs.ReadWriteSeekCloser, err error) {
 	defer f.convertResultError(&err, filePath)
 
 	data, err := f.ReadAll(context.Background(), filePath)
@@ -759,36 +720,4 @@ func (f *fileSystem) Name() string {
 		return "FTPS"
 	}
 	return "FTP"
-}
-
-func (f *fileSystem) IsSymbolicLink(filePath string) bool {
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
-		return false
-	}
-	defer release()
-
-	// Try GetEntry first
-	entry, err := conn.GetEntry(filePath)
-	if err != nil {
-		// Fall back to List if GetEntry fails
-		dir, name := f.SplitDirAndName(filePath)
-		if dir == "" {
-			dir = "/"
-		}
-
-		entries, listErr := conn.List(dir)
-		if listErr != nil {
-			return false
-		}
-
-		// Find the entry in the list
-		for _, e := range entries {
-			if e.Name == name {
-				return e.Type == ftp.EntryTypeLink
-			}
-		}
-		return false
-	}
-	return entry.Type == ftp.EntryTypeLink
 }

@@ -31,7 +31,7 @@ func TestMemFileSystem_Conformance(t *testing.T) {
 			t.Cleanup(func() { assert.NoError(t, memFS.Close()) })
 
 			testDir := sep + "test"
-			require.NoError(t, memFS.MakeDir(testDir, nil), "creating test directory")
+			require.NoError(t, memFS.MakeDir(testDir, 0), "creating test directory")
 
 			fstest.RunConformance(t, memFS, fstest.Config{
 				Name:    "memory file system",

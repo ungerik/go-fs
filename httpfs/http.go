@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	iofs "io/fs"
 	"net/http"
 	"path"
 	"strings"
@@ -38,16 +37,19 @@ var (
 // fileSystem paths are not rooted, they start with the host name:
 // Prefix()+path is the URL.
 type fileSystem struct {
-	fs.ReadOnlyBase
 	fsimpl.PathHelper
+}
+
+func (*fileSystem) ReadableWritable() (readable, writable bool) {
+	return true, false
 }
 
 func (*fileSystem) RootDir() fs.File {
 	return fs.InvalidFile
 }
 
-func (f *fileSystem) ID() (string, error) {
-	return strings.TrimSuffix(f.URIPrefix, "://"), nil
+func (f *fileSystem) ID() string {
+	return strings.TrimSuffix(f.URIPrefix, "://")
 }
 
 func (f *fileSystem) Name() string {
@@ -56,16 +58,6 @@ func (f *fileSystem) Name() string {
 
 func (f *fileSystem) String() string {
 	return f.Name() + " read-only file system"
-}
-
-// MatchAnyPattern resolves the ambiguity between the embedded
-// fs.ReadOnlyBase and fsimpl.PathHelper implementations.
-func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return f.PathHelper.MatchAnyPattern(name, patterns)
-}
-
-func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
 // info determines whether filePath exists and, if so, returns its FileInfo.
@@ -101,9 +93,11 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 
 	case isSuccessStatus(response.StatusCode) && response.ContentLength >= 0:
 		return fs.FileInfo{
-			Exists:      true,
+			File:        fs.File(url),
 			Name:        name,
+			Exists:      true,
 			IsRegular:   true,
+			IsHidden:    strings.HasPrefix(name, "."),
 			Size:        response.ContentLength,
 			Modified:    modifiedTime(response),
 			Permissions: fs.AllRead,
@@ -146,9 +140,11 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 	}
 
 	return fs.FileInfo{
-		Exists:      true,
+		File:        fs.File(url),
 		Name:        name,
+		Exists:      true,
 		IsRegular:   true,
+		IsHidden:    strings.HasPrefix(name, "."),
 		Size:        size,
 		Modified:    modifiedTime(response),
 		Permissions: fs.AllRead,
@@ -179,20 +175,23 @@ func modifiedTime(response *http.Response) time.Time {
 	return modified
 }
 
-func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	info, err := f.info(filePath)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Exists {
-		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(fs.File(f.URL(filePath)))
 	}
-	return info.StdFileInfo(), nil
+	return &info, nil
 }
 
-func (f *fileSystem) Exists(filePath string) bool {
+func (f *fileSystem) Exists(filePath string) (bool, error) {
 	info, err := f.info(filePath)
-	return err == nil && info.Exists
+	if err != nil {
+		return false, err
+	}
+	return info.Exists, nil
 }
 
 func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
@@ -213,7 +212,7 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte,
 	return data, nil
 }
 
-func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
+func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	info, err := f.Stat(filePath)
 	if err != nil {
 		return nil, err
@@ -226,15 +225,17 @@ func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
 		return nil, fmt.Errorf("HTTPFileSystem.OpenReader: %d: %s", response.StatusCode, response.Status)
 	}
 	defer response.Body.Close()
-	return fsimpl.NewReadonlyFileBufferReadAll(response.Body, info)
+	buffer, err := fsimpl.NewReadonlyFileBufferReadAll(response.Body, info.StdFileInfo())
+	if err != nil {
+		return nil, err
+	}
+	return buffer, nil
 }
 
 func (f *fileSystem) Close() error {
 	return nil
 }
 
-func (f *fileSystem) IsSymbolicLink(filePath string) bool { return false }
-
-func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	return fs.NewErrUnsupported(f, "ListDirInfo")
+func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	return fs.NewErrUnsupported(f, "ListDir")
 }

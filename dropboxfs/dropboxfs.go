@@ -11,7 +11,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	iofs "io/fs"
+	"io"
 	"path"
 	"strings"
 	"time"
@@ -45,7 +45,6 @@ var (
 type fileSystem struct {
 	fsimpl.PathHelper
 
-	id            string
 	config        dropbox.Config
 	filesClient   files.Client
 	usersClient   users.Client
@@ -135,21 +134,13 @@ func (dbfs *fileSystem) RootDir() fs.File {
 	return fs.File(dbfs.URIPrefix + Separator)
 }
 
-// ID returns the Dropbox account ID for this filesystem.
-// The account ID is fetched from the Dropbox API on first call and cached.
-// This requires a valid access token and network connectivity.
-func (dbfs *fileSystem) ID() (string, error) {
-	if err := dbfs.checkClosed(); err != nil {
-		return "", err
-	}
-	if dbfs.id == "" {
-		account, err := dbfs.usersClient.GetCurrentAccount()
-		if err != nil {
-			return "", err
-		}
-		dbfs.id = account.AccountId
-	}
-	return dbfs.id, nil
+// ID returns the random suffix of the filesystem prefix as identifier.
+//
+// TODO(Phase 5, docs/V1_ROADMAP.md): fetch the Dropbox account ID
+// via usersClient.GetCurrentAccount at construction time and use it
+// as ID and prefix suffix, so that the same account always gets the same ID.
+func (dbfs *fileSystem) ID() string {
+	return strings.TrimPrefix(dbfs.URIPrefix, Prefix)
 }
 
 // Name returns the human-readable name of this filesystem.
@@ -179,11 +170,12 @@ func (dbfs *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 // metadataToFileInfo converts Dropbox metadata to fs.FileInfo.
 // Handles FileMetadata, FolderMetadata, and DeletedMetadata types.
 // Files starting with "." are considered hidden, following Unix conventions.
-func metadataToFileInfo(meta files.IsMetadata) *fs.FileInfo {
+func (dbfs *fileSystem) metadataToFileInfo(meta files.IsMetadata) *fs.FileInfo {
 	var info fs.FileInfo
 
 	switch m := meta.(type) {
 	case *files.FileMetadata:
+		info.File = dbfs.File(m.PathDisplay)
 		info.Name = m.Name
 		info.Exists = true
 		info.IsRegular = true
@@ -193,6 +185,7 @@ func metadataToFileInfo(meta files.IsMetadata) *fs.FileInfo {
 		info.Modified = m.ServerModified
 		info.Permissions = DefaultPermissions
 	case *files.FolderMetadata:
+		info.File = dbfs.File(m.PathDisplay)
 		info.Name = m.Name
 		info.Exists = true
 		info.IsRegular = false
@@ -227,6 +220,7 @@ func (dbfs *fileSystem) info(filePath string) (*fs.FileInfo, error) {
 	// The root folder is unsupported by the API
 	if filePath == "" || filePath == "/" {
 		return &fs.FileInfo{
+			File:        dbfs.RootDir(),
 			Name:        "",
 			Exists:      true,
 			IsRegular:   false,
@@ -252,7 +246,7 @@ func (dbfs *fileSystem) info(filePath string) (*fs.FileInfo, error) {
 		return nil, err
 	}
 
-	info := metadataToFileInfo(meta)
+	info := dbfs.metadataToFileInfo(meta)
 	if dbfs.fileInfoCache != nil {
 		dbfs.fileInfoCache.Put(filePath, info)
 	}
@@ -263,38 +257,34 @@ func (dbfs *fileSystem) info(filePath string) (*fs.FileInfo, error) {
 // Returns fs.ErrDoesNotExist if the file or directory doesn't exist.
 // Any other error (transport, rate limit, authorization, ...) is returned
 // unchanged instead of being reported as a missing file.
-func (dbfs *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (dbfs *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	info, err := dbfs.info(filePath)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Exists {
-		return nil, fs.NewErrDoesNotExist(fs.File(filePath))
+		return nil, fs.NewErrDoesNotExist(dbfs.File(filePath))
 	}
-	return info.StdFileInfo(), nil
+	return info, nil
 }
 
 // Exists checks if a file or directory exists.
 // Uses cached information when available to avoid API calls.
-// If existence cannot be determined (transport error, rate limit, ...),
-// Exists conservatively returns false because the FileSystem interface does
-// not allow returning an error here; use Stat to observe such errors.
-func (dbfs *fileSystem) Exists(filePath string) bool {
+// An error is returned only if existence cannot be determined
+// (closed file system, transport error, rate limit, ...).
+func (dbfs *fileSystem) Exists(filePath string) (bool, error) {
 	info, err := dbfs.info(filePath)
-	return err == nil && info.Exists
+	if err != nil {
+		return false, err
+	}
+	return info.Exists, nil
 }
 
-// IsSymbolicLink always returns false.
-// Dropbox does not support symbolic links.
-func (dbfs *fileSystem) IsSymbolicLink(filePath string) bool {
-	return false
-}
-
-// listDirInfo lists directory contents with optional recursion and pattern matching.
+// listDir lists directory contents with optional recursion and pattern matching.
 // Uses the Dropbox ListFolder API with pagination support.
 // The root directory ("/") is converted to empty string for the API.
 // Results are cached for performance and callback is called for each matching entry.
-func (dbfs *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+func (dbfs *fileSystem) listDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error, recursive bool) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -329,7 +319,7 @@ func (dbfs *fileSystem) listDirInfo(ctx context.Context, dirPath string, callbac
 		}
 
 		for _, entry := range result.Entries {
-			meta := metadataToFileInfo(entry)
+			meta := dbfs.metadataToFileInfo(entry)
 			if meta.Exists {
 				match, err := fsimpl.MatchAnyPattern(meta.Name, patterns)
 				if err != nil {
@@ -373,22 +363,22 @@ func (dbfs *fileSystem) listDirInfo(ctx context.Context, dirPath string, callbac
 	return nil
 }
 
-// ListDirInfo lists directory contents non-recursively.
+// ListDir lists directory contents non-recursively.
 // Calls the callback function for each file and directory in the specified directory.
-func (dbfs *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
-	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, false)
+func (dbfs *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) (err error) {
+	return dbfs.listDir(ctx, dirPath, patterns, callback, false)
 }
 
-// ListDirInfoRecursive lists directory contents recursively.
+// ListDirRecursive lists directory contents recursively.
 // Calls the callback function for each file and directory in the specified directory and all subdirectories.
-func (dbfs *fileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
-	return dbfs.listDirInfo(ctx, dirPath, callback, patterns, true)
+func (dbfs *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) (err error) {
+	return dbfs.listDir(ctx, dirPath, patterns, callback, true)
 }
 
 // Touch creates an empty file if it doesn't exist.
 // Note: Dropbox doesn't support updating modification times, so Touch only creates new files.
 // Returns an error if the file already exists.
-func (dbfs *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
+func (dbfs *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	info, err := dbfs.info(filePath)
 	if err != nil {
 		return err
@@ -401,7 +391,7 @@ func (dbfs *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
 
 // MakeDir creates a directory at the specified path.
 // Uses the Dropbox CreateFolderV2 API to create directories.
-func (dbfs *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+func (dbfs *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	if err := dbfs.checkClosed(); err != nil {
 		return err
 	}
@@ -433,7 +423,7 @@ func (dbfs *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, e
 
 // WriteAll writes data to a file in Dropbox.
 // The mute configuration from the filesystem is applied to control user notifications.
-func (dbfs *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+func (dbfs *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
 	if err := dbfs.checkClosed(); err != nil {
 		return err
 	}
@@ -452,7 +442,7 @@ func (dbfs *fileSystem) WriteAll(ctx context.Context, filePath string, data []by
 // OpenReader opens a file for reading.
 // Downloads the entire file content into memory and returns a read-only file buffer.
 // This is not suitable for very large files due to memory usage.
-func (dbfs *fileSystem) OpenReader(filePath string) (iofs.File, error) {
+func (dbfs *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	info, err := dbfs.Stat(filePath)
 	if err != nil {
 		return nil, err
@@ -461,13 +451,13 @@ func (dbfs *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fsimpl.NewReadonlyFileBuffer(data, info), nil
+	return fsimpl.NewReadonlyFileBuffer(data, info.StdFileInfo()), nil
 }
 
 // OpenWriter opens a file for writing.
 // Creates an in-memory buffer that uploads to Dropbox when closed.
 // Requires the parent directory to exist.
-func (dbfs *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (dbfs *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	dirInfo, err := dbfs.info(path.Dir(filePath))
 	if err != nil {
 		return nil, err
@@ -476,31 +466,35 @@ func (dbfs *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.W
 		return nil, fs.NewErrIsNotDirectory(dbfs.File(path.Dir(filePath)))
 	}
 	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
-		return dbfs.WriteAll(context.Background(), filePath, data, nil)
+		return dbfs.WriteAll(context.Background(), filePath, data, perm)
 	}), nil
 }
 
 // OpenReadWriter opens a file for both reading and writing.
 // Downloads the entire file content into memory and returns a read-write-seek buffer.
 // Uploads to Dropbox when closed. Not suitable for very large files.
-func (dbfs *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+func (dbfs *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error) {
 	data, err := dbfs.ReadAll(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
 	return fsimpl.NewWriteOnCloseFileBuffer(data, func(data []byte) error {
-		return dbfs.WriteAll(context.Background(), filePath, data, nil)
+		return dbfs.WriteAll(context.Background(), filePath, data, perm)
 	}), nil
 }
 
 // CopyFile copies a file from srcFile to destFile within Dropbox.
 // Uses the Dropbox CopyV2 API for server-side copying (no data transfer required).
-func (dbfs *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+// Copying a file onto itself is a no-op.
+func (dbfs *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if err := dbfs.checkClosed(); err != nil {
 		return err
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if srcFile == destFile {
+		return nil
 	}
 
 	arg := files.NewRelocationArg(srcFile, destFile)

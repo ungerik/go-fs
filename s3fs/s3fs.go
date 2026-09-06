@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	iofs "io/fs"
 	"path"
 	"strings"
 	"time"
@@ -138,8 +137,8 @@ func (s *fileSystem) RootDir() fs.File {
 // ID returns the bucket name as the filesystem identifier.
 //
 // This is used to distinguish between different S3 filesystems.
-func (s *fileSystem) ID() (string, error) {
-	return s.bucketName, nil
+func (s *fileSystem) ID() string {
+	return s.bucketName
 }
 
 // Name returns a human-readable name for the filesystem.
@@ -150,20 +149,6 @@ func (s *fileSystem) Name() string {
 // String returns a detailed string representation of the filesystem.
 func (s *fileSystem) String() string {
 	return s.Name() + " with prefix " + s.URIPrefix
-}
-
-// JoinCleanFile joins path parts into a File with this filesystem's prefix.
-//
-// The parts are cleaned and joined with forward slashes, then prefixed with s3://bucket-name
-func (s *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(s.JoinCleanURI(uriParts...))
-}
-
-// VolumeName returns the bucket name as the volume name.
-//
-// In S3, the bucket is equivalent to a volume or drive.
-func (s *fileSystem) VolumeName(filePath string) string {
-	return s.bucketName
 }
 
 // Stat returns file information for the given path.
@@ -177,7 +162,7 @@ func (s *fileSystem) VolumeName(filePath string) string {
 //   - May require two API calls (one for file, one for directory)
 //   - No permission information (S3 uses IAM policies)
 //   - LastModified is set by S3, not the client
-func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (s *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -194,10 +179,15 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 		},
 	)
 	if err == nil {
-		return &fileInfo{
-			name: path.Base(filePath),
-			size: derefInt64(out.ContentLength),
-			time: derefTime(out.LastModified),
+		return &fs.FileInfo{
+			File:        fs.File(s.JoinCleanURI(filePath)),
+			Name:        path.Base(filePath),
+			Exists:      true,
+			IsRegular:   true,
+			IsHidden:    s.IsHidden(filePath),
+			Size:        derefInt64(out.ContentLength),
+			Modified:    derefTime(out.LastModified),
+			Permissions: DefaultPermissions,
 		}, nil
 	}
 
@@ -212,11 +202,14 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 			},
 		)
 		if err == nil {
-			return &fileInfo{
-				name: path.Base(filePath),
-				size: 0,
-				time: derefTime(out.LastModified),
-				dir:  true,
+			return &fs.FileInfo{
+				File:        fs.File(s.JoinCleanURI(filePath)),
+				Name:        path.Base(filePath),
+				Exists:      true,
+				IsDir:       true,
+				IsHidden:    s.IsHidden(filePath),
+				Modified:    derefTime(out.LastModified),
+				Permissions: DefaultDirPermissions,
 			}, nil
 		}
 	}
@@ -233,14 +226,16 @@ func (s *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 //   - Uses S3 HeadObject API (fast, doesn't download content)
 //   - Returns false for empty path or root "/"
 //   - Only checks for exact path match (doesn't try directory variants)
+//   - Returns an error only if the existence can't be determined
+//     (closed file system or a transport error)
 //
 // Note: For better directory detection, use Stat() instead.
-func (s *fileSystem) Exists(filePath string) bool {
-	if s.closed {
-		return false
+func (s *fileSystem) Exists(filePath string) (bool, error) {
+	if err := s.checkClosed(); err != nil {
+		return false, err
 	}
 	if filePath == "" || filePath == "/" {
-		return false
+		return false, nil
 	}
 	_, err := s.client.HeadObject(
 		context.Background(),
@@ -249,19 +244,16 @@ func (s *fileSystem) Exists(filePath string) bool {
 			Key:    &filePath,
 		},
 	)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if _, ok := errors.AsType[*types.NotFound](err); ok {
+		return false, nil
+	}
+	return false, err
 }
 
-// IsSymbolicLink always returns false for S3.
-//
-// S3 limitation:
-//   - S3 doesn't support symbolic links
-//   - All S3 objects are regular files or directories (simulated via trailing slash)
-func (s *fileSystem) IsSymbolicLink(filePath string) bool {
-	return false
-}
-
-// listDirInfo lists directory contents and calls callback for each entry.
+// listDir lists directory contents and calls callback for each entry.
 //
 // Implementation:
 //   - Uses S3 ListObjectsV2 API with pagination support
@@ -282,7 +274,7 @@ func (s *fileSystem) IsSymbolicLink(filePath string) bool {
 //   - Directories are simulated using keys ending with "/"
 //   - CommonPrefixes represent "virtual" directories
 //   - Zero-byte objects with trailing "/" are real directory markers
-func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string, recursive bool) (err error) {
+func (s *fileSystem) listDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error, recursive bool) (err error) {
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
@@ -359,12 +351,12 @@ func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback f
 				}
 
 				// Create FileInfo for directory
-				dirFile := fs.File(s.URIPrefix + "/" + strings.TrimSuffix(*commonPrefix.Prefix, "/"))
 				info := &fs.FileInfo{
-					File:        dirFile,
+					File:        fs.File(s.JoinCleanURI(dirName)),
 					Name:        baseName,
 					Exists:      true,
 					IsDir:       true,
+					IsHidden:    strings.HasPrefix(baseName, "."),
 					Permissions: DefaultDirPermissions,
 				}
 
@@ -416,12 +408,12 @@ func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback f
 				modTime = *obj.LastModified
 			}
 
-			fileFile := fs.File(s.URIPrefix + "/" + *obj.Key)
 			info := &fs.FileInfo{
-				File:        fileFile,
+				File:        fs.File(s.JoinCleanURI(*obj.Key)),
 				Name:        baseName,
 				Exists:      true,
 				IsRegular:   true,
+				IsHidden:    strings.HasPrefix(baseName, "."),
 				Size:        derefInt64(obj.Size),
 				Modified:    modTime,
 				Permissions: DefaultPermissions,
@@ -436,20 +428,20 @@ func (s *fileSystem) listDirInfo(ctx context.Context, dirPath string, callback f
 	return nil
 }
 
-// ListDirInfo lists immediate children of a directory (non-recursive).
+// ListDir lists immediate children of a directory (non-recursive).
 //
 // Only returns files and directories directly in dirPath, not nested contents.
-// See listDirInfo for implementation details.
-func (s *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
-	return s.listDirInfo(ctx, dirPath, callback, patterns, false)
+// See listDir for implementation details.
+func (s *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) (err error) {
+	return s.listDir(ctx, dirPath, patterns, callback, false)
 }
 
-// ListDirInfoRecursive lists all files under a directory recursively.
+// ListDirRecursive lists all files under a directory recursively.
 //
 // Returns all nested files, no matter how deep in the directory tree.
-// See listDirInfo for implementation details.
-func (s *fileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
-	return s.listDirInfo(ctx, dirPath, callback, patterns, true)
+// See listDir for implementation details.
+func (s *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) (err error) {
+	return s.listDir(ctx, dirPath, patterns, callback, true)
 }
 
 // Touch creates an empty file or updates the modification time of an existing file.
@@ -468,7 +460,7 @@ func (s *fileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, c
 //   - No way to set a specific LastModified time (S3 always uses current time)
 //
 // Note: The perm parameter is ignored for existing files (S3 uses IAM policies)
-func (s *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
+func (s *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
@@ -479,7 +471,11 @@ func (s *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
 	ctx := context.Background()
 
 	// Check if file exists
-	if s.Exists(filePath) {
+	exists, err := s.Exists(filePath)
+	if err != nil {
+		return err
+	}
+	if exists {
 		// S3 doesn't support updating LastModified without rewriting the object.
 		// We need to copy the object to itself to update the modification time.
 		// This is the only way to "touch" an existing S3 object.
@@ -512,7 +508,7 @@ func (s *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
 // Note:
 //   - Returns nil (success) for root directory "/"
 //   - The perm parameter is ignored (S3 uses IAM policies)
-func (s *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+func (s *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -620,7 +616,7 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 //   - No append capability (see S3 limitations in documentation)
 //   - The perm parameter is ignored (S3 uses IAM policies)
 //   - No progress reporting
-func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) error {
+func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
@@ -651,7 +647,7 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	return err
 }
 
-// OpenReader opens a file for reading and returns an io/fs.File.
+// OpenReader opens a file for reading and returns an io.ReadCloser.
 //
 // Implementation:
 //   - Downloads entire file into memory
@@ -669,7 +665,7 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 //   - Not suitable for very large files
 //
 // Note: This downloads the file eagerly. For streaming, use ReadAll with a custom reader.
-func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
+func (s *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -691,11 +687,16 @@ func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 		return nil, err
 	}
 
-	info := &fileInfo{
-		name: path.Base(filePath),
-		size: derefInt64(stat.ContentLength),
-		time: derefTime(stat.LastModified),
-	}
+	info := (&fs.FileInfo{
+		File:        fs.File(s.JoinCleanURI(filePath)),
+		Name:        path.Base(filePath),
+		Exists:      true,
+		IsRegular:   true,
+		IsHidden:    s.IsHidden(filePath),
+		Size:        derefInt64(stat.ContentLength),
+		Modified:    derefTime(stat.LastModified),
+		Permissions: DefaultPermissions,
+	}).StdFileInfo()
 
 	// For large files, use multipart download via manager
 	if stat.ContentLength != nil && *stat.ContentLength >= MultipartDownloadThreshold {
@@ -747,7 +748,7 @@ func (s *fileSystem) OpenReader(filePath string) (iofs.File, error) {
 //   - Memory usage = size of data written
 //
 // Use WriteAll directly for better error handling if you have all data upfront.
-func (s *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (s *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -782,7 +783,7 @@ func (s *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.Writ
 // S3 limitation:
 //   - No atomic read-modify-write
 //   - Concurrent modifications may cause data loss (last write wins)
-func (s *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+func (s *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error) {
 	return s.openFileBuffer(filePath)
 }
 
@@ -799,7 +800,7 @@ func (s *fileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileBuf
 		return nil, err
 	}
 	return fsimpl.NewWriteOnCloseFileBuffer(current, func(data []byte) error {
-		return s.WriteAll(context.Background(), filePath, data, nil)
+		return s.WriteAll(context.Background(), filePath, data, 0)
 	}), nil
 }
 
@@ -818,12 +819,13 @@ func (s *fileSystem) openFileBuffer(filePath string) (fileBuffer *fsimpl.FileBuf
 //
 // Limitations:
 //   - Source and destination must be in the same bucket
-//   - The buf parameter is ignored (no client-side buffering needed)
 //   - Cannot copy across regions without additional configuration
+//
+// Copying a file onto itself is a no-op.
 //
 // S3 pricing:
 //   - Copy operations have API costs but no data transfer costs
-func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
+func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
@@ -832,6 +834,9 @@ func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 	}
 	if srcFile == "" || destFile == "" {
 		return fs.ErrEmptyPath
+	}
+	if srcFile == destFile {
+		return nil
 	}
 	srcFile = s.bucketName + "/" + srcFile
 	_, err := s.client.CopyObject(
@@ -883,26 +888,6 @@ func (s *fileSystem) Remove(filePath string) error {
 			Key:    &filePath,
 		})
 	return err
-}
-
-// Watch is not supported for S3 filesystems.
-//
-// S3 limitation:
-//   - S3 doesn't support real-time file watching
-//   - S3 Event Notifications require separate infrastructure (SQS/SNS/Lambda)
-//   - No equivalent to inotify or file system watches
-//
-// Alternatives:
-//   - Use S3 Event Notifications with SQS/SNS
-//   - Poll with ListObjects or HeadObject
-//   - Use S3 Select for query-based monitoring
-//
-// This method always returns errors.ErrUnsupported.
-func (s *fileSystem) Watch(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error) {
-	// https://stackoverflow.com/questions/18049717/waituntilobjectexists-amazon-s3-php-sdk-method-exactly-how-does-it-work
-	// S3 WaitUntilObjectExists and WaitUntilObjectNotExists were removed in SDK v2
-	// S3 Event Notifications are the recommended approach for watching S3 changes
-	return nil, errors.ErrUnsupported
 }
 
 // Close unregisters the filesystem and releases resources.

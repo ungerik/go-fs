@@ -88,6 +88,8 @@ func (perm Permissions) CanAllWrite() bool     { return perm.Can(AllWrite) }
 func (perm Permissions) CanAllExecute() bool   { return perm.Can(AllExecute) }
 func (perm Permissions) CanAllReadWrite() bool { return perm.Can(AllReadWrite) }
 
+// JoinPermissions ORs the passed perms together,
+// or returns defaultPerm if no perms are passed.
 func JoinPermissions(perms []Permissions, defaultPerm Permissions) (result Permissions) {
 	if len(perms) == 0 {
 		return defaultPerm
@@ -96,6 +98,16 @@ func JoinPermissions(perms []Permissions, defaultPerm Permissions) (result Permi
 		result |= p
 	}
 	return result
+}
+
+// OrDefault returns perm, or defaultPerm if perm is zero (NoPermissions).
+// FileSystem implementations use it to apply their default permissions
+// when a caller did not specify any.
+func (perm Permissions) OrDefault(defaultPerm Permissions) Permissions {
+	if perm == 0 {
+		return defaultPerm
+	}
+	return perm
 }
 
 func PermissionsFromStdFileInfo(info iofs.FileInfo) Permissions {

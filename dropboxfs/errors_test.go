@@ -73,8 +73,8 @@ func TestIsNotExistError(t *testing.T) {
 }
 
 // TestClosedFileSystem verifies that after Close every method that uses the
-// Dropbox API returns fs.ErrFileSystemClosed (or false for Exists) instead of
-// dereferencing a closed client.
+// Dropbox API returns fs.ErrFileSystemClosed instead of dereferencing a
+// closed client.
 func TestClosedFileSystem(t *testing.T) {
 	// A real (offline) client is fine: closed methods short-circuit before any
 	// network call, so no token or connectivity is required.
@@ -94,21 +94,20 @@ func TestClosedFileSystem(t *testing.T) {
 
 	ctx := t.Context()
 
-	assert.False(t, dbfs.Exists("/file"), "Exists must be false on a closed filesystem")
-
-	_, err := dbfs.Stat("/file")
+	exists, err := dbfs.Exists("/file")
+	assert.False(t, exists, "Exists must be false on a closed filesystem")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	_, err = dbfs.ID()
+	_, err = dbfs.Stat("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	_, err = dbfs.ReadAll(ctx, "/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = dbfs.WriteAll(ctx, "/file", []byte("x"), nil)
+	err = dbfs.WriteAll(ctx, "/file", []byte("x"), 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = dbfs.MakeDir("/dir", nil)
+	err = dbfs.MakeDir("/dir", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	err = dbfs.Remove("/file")
@@ -117,15 +116,15 @@ func TestClosedFileSystem(t *testing.T) {
 	err = dbfs.Move("/a", "/b")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = dbfs.CopyFile(ctx, "/a", "/b", nil)
+	err = dbfs.CopyFile(ctx, "/a", "/b")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	_, err = dbfs.OpenReader("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	_, err = dbfs.OpenWriter("/file", nil)
+	_, err = dbfs.OpenWriter("/file", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = dbfs.ListDirInfo(ctx, "/dir", func(*fs.FileInfo) error { return nil }, nil)
+	err = dbfs.ListDir(ctx, "/dir", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 }

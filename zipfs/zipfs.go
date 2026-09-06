@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	iofs "io/fs"
 	"path"
 	"strings"
 	"sync"
@@ -87,8 +86,8 @@ func (f *ZipFileSystem) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
-func (f *ZipFileSystem) ID() (string, error) {
-	return f.URIPrefix, nil
+func (f *ZipFileSystem) ID() string {
+	return f.URIPrefix
 }
 
 func (f *ZipFileSystem) Name() string {
@@ -142,7 +141,7 @@ func (f *ZipFileSystem) findFile(filePath string) (zipFile *zip.File, isDir bool
 	return nil, false
 }
 
-func (f *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (iofs.FileInfo, error) {
+func (f *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (*fs.FileInfo, error) {
 	if zipFile == nil {
 		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
@@ -152,20 +151,20 @@ func (f *ZipFileSystem) stat(filePath string, zipFile *zip.File, isDir bool) (io
 	if isDir {
 		size = 0
 	}
-	info := &fs.FileInfo{
+	return &fs.FileInfo{
+		File:        f.File(filePath),
 		Name:        name,
 		Exists:      true,
 		IsDir:       isDir,
-		IsRegular:   true,
+		IsRegular:   !isDir,
 		IsHidden:    len(name) > 0 && name[0] == '.',
 		Size:        size,
 		Modified:    zipFile.Modified,
 		Permissions: fs.AllRead,
-	}
-	return info.StdFileInfo(), nil
+	}, nil
 }
 
-func (f *ZipFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+func (f *ZipFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	if err := f.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -176,19 +175,15 @@ func (f *ZipFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
 	return f.stat(filePath, zipFile, isDir)
 }
 
-func (f *ZipFileSystem) Exists(filePath string) bool {
+func (f *ZipFileSystem) Exists(filePath string) (bool, error) {
 	if f.zipReader == nil {
-		return false
+		return false, nil
 	}
 	zipFile, _ := f.findFile(filePath)
-	return zipFile != nil
+	return zipFile != nil, nil
 }
 
-func (f *ZipFileSystem) IsSymbolicLink(filePath string) bool {
-	return false
-}
-
-func (f *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
+func (f *ZipFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -275,7 +270,7 @@ func (f *ZipFileSystem) ListDirInfo(ctx context.Context, dirPath string, callbac
 	return nil
 }
 
-func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
+func (f *ZipFileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -341,7 +336,7 @@ func (f *ZipFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string
 	return listFiles(dir)
 }
 
-func (f *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
+func (f *ZipFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if f.zipReader == nil {
 		return nil, fs.ErrWriteOnlyFileSystem
 	}
@@ -356,14 +351,10 @@ func (f *ZipFileSystem) OpenReader(filePath string) (iofs.File, error) {
 	if zipFile == nil {
 		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
-	file, err := zipFile.Open()
-	if err != nil {
-		return nil, err
-	}
-	return file.(iofs.File), nil
+	return zipFile.Open()
 }
 
-func (f *ZipFileSystem) Touch(filePath string, perm []fs.Permissions) error {
+func (f *ZipFileSystem) Touch(filePath string, perm fs.Permissions) error {
 	if f.zipWriter == nil {
 		return fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
 	}
@@ -387,7 +378,7 @@ func (f *ZipFileSystem) Touch(filePath string, perm []fs.Permissions) error {
 // MakeDir is a no-op for writer-mode archives: ZIP directories are implicit
 // and created automatically from the path of any file written below them.
 // It returns an error for read-only or closed archives.
-func (f *ZipFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
+func (f *ZipFileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	if f.zipWriter == nil {
 		return fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
 	}
@@ -397,7 +388,7 @@ func (f *ZipFileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
 	return nil
 }
 
-func (f *ZipFileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
+func (f *ZipFileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	if f.zipWriter == nil {
 		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrReadOnlyFileSystem)
 	}
@@ -432,22 +423,6 @@ func (f *ZipFileSystem) checkNoOpenWriterLocked() error {
 		return fmt.Errorf("%s: previous zip entry writer must be closed before opening another (zip entries are written sequentially)", f.Name())
 	}
 	return nil
-}
-
-// OpenReadWriter is not supported by ZIP archives: an archive is opened either
-// for reading or for writing, and a stream ZIP provides no random-access
-// read-write. It returns the specific reason for the archive's mode.
-func (f *ZipFileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	if f.closer == nil {
-		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
-	}
-	if f.zipReader != nil {
-		return nil, fmt.Errorf("%s: %w (read-only ZIP archive)", f.Name(), fs.ErrReadOnlyFileSystem)
-	}
-	if f.zipWriter != nil {
-		return nil, fmt.Errorf("%s: %w (write-only ZIP archive)", f.Name(), fs.ErrWriteOnlyFileSystem)
-	}
-	return nil, fs.NewErrUnsupported(f, "OpenReadWriter")
 }
 
 // Remove is not possible for ZIP archives: entries can't be removed

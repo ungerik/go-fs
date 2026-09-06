@@ -245,17 +245,17 @@ func Test_fileSystem_MultipartUploadDownload(t *testing.T) {
 		largeData[i] = byte(i % 256)
 	}
 
-	testFilePath := s3fs.JoinCleanPath(testDataDir, "large-test-file.bin")
+	testFilePath := s3fs.CleanPath(testDataDir, "large-test-file.bin")
 
 	// Test multipart upload via WriteAll
 	t.Run("MultipartUpload", func(t *testing.T) {
-		err := s3fs.(fs.WriteAllFileSystem).WriteAll(ctx, testFilePath, largeData, nil)
+		err := s3fs.(fs.WriteAllFileSystem).WriteAll(ctx, testFilePath, largeData, 0)
 		require.NoError(t, err, "WriteAll should succeed for large file")
 
 		// Verify file exists
 		info, err := s3fs.Stat(testFilePath)
 		require.NoError(t, err, "Stat should work on uploaded file")
-		require.Equal(t, int64(largeFileSize), info.Size(), "File size should match")
+		require.Equal(t, int64(largeFileSize), info.Size, "File size should match")
 	})
 
 	// Test multipart download via ReadAll
@@ -279,6 +279,6 @@ func Test_fileSystem_MultipartUploadDownload(t *testing.T) {
 	})
 
 	// Clean up
-	err := s3fs.Remove(testFilePath)
+	err := s3fs.(fs.WriteFileSystem).Remove(testFilePath)
 	require.NoError(t, err, "Cleanup should succeed")
 }

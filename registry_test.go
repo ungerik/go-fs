@@ -65,7 +65,7 @@ func TestParseRawURI_SchemeNotLocal(t *testing.T) {
 	// The local file:// scheme resolves to the local file system.
 	fs, fsPath := ParseRawURI(LocalPrefix + "/home/user/file.txt")
 	assert.Equal(t, Local, fs, "file:// must resolve to the local file system")
-	assert.Equal(t, Local.CleanPathFromURI(LocalPrefix+"/home/user/file.txt"), fsPath)
+	assert.Equal(t, Local.CleanPath(LocalPrefix+"/home/user/file.txt"), fsPath)
 
 	// Plain paths without a scheme resolve to the local file system.
 	for _, uri := range []string{

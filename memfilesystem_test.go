@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	iofs "io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -88,7 +87,7 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.Equal(t, "hello", content, "content preserved across rename")
 
 		// Renaming a directory works the same way.
-		require.NoError(t, memFS.MakeDir("/d1", nil))
+		require.NoError(t, memFS.MakeDir("/d1", 0))
 		dir := memFS.RootDir().Join("d1")
 		dir2, err := dir.Rename("d2")
 		require.NoError(t, err)
@@ -102,7 +101,7 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		// Rejects collision.
 		_, err = memFS.RootDir().Join("c.txt").Rename("b.txt")
 		require.Error(t, err) // source missing — also an error
-		require.NoError(t, memFS.WriteAll(t.Context(), "/c.txt", []byte("c"), nil))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/c.txt", []byte("c"), 0))
 		_, err = memFS.RootDir().Join("c.txt").Rename("b.txt")
 		require.Error(t, err, "should reject existing target name")
 	})
@@ -112,10 +111,12 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
-		require.NoError(t, memFS.MakeAllDirs("/sub/nested", nil))
+		require.NoError(t, memFS.MakeAllDirs("/sub/nested", 0))
 
-		// Move into existing directory uses base name.
-		require.NoError(t, memFS.Move("/a.txt", "/sub"))
+		// The destination is always the final path, an existing directory
+		// is a collision (File.MoveTo resolves "into directory" before dispatch).
+		require.ErrorIs(t, memFS.Move("/a.txt", "/sub"), os.ErrExist)
+		require.NoError(t, memFS.Move("/a.txt", "/sub/a.txt"))
 		require.True(t, memFS.RootDir().Join("sub", "a.txt").Exists())
 		require.False(t, memFS.RootDir().Join("a.txt").Exists())
 
@@ -125,7 +126,7 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.False(t, memFS.RootDir().Join("sub", "a.txt").Exists())
 
 		// Collision is rejected.
-		require.NoError(t, memFS.WriteAll(t.Context(), "/sub/blocker.txt", []byte("x"), nil))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/sub/blocker.txt", []byte("x"), 0))
 		require.Error(t, memFS.Move("/sub/nested/renamed.txt", "/sub/blocker.txt"))
 
 		// Missing source.
@@ -133,14 +134,14 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 
 		// Moving a directory into a descendant is rejected and leaves the
 		// source intact (regression for an orphaning bug).
-		require.NoError(t, memFS.MakeAllDirs("/cyc/inner", nil))
+		require.NoError(t, memFS.MakeAllDirs("/cyc/inner", 0))
 		require.Error(t, memFS.Move("/cyc", "/cyc/inner/sub"), "into descendant")
 		require.True(t, memFS.RootDir().Join("cyc").Exists(), "source survives rejected move")
 		require.True(t, memFS.RootDir().Join("cyc", "inner").Exists(), "subtree survives rejected move")
 
 		// Move(src, src) on a regular file is a no-op, matching
 		// LocalFileSystem and the MoveFileSystem contract.
-		require.NoError(t, memFS.WriteAll(t.Context(), "/same.txt", []byte("z"), nil))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/same.txt", []byte("z"), 0))
 		require.NoError(t, memFS.Move("/same.txt", "/same.txt"), "Move(file, file) must be a no-op")
 		got, err := memFS.RootDir().Join("same.txt").ReadAllString()
 		require.NoError(t, err)
@@ -151,11 +152,12 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.NoError(t, memFS.Move("/cyc", "/cyc"), "Move(dir, dir) must be a no-op")
 		require.True(t, memFS.RootDir().Join("cyc", "inner").Exists(), "subtree preserved")
 
-		// Move(/a, /) becomes Move(/a, /a) after the directory-append step
-		// and must also be a no-op.
-		require.NoError(t, memFS.MakeDir("/movable", nil))
-		require.NoError(t, memFS.Move("/movable", "/"), "Move(/a, /) collapses to a no-op")
-		require.True(t, memFS.RootDir().Join("movable").Exists(), "subject survives the no-op")
+		// Move(/a, /) targets the existing root directory, which is a
+		// collision under the final-destination contract (File.MoveTo
+		// resolves "into directory" before calling Move).
+		require.NoError(t, memFS.MakeDir("/movable", 0))
+		require.ErrorIs(t, memFS.Move("/movable", "/"), os.ErrExist, "Move(/a, /) collides with the root")
+		require.True(t, memFS.RootDir().Join("movable").Exists(), "subject survives the rejected move")
 	})
 
 	t.Run("Permissions_User_Group", func(t *testing.T) {
@@ -247,24 +249,24 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
-		require.NoError(t, memFS.MakeAllDirs("/a/b", nil))
-		require.NoError(t, memFS.WriteAll(t.Context(), "/a/b/c.txt", []byte("c"), nil))
-		require.NoError(t, memFS.WriteAll(t.Context(), "/a/b/d.txt", []byte("d"), nil))
-		require.NoError(t, memFS.WriteAll(t.Context(), "/a/e.txt", []byte("e"), nil))
-		require.NoError(t, memFS.WriteAll(t.Context(), "/a/skip.bin", []byte("x"), nil))
+		require.NoError(t, memFS.MakeAllDirs("/a/b", 0))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/a/b/c.txt", []byte("c"), 0))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/a/b/d.txt", []byte("d"), 0))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/a/e.txt", []byte("e"), 0))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/a/skip.bin", []byte("x"), 0))
 
 		var collected []string
-		err = memFS.ListDirInfoRecursive(t.Context(), "/a", func(info *FileInfo) error {
+		err = memFS.ListDirRecursive(t.Context(), "/a", []string{"*.txt"}, func(info *FileInfo) error {
 			collected = append(collected, info.Name)
 			return nil
-		}, []string{"*.txt"})
+		})
 		require.NoError(t, err)
 		require.ElementsMatch(t, []string{"c.txt", "d.txt", "e.txt"}, collected)
 
 		// Context cancel
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		err = memFS.ListDirInfoRecursive(ctx, "/a", func(*FileInfo) error { return nil }, nil)
+		err = memFS.ListDirRecursive(ctx, "/a", nil, func(*FileInfo) error { return nil })
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -304,10 +306,10 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.NoError(t, err)
 
 		// Touch existing -> Chmod
-		require.NoError(t, memFS.Touch("/a.txt", nil))
+		require.NoError(t, memFS.Touch("/a.txt", 0))
 
 		// WriteAll on new file -> Create|Write
-		require.NoError(t, memFS.WriteAll(t.Context(), "/b.txt", []byte("b"), nil))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/b.txt", []byte("b"), 0))
 
 		// SetPermissions -> Chmod
 		require.NoError(t, memFS.SetPermissions("/a.txt", AllRead))
@@ -351,7 +353,7 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 			}
 		}
 	drained:
-		require.NoError(t, memFS.WriteAll(t.Context(), "/c.txt", []byte("c"), nil))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/c.txt", []byte("c"), 0))
 		select {
 		case e := <-events:
 			t.Fatalf("unexpected event after cancel: %s", e)
@@ -396,11 +398,11 @@ func TestMemFileSystem_Constructor_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
-		require.True(t, memFS.Exists("/docs"))
-		require.True(t, memFS.Exists("/docs/sub"))
-		require.True(t, memFS.Exists("/docs/readme.txt"))
-		require.True(t, memFS.Exists("/docs/sub/deep.txt"))
-		require.True(t, memFS.Exists("/top.txt"))
+		require.True(t, memExists(memFS, "/docs"))
+		require.True(t, memExists(memFS, "/docs/sub"))
+		require.True(t, memExists(memFS, "/docs/readme.txt"))
+		require.True(t, memExists(memFS, "/docs/sub/deep.txt"))
+		require.True(t, memExists(memFS, "/top.txt"))
 
 		data, err := memFS.ReadAll(t.Context(), "/docs/sub/deep.txt")
 		require.NoError(t, err)
@@ -418,7 +420,7 @@ func TestMemFileSystem_WithIDVolume(t *testing.T) {
 	origPrefix := memFS.Prefix()
 
 	// WithID(sameID) returns identity, no re-registration churn.
-	id, _ := memFS.ID()
+	id := memFS.ID()
 	same := memFS.WithID(id)
 	require.Same(t, memFS, same)
 	require.Equal(t, origPrefix, memFS.Prefix())
@@ -455,27 +457,27 @@ func TestMemFileSystem_AddMemFile_EdgeCases(t *testing.T) {
 		f, err := memFS.AddMemFile(NewMemFile("a/b/c.txt", []byte("X")), time.Now())
 		require.NoError(t, err)
 		require.True(t, f.Exists())
-		require.True(t, memFS.Exists("/a"))
-		require.True(t, memFS.Exists("/a/b"))
+		require.True(t, memExists(memFS, "/a"))
+		require.True(t, memExists(memFS, "/a/b"))
 	})
 }
 
 func TestMemFileSystem_MakeDir_EdgeCases(t *testing.T) {
 	t.Run("EmptyPath", func(t *testing.T) {
 		memFS := newTestMemFS(t)
-		require.ErrorIs(t, memFS.MakeDir("", nil), ErrEmptyPath)
+		require.ErrorIs(t, memFS.MakeDir("", 0), ErrEmptyPath)
 	})
 
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS := newTestMemFS(t)
 		memFS.SetReadOnly(true)
-		require.ErrorIs(t, memFS.MakeDir("/d", nil), ErrReadOnlyFileSystem)
+		require.ErrorIs(t, memFS.MakeDir("/d", 0), ErrReadOnlyFileSystem)
 	})
 
 	t.Run("AlreadyExists", func(t *testing.T) {
 		memFS := newTestMemFS(t)
-		require.NoError(t, memFS.MakeDir("/d", nil))
-		err := memFS.MakeDir("/d", nil)
+		require.NoError(t, memFS.MakeDir("/d", 0))
+		err := memFS.MakeDir("/d", 0)
 		require.Error(t, err)
 		var aexists ErrAlreadyExists
 		require.ErrorAs(t, err, &aexists, "MakeDir on existing dir returns ErrAlreadyExists")
@@ -483,14 +485,14 @@ func TestMemFileSystem_MakeDir_EdgeCases(t *testing.T) {
 
 	t.Run("ParentMissing", func(t *testing.T) {
 		memFS := newTestMemFS(t)
-		err := memFS.MakeDir("/no/such/parent/d", nil)
+		err := memFS.MakeDir("/no/such/parent/d", 0)
 		require.Error(t, err)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("ParentIsFile", func(t *testing.T) {
 		memFS := newTestMemFS(t, NewMemFile("f.txt", []byte("x")))
-		err := memFS.MakeDir("/f.txt/sub", nil)
+		err := memFS.MakeDir("/f.txt/sub", 0)
 		require.Error(t, err)
 		var notDir ErrIsNotDirectory
 		require.ErrorAs(t, err, &notDir)
@@ -500,26 +502,26 @@ func TestMemFileSystem_MakeDir_EdgeCases(t *testing.T) {
 func TestMemFileSystem_MakeAllDirs_EdgeCases(t *testing.T) {
 	t.Run("EmptyPath", func(t *testing.T) {
 		memFS := newTestMemFS(t)
-		require.ErrorIs(t, memFS.MakeAllDirs("", nil), ErrEmptyPath)
+		require.ErrorIs(t, memFS.MakeAllDirs("", 0), ErrEmptyPath)
 	})
 
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS := newTestMemFS(t)
 		memFS.SetReadOnly(true)
-		require.ErrorIs(t, memFS.MakeAllDirs("/a/b/c", nil), ErrReadOnlyFileSystem)
+		require.ErrorIs(t, memFS.MakeAllDirs("/a/b/c", 0), ErrReadOnlyFileSystem)
 	})
 
 	t.Run("IdempotentOnExistingDirs", func(t *testing.T) {
 		memFS := newTestMemFS(t)
-		require.NoError(t, memFS.MakeAllDirs("/a/b/c", nil))
+		require.NoError(t, memFS.MakeAllDirs("/a/b/c", 0))
 		// Second call must not error — already-existing components are
 		// silently skipped, matching the os.MkdirAll contract.
-		require.NoError(t, memFS.MakeAllDirs("/a/b/c", nil))
+		require.NoError(t, memFS.MakeAllDirs("/a/b/c", 0))
 	})
 
 	t.Run("PathComponentIsFile", func(t *testing.T) {
 		memFS := newTestMemFS(t, NewMemFile("a/f.txt", []byte("x")))
-		err := memFS.MakeAllDirs("/a/f.txt/d", nil)
+		err := memFS.MakeAllDirs("/a/f.txt/d", 0)
 		require.Error(t, err)
 		var notDir ErrIsNotDirectory
 		require.ErrorAs(t, err, &notDir)
@@ -528,36 +530,36 @@ func TestMemFileSystem_MakeAllDirs_EdgeCases(t *testing.T) {
 
 func TestMemFileSystem_Stat_And_Exists(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("abc")))
-	require.NoError(t, memFS.MakeDir("/d", nil))
+	require.NoError(t, memFS.MakeDir("/d", 0))
 	require.NoError(t, memFS.CreateSymbolicLink("/a.txt", "/link"))
 
 	t.Run("EmptyPath", func(t *testing.T) {
 		_, err := memFS.Stat("")
 		require.ErrorIs(t, err, ErrEmptyPath)
-		require.False(t, memFS.Exists(""))
+		require.False(t, memExists(memFS, ""))
 	})
 
 	t.Run("Missing", func(t *testing.T) {
 		_, err := memFS.Stat("/missing")
 		require.Error(t, err)
 		require.ErrorIs(t, err, os.ErrNotExist)
-		require.False(t, memFS.Exists("/missing"))
+		require.False(t, memExists(memFS, "/missing"))
 	})
 
 	t.Run("FileMode", func(t *testing.T) {
 		info, err := memFS.Stat("/a.txt")
 		require.NoError(t, err)
-		require.False(t, info.IsDir())
-		require.Equal(t, int64(3), info.Size())
-		require.Zero(t, info.Mode()&iofs.ModeDir)
-		require.Zero(t, info.Mode()&iofs.ModeSymlink)
+		require.False(t, info.IsDir)
+		require.True(t, info.IsRegular)
+		require.Equal(t, int64(3), info.Size)
+		require.False(t, info.IsSymlink)
 	})
 
 	t.Run("DirMode", func(t *testing.T) {
 		info, err := memFS.Stat("/d")
 		require.NoError(t, err)
-		require.True(t, info.IsDir())
-		require.NotZero(t, info.Mode()&iofs.ModeDir)
+		require.True(t, info.IsDir)
+		require.False(t, info.IsRegular)
 	})
 
 	t.Run("SymlinkFollowed", func(t *testing.T) {
@@ -565,16 +567,17 @@ func TestMemFileSystem_Stat_And_Exists(t *testing.T) {
 		// while IsSymbolicLink reports the link itself.
 		info, err := memFS.Stat("/link")
 		require.NoError(t, err)
-		require.Zero(t, info.Mode()&iofs.ModeSymlink, "Stat must follow the link to the target")
-		require.Equal(t, int64(3), info.Size(), "Stat must report the target size")
+		require.True(t, info.IsSymlink, "Stat must report that the path is a link")
+		require.True(t, info.IsRegular, "Stat must follow the link to the regular target")
+		require.Equal(t, int64(3), info.Size, "Stat must report the target size")
 		require.True(t, memFS.IsSymbolicLink("/link"))
-		require.Nil(t, info.Sys())
+		require.Nil(t, info.Sys)
 	})
 }
 
 func TestMemFileSystem_ReadAll_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("abc")))
-	require.NoError(t, memFS.MakeDir("/d", nil))
+	require.NoError(t, memFS.MakeDir("/d", 0))
 
 	t.Run("EmptyPath", func(t *testing.T) {
 		_, err := memFS.ReadAll(t.Context(), "")
@@ -604,23 +607,23 @@ func TestMemFileSystem_WriteAll_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t)
 
 	t.Run("EmptyPath", func(t *testing.T) {
-		require.ErrorIs(t, memFS.WriteAll(t.Context(), "", nil, nil), ErrEmptyPath)
+		require.ErrorIs(t, memFS.WriteAll(t.Context(), "", nil, 0), ErrEmptyPath)
 	})
 
 	t.Run("CanceledContext", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		require.ErrorIs(t, memFS.WriteAll(ctx, "/x.txt", []byte("x"), nil), context.Canceled)
+		require.ErrorIs(t, memFS.WriteAll(ctx, "/x.txt", []byte("x"), 0), context.Canceled)
 	})
 
 	t.Run("ParentMissing", func(t *testing.T) {
-		err := memFS.WriteAll(t.Context(), "/no/such/x.txt", []byte("x"), nil)
+		err := memFS.WriteAll(t.Context(), "/no/such/x.txt", []byte("x"), 0)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("OverwriteExisting", func(t *testing.T) {
-		require.NoError(t, memFS.WriteAll(t.Context(), "/over.txt", []byte("first"), nil))
-		require.NoError(t, memFS.WriteAll(t.Context(), "/over.txt", []byte("second"), nil))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/over.txt", []byte("first"), 0))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/over.txt", []byte("second"), 0))
 		data, err := memFS.ReadAll(t.Context(), "/over.txt")
 		require.NoError(t, err)
 		require.Equal(t, []byte("second"), data)
@@ -629,7 +632,7 @@ func TestMemFileSystem_WriteAll_EdgeCases(t *testing.T) {
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		require.ErrorIs(t, memFS.WriteAll(t.Context(), "/ro.txt", []byte("x"), nil), ErrReadOnlyFileSystem)
+		require.ErrorIs(t, memFS.WriteAll(t.Context(), "/ro.txt", []byte("x"), 0), ErrReadOnlyFileSystem)
 	})
 }
 
@@ -637,24 +640,24 @@ func TestMemFileSystem_Append_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t)
 
 	t.Run("EmptyPath", func(t *testing.T) {
-		require.ErrorIs(t, memFS.Append(t.Context(), "", []byte("x"), nil), ErrEmptyPath)
+		require.ErrorIs(t, memFS.Append(t.Context(), "", []byte("x"), 0), ErrEmptyPath)
 	})
 
 	t.Run("CanceledContext", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		require.ErrorIs(t, memFS.Append(ctx, "/x.txt", []byte("x"), nil), context.Canceled)
+		require.ErrorIs(t, memFS.Append(ctx, "/x.txt", []byte("x"), 0), context.Canceled)
 	})
 
 	t.Run("ParentMissing", func(t *testing.T) {
-		err := memFS.Append(t.Context(), "/no/dir/x.txt", []byte("x"), nil)
+		err := memFS.Append(t.Context(), "/no/dir/x.txt", []byte("x"), 0)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("CreateThenAppend", func(t *testing.T) {
-		require.NoError(t, memFS.Append(t.Context(), "/log.txt", []byte("a"), nil))
-		require.NoError(t, memFS.Append(t.Context(), "/log.txt", []byte("b"), nil))
-		require.NoError(t, memFS.Append(t.Context(), "/log.txt", []byte("c"), nil))
+		require.NoError(t, memFS.Append(t.Context(), "/log.txt", []byte("a"), 0))
+		require.NoError(t, memFS.Append(t.Context(), "/log.txt", []byte("b"), 0))
+		require.NoError(t, memFS.Append(t.Context(), "/log.txt", []byte("c"), 0))
 		data, err := memFS.ReadAll(t.Context(), "/log.txt")
 		require.NoError(t, err)
 		require.Equal(t, []byte("abc"), data)
@@ -663,7 +666,7 @@ func TestMemFileSystem_Append_EdgeCases(t *testing.T) {
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		require.ErrorIs(t, memFS.Append(t.Context(), "/log.txt", []byte("z"), nil), ErrReadOnlyFileSystem)
+		require.ErrorIs(t, memFS.Append(t.Context(), "/log.txt", []byte("z"), 0), ErrReadOnlyFileSystem)
 	})
 }
 
@@ -671,37 +674,37 @@ func TestMemFileSystem_Touch_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("a")))
 
 	t.Run("EmptyPath", func(t *testing.T) {
-		require.ErrorIs(t, memFS.Touch("", nil), ErrEmptyPath)
+		require.ErrorIs(t, memFS.Touch("", 0), ErrEmptyPath)
 	})
 
 	t.Run("ParentMissing", func(t *testing.T) {
-		err := memFS.Touch("/no/dir/x.txt", nil)
+		err := memFS.Touch("/no/dir/x.txt", 0)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("UpdatesModTime", func(t *testing.T) {
 		info, err := memFS.Stat("/a.txt")
 		require.NoError(t, err)
-		original := info.ModTime()
+		original := info.Modified
 
 		time.Sleep(2 * time.Millisecond)
-		require.NoError(t, memFS.Touch("/a.txt", nil))
+		require.NoError(t, memFS.Touch("/a.txt", 0))
 
 		info, err = memFS.Stat("/a.txt")
 		require.NoError(t, err)
-		require.True(t, info.ModTime().After(original), "Touch must advance ModTime")
+		require.True(t, info.Modified.After(original), "Touch must advance ModTime")
 	})
 
 	t.Run("CreatesIfMissing", func(t *testing.T) {
-		require.False(t, memFS.Exists("/new.txt"))
-		require.NoError(t, memFS.Touch("/new.txt", nil))
-		require.True(t, memFS.Exists("/new.txt"))
+		require.False(t, memExists(memFS, "/new.txt"))
+		require.NoError(t, memFS.Touch("/new.txt", 0))
+		require.True(t, memExists(memFS, "/new.txt"))
 	})
 
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		require.ErrorIs(t, memFS.Touch("/another.txt", nil), ErrReadOnlyFileSystem)
+		require.ErrorIs(t, memFS.Touch("/another.txt", 0), ErrReadOnlyFileSystem)
 	})
 }
 
@@ -746,7 +749,7 @@ func TestMemFileSystem_Truncate_EdgeCases(t *testing.T) {
 
 func TestMemFileSystem_OpenReader_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("abc")))
-	require.NoError(t, memFS.MakeDir("/d", nil))
+	require.NoError(t, memFS.MakeDir("/d", 0))
 
 	t.Run("EmptyPath", func(t *testing.T) {
 		_, err := memFS.OpenReader("")
@@ -779,33 +782,33 @@ func TestMemFileSystem_OpenReader_EdgeCases(t *testing.T) {
 
 func TestMemFileSystem_OpenWriter_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("existing")), NewMemFile("f.txt", []byte("file")))
-	require.NoError(t, memFS.MakeDir("/d", nil))
+	require.NoError(t, memFS.MakeDir("/d", 0))
 
 	t.Run("EmptyPath", func(t *testing.T) {
-		_, err := memFS.OpenWriter("", nil)
+		_, err := memFS.OpenWriter("", 0)
 		require.ErrorIs(t, err, ErrEmptyPath)
 	})
 
 	t.Run("OnDirectory", func(t *testing.T) {
-		_, err := memFS.OpenWriter("/d", nil)
+		_, err := memFS.OpenWriter("/d", 0)
 		var isDir ErrIsDirectory
 		require.ErrorAs(t, err, &isDir)
 	})
 
 	t.Run("ParentMissing", func(t *testing.T) {
-		_, err := memFS.OpenWriter("/no/dir/x.txt", nil)
+		_, err := memFS.OpenWriter("/no/dir/x.txt", 0)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("ParentIsFile", func(t *testing.T) {
-		_, err := memFS.OpenWriter("/f.txt/x.txt", nil)
+		_, err := memFS.OpenWriter("/f.txt/x.txt", 0)
 		require.Error(t, err)
 		var notDir ErrIsNotDirectory
 		require.ErrorAs(t, err, &notDir)
 	})
 
 	t.Run("TruncatesExisting", func(t *testing.T) {
-		w, err := memFS.OpenWriter("/a.txt", nil)
+		w, err := memFS.OpenWriter("/a.txt", 0)
 		require.NoError(t, err)
 		_, err = w.Write([]byte("X"))
 		require.NoError(t, err)
@@ -821,39 +824,39 @@ func TestMemFileSystem_OpenWriter_EdgeCases(t *testing.T) {
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		_, err := memFS.OpenWriter("/new.txt", nil)
+		_, err := memFS.OpenWriter("/new.txt", 0)
 		require.ErrorIs(t, err, ErrReadOnlyFileSystem)
 	})
 }
 
 func TestMemFileSystem_OpenAppendWriter_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("hello")), NewMemFile("f.txt", []byte("f")))
-	require.NoError(t, memFS.MakeDir("/d", nil))
+	require.NoError(t, memFS.MakeDir("/d", 0))
 
 	t.Run("EmptyPath", func(t *testing.T) {
-		_, err := memFS.OpenAppendWriter("", nil)
+		_, err := memFS.OpenAppendWriter("", 0)
 		require.ErrorIs(t, err, ErrEmptyPath)
 	})
 
 	t.Run("OnDirectory", func(t *testing.T) {
-		_, err := memFS.OpenAppendWriter("/d", nil)
+		_, err := memFS.OpenAppendWriter("/d", 0)
 		var isDir ErrIsDirectory
 		require.ErrorAs(t, err, &isDir)
 	})
 
 	t.Run("ParentMissing", func(t *testing.T) {
-		_, err := memFS.OpenAppendWriter("/no/dir/x.txt", nil)
+		_, err := memFS.OpenAppendWriter("/no/dir/x.txt", 0)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("ParentIsFile", func(t *testing.T) {
-		_, err := memFS.OpenAppendWriter("/f.txt/x.txt", nil)
+		_, err := memFS.OpenAppendWriter("/f.txt/x.txt", 0)
 		var notDir ErrIsNotDirectory
 		require.ErrorAs(t, err, &notDir)
 	})
 
 	t.Run("AppendsToExisting", func(t *testing.T) {
-		w, err := memFS.OpenAppendWriter("/a.txt", nil)
+		w, err := memFS.OpenAppendWriter("/a.txt", 0)
 		require.NoError(t, err)
 		_, err = w.Write([]byte(" world"))
 		require.NoError(t, err)
@@ -865,50 +868,50 @@ func TestMemFileSystem_OpenAppendWriter_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("CreatesNewFile", func(t *testing.T) {
-		w, err := memFS.OpenAppendWriter("/new.txt", nil)
+		w, err := memFS.OpenAppendWriter("/new.txt", 0)
 		require.NoError(t, err)
 		_, err = w.Write([]byte("z"))
 		require.NoError(t, err)
 		require.NoError(t, w.Close())
-		require.True(t, memFS.Exists("/new.txt"))
+		require.True(t, memExists(memFS, "/new.txt"))
 	})
 
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		_, err := memFS.OpenAppendWriter("/x.txt", nil)
+		_, err := memFS.OpenAppendWriter("/x.txt", 0)
 		require.ErrorIs(t, err, ErrReadOnlyFileSystem)
 	})
 }
 
 func TestMemFileSystem_OpenReadWriter_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("abcdef")), NewMemFile("f.txt", []byte("f")))
-	require.NoError(t, memFS.MakeDir("/d", nil))
+	require.NoError(t, memFS.MakeDir("/d", 0))
 
 	t.Run("EmptyPath", func(t *testing.T) {
-		_, err := memFS.OpenReadWriter("", nil)
+		_, err := memFS.OpenReadWriter("", 0)
 		require.ErrorIs(t, err, ErrEmptyPath)
 	})
 
 	t.Run("OnDirectory", func(t *testing.T) {
-		_, err := memFS.OpenReadWriter("/d", nil)
+		_, err := memFS.OpenReadWriter("/d", 0)
 		var isDir ErrIsDirectory
 		require.ErrorAs(t, err, &isDir)
 	})
 
 	t.Run("ParentMissing", func(t *testing.T) {
-		_, err := memFS.OpenReadWriter("/no/dir/x.txt", nil)
+		_, err := memFS.OpenReadWriter("/no/dir/x.txt", 0)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("ParentIsFile", func(t *testing.T) {
-		_, err := memFS.OpenReadWriter("/f.txt/x.txt", nil)
+		_, err := memFS.OpenReadWriter("/f.txt/x.txt", 0)
 		var notDir ErrIsNotDirectory
 		require.ErrorAs(t, err, &notDir)
 	})
 
 	t.Run("SeekReadWriteAt", func(t *testing.T) {
-		rw, err := memFS.OpenReadWriter("/a.txt", nil)
+		rw, err := memFS.OpenReadWriter("/a.txt", 0)
 		require.NoError(t, err)
 
 		// Read whole file.
@@ -942,7 +945,7 @@ func TestMemFileSystem_OpenReadWriter_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("CreatesNewFile", func(t *testing.T) {
-		rw, err := memFS.OpenReadWriter("/new-rw.txt", nil)
+		rw, err := memFS.OpenReadWriter("/new-rw.txt", 0)
 		require.NoError(t, err)
 		_, err = rw.Write([]byte("hi"))
 		require.NoError(t, err)
@@ -956,15 +959,15 @@ func TestMemFileSystem_OpenReadWriter_EdgeCases(t *testing.T) {
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		_, err := memFS.OpenReadWriter("/a.txt", nil)
+		_, err := memFS.OpenReadWriter("/a.txt", 0)
 		require.ErrorIs(t, err, ErrReadOnlyFileSystem)
 	})
 }
 
 func TestMemFileSystem_Remove_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("a")))
-	require.NoError(t, memFS.MakeAllDirs("/d/sub", nil))
-	require.NoError(t, memFS.WriteAll(t.Context(), "/d/sub/inner.txt", []byte("x"), nil))
+	require.NoError(t, memFS.MakeAllDirs("/d/sub", 0))
+	require.NoError(t, memFS.WriteAll(t.Context(), "/d/sub/inner.txt", []byte("x"), 0))
 
 	t.Run("EmptyPath", func(t *testing.T) {
 		require.ErrorIs(t, memFS.Remove(""), ErrEmptyPath)
@@ -983,10 +986,10 @@ func TestMemFileSystem_Remove_EdgeCases(t *testing.T) {
 		// Like os.Remove, a non-empty directory can't be removed;
 		// File.RemoveRecursive is the way to drop a subtree.
 		require.Error(t, memFS.Remove("/d"))
-		require.True(t, memFS.Exists("/d/sub/inner.txt"), "content must survive a refused Remove")
+		require.True(t, memExists(memFS, "/d/sub/inner.txt"), "content must survive a refused Remove")
 		require.NoError(t, memFS.RootDir().Join("d").RemoveRecursive())
-		require.False(t, memFS.Exists("/d"))
-		require.False(t, memFS.Exists("/d/sub/inner.txt"))
+		require.False(t, memExists(memFS, "/d"))
+		require.False(t, memExists(memFS, "/d/sub/inner.txt"))
 	})
 
 	t.Run("ReadOnly", func(t *testing.T) {
@@ -1079,23 +1082,23 @@ func TestMemFileSystem_CopyFile_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("hello")))
 
 	t.Run("EmptyInputs", func(t *testing.T) {
-		require.ErrorIs(t, memFS.CopyFile(t.Context(), "", "/x", nil), ErrEmptyPath)
-		require.ErrorIs(t, memFS.CopyFile(t.Context(), "/a.txt", "", nil), ErrEmptyPath)
+		require.ErrorIs(t, memFS.CopyFile(t.Context(), "", "/x"), ErrEmptyPath)
+		require.ErrorIs(t, memFS.CopyFile(t.Context(), "/a.txt", ""), ErrEmptyPath)
 	})
 
 	t.Run("MissingSource", func(t *testing.T) {
-		err := memFS.CopyFile(t.Context(), "/missing", "/x", nil)
+		err := memFS.CopyFile(t.Context(), "/missing", "/x")
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("CanceledContext", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		require.ErrorIs(t, memFS.CopyFile(ctx, "/a.txt", "/dst.txt", nil), context.Canceled)
+		require.ErrorIs(t, memFS.CopyFile(ctx, "/a.txt", "/dst.txt"), context.Canceled)
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		require.NoError(t, memFS.CopyFile(t.Context(), "/a.txt", "/copy.txt", nil))
+		require.NoError(t, memFS.CopyFile(t.Context(), "/a.txt", "/copy.txt"))
 		data, err := memFS.ReadAll(t.Context(), "/copy.txt")
 		require.NoError(t, err)
 		require.Equal(t, []byte("hello"), data)
@@ -1104,7 +1107,7 @@ func TestMemFileSystem_CopyFile_EdgeCases(t *testing.T) {
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		require.ErrorIs(t, memFS.CopyFile(t.Context(), "/a.txt", "/new.txt", nil), ErrReadOnlyFileSystem)
+		require.ErrorIs(t, memFS.CopyFile(t.Context(), "/a.txt", "/new.txt"), ErrReadOnlyFileSystem)
 	})
 }
 
@@ -1179,17 +1182,17 @@ func TestMemFileSystem_ListDir_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("a")))
 
 	t.Run("ListDirInfo_EmptyPath", func(t *testing.T) {
-		err := memFS.ListDirInfo(t.Context(), "", func(*FileInfo) error { return nil }, nil)
+		err := memFS.ListDir(t.Context(), "", nil, func(*FileInfo) error { return nil })
 		require.ErrorIs(t, err, ErrEmptyPath)
 	})
 
 	t.Run("ListDirInfo_Missing", func(t *testing.T) {
-		err := memFS.ListDirInfo(t.Context(), "/missing", func(*FileInfo) error { return nil }, nil)
+		err := memFS.ListDir(t.Context(), "/missing", nil, func(*FileInfo) error { return nil })
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("ListDirInfo_OnFile", func(t *testing.T) {
-		err := memFS.ListDirInfo(t.Context(), "/a.txt", func(*FileInfo) error { return nil }, nil)
+		err := memFS.ListDir(t.Context(), "/a.txt", nil, func(*FileInfo) error { return nil })
 		require.Error(t, err)
 		var notDir ErrIsNotDirectory
 		require.ErrorAs(t, err, &notDir)
@@ -1198,13 +1201,13 @@ func TestMemFileSystem_ListDir_EdgeCases(t *testing.T) {
 	t.Run("ListDirInfo_CanceledCtx", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		err := memFS.ListDirInfo(ctx, "/", func(*FileInfo) error { return nil }, nil)
+		err := memFS.ListDir(ctx, "/", nil, func(*FileInfo) error { return nil })
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
 	t.Run("ListDirInfo_CallbackError", func(t *testing.T) {
 		sentinel := errors.New("stop")
-		err := memFS.ListDirInfo(t.Context(), "/", func(*FileInfo) error { return sentinel }, nil)
+		err := memFS.ListDir(t.Context(), "/", nil, func(*FileInfo) error { return sentinel })
 		require.ErrorIs(t, err, sentinel)
 	})
 
@@ -1226,13 +1229,13 @@ func TestMemFileSystem_ListDir_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("ListDirInfoRecursive_Errors", func(t *testing.T) {
-		err := memFS.ListDirInfoRecursive(t.Context(), "", func(*FileInfo) error { return nil }, nil)
+		err := memFS.ListDirRecursive(t.Context(), "", nil, func(*FileInfo) error { return nil })
 		require.ErrorIs(t, err, ErrEmptyPath)
 
-		err = memFS.ListDirInfoRecursive(t.Context(), "/missing", func(*FileInfo) error { return nil }, nil)
+		err = memFS.ListDirRecursive(t.Context(), "/missing", nil, func(*FileInfo) error { return nil })
 		require.ErrorIs(t, err, os.ErrNotExist)
 
-		err = memFS.ListDirInfoRecursive(t.Context(), "/a.txt", func(*FileInfo) error { return nil }, nil)
+		err = memFS.ListDirRecursive(t.Context(), "/a.txt", nil, func(*FileInfo) error { return nil })
 		var notDir ErrIsNotDirectory
 		require.ErrorAs(t, err, &notDir)
 	})
@@ -1334,7 +1337,7 @@ func TestMemFileSystem_Watch_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = cancel() })
 
-		require.NoError(t, memFS.WriteAll(t.Context(), "/a.txt", []byte("Z"), nil))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/a.txt", []byte("Z"), 0))
 
 		select {
 		case e := <-events:
@@ -1355,7 +1358,7 @@ func TestMemFileSystem_Watch_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = c2() })
 
-		require.NoError(t, memFS.Touch("/a.txt", nil))
+		require.NoError(t, memFS.Touch("/a.txt", 0))
 
 		done := make(chan struct{})
 		go func() { wg.Wait(); close(done) }()
@@ -1390,7 +1393,7 @@ func TestMemFileSystem_Watch_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = cancel() })
 
-		require.NoError(t, memFS.WriteAll(t.Context(), "/x.txt", []byte("x"), nil))
+		require.NoError(t, memFS.WriteAll(t.Context(), "/x.txt", []byte("x"), 0))
 
 		time.Sleep(100 * time.Millisecond)
 		mu.Lock()
@@ -1420,17 +1423,17 @@ func TestMemFileSystem_Clear(t *testing.T) {
 		NewMemFile("a.txt", []byte("a")),
 		NewMemFile("sub/b.txt", []byte("b")),
 	)
-	require.True(t, memFS.Exists("/a.txt"))
-	require.True(t, memFS.Exists("/sub/b.txt"))
+	require.True(t, memExists(memFS, "/a.txt"))
+	require.True(t, memExists(memFS, "/sub/b.txt"))
 
 	memFS.Clear()
 
-	require.False(t, memFS.Exists("/a.txt"), "Clear removes top-level files")
-	require.False(t, memFS.Exists("/sub"), "Clear removes top-level dirs")
+	require.False(t, memExists(memFS, "/a.txt"), "Clear removes top-level files")
+	require.False(t, memExists(memFS, "/sub"), "Clear removes top-level dirs")
 
 	// Filesystem is still usable.
-	require.NoError(t, memFS.WriteAll(t.Context(), "/after.txt", []byte("ok"), nil))
-	require.True(t, memFS.Exists("/after.txt"))
+	require.NoError(t, memFS.WriteAll(t.Context(), "/after.txt", []byte("ok"), 0))
+	require.True(t, memExists(memFS, "/after.txt"))
 }
 
 func TestMemFileSystem_Concurrent(t *testing.T) {
@@ -1438,7 +1441,7 @@ func TestMemFileSystem_Concurrent(t *testing.T) {
 	// under -race. The test only asserts that operations don't error;
 	// the race detector catches actual concurrency bugs.
 	memFS := newTestMemFS(t)
-	require.NoError(t, memFS.MakeDir("/shared", nil))
+	require.NoError(t, memFS.MakeDir("/shared", 0))
 
 	const workers = 16
 	const opsPerWorker = 50
@@ -1450,10 +1453,10 @@ func TestMemFileSystem_Concurrent(t *testing.T) {
 			defer wg.Done()
 			for i := range opsPerWorker {
 				path := "/shared/" + string(rune('a'+(id%26))) + "-" + string(rune('a'+(i%26))) + ".txt"
-				_ = memFS.WriteAll(t.Context(), path, []byte("x"), nil)
+				_ = memFS.WriteAll(t.Context(), path, []byte("x"), 0)
 				_, _ = memFS.ReadAll(t.Context(), path)
 				_, _ = memFS.Stat(path)
-				_ = memFS.Touch(path, nil)
+				_ = memFS.Touch(path, 0)
 				_ = memFS.Remove(path)
 			}
 		}(w)
@@ -1465,13 +1468,19 @@ func TestMemFileSystem_FileMode_Permissions(t *testing.T) {
 	// FileMode() composes the stored Permissions with the dir/symlink bits.
 	memFS := newTestMemFS(t)
 
-	require.NoError(t, memFS.WriteAll(t.Context(), "/f.txt", []byte("x"), []Permissions{UserRead}))
+	require.NoError(t, memFS.WriteAll(t.Context(), "/f.txt", []byte("x"), UserRead))
 	info, err := memFS.Stat("/f.txt")
 	require.NoError(t, err)
-	require.Equal(t, iofs.FileMode(UserRead), info.Mode()&iofs.ModePerm)
+	require.Equal(t, UserRead, info.Permissions)
 
 	require.NoError(t, memFS.SetPermissions("/f.txt", AllRead))
 	info, err = memFS.Stat("/f.txt")
 	require.NoError(t, err)
-	require.Equal(t, iofs.FileMode(AllRead), info.Mode()&iofs.ModePerm)
+	require.Equal(t, AllRead, info.Permissions)
+}
+
+// memExists returns the existence of a path ignoring errors
+func memExists(fs *MemFileSystem, path string) bool {
+	exists, _ := fs.Exists(path)
+	return exists
 }

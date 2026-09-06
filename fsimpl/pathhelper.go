@@ -1,7 +1,6 @@
 package fsimpl
 
 import (
-	"net/url"
 	"path"
 	"strings"
 )
@@ -47,6 +46,12 @@ func (h PathHelper) Prefix() string {
 	return h.URIPrefix
 }
 
+// PrefixAliases returns the AltPrefixes,
+// implementing fs.PrefixAliasFileSystem.
+func (h PathHelper) PrefixAliases() []string {
+	return h.AltPrefixes
+}
+
 // Separator returns PathSep or "/" if PathSep is empty.
 func (h PathHelper) Separator() string {
 	if h.PathSep == "" {
@@ -82,9 +87,10 @@ func (h PathHelper) volumeLen(filePath string) int {
 
 // CleanPath returns the uriParts joined with the separator
 // and cleaned as file system path: the URI prefix is stripped
-// from the first part, URL escapes are decoded, "." and ".."
-// elements and duplicate separators are removed, and the path
-// is made absolute (rooted) or relative (not rooted) as configured.
+// from the first part, "." and ".." elements and duplicate
+// separators are removed, and the path is made absolute (rooted)
+// or relative (not rooted) as configured.
+// URL escapes are not decoded, that is the job of fs.ParseRawURI.
 // The passed uriParts slice is not modified.
 func (h PathHelper) CleanPath(uriParts ...string) string {
 	sep := h.Separator()
@@ -95,10 +101,6 @@ func (h PathHelper) CleanPath(uriParts ...string) string {
 			joined += sep + strings.Join(uriParts[1:], sep)
 		}
 	}
-	if unescaped, err := url.PathUnescape(joined); err == nil {
-		joined = unescaped
-	}
-
 	volume := joined[:h.volumeLen(joined)]
 	rest := joined[len(volume):]
 	if sep != "/" {

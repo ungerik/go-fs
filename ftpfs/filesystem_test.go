@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fstest"
 )
 
@@ -198,11 +199,11 @@ func Test_fileSystem_FTPS(t *testing.T) {
 	t.Log("FTPS connection successful!")
 
 	// Test basic operations with comprehensive error handling
-	testFilePath := ftpsFS.JoinCleanPath(testDataDir, "ftps-test.txt")
+	testFilePath := ftpsFS.CleanPath(testDataDir, "ftps-test.txt")
 	testContent := []byte("Hello, FTPS!")
 
 	// Test write operation
-	writer, err := ftpsFS.OpenWriter(testFilePath, nil)
+	writer, err := ftpsFS.(fs.WriteFileSystem).OpenWriter(testFilePath, 0)
 	if err != nil {
 		t.Logf("FTPS OpenWriter failed: %v", err)
 		t.Skip("FTPS OpenWriter failed - jlaffaye/ftp library limitation")
@@ -251,7 +252,7 @@ func Test_fileSystem_FTPS(t *testing.T) {
 	}
 
 	// Clean up
-	err = ftpsFS.Remove(testFilePath)
+	err = ftpsFS.(fs.WriteFileSystem).Remove(testFilePath)
 	if err != nil {
 		t.Logf("FTPS Remove failed: %v", err)
 		// Don't skip here, just log the error

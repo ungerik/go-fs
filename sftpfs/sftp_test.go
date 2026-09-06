@@ -142,13 +142,11 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 		require.NoError(t, err, "Dial")
 
 		require.Equal(t, "sftp://demo@test.rebex.net", sftpFS.Prefix())
-		id, err := sftpFS.ID()
-		require.NoError(t, err)
-		require.Equal(t, "sftp://demo@test.rebex.net", id)
+		require.Equal(t, "sftp://demo@test.rebex.net", sftpFS.ID())
 		require.Equal(t, "sftp://demo@test.rebex.net file system", sftpFS.String())
 		require.Equal(t, "SFTP", sftpFS.Name())
-		require.Equal(t, "/a/b", sftpFS.JoinCleanPath("a", "skip", "..", "/", "b", "/"))
-		require.Equal(t, fs.File("sftp://demo@test.rebex.net/a/b"), sftpFS.JoinCleanFile("a", "skip", "..", "/", "b", "/"))
+		require.Equal(t, "/a/b", sftpFS.CleanPath("a", "skip", "..", "/", "b", "/"))
+		require.Equal(t, fs.File("sftp://demo@test.rebex.net/a/b"), sftpFS.(*fileSystem).JoinCleanFile("a", "skip", "..", "/", "b", "/"))
 
 		f := fs.File("sftp://demo@test.rebex.net/readme.txt")
 		assert.Equal(t, "readme.txt", f.Name())

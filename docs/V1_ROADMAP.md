@@ -381,19 +381,35 @@ One PR per phase unless noted.
 
 ### Phase 3 — `FileSystem` interface flip (implementer-facing)
 
-- [ ] Refactor `file.go`/`copy.go`/`fs.go`/`stdfs.go` so every backend call goes
-      through unexported dispatch helpers (`fsStat`, `fsOpenReader`, ...);
-      pure refactor, green.
-- [ ] Introduce the new `FileSystem`/`WriteFileSystem`/optional interfaces;
-      keep the old one as `LegacyFileSystem` with
-      `AdaptLegacy(LegacyFileSystem) FileSystem` so the four external modules
-      keep compiling. Same commit migrates `LocalFileSystem`, `MemFileSystem`,
-      `InvalidFileSystem`, `httpfs`, `zipfs`, `multipartfs` and the `fstest`
-      mocks (the root module must compile), deletes `ReadOnlyBase`, and changes
-      the four sub-modules' `fs.Register(x)` to `fs.Register(fs.AdaptLegacy(x))`.
-- [ ] Registry: `RLock` for reads; match on `AltPrefixes`; `Close` contract.
-- [ ] Verify: conformance on all backends; `file_mock_test.go` ported. Tag
-      `v0.2.0`.
+- [x] `dispatch.go`: every `File` method calls the file system through
+      unexported helpers (`fsStat`, `fsListDir`, `fsOpenReader`, ...) that
+      apply the readable/writable gates (`ErrReadOnlyFileSystem` /
+      `ErrWriteOnlyFileSystem` come from the package now, no stubs needed),
+      complete `FileInfo.File`/`Name`/`IsHidden`, and hold the generic
+      emulations of every optional interface.
+- [x] New `FileSystem` (primitives only) and `WriteFileSystem`, plus the
+      optional interfaces as designed; `PrefixAliasFileSystem` for default-port
+      URIs; `HiddenFileSystem`; `SymbolicLinkFileSystem` keeps `IsSymbolicLink`;
+      `AbsPathFileSystem` merges `RelPathFileSystem`; `RemoveAllFileSystem` is
+      new; `ReadOnlyBase`, `FullyFeaturedFileSystem` and `FileSystem.ID()`'s
+      error result are gone. `FileInfo` gained `IsSymlink` and `Sys`.
+      Because everything lands in one PR, no `LegacyFileSystem` adapter was
+      written: all in-repo backends were migrated to the new signatures
+      directly (semantic reworks stay in Phase 5).
+- [x] `ParseRawURI` cleans the path with `CleanPath`, decodes URL escapes only
+      for URIs with a scheme, and resolves prefix aliases; reads use `RLock`.
+- [x] Local file system: `ID()` is the real file system id (statfs
+      `f_fsid`, Windows volume serial), `Stat` follows symlinks and reports
+      `IsSymlink`, receiver defaults instead of the `Local` singleton, no
+      stderr writes, `RemoveAll` via `os.RemoveAll`, `Watch` expands `~`,
+      `MakeAllDirs` on a file reports `ErrIsNotDirectory`.
+- [x] Mem file system: `RelPath`, `RemoveAll`, `Move` with final destination
+      semantics.
+- [x] `fstest` mocks regenerated; conformance suite on the new interface
+      (also checks prefix aliases, `IsSymlink`, `RemoveAll`, native
+      `OpenReadWriter`, `MoveTo` into a directory and across file systems).
+- [x] Verify: conformance on Local, Mem, httpfs, zipfs, multipartfs, sftpfs
+      and ftpfs (Docker); `file_mock_test.go` ported.
 
 ### Phase 4 — `File`/`FileReader`/`MemFile` v1 API (consumer-facing)
 

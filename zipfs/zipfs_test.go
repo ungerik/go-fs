@@ -28,12 +28,12 @@ func TestZipFileSystem(t *testing.T) {
 
 		// Create test directory structure
 		testDir := "test"
-		err = zipWriter.MakeDir(testDir, nil)
+		err = zipWriter.MakeDir(testDir, 0)
 		require.NoError(t, err, "MakeDir should not error")
 
 		// Write some test files
 		testFilePath := zipWriter.JoinCleanPath(testDir, "test-file.txt")
-		writer, err := zipWriter.OpenWriter(testFilePath, nil)
+		writer, err := zipWriter.OpenWriter(testFilePath, 0)
 		require.NoError(t, err, "OpenWriter should not error")
 
 		testContent := []byte("Hello, ZipFileSystem!")
@@ -46,7 +46,7 @@ func TestZipFileSystem(t *testing.T) {
 
 		// Write another file
 		testFile2Path := zipWriter.JoinCleanPath(testDir, "test-file-2.txt")
-		writer2, err := zipWriter.OpenWriter(testFile2Path, nil)
+		writer2, err := zipWriter.OpenWriter(testFile2Path, 0)
 		require.NoError(t, err, "OpenWriter should not error for second file")
 
 		testContent2 := []byte("Another test file")
@@ -75,9 +75,7 @@ func TestZipFileSystem(t *testing.T) {
 			assert.Contains(t, zipReader.Name(), "Zip reader filesystem", "Name() should contain 'Zip reader filesystem'")
 			assert.True(t, len(zipReader.Prefix()) > 0, "Prefix() should not be empty")
 
-			id, err := zipReader.ID()
-			require.NoError(t, err, "ID() should not error")
-			assert.NotEmpty(t, id, "ID() should not be empty")
+			assert.NotEmpty(t, zipReader.ID(), "ID() should not be empty")
 
 			rootDir := zipReader.RootDir()
 			assert.NotEmpty(t, rootDir, "RootDir() should not be empty")
@@ -87,25 +85,30 @@ func TestZipFileSystem(t *testing.T) {
 			testFilePath := zipReader.JoinCleanPath("test", "test-file.txt")
 			info, err := zipReader.Stat(testFilePath)
 			require.NoError(t, err, "Stat should not error")
-			assert.False(t, info.IsDir(), "test-file.txt should not be a directory")
-			assert.Greater(t, info.Size(), int64(0), "File size should be greater than 0")
+			assert.False(t, info.IsDir, "test-file.txt should not be a directory")
+			assert.True(t, info.IsRegular, "test-file.txt should be a regular file")
+			assert.Greater(t, info.Size, int64(0), "File size should be greater than 0")
 		})
 
 		t.Run("Exists", func(t *testing.T) {
 			testFilePath := zipReader.JoinCleanPath("test", "test-file.txt")
-			assert.True(t, zipReader.Exists(testFilePath), "test-file.txt should exist")
+			exists, err := zipReader.Exists(testFilePath)
+			require.NoError(t, err, "Exists should not error")
+			assert.True(t, exists, "test-file.txt should exist")
 
 			nonExistentPath := zipReader.JoinCleanPath("test", "non-existent.txt")
-			assert.False(t, zipReader.Exists(nonExistentPath), "non-existent.txt should not exist")
+			exists, err = zipReader.Exists(nonExistentPath)
+			require.NoError(t, err, "Exists should not error")
+			assert.False(t, exists, "non-existent.txt should not exist")
 		})
 
-		t.Run("ListDirInfo", func(t *testing.T) {
+		t.Run("ListDir", func(t *testing.T) {
 			var files []*fs.FileInfo
-			err := zipReader.ListDirInfo(t.Context(), "test", func(info *fs.FileInfo) error {
+			err := zipReader.ListDir(t.Context(), "test", nil, func(info *fs.FileInfo) error {
 				files = append(files, info)
 				return nil
-			}, nil)
-			require.NoError(t, err, "ListDirInfo should not error")
+			})
+			require.NoError(t, err, "ListDir should not error")
 			assert.GreaterOrEqual(t, len(files), 2, "Should list at least 2 files")
 		})
 
@@ -125,10 +128,11 @@ func TestZipFileSystem(t *testing.T) {
 		})
 
 		t.Run("OpenReadWriter_ReadOnly", func(t *testing.T) {
-			testFilePath := zipReader.JoinCleanPath("test", "test-file.txt")
-			_, err := zipReader.OpenReadWriter(testFilePath, nil)
-			require.Error(t, err, "OpenReadWriter should error on read-only ZIP")
-			assert.Contains(t, err.Error(), "read-only ZIP archive", "Error should mention read-only")
+			// A ZIP archive is opened either for reading or for writing,
+			// so random access read-write must be rejected as read-only
+			// by the fs package based on ReadableWritable.
+			_, err := zipReader.JoinCleanFile("test", "test-file.txt").OpenReadWriter()
+			require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "OpenReadWriter should error on read-only ZIP")
 		})
 	})
 
@@ -142,10 +146,8 @@ func TestZipFileSystem(t *testing.T) {
 		})
 
 		t.Run("OpenReadWriter_WriteOnly", func(t *testing.T) {
-			testFilePath := zipWriter.JoinCleanPath("test", "test-file.txt")
-			_, err := zipWriter.OpenReadWriter(testFilePath, nil)
-			require.Error(t, err, "OpenReadWriter should error on write-only ZIP")
-			assert.Contains(t, err.Error(), "write-only ZIP archive", "Error should mention write-only")
+			_, err := zipWriter.JoinCleanFile("test", "test-file.txt").OpenReadWriter()
+			require.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "OpenReadWriter should error on write-only ZIP")
 		})
 	})
 }
@@ -164,9 +166,9 @@ func TestZipWriter_SequentialEnforcement(t *testing.T) {
 
 	// Opening a second writer while the first is still open must fail, because
 	// archive/zip can only write to the most recently created entry.
-	w1, err := zipWriter.OpenWriter("a.txt", nil)
+	w1, err := zipWriter.OpenWriter("a.txt", 0)
 	require.NoError(t, err)
-	_, err = zipWriter.OpenWriter("b.txt", nil)
+	_, err = zipWriter.OpenWriter("b.txt", 0)
 	require.Error(t, err, "opening a second writer before closing the first must fail")
 
 	// A write to the first (still active) writer succeeds; after closing it a
@@ -178,17 +180,17 @@ func TestZipWriter_SequentialEnforcement(t *testing.T) {
 	require.Error(t, err, "write to a closed entry writer must fail")
 
 	// After closing the first, a second writer can be opened sequentially.
-	w2, err := zipWriter.OpenWriter("b.txt", nil)
+	w2, err := zipWriter.OpenWriter("b.txt", 0)
 	require.NoError(t, err)
 	_, err = w2.Write([]byte("world"))
 	require.NoError(t, err)
 	require.NoError(t, w2.Close())
 
 	// Writing to a writer that was superseded by a newer one must fail.
-	w3, err := zipWriter.OpenWriter("c.txt", nil)
+	w3, err := zipWriter.OpenWriter("c.txt", 0)
 	require.NoError(t, err)
 	require.NoError(t, w3.Close())
-	w4, err := zipWriter.OpenWriter("d.txt", nil)
+	w4, err := zipWriter.OpenWriter("d.txt", 0)
 	require.NoError(t, err)
 	_, err = w3.Write([]byte("stale")) // w3 already closed -> closed error
 	require.Error(t, err)
@@ -204,7 +206,7 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	zipFile := tempDir.Join("ro.zip")
 	zipWriter, err := NewWriterFileSystem(zipFile)
 	require.NoError(t, err)
-	w, err := zipWriter.OpenWriter("f.txt", nil)
+	w, err := zipWriter.OpenWriter("f.txt", 0)
 	require.NoError(t, err)
 	_, err = w.Write([]byte("x"))
 	require.NoError(t, err)
@@ -216,6 +218,6 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, zipReader.Close()) })
 
 	// MakeDir on a read-only archive must report read-only, not silently succeed.
-	err = zipReader.MakeDir("somedir", nil)
+	err = zipReader.MakeDir("somedir", 0)
 	require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
 }

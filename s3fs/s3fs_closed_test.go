@@ -12,12 +12,13 @@ import (
 )
 
 // TestClosedFileSystem verifies that after Close every S3 method returns
-// fs.ErrFileSystemClosed (or false for Exists) instead of dereferencing the
-// now-nil client and panicking. No network or credentials are needed: the
-// closed check short-circuits before any API call.
+// fs.ErrFileSystemClosed instead of dereferencing the now-nil client and
+// panicking. No network or credentials are needed: the closed check
+// short-circuits before any API call.
 func TestClosedFileSystem(t *testing.T) {
 	client := s3.New(s3.Options{Region: "us-east-1"})
 	s3fsys := s3fs.NewAndRegister(client, "s3fs-closed-test-bucket", false)
+	writeFS := s3fsys.(fs.WriteFileSystem)
 
 	require.True(t, fs.IsRegistered(s3fsys), "filesystem should be registered before Close")
 	require.NoError(t, s3fsys.Close())
@@ -28,39 +29,40 @@ func TestClosedFileSystem(t *testing.T) {
 
 	ctx := t.Context()
 
-	assert.False(t, s3fsys.(fs.ExistsFileSystem).Exists("/file"),
-		"Exists must be false on a closed filesystem")
+	exists, err := s3fsys.(fs.ExistsFileSystem).Exists("/file")
+	assert.False(t, exists, "Exists must be false on a closed filesystem")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	_, err := s3fsys.Stat("/file")
+	_, err = s3fsys.Stat("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	_, err = s3fsys.OpenReader("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	_, err = s3fsys.OpenWriter("/file", nil)
+	_, err = writeFS.OpenWriter("/file", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	_, err = s3fsys.OpenReadWriter("/file", nil)
+	_, err = s3fsys.(fs.ReadWriterFileSystem).OpenReadWriter("/file", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = s3fsys.MakeDir("/dir", nil)
+	err = writeFS.MakeDir("/dir", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = s3fsys.Remove("/file")
+	err = writeFS.Remove("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = s3fsys.ListDirInfo(ctx, "/dir", func(*fs.FileInfo) error { return nil }, nil)
+	err = s3fsys.ListDir(ctx, "/dir", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	_, err = s3fsys.(fs.ReadAllFileSystem).ReadAll(ctx, "/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = s3fsys.(fs.WriteAllFileSystem).WriteAll(ctx, "/file", []byte("x"), nil)
+	err = s3fsys.(fs.WriteAllFileSystem).WriteAll(ctx, "/file", []byte("x"), 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = s3fsys.(fs.CopyFileSystem).CopyFile(ctx, "/a", "/b", nil)
+	err = s3fsys.(fs.CopyFileSystem).CopyFile(ctx, "/a", "/b")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = s3fsys.(fs.TouchFileSystem).Touch("/file", nil)
+	err = s3fsys.(fs.TouchFileSystem).Touch("/file", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 }

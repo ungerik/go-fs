@@ -33,15 +33,16 @@ func newFileTestServer(t *testing.T) (addr string) {
 func TestStat(t *testing.T) {
 	addr := newFileTestServer(t)
 
-	osInfo, err := FileSystem.Stat(addr + "/README.md")
+	info, err := FileSystem.Stat(addr + "/README.md")
 	require.NoError(t, err)
-	assert.False(t, osInfo.IsDir())
-	assert.Equal(t, int64(len(testFileContent)), osInfo.Size())
-	assert.NotZero(t, osInfo.ModTime(), "has modified time")
+	assert.False(t, info.IsDir)
+	assert.True(t, info.IsRegular)
+	assert.Equal(t, int64(len(testFileContent)), info.Size)
+	assert.NotZero(t, info.Modified, "has modified time")
 
 	file := fs.File("http://" + addr + "/README.md")
-	info := file.Info()
-	assert.Equal(t, fs.NewFileInfo(file, osInfo, false), info)
+	assert.Equal(t, file, info.File)
+	assert.Equal(t, info, file.Info())
 }
 
 func TestReadAll(t *testing.T) {

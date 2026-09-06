@@ -9,6 +9,41 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 Road to v1.0, see `docs/V1_ROADMAP.md`.
 
+### Changed
+
+- **`FileSystem` interface redesigned (Phase 3).** The core interface holds
+  the primitives only: `ID() string`, `Prefix`, `Name`, `String`, `Separator`,
+  `ReadableWritable`, `RootDir`, `CleanPath`, `Stat(path) (*FileInfo, error)`,
+  `ListDir(ctx, dirPath, patterns, callback)`, `OpenReader(path) (io.ReadCloser,
+  error)`, `Close`. Writing moved to `WriteFileSystem` (`OpenWriter`, `MakeDir`,
+  `Remove`); read-only file systems implement no write stubs, the package
+  returns `ErrReadOnlyFileSystem` / `ErrWriteOnlyFileSystem` itself based on
+  `ReadableWritable`. Permissions are a single `Permissions` value (zero means
+  the file system default). Removed from the interface: `URL`,
+  `CleanPathFromURI`, `JoinCleanFile`, `JoinCleanPath`, `SplitPath`,
+  `SplitDirAndName`, `MatchAnyPattern`, `IsHidden` (`HiddenFileSystem`,
+  default dot rule), `IsSymbolicLink` (part of `SymbolicLinkFileSystem`),
+  `IsAbsPath`/`AbsPath` (`AbsPathFileSystem`, which also absorbs `RelPath`),
+  `OpenReadWriter` (`ReadWriterFileSystem`). `ExistsFileSystem.Exists` returns
+  `(bool, error)`, `ListDirRecursiveFileSystem.ListDirRecursive` takes the
+  patterns before the callback, `CopyFileSystem.CopyFile` lost the buffer
+  parameter, `MoveFileSystem.Move` always gets the final destination path
+  (`File.MoveTo` resolves "into directory"), new `RemoveAllFileSystem` and
+  `PrefixAliasFileSystem` (sftpfs/ftpfs default ports). `ReadOnlyBase` and
+  `FullyFeaturedFileSystem` are gone. `FileInfo` gained `IsSymlink` and `Sys`.
+  `ParseRawURI` decodes URL escapes only for URIs with a scheme, so a local
+  file literally named `a%20b` is reachable.
+- `LocalFileSystem.ID()` returns the real id of the root file system (statfs
+  `f_fsid` on Unix, the volume serial number on Windows); `Stat` follows
+  symbolic links and reports `IsSymlink`; the default permissions come from the
+  receiver instead of the `Local` singleton; `MakeAllDirs` on an existing file
+  reports `ErrIsNotDirectory`; `Watch` expands a leading `~`.
+- `File.Touch` on a file system without native touch creates a missing file and
+  returns `ErrUnsupported` for an existing one instead of truncating it;
+  `File.RemoveRecursive` no longer fails for a missing path and uses native
+  `RemoveAll` where available; `File.IsSymbolicLink` is false on file systems
+  without symbolic link support.
+
 ### Added
 
 - **`fstest.RunConformance`** replaces `fs.RunFileSystemTests` and the `tests`
@@ -59,6 +94,10 @@ Road to v1.0, see `docs/V1_ROADMAP.md`.
 ### Removed
 
 - `fs.RunFileSystemTests` and the `tests` package (use `fstest.RunConformance`).
+- `fs.ReadOnlyBase`, `fs.FullyFeaturedFileSystem`, `fs.RelPathFileSystem`
+  (merged into `fs.AbsPathFileSystem`), `s3fs` `Watch` and `VolumeName` stubs,
+  `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
+  `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
 - `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
   `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
 - `fs.MemFileSystem.ReadAll` on a directory returns `ErrIsDirectory` instead

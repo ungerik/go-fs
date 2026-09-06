@@ -47,7 +47,7 @@ func writeSeedArchive(t *testing.T, zipFile fs.File, dir string) {
 	writer, err := NewWriterFileSystem(zipFile)
 	require.NoError(t, err, "NewWriterFileSystem")
 	for name, content := range fstest.DefaultSeed() {
-		w, err := writer.OpenWriter(writer.JoinCleanPath(dir, name), nil)
+		w, err := writer.OpenWriter(writer.CleanPath(dir, name), 0)
 		require.NoError(t, err, "OpenWriter")
 		_, err = w.Write(content)
 		require.NoError(t, err, "Write")

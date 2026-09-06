@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // Seed describes the directory tree the conformance suite expects
@@ -155,6 +156,10 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 	}
 	c := &conformance{t: t, fs: fileSystem, cfg: cfg, ctx: t.Context()}
 	c.readable, c.writable = fileSystem.ReadableWritable()
+	c.writeFS, _ = fileSystem.(fs.WriteFileSystem)
+	if c.writable {
+		require.NotNil(t, c.writeFS, "a writable file system must implement fs.WriteFileSystem")
+	}
 
 	// The high level File API resolves a FileSystem via the global
 	// registry from a File's URI prefix. Make sure the file system under
@@ -166,7 +171,6 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 
 	t.Run("Metadata", c.testMetadata)
 	t.Run("Paths", c.testPaths)
-	t.Run("PatternMatching", c.testPatternMatching)
 
 	if c.writable {
 		t.Run("WriteSeed", c.writeSeed)
@@ -187,8 +191,6 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 			t.Run("WriteErrors", c.testWriteErrors)
 			t.Run("OptionalWrite", c.testOptionalWrite)
 			t.Run("HighLevelWrite", c.testHighLevelWrite)
-		}
-		if c.readable {
 			t.Run("Cleanup", c.cleanup)
 		}
 	} else {
@@ -202,6 +204,7 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 type conformance struct {
 	t        *testing.T
 	fs       fs.FileSystem
+	writeFS  fs.WriteFileSystem // nil if not implemented
 	cfg      Config
 	ctx      context.Context
 	readable bool
@@ -211,17 +214,29 @@ type conformance struct {
 // path returns the file system path of a seed relative path.
 func (c *conformance) path(rel string) string {
 	if rel == "" {
-		return c.fs.JoinCleanPath(c.cfg.TestDir)
+		return c.fs.CleanPath(c.cfg.TestDir)
 	}
-	return c.fs.JoinCleanPath(append([]string{c.cfg.TestDir}, strings.Split(rel, "/")...)...)
+	return c.fs.CleanPath(append([]string{c.cfg.TestDir}, strings.Split(rel, "/")...)...)
 }
 
 // file returns the File of a seed relative path.
 func (c *conformance) file(rel string) fs.File {
-	if rel == "" {
-		return c.fs.JoinCleanFile(c.cfg.TestDir)
+	if c.fs == fs.FileSystem(fs.Local) {
+		return fs.File(c.path(rel)) // Local files have no prefix
 	}
-	return c.fs.JoinCleanFile(append([]string{c.cfg.TestDir}, strings.Split(rel, "/")...)...)
+	return fs.File(c.url(c.path(rel)))
+}
+
+// url returns the URI of a file system path.
+func (c *conformance) url(cleanPath string) string {
+	if c.fs == fs.FileSystem(fs.Local) {
+		return fs.File(cleanPath).URL()
+	}
+	prefix, sep := c.fs.Prefix(), c.fs.Separator()
+	if strings.HasSuffix(prefix, sep) && strings.HasPrefix(cleanPath, sep) {
+		return prefix + cleanPath[len(sep):]
+	}
+	return prefix + cleanPath
 }
 
 func (c *conformance) readAll(t *testing.T, path string) []byte {
@@ -236,7 +251,7 @@ func (c *conformance) readAll(t *testing.T, path string) []byte {
 
 func (c *conformance) writeFile(t *testing.T, path string, data []byte) {
 	t.Helper()
-	w, err := c.fs.OpenWriter(path, nil)
+	w, err := c.writeFS.OpenWriter(path, 0)
 	require.NoError(t, err, "OpenWriter(%q)", path)
 	n, err := w.Write(data)
 	require.NoError(t, err, "Write(%q)", path)
@@ -249,7 +264,7 @@ func (c *conformance) makeDir(t *testing.T, path string) {
 	if _, err := c.fs.Stat(path); err == nil {
 		return
 	}
-	require.NoError(t, c.fs.MakeDir(path, nil), "MakeDir(%q)", path)
+	require.NoError(t, c.writeFS.MakeDir(path, 0), "MakeDir(%q)", path)
 }
 
 func (c *conformance) testMetadata(t *testing.T) {
@@ -260,15 +275,12 @@ func (c *conformance) testMetadata(t *testing.T) {
 		assert.Equal(t, c.cfg.Prefix, c.fs.Prefix(), "Prefix()")
 	}
 	assert.NotEmpty(t, c.fs.Prefix(), "Prefix() must not be empty")
-	assert.True(t, strings.HasSuffix(c.fs.Prefix(), fs.PrefixSeparator) || strings.Contains(c.fs.Prefix(), fs.PrefixSeparator),
-		"Prefix() %q must contain %q", c.fs.Prefix(), fs.PrefixSeparator)
+	assert.Contains(t, c.fs.Prefix(), fs.PrefixSeparator, "Prefix() %q must contain %q", c.fs.Prefix(), fs.PrefixSeparator)
 	assert.NotEmpty(t, c.fs.String(), "String() must not be empty")
 	assert.NotEmpty(t, c.fs.Separator(), "Separator() must not be empty")
 	assert.True(t, c.readable || c.writable, "file system must be readable or writable")
-
-	id, err := c.fs.ID()
-	require.NoError(t, err, "ID()")
-	assert.NotEmpty(t, id, "ID() must not be empty")
+	assert.NotEmpty(t, c.fs.ID(), "ID() must not be empty")
+	assert.Equal(t, c.fs.ID(), c.fs.ID(), "ID() must be stable")
 
 	if root := c.fs.RootDir(); root != fs.InvalidFile {
 		assert.True(t, strings.HasPrefix(root.URL(), c.fs.Prefix()),
@@ -282,67 +294,42 @@ func (c *conformance) testMetadata(t *testing.T) {
 func (c *conformance) testPaths(t *testing.T) {
 	sep := c.fs.Separator()
 
-	// JoinCleanPath must be pure: it must not modify the passed slice.
+	// CleanPath must be pure: it must not modify the passed slice.
 	parts := []string{c.fs.Prefix() + "a", "b", "..", "c", "file.txt"}
 	partsCopy := slices.Clone(parts)
-	joined := c.fs.JoinCleanPath(parts...)
-	assert.Equal(t, partsCopy, parts, "JoinCleanPath must not modify the passed uriParts")
-	assert.False(t, strings.HasPrefix(joined, c.fs.Prefix()), "JoinCleanPath must strip the prefix: %q", joined)
-	assert.NotContains(t, joined, "..", "JoinCleanPath must clean the path: %q", joined)
-	assert.True(t, strings.HasSuffix(joined, "a"+sep+"c"+sep+"file.txt"), "JoinCleanPath must join with the separator: %q", joined)
+	joined := c.fs.CleanPath(parts...)
+	assert.Equal(t, partsCopy, parts, "CleanPath must not modify the passed uriParts")
+	assert.False(t, strings.HasPrefix(joined, c.fs.Prefix()), "CleanPath must strip the prefix: %q", joined)
+	assert.NotContains(t, joined, "..", "CleanPath must clean the path: %q", joined)
+	assert.True(t, strings.HasSuffix(joined, "a"+sep+"c"+sep+"file.txt"), "CleanPath must join with the separator: %q", joined)
+	assert.Equal(t, joined, c.fs.CleanPath(joined), "CleanPath must be idempotent")
 
-	// JoinCleanFile must agree with JoinCleanPath and carry the prefix.
-	file := c.fs.JoinCleanFile("a", "b", "..", "c", "file.txt")
-	assert.Equal(t, c.fs.JoinCleanPath("a", "c", "file.txt"), file.Path(), "JoinCleanFile().Path() must equal JoinCleanPath()")
-	assert.True(t, strings.HasPrefix(file.URL(), c.fs.Prefix()), "JoinCleanFile().URL() %q must have prefix %q", file.URL(), c.fs.Prefix())
-	assert.Same(t, c.fs, file.FileSystem(), "JoinCleanFile() must resolve to the file system")
+	// The prefix must be stripped from a URI and the path must survive the round trip
+	testPath := c.fs.CleanPath(c.cfg.TestDir, "x", "y.txt")
+	uri := c.url(testPath)
+	assert.True(t, strings.HasPrefix(uri, c.fs.Prefix()), "URI %q must have prefix %q", uri, c.fs.Prefix())
+	assert.Equal(t, testPath, c.fs.CleanPath(uri), "CleanPath(uri) must return the path")
+	assert.Equal(t, testPath, fs.File(uri).Path(), "File(uri).Path() must return the path")
+	assert.Equal(t, uri, fs.File(uri).URL(), "File(uri).URL() must return the URI")
+	assert.Same(t, c.fs, fs.File(uri).FileSystem(), "File(uri) must resolve to the file system")
 
-	// URL and CleanPathFromURI must be inverse operations.
-	testPath := c.fs.JoinCleanPath(c.cfg.TestDir, "x", "y.txt")
-	url := c.fs.URL(testPath)
-	assert.True(t, strings.HasPrefix(url, c.fs.Prefix()), "URL() %q must have prefix %q", url, c.fs.Prefix())
-	assert.Equal(t, testPath, c.fs.CleanPathFromURI(url), "CleanPathFromURI(URL(p)) must return p")
-	assert.Equal(t, testPath, c.fs.CleanPathFromURI(testPath), "CleanPathFromURI of a path without prefix must return the path")
+	// File path methods
+	f := c.file("x/y.txt")
+	assert.Equal(t, uri, f.URL(), "File.URL()")
+	assert.Equal(t, "y.txt", f.Name(), "File.Name()")
+	assert.Equal(t, c.file("x"), f.Dir(), "File.Dir()")
+	assert.Equal(t, f, f.Dir().Join("y.txt"), "Dir().Join(Name()) must return the file")
+	assert.Equal(t, f, f.Dir().Join("skip", "..", "y.txt"), "Join must clean the path")
+	assert.Equal(t, ".txt", f.Ext(), "File.Ext()")
 
-	// SplitPath and SplitDirAndName
-	parts = c.fs.SplitPath(testPath)
-	require.NotEmpty(t, parts, "SplitPath")
-	assert.Equal(t, "y.txt", parts[len(parts)-1], "SplitPath last element")
-	assert.Equal(t, "x", parts[len(parts)-2], "SplitPath second to last element")
-	dir, name := c.fs.SplitDirAndName(testPath)
-	assert.Equal(t, "y.txt", name, "SplitDirAndName name")
-	assert.Equal(t, c.fs.JoinCleanPath(c.cfg.TestDir, "x"), dir, "SplitDirAndName dir")
-	assert.Equal(t, testPath, c.fs.JoinCleanPath(dir, name), "JoinCleanPath(SplitDirAndName(p)) must return p")
-
-	// AbsPath must be idempotent
-	abs := c.fs.AbsPath(testPath)
-	assert.NotEmpty(t, abs, "AbsPath")
-	assert.Equal(t, abs, c.fs.AbsPath(abs), "AbsPath must be idempotent")
-	assert.True(t, c.fs.IsAbsPath(abs), "IsAbsPath(AbsPath(p)) must be true")
-}
-
-func (c *conformance) testPatternMatching(t *testing.T) {
-	tests := []struct {
-		name     string
-		patterns []string
-		want     bool
-	}{
-		{"file.txt", []string{"*.txt"}, true},
-		{"file.txt", []string{"*.go"}, false},
-		{"file.txt", []string{"*.go", "*.txt"}, true},
-		{"file.txt", []string{"file.*"}, true},
-		{"file.txt", []string{"?ile.txt"}, true},
-		{"file.txt", nil, true},
-		{"file.txt", []string{}, true},
-		{".hidden", []string{"*.txt"}, false},
+	// Aliases
+	if aliasFS, ok := c.fs.(fs.PrefixAliasFileSystem); ok {
+		for _, alias := range aliasFS.PrefixAliases() {
+			aliasURI := alias + strings.TrimPrefix(uri, c.fs.Prefix())
+			assert.Equal(t, testPath, fs.File(aliasURI).Path(), "File with alias prefix %q must resolve to the same path", alias)
+			assert.Same(t, c.fs, fs.File(aliasURI).FileSystem(), "File with alias prefix %q must resolve to the file system", alias)
+		}
 	}
-	for _, tt := range tests {
-		got, err := c.fs.MatchAnyPattern(tt.name, tt.patterns)
-		require.NoError(t, err, "MatchAnyPattern(%q, %q)", tt.name, tt.patterns)
-		assert.Equal(t, tt.want, got, "MatchAnyPattern(%q, %q)", tt.name, tt.patterns)
-	}
-	_, err := c.fs.MatchAnyPattern("file.txt", []string{"[invalid"})
-	assert.Error(t, err, "MatchAnyPattern with a malformed pattern must return an error")
 }
 
 // writeSeed creates the seed tree through the FileSystem write methods.
@@ -351,13 +338,13 @@ func (c *conformance) writeSeed(t *testing.T) {
 	info, err := c.fs.Stat(root)
 	switch {
 	case err == nil && !c.cfg.NoDirectories:
-		require.True(t, info.IsDir(), "Config.TestDir %q must be a directory", root)
+		require.True(t, info.IsDir, "Config.TestDir %q must be a directory", root)
 	case err != nil && !c.readable:
 		// Write-only file systems can't stat, just create the directory
-		_ = c.fs.MakeDir(root, nil)
+		_ = c.writeFS.MakeDir(root, 0)
 	case err != nil:
 		require.ErrorIs(t, err, os.ErrNotExist, "Stat(TestDir)")
-		require.NoError(t, c.fs.MakeDir(root, nil), "creating Config.TestDir %q", root)
+		require.NoError(t, c.writeFS.MakeDir(root, 0), "creating Config.TestDir %q", root)
 	}
 	for _, dir := range c.cfg.Seed.dirs() {
 		c.makeDir(t, c.path(dir))
@@ -367,26 +354,42 @@ func (c *conformance) writeSeed(t *testing.T) {
 	}
 }
 
+func (c *conformance) checkStatInfo(t *testing.T, rel string, info *fs.FileInfo) {
+	t.Helper()
+	require.NotNil(t, info, "Stat(%q) must not return a nil FileInfo", rel)
+	assert.True(t, info.Exists, "Stat(%q).Exists", rel)
+	if info.File != "" {
+		assert.Equal(t, c.file(rel), info.File, "Stat(%q).File", rel)
+	}
+	if info.Name != "" || rel != "" {
+		assert.Equal(t, baseName(rel), info.Name, "Stat(%q).Name", rel)
+	}
+	assert.Equal(t, strings.HasPrefix(baseName(rel), "."), info.IsHidden, "Stat(%q).IsHidden must follow the dot rule", rel)
+}
+
 func (c *conformance) testReadSeed(t *testing.T) {
 	if !c.cfg.NoDirectories {
 		info, err := c.fs.Stat(c.path(""))
 		require.NoError(t, err, "Stat(TestDir)")
-		assert.True(t, info.IsDir(), "TestDir must be a directory")
+		assert.True(t, info.IsDir, "TestDir must be a directory")
+		assert.False(t, info.IsRegular, "TestDir must not be regular")
 		for _, dir := range c.cfg.Seed.dirs() {
 			info, err := c.fs.Stat(c.path(dir))
 			require.NoError(t, err, "Stat(%q)", dir)
-			assert.True(t, info.IsDir(), "%q must be a directory", dir)
-			assert.Equal(t, baseName(dir), info.Name(), "Stat(%q).Name()", dir)
+			c.checkStatInfo(t, dir, info)
+			assert.True(t, info.IsDir, "%q must be a directory", dir)
+			assert.False(t, info.IsRegular, "%q must not be regular", dir)
 		}
 	}
 	for name, content := range c.cfg.Seed {
 		path := c.path(name)
 		info, err := c.fs.Stat(path)
 		require.NoError(t, err, "Stat(%q)", name)
-		assert.False(t, info.IsDir(), "%q must not be a directory", name)
-		assert.Equal(t, int64(len(content)), info.Size(), "Stat(%q).Size()", name)
-		assert.Equal(t, baseName(name), info.Name(), "Stat(%q).Name()", name)
-		assert.True(t, info.Mode().IsRegular(), "Stat(%q).Mode().IsRegular()", name)
+		c.checkStatInfo(t, name, info)
+		assert.False(t, info.IsDir, "%q must not be a directory", name)
+		assert.True(t, info.IsRegular, "%q must be regular", name)
+		assert.False(t, info.IsSymlink, "%q must not be a symlink", name)
+		assert.Equal(t, int64(len(content)), info.Size, "Stat(%q).Size", name)
 
 		got := c.readAll(t, path)
 		assert.True(t, bytes.Equal(content, got), "OpenReader(%q) content: want %q, got %q", name, content, got)
@@ -397,9 +400,10 @@ func (c *conformance) testReadSeed(t *testing.T) {
 			assert.True(t, bytes.Equal(content, got), "ReadAll(%q) content: want %q, got %q", name, content, got)
 		}
 		if efs, ok := c.fs.(fs.ExistsFileSystem); ok {
-			assert.True(t, efs.Exists(path), "Exists(%q)", name)
+			exists, err := efs.Exists(path)
+			require.NoError(t, err, "Exists(%q)", name)
+			assert.True(t, exists, "Exists(%q)", name)
 		}
-		assert.Equal(t, c.fs.IsHidden(path), c.file(name).IsHidden(), "IsHidden(%q) must agree between FileSystem and File", name)
 	}
 }
 
@@ -415,7 +419,9 @@ func (c *conformance) testReadErrors(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist, "OpenReader of a missing file must wrap os.ErrNotExist")
 
 	if efs, ok := c.fs.(fs.ExistsFileSystem); ok {
-		assert.False(t, efs.Exists(missing), "Exists of a missing file must be false")
+		exists, err := efs.Exists(missing)
+		require.NoError(t, err, "Exists of a missing file must not fail")
+		assert.False(t, exists, "Exists of a missing file must be false")
 	}
 	if rafs, ok := c.fs.(fs.ReadAllFileSystem); ok {
 		_, err = rafs.ReadAll(c.ctx, missing)
@@ -432,25 +438,25 @@ func (c *conformance) testReadErrors(t *testing.T) {
 		// Listing a missing directory must either fail with os.ErrNotExist
 		// or, for file systems without real directories, list nothing.
 		n := 0
-		err = c.fs.ListDirInfo(c.ctx, c.path("does-not-exist-dir"), func(*fs.FileInfo) error { n++; return nil }, nil)
+		err = c.fs.ListDir(c.ctx, c.path("does-not-exist-dir"), nil, func(*fs.FileInfo) error { n++; return nil })
 		if err != nil {
-			assert.ErrorIs(t, err, os.ErrNotExist, "ListDirInfo of a missing directory must wrap os.ErrNotExist")
+			assert.ErrorIs(t, err, os.ErrNotExist, "ListDir of a missing directory must wrap os.ErrNotExist")
 		}
-		assert.Zero(t, n, "ListDirInfo of a missing directory must not list anything")
+		assert.Zero(t, n, "ListDir of a missing directory must not list anything")
 
 		// Listing a file must either fail or list nothing.
 		n = 0
-		err = c.fs.ListDirInfo(c.ctx, c.path("hello.txt"), func(*fs.FileInfo) error { n++; return nil }, nil)
+		err = c.fs.ListDir(c.ctx, c.path("hello.txt"), nil, func(*fs.FileInfo) error { n++; return nil })
 		if err != nil {
-			assert.NotErrorIs(t, err, os.ErrNotExist, "ListDirInfo of a file must not report os.ErrNotExist")
+			assert.NotErrorIs(t, err, os.ErrNotExist, "ListDir of a file must not report os.ErrNotExist")
 		}
-		assert.Zero(t, n, "ListDirInfo of a file must not list anything")
+		assert.Zero(t, n, "ListDir of a file must not list anything")
 	}
 }
 
 func (c *conformance) checkFileInfo(t *testing.T, info *fs.FileInfo, dir string) {
 	t.Helper()
-	require.NotNil(t, info, "ListDirInfo must not pass nil")
+	require.NotNil(t, info, "ListDir must not pass nil")
 	require.NoError(t, info.Validate(), "FileInfo.Validate")
 	assert.True(t, info.Exists, "listed %q must exist", info.Name)
 	assert.NotContains(t, info.Name, "/", "FileInfo.Name %q must be a name, not a path", info.Name)
@@ -458,8 +464,8 @@ func (c *conformance) checkFileInfo(t *testing.T, info *fs.FileInfo, dir string)
 	assert.True(t, strings.HasPrefix(info.File.URL(), c.fs.Prefix()),
 		"FileInfo.File %q must have the prefix %q", info.File.URL(), c.fs.Prefix())
 	assert.Same(t, c.fs, info.File.FileSystem(), "FileInfo.File must resolve to the file system under test")
-	assert.Equal(t, c.fs.JoinCleanPath(c.path(dir), info.Name), info.File.Path(), "FileInfo.File.Path()")
-	assert.Equal(t, c.fs.IsHidden(info.File.Path()), info.IsHidden, "FileInfo.IsHidden must agree with IsHidden()")
+	assert.Equal(t, c.fs.CleanPath(c.path(dir), info.Name), info.File.Path(), "FileInfo.File.Path()")
+	assert.Equal(t, strings.HasPrefix(info.Name, "."), info.IsHidden, "FileInfo.IsHidden must follow the dot rule")
 
 	rel := info.Name
 	if dir != "" {
@@ -473,19 +479,19 @@ func (c *conformance) checkFileInfo(t *testing.T, info *fs.FileInfo, dir string)
 		assert.True(t, info.IsDir, "listed directory %q must be a directory", rel)
 		assert.False(t, info.IsRegular, "listed directory %q must not be regular", rel)
 	} else {
-		t.Errorf("ListDirInfo(%q) listed unexpected entry %q", dir, info.Name)
+		t.Errorf("ListDir(%q) listed unexpected entry %q", dir, info.Name)
 	}
 	assert.True(t, info.File.Exists(), "listed %q must exist via the File API", info.File)
 }
 
 func (c *conformance) listNames(t *testing.T, dir string, patterns []string) (names []string) {
 	t.Helper()
-	err := c.fs.ListDirInfo(c.ctx, c.path(dir), func(info *fs.FileInfo) error {
+	err := c.fs.ListDir(c.ctx, c.path(dir), patterns, func(info *fs.FileInfo) error {
 		c.checkFileInfo(t, info, dir)
 		names = append(names, info.Name)
 		return nil
-	}, patterns)
-	require.NoError(t, err, "ListDirInfo(%q, %q)", dir, patterns)
+	})
+	require.NoError(t, err, "ListDir(%q, %q)", dir, patterns)
 	sort.Strings(names)
 	return names
 }
@@ -499,7 +505,7 @@ func (c *conformance) testListDir(t *testing.T) {
 		files, subDirs := seed.entriesOf(dir)
 		want := append(append([]string{}, files...), subDirs...)
 		sort.Strings(want)
-		assert.Equal(t, want, c.listNames(t, dir, nil), "ListDirInfo(%q) entries", dir)
+		assert.Equal(t, want, c.listNames(t, dir, nil), "ListDir(%q) entries", dir)
 	}
 
 	// Patterns filter by name
@@ -510,21 +516,23 @@ func (c *conformance) testListDir(t *testing.T) {
 			wantTxt = append(wantTxt, f)
 		}
 	}
-	assert.Equal(t, wantTxt, c.listNames(t, "", []string{"*.txt"}), "ListDirInfo with pattern *.txt")
-	assert.Empty(t, c.listNames(t, "", []string{"*.nomatch"}), "ListDirInfo with non matching pattern")
+	assert.Equal(t, wantTxt, c.listNames(t, "", []string{"*.txt"}), "ListDir with pattern *.txt")
+	assert.Empty(t, c.listNames(t, "", []string{"*.nomatch"}), "ListDir with non matching pattern")
+	_, err := fsimpl.MatchAnyPattern("x", []string{"[invalid"})
+	assert.Error(t, err, "a malformed pattern must be an error")
 
 	// Returning an error from the callback stops the listing and returns the error
 	errStop := errors.New("stop listing")
 	n := 0
-	err := c.fs.ListDirInfo(c.ctx, c.path(""), func(*fs.FileInfo) error { n++; return errStop }, nil)
-	assert.ErrorIs(t, err, errStop, "ListDirInfo must return the callback error")
-	assert.Equal(t, 1, n, "ListDirInfo must stop after the callback returned an error")
+	err = c.fs.ListDir(c.ctx, c.path(""), nil, func(*fs.FileInfo) error { n++; return errStop })
+	assert.ErrorIs(t, err, errStop, "ListDir must return the callback error")
+	assert.Equal(t, 1, n, "ListDir must stop after the callback returned an error")
 
 	// A canceled context stops the listing
 	canceled, cancel := context.WithCancel(c.ctx)
 	cancel()
-	err = c.fs.ListDirInfo(canceled, c.path(""), func(*fs.FileInfo) error { return nil }, nil)
-	assert.Error(t, err, "ListDirInfo with a canceled context must fail")
+	err = c.fs.ListDir(canceled, c.path(""), nil, func(*fs.FileInfo) error { return nil })
+	assert.Error(t, err, "ListDir with a canceled context must fail")
 
 	// ListDirMax
 	if ldmfs, ok := c.fs.(fs.ListDirMaxFileSystem); ok {
@@ -544,12 +552,12 @@ func (c *conformance) testListDir(t *testing.T) {
 		assert.Empty(t, none, "ListDirMax(0) must list nothing")
 	}
 
-	// ListDirInfoRecursive lists all files (not directories) of the tree
+	// ListDirRecursive lists all files (not directories) of the tree
 	if ldrfs, ok := c.fs.(fs.ListDirRecursiveFileSystem); ok {
 		var got []string
-		err := ldrfs.ListDirInfoRecursive(c.ctx, c.path(""), func(info *fs.FileInfo) error {
+		err := ldrfs.ListDirRecursive(c.ctx, c.path(""), nil, func(info *fs.FileInfo) error {
 			require.NoError(t, info.Validate(), "FileInfo.Validate")
-			assert.False(t, info.IsDir, "ListDirInfoRecursive must only list files, got directory %q", info.File)
+			assert.False(t, info.IsDir, "ListDirRecursive must only list files, got directory %q", info.File)
 			assert.True(t, strings.HasPrefix(info.File.URL(), c.fs.Prefix()), "FileInfo.File %q must have the prefix", info.File)
 			assert.True(t, info.File.Exists(), "listed %q must exist via the File API", info.File)
 			rel, err := relPath(c.path(""), info.File.Path(), c.fs.Separator())
@@ -557,22 +565,22 @@ func (c *conformance) testListDir(t *testing.T) {
 			assert.Equal(t, int64(len(seed[rel])), info.Size, "FileInfo.Size of %q", rel)
 			got = append(got, rel)
 			return nil
-		}, nil)
-		require.NoError(t, err, "ListDirInfoRecursive")
+		})
+		require.NoError(t, err, "ListDirRecursive")
 		sort.Strings(got)
 		want := make([]string, 0, len(seed))
 		for name := range seed {
 			want = append(want, name)
 		}
 		sort.Strings(want)
-		assert.Equal(t, want, got, "ListDirInfoRecursive must list every seed file")
+		assert.Equal(t, want, got, "ListDirRecursive must list every seed file")
 
 		var mdFiles []string
-		err = ldrfs.ListDirInfoRecursive(c.ctx, c.path(""), func(info *fs.FileInfo) error {
+		err = ldrfs.ListDirRecursive(c.ctx, c.path(""), []string{"*.md"}, func(info *fs.FileInfo) error {
 			mdFiles = append(mdFiles, info.Name)
 			return nil
-		}, []string{"*.md"})
-		require.NoError(t, err, "ListDirInfoRecursive with pattern")
+		})
+		require.NoError(t, err, "ListDirRecursive with pattern")
 		var wantMd []string
 		for name := range seed {
 			if strings.HasSuffix(name, ".md") {
@@ -581,7 +589,7 @@ func (c *conformance) testListDir(t *testing.T) {
 		}
 		sort.Strings(wantMd)
 		sort.Strings(mdFiles)
-		assert.Equal(t, wantMd, mdFiles, "ListDirInfoRecursive with pattern *.md")
+		assert.Equal(t, wantMd, mdFiles, "ListDirRecursive with pattern *.md")
 	}
 }
 
@@ -647,6 +655,18 @@ func (c *conformance) testFileAPI(t *testing.T) {
 
 		_, err = dir.ListDirMaxContext(canceled, -1)
 		assert.Error(t, err, "File.ListDirMax with a canceled context must fail")
+
+		// Relative paths
+		if len(c.cfg.Seed.dirs()) > 0 {
+			sep := c.fs.Separator()
+			rel, err := dir.RelPathOf(c.file("sub/deeper/leaf.md"))
+			require.NoError(t, err, "RelPathOf")
+			assert.Equal(t, strings.Join([]string{"sub", "deeper", "leaf.md"}, sep), rel, "RelPathOf")
+			assert.Equal(t, c.file("sub/deeper/leaf.md"), dir.Join(rel), "Join(RelPathOf()) must return the target")
+			rel, err = c.file("sub/deeper").RelPathOf(c.file("hello.txt"))
+			require.NoError(t, err, "RelPathOf with parent segments")
+			assert.Equal(t, strings.Join([]string{"..", "..", "hello.txt"}, sep), rel, "RelPathOf with parent segments")
+		}
 	}
 
 	for name, content := range c.cfg.Seed {
@@ -658,8 +678,12 @@ func (c *conformance) testFileAPI(t *testing.T) {
 		assert.ErrorAs(t, f.CheckIsDir(), new(fs.ErrIsNotDirectory), "CheckIsDir(%q) must return ErrIsNotDirectory", name)
 		assert.True(t, f.IsRegular(), "%q must be regular", name)
 		assert.True(t, f.IsReadable(), "%q must be readable", name)
+		assert.False(t, f.IsSymbolicLink(), "%q must not be a symbolic link", name)
+		assert.Equal(t, strings.HasPrefix(baseName(name), "."), f.IsHidden(), "IsHidden(%q) must follow the dot rule", name)
 		assert.Equal(t, int64(len(content)), f.Size(), "Size() of %q", name)
 		assert.Equal(t, c.file(parentDir(name)), f.Dir(), "Dir() of %q", name)
+		assert.True(t, f.HasAbsPath(), "%q must have an absolute path", name)
+		assert.Equal(t, f, f.ToAbsPath(), "ToAbsPath() of an absolute path must be a no-op")
 
 		info := f.Info()
 		require.NotNil(t, info)
@@ -670,10 +694,12 @@ func (c *conformance) testFileAPI(t *testing.T) {
 
 		stat, err := f.Stat()
 		require.NoError(t, err, "Stat() of %q", name)
+		assert.Equal(t, info.Name, stat.Name(), "Stat().Name() must equal Info().Name")
 		assert.Equal(t, info.Size, stat.Size(), "Stat().Size() must equal Info().Size")
 		assert.Equal(t, info.Modified, stat.ModTime(), "Stat().ModTime() must equal Info().Modified")
 		assert.Equal(t, info.Modified, f.Modified(), "Modified() must equal Info().Modified")
 		assert.Equal(t, info.Permissions, f.Permissions(), "Permissions() must equal Info().Permissions")
+		assert.True(t, stat.Mode().IsRegular(), "Stat().Mode().IsRegular()")
 
 		data, err := f.ReadAllContext(c.ctx)
 		require.NoError(t, err, "ReadAll(%q)", name)
@@ -704,6 +730,13 @@ func (c *conformance) testFileAPI(t *testing.T) {
 		require.NoError(t, err, "WriteTo(%q)", name)
 		assert.Equal(t, int64(len(content)), n, "WriteTo(%q) bytes", name)
 		assert.True(t, bytes.Equal(content, buf.Bytes()), "WriteTo(%q) content", name)
+
+		r, err := f.OpenReader()
+		require.NoError(t, err, "OpenReader(%q)", name)
+		rStat, err := r.Stat()
+		require.NoError(t, err, "OpenReader(%q).Stat()", name)
+		assert.Equal(t, int64(len(content)), rStat.Size(), "OpenReader(%q).Stat().Size()", name)
+		require.NoError(t, r.Close())
 
 		c.testReadSeeker(t, f, content)
 	}
@@ -767,43 +800,58 @@ func (c *conformance) testReadSeeker(t *testing.T, f fs.File, content []byte) {
 }
 
 // testWriteOnly checks that a write-only file system rejects reads
-// with fs.ErrWriteOnlyFileSystem.
+// with fs.ErrWriteOnlyFileSystem through the File API.
 func (c *conformance) testWriteOnly(t *testing.T) {
-	path := c.path("hello.txt")
-	_, err := c.fs.OpenReader(path)
-	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "OpenReader on a write-only file system")
-	err = c.fs.ListDirInfo(c.ctx, c.path(""), func(*fs.FileInfo) error { return nil }, nil)
-	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "ListDirInfo on a write-only file system")
-	if rafs, ok := c.fs.(fs.ReadAllFileSystem); ok {
-		_, err = rafs.ReadAll(c.ctx, path)
-		assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "ReadAll on a write-only file system")
-	}
-	_, err = c.file("hello.txt").ReadAllContext(c.ctx)
+	f := c.file("hello.txt")
+	_, err := f.OpenReader()
+	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "File.OpenReader on a write-only file system")
+	_, err = f.ReadAllContext(c.ctx)
 	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "File.ReadAll on a write-only file system")
+	_, err = f.Stat()
+	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "File.Stat on a write-only file system")
+	err = c.file("").ListDirContext(c.ctx, func(fs.File) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "File.ListDir on a write-only file system")
+	assert.False(t, f.Exists(), "File.Exists on a write-only file system")
+	assert.False(t, f.IsReadable(), "File.IsReadable on a write-only file system")
 }
 
 // testReadOnly checks that a read-only file system rejects writes
-// with fs.ErrReadOnlyFileSystem.
+// with fs.ErrReadOnlyFileSystem through the File API.
 func (c *conformance) testReadOnly(t *testing.T) {
-	path := c.path("read-only-test.txt")
-	_, err := c.fs.OpenWriter(path, nil)
-	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "OpenWriter on a read-only file system")
-	_, err = c.fs.OpenReadWriter(path, nil)
-	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "OpenReadWriter on a read-only file system")
-	err = c.fs.MakeDir(c.path("read-only-dir"), nil)
-	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "MakeDir on a read-only file system")
-	err = c.fs.Remove(c.path("hello.txt"))
-	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "Remove on a read-only file system")
-	if wafs, ok := c.fs.(fs.WriteAllFileSystem); ok {
-		err = wafs.WriteAll(c.ctx, path, []byte("x"), nil)
-		assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "WriteAll on a read-only file system")
-	}
-	if tfs, ok := c.fs.(fs.TouchFileSystem); ok {
-		err = tfs.Touch(path, nil)
-		assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "Touch on a read-only file system")
-	}
+	f := c.file("read-only-test.txt")
+	_, err := f.OpenWriter()
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.OpenWriter on a read-only file system")
+	_, err = f.OpenAppendWriter()
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.OpenAppendWriter on a read-only file system")
+	_, err = f.OpenReadWriter()
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.OpenReadWriter on a read-only file system")
+	err = f.WriteAllContext(c.ctx, []byte("x"))
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.WriteAll on a read-only file system")
+	err = f.Append(c.ctx, []byte("x"))
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Append on a read-only file system")
+	err = f.Touch()
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Touch on a read-only file system")
+	err = c.file("read-only-dir").MakeDir()
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.MakeDir on a read-only file system")
+	err = c.file("read-only-dir").MakeAllDirs()
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.MakeAllDirs on a read-only file system")
+	err = c.file("hello.txt").Remove()
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Remove on a read-only file system")
+	err = c.file("hello.txt").RemoveRecursiveContext(c.ctx)
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.RemoveRecursive on a read-only file system")
+	_, err = c.file("hello.txt").Rename("renamed.txt")
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Rename on a read-only file system")
+	err = c.file("hello.txt").MoveTo(f)
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.MoveTo on a read-only file system")
+	err = c.file("hello.txt").Truncate(1)
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Truncate on a read-only file system")
+	err = c.file("hello.txt").SetPermissions(fs.AllRead)
+	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.SetPermissions on a read-only file system")
 	assert.False(t, c.file("hello.txt").IsWritable(), "File.IsWritable on a read-only file system")
 	assert.True(t, c.file("hello.txt").Exists(), "the seed must still exist after rejected writes")
+	got, err := c.file("hello.txt").ReadAllContext(c.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, c.cfg.Seed["hello.txt"], got, "the seed content must be unchanged after rejected writes")
 }
 
 func (c *conformance) testWrite(t *testing.T) {
@@ -817,7 +865,7 @@ func (c *conformance) testWrite(t *testing.T) {
 
 	// Writing in several chunks must append within one writer
 	chunked := c.path("chunked.txt")
-	w, err := c.fs.OpenWriter(chunked, nil)
+	w, err := c.writeFS.OpenWriter(chunked, 0)
 	require.NoError(t, err, "OpenWriter")
 	for _, chunk := range []string{"first ", "second ", "third"} {
 		_, err = w.Write([]byte(chunk))
@@ -830,22 +878,23 @@ func (c *conformance) testWrite(t *testing.T) {
 	c.makeDir(t, c.path("write-dir"))
 	info, err := c.fs.Stat(c.path("write-dir"))
 	require.NoError(t, err, "Stat of created directory")
-	assert.True(t, info.IsDir(), "created path must be a directory")
+	assert.True(t, info.IsDir, "created path must be a directory")
 	c.writeFile(t, c.path("write-dir/inner.txt"), []byte("inner"))
 	assert.Equal(t, []byte("inner"), c.readAll(t, c.path("write-dir/inner.txt")))
 
 	// Remove a file and a directory
-	require.NoError(t, c.fs.Remove(c.path("write-dir/inner.txt")), "Remove file")
+	require.NoError(t, c.writeFS.Remove(c.path("write-dir/inner.txt")), "Remove file")
 	_, err = c.fs.Stat(c.path("write-dir/inner.txt"))
 	assert.ErrorIs(t, err, os.ErrNotExist, "removed file must not exist")
-	require.NoError(t, c.fs.Remove(c.path("write-dir")), "Remove empty directory")
+	require.NoError(t, c.writeFS.Remove(c.path("write-dir")), "Remove empty directory")
 	_, err = c.fs.Stat(c.path("write-dir"))
 	assert.ErrorIs(t, err, os.ErrNotExist, "removed directory must not exist")
 
-	// OpenReadWriter: read, seek, write, and the result must be visible after Close
+	// OpenReadWriter (native or emulated): read, seek, write,
+	// and the result must be visible after Close
 	rwPath := c.path("readwriter.txt")
 	c.writeFile(t, rwPath, []byte("Initial content"))
-	rw, err := c.fs.OpenReadWriter(rwPath, nil)
+	rw, err := fs.File(c.url(rwPath)).OpenReadWriter()
 	require.NoError(t, err, "OpenReadWriter")
 	buf := make([]byte, 7)
 	n, err := rw.Read(buf)
@@ -865,29 +914,29 @@ func (c *conformance) testWrite(t *testing.T) {
 func (c *conformance) testWriteErrors(t *testing.T) {
 	// MakeDir on an existing path must wrap os.ErrExist
 	existing := c.path("sub")
-	err := c.fs.MakeDir(existing, nil)
+	err := c.writeFS.MakeDir(existing, 0)
 	require.Error(t, err, "MakeDir on an existing directory must fail")
 	assert.ErrorIs(t, err, os.ErrExist, "MakeDir on an existing directory must wrap os.ErrExist")
-	err = c.fs.MakeDir(c.path("hello.txt"), nil)
+	err = c.writeFS.MakeDir(c.path("hello.txt"), 0)
 	require.Error(t, err, "MakeDir on an existing file must fail")
 	assert.ErrorIs(t, err, os.ErrExist, "MakeDir on an existing file must wrap os.ErrExist")
 
 	// Remove of a missing path must wrap os.ErrNotExist
-	err = c.fs.Remove(c.path("does-not-exist.txt"))
+	err = c.writeFS.Remove(c.path("does-not-exist.txt"))
 	require.Error(t, err, "Remove of a missing file must fail")
 	assert.ErrorIs(t, err, os.ErrNotExist, "Remove of a missing file must wrap os.ErrNotExist")
 
 	// Remove of a non-empty directory must fail and keep the content
-	err = c.fs.Remove(existing)
+	err = c.writeFS.Remove(existing)
 	require.Error(t, err, "Remove of a non-empty directory must fail")
 	_, err = c.fs.Stat(c.path("sub/nested.txt"))
 	assert.NoError(t, err, "content of a non-empty directory must survive a failed Remove")
 
 	// Writing into a missing directory must fail with os.ErrNotExist
-	_, err = c.fs.OpenWriter(c.path("no-such-dir/file.txt"), nil)
+	_, err = c.writeFS.OpenWriter(c.path("no-such-dir/file.txt"), 0)
 	if err == nil {
 		// Object stores have no directories and may allow this
-		require.NoError(t, c.fs.Remove(c.path("no-such-dir/file.txt")))
+		require.NoError(t, c.writeFS.Remove(c.path("no-such-dir/file.txt")))
 	} else {
 		assert.ErrorIs(t, err, os.ErrNotExist, "OpenWriter into a missing directory must wrap os.ErrNotExist")
 	}
@@ -896,31 +945,41 @@ func (c *conformance) testWriteErrors(t *testing.T) {
 func (c *conformance) testOptionalWrite(t *testing.T) {
 	if wafs, ok := c.fs.(fs.WriteAllFileSystem); ok {
 		path := c.path("writeall.txt")
-		require.NoError(t, wafs.WriteAll(c.ctx, path, []byte("0123456789ABCDEFGHIJ"), nil), "WriteAll long")
-		require.NoError(t, wafs.WriteAll(c.ctx, path, []byte("xyz"), nil), "WriteAll short")
+		require.NoError(t, wafs.WriteAll(c.ctx, path, []byte("0123456789ABCDEFGHIJ"), 0), "WriteAll long")
+		require.NoError(t, wafs.WriteAll(c.ctx, path, []byte("xyz"), 0), "WriteAll short")
 		assert.Equal(t, []byte("xyz"), c.readAll(t, path), "WriteAll must truncate previous larger content")
 		canceled, cancel := context.WithCancel(c.ctx)
 		cancel()
-		assert.Error(t, wafs.WriteAll(canceled, path, []byte("canceled"), nil), "WriteAll with a canceled context must fail")
+		assert.Error(t, wafs.WriteAll(canceled, path, []byte("canceled"), 0), "WriteAll with a canceled context must fail")
 		assert.Equal(t, []byte("xyz"), c.readAll(t, path), "WriteAll with a canceled context must not modify the file")
 	}
 
 	if afs, ok := c.fs.(fs.AppendFileSystem); ok {
 		path := c.path("append.txt")
-		require.NoError(t, afs.Append(c.ctx, path, []byte("first\n"), nil), "Append to a new file")
-		require.NoError(t, afs.Append(c.ctx, path, []byte("second\n"), nil), "Append to an existing file")
+		require.NoError(t, afs.Append(c.ctx, path, []byte("first\n"), 0), "Append to a new file")
+		require.NoError(t, afs.Append(c.ctx, path, []byte("second\n"), 0), "Append to an existing file")
 		assert.Equal(t, []byte("first\nsecond\n"), c.readAll(t, path), "Append content")
 	}
 
 	if awfs, ok := c.fs.(fs.AppendWriterFileSystem); ok {
 		path := c.path("append-writer.txt")
 		c.writeFile(t, path, []byte("existing "))
-		w, err := awfs.OpenAppendWriter(path, nil)
+		w, err := awfs.OpenAppendWriter(path, 0)
 		require.NoError(t, err, "OpenAppendWriter")
 		_, err = w.Write([]byte("appended"))
 		require.NoError(t, err, "Write to append writer")
 		require.NoError(t, w.Close(), "Close append writer")
 		assert.Equal(t, []byte("existing appended"), c.readAll(t, path), "OpenAppendWriter content")
+	}
+
+	if rwfs, ok := c.fs.(fs.ReadWriterFileSystem); ok {
+		path := c.path("native-readwriter.txt")
+		rw, err := rwfs.OpenReadWriter(path, 0)
+		require.NoError(t, err, "OpenReadWriter must create a missing file")
+		_, err = rw.Write([]byte("created"))
+		require.NoError(t, err)
+		require.NoError(t, rw.Close())
+		assert.Equal(t, []byte("created"), c.readAll(t, path), "OpenReadWriter created file content")
 	}
 
 	if tfs, ok := c.fs.(fs.TruncateFileSystem); ok {
@@ -934,15 +993,15 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 
 	if tfs, ok := c.fs.(fs.TouchFileSystem); ok {
 		path := c.path("touch.txt")
-		require.NoError(t, tfs.Touch(path, nil), "Touch a new file")
+		require.NoError(t, tfs.Touch(path, 0), "Touch a new file")
 		info, err := c.fs.Stat(path)
 		require.NoError(t, err, "Stat touched file")
-		assert.False(t, info.IsDir())
-		assert.Zero(t, info.Size(), "touched new file must be empty")
+		assert.False(t, info.IsDir)
+		assert.Zero(t, info.Size, "touched new file must be empty")
 
 		existing := c.path("touch-existing.txt")
 		c.writeFile(t, existing, []byte("keep me"))
-		err = tfs.Touch(existing, nil)
+		err = tfs.Touch(existing, 0)
 		if errors.Is(err, errors.ErrUnsupported) {
 			t.Logf("Touch of an existing file is unsupported: %v", err)
 		} else {
@@ -953,31 +1012,53 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 
 	if efs, ok := c.fs.(fs.ExistsFileSystem); ok {
 		path := c.path("exists.txt")
-		assert.False(t, efs.Exists(path), "Exists before creation")
+		exists, err := efs.Exists(path)
+		require.NoError(t, err)
+		assert.False(t, exists, "Exists before creation")
 		c.writeFile(t, path, []byte("x"))
-		assert.True(t, efs.Exists(path), "Exists after creation")
-		require.NoError(t, c.fs.Remove(path))
-		assert.False(t, efs.Exists(path), "Exists after removal")
+		exists, err = efs.Exists(path)
+		require.NoError(t, err)
+		assert.True(t, exists, "Exists after creation")
+		require.NoError(t, c.writeFS.Remove(path))
+		exists, err = efs.Exists(path)
+		require.NoError(t, err)
+		assert.False(t, exists, "Exists after removal")
 	}
 
 	if mafs, ok := c.fs.(fs.MakeAllDirsFileSystem); ok {
 		nested := c.path("all/dirs/nested")
-		require.NoError(t, mafs.MakeAllDirs(nested, nil), "MakeAllDirs")
+		require.NoError(t, mafs.MakeAllDirs(nested, 0), "MakeAllDirs")
 		info, err := c.fs.Stat(nested)
 		require.NoError(t, err, "Stat nested directory")
-		assert.True(t, info.IsDir(), "nested path must be a directory")
-		assert.NoError(t, mafs.MakeAllDirs(nested, nil), "MakeAllDirs on an existing directory must not fail")
+		assert.True(t, info.IsDir, "nested path must be a directory")
+		assert.NoError(t, mafs.MakeAllDirs(nested, 0), "MakeAllDirs on an existing directory must not fail")
+	}
+
+	if rafs, ok := c.fs.(fs.RemoveAllFileSystem); ok {
+		root := c.path("remove-all")
+		c.makeDir(t, root)
+		c.makeDir(t, c.path("remove-all/sub"))
+		c.writeFile(t, c.path("remove-all/sub/file.txt"), []byte("x"))
+		c.writeFile(t, c.path("remove-all/file.txt"), []byte("y"))
+		require.NoError(t, rafs.RemoveAll(c.ctx, root), "RemoveAll")
+		_, err := c.fs.Stat(root)
+		assert.ErrorIs(t, err, os.ErrNotExist, "RemoveAll must remove the directory tree")
+		assert.NoError(t, rafs.RemoveAll(c.ctx, root), "RemoveAll of a missing path must not fail")
+		single := c.path("remove-all-file.txt")
+		c.writeFile(t, single, []byte("z"))
+		require.NoError(t, rafs.RemoveAll(c.ctx, single), "RemoveAll of a file")
+		_, err = c.fs.Stat(single)
+		assert.ErrorIs(t, err, os.ErrNotExist, "RemoveAll must remove a file")
 	}
 
 	if cfs, ok := c.fs.(fs.CopyFileSystem); ok {
 		src := c.path("copy-src.txt")
 		dst := c.path("copy-dst.txt")
 		c.writeFile(t, src, []byte("copy me"))
-		var buf []byte
-		require.NoError(t, cfs.CopyFile(c.ctx, src, dst, &buf), "CopyFile")
+		require.NoError(t, cfs.CopyFile(c.ctx, src, dst), "CopyFile")
 		assert.Equal(t, []byte("copy me"), c.readAll(t, dst), "CopyFile destination content")
 		assert.Equal(t, []byte("copy me"), c.readAll(t, src), "CopyFile must keep the source")
-		require.NoError(t, cfs.CopyFile(c.ctx, src, src, &buf), "CopyFile(src, src) must be a no-op")
+		require.NoError(t, cfs.CopyFile(c.ctx, src, src), "CopyFile(src, src) must be a no-op")
 		assert.Equal(t, []byte("copy me"), c.readAll(t, src), "CopyFile(src, src) must keep the content")
 	}
 
@@ -1012,12 +1093,17 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 			t.Logf("symbolic links not available: %v", err)
 		} else {
 			require.NoError(t, err, "CreateSymbolicLink")
-			assert.True(t, c.fs.IsSymbolicLink(link), "IsSymbolicLink(link)")
-			assert.False(t, c.fs.IsSymbolicLink(target), "IsSymbolicLink(target)")
+			assert.True(t, slfs.IsSymbolicLink(link), "IsSymbolicLink(link)")
+			assert.False(t, slfs.IsSymbolicLink(target), "IsSymbolicLink(target)")
 			got, err := slfs.ReadSymbolicLink(link)
 			require.NoError(t, err, "ReadSymbolicLink")
 			assert.Equal(t, target, got, "ReadSymbolicLink must return the target as stored")
 			assert.Equal(t, c.cfg.Seed["hello.txt"], c.readAll(t, link), "reading through the link")
+			info, err := c.fs.Stat(link)
+			require.NoError(t, err, "Stat(link)")
+			assert.True(t, info.IsSymlink, "Stat(link).IsSymlink")
+			assert.Equal(t, int64(len(c.cfg.Seed["hello.txt"])), info.Size, "Stat(link) must report the target size")
+			assert.True(t, fs.File(c.url(link)).IsSymbolicLink(), "File.IsSymbolicLink(link)")
 		}
 	}
 
@@ -1040,15 +1126,6 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 		}
 	}
 
-	if rpfs, ok := c.fs.(fs.RelPathFileSystem); ok {
-		rel, err := rpfs.RelPath(c.path(""), c.path("sub/deeper/leaf.md"))
-		require.NoError(t, err, "RelPath")
-		assert.Equal(t, c.fs.JoinCleanPath("sub", "deeper", "leaf.md"), rel, "RelPath")
-		rel, err = rpfs.RelPath(c.path("sub/deeper"), c.path("hello.txt"))
-		require.NoError(t, err, "RelPath with parent segments")
-		assert.Equal(t, c.fs.JoinCleanPath("..", "..", "hello.txt"), rel, "RelPath with parent segments")
-	}
-
 	if pfs, ok := c.fs.(fs.PermissionsFileSystem); ok {
 		path := c.path("perm.txt")
 		c.writeFile(t, path, []byte("perm"))
@@ -1059,7 +1136,7 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 			require.NoError(t, err, "SetPermissions")
 			info, err := c.fs.Stat(path)
 			require.NoError(t, err)
-			assert.Equal(t, fs.UserRead|fs.UserWrite|fs.GroupRead, fs.PermissionsFromStdFileInfo(info), "permissions after SetPermissions")
+			assert.Equal(t, fs.UserRead|fs.UserWrite|fs.GroupRead, info.Permissions, "permissions after SetPermissions")
 		}
 	}
 }
@@ -1097,6 +1174,13 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("xyz-appended-string-writer"), got, "File.OpenAppendWriter content")
 
+	// Append to a new file
+	newAppend := dir.Join("file-append-new.txt")
+	require.NoError(t, newAppend.Append(c.ctx, []byte("new")), "File.Append to a new file")
+	got, err = newAppend.ReadAllContext(c.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("new"), got, "File.Append to a new file content")
+
 	// Truncate
 	require.NoError(t, f.Truncate(3), "File.Truncate shrink")
 	got, err = f.ReadAllContext(c.ctx)
@@ -1112,6 +1196,13 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	require.NoError(t, touched.Touch(), "File.Touch new file")
 	assert.True(t, touched.Exists(), "touched file must exist")
 	assert.Zero(t, touched.Size(), "touched file must be empty")
+	err = f.Touch()
+	if err != nil {
+		assert.ErrorIs(t, err, errors.ErrUnsupported, "File.Touch of an existing file may only fail with ErrUnsupported")
+	}
+	got, err = f.ReadAllContext(c.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("xyz\x00\x00"), got, "File.Touch must never modify the content")
 
 	// MakeDir and MakeAllDirs
 	sub := dir.Join("file-dir")
@@ -1123,6 +1214,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	require.NoError(t, nested.MakeAllDirs(), "File.MakeAllDirs")
 	assert.True(t, nested.IsDir())
 	assert.True(t, nested.IsEmptyDir(), "new directory must be empty")
+	assert.NoError(t, nested.MakeAllDirs(), "File.MakeAllDirs on an existing directory must not fail")
 
 	// ReadFrom
 	target := dir.Join("file-readfrom.txt")
@@ -1133,7 +1225,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from reader"), got, "File.ReadFrom content")
 
-	// JSON round trip
+	// JSON and XML round trips
 	type doc struct {
 		Name  string `json:"name" xml:"name"`
 		Count int    `json:"count" xml:"count"`
@@ -1168,7 +1260,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	assert.Equal(t, []byte("dir-content"), got, "child content preserved across directory rename")
 	assert.False(t, srcDir.Exists(), "source directory must be gone after rename")
 
-	// MoveTo
+	// MoveTo with a final path and into a directory
 	moved := dir.Join("file-moved.txt")
 	require.NoError(t, renamed.MoveTo(moved), "File.MoveTo")
 	assert.False(t, renamed.Exists(), "File.MoveTo source must be gone")
@@ -1177,6 +1269,13 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	assert.Equal(t, []byte("from reader"), got, "File.MoveTo content")
 	require.NoError(t, moved.MoveTo(moved), "File.MoveTo(self) must be a no-op")
 	assert.True(t, moved.Exists(), "File.MoveTo(self) must keep the file")
+	require.NoError(t, moved.MoveTo(renamedDir), "File.MoveTo(directory) moves into the directory")
+	assert.False(t, moved.Exists(), "File.MoveTo(directory) source must be gone")
+	inDir := renamedDir.Join("file-moved.txt")
+	got, err = inDir.ReadAllContext(c.ctx)
+	require.NoError(t, err, "File.MoveTo(directory) must place the file into the directory")
+	assert.Equal(t, []byte("from reader"), got, "File.MoveTo(directory) content")
+	require.NoError(t, inDir.MoveTo(moved), "File.MoveTo back")
 
 	// CopyFile and CopyRecursive
 	copied := dir.Join("file-copied.txt")
@@ -1184,6 +1283,10 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	got, err = copied.ReadAllContext(c.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from reader"), got, "fs.CopyFile content")
+	require.NoError(t, fs.CopyFile(c.ctx, copied, copied), "fs.CopyFile onto itself must be a no-op")
+	got, err = copied.ReadAllContext(c.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("from reader"), got, "fs.CopyFile onto itself must keep the content")
 	copiedDir := dir.Join("copied-dir")
 	require.NoError(t, fs.CopyRecursive(c.ctx, renamedDir, copiedDir), "fs.CopyRecursive")
 	got, err = copiedDir.Join("child.txt").ReadAllContext(c.ctx)
@@ -1196,6 +1299,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	assert.ErrorIs(t, copied.Remove(), os.ErrNotExist, "File.Remove of a missing file")
 	require.NoError(t, copiedDir.RemoveRecursive(), "File.RemoveRecursive")
 	assert.False(t, copiedDir.Exists(), "removed directory must be gone")
+	assert.NoError(t, copiedDir.RemoveRecursive(), "File.RemoveRecursive of a missing path must not fail")
 	require.NoError(t, renamedDir.RemoveDirContentsRecursive(), "File.RemoveDirContentsRecursive")
 	assert.True(t, renamedDir.IsEmptyDir(), "directory must be empty after RemoveDirContentsRecursive")
 
@@ -1211,6 +1315,10 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	identical, err := fs.IdenticalFileContents(c.ctx, moved, memFile)
 	require.NoError(t, err)
 	assert.True(t, identical, "IdenticalFileContents across file systems")
+	memDir := memFS.RootDir().Join("moved-dir")
+	require.NoError(t, renamedDir.MoveTo(memDir), "File.MoveTo to another file system")
+	assert.False(t, renamedDir.Exists(), "File.MoveTo to another file system must remove the source")
+	assert.True(t, memDir.IsDir(), "File.MoveTo to another file system must create the destination")
 }
 
 // cleanup removes everything the suite created below TestDir.
@@ -1226,7 +1334,7 @@ func (c *conformance) testClose(t *testing.T) {
 	registered := fs.IsRegistered(c.fs)
 	require.NoError(t, c.fs.Close(), "Close")
 	assert.NoError(t, c.fs.Close(), "Close must be idempotent")
-	if registered && c.fs != fs.Local {
+	if registered && c.fs != fs.FileSystem(fs.Local) {
 		assert.False(t, fs.IsRegistered(c.fs), "Close must unregister the file system")
 	}
 	if _, err := c.fs.Stat(c.path("")); err != nil {

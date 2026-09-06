@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -23,6 +24,19 @@ var extraDirPermissions Permissions = AllExecute
 
 func hasLocalFileAttributeHidden(string) (bool, error) {
 	return false, nil
+}
+
+// localFileSystemID returns the statfs f_fsid of the root directory
+// formatted as hex, or "/" if it can't be determined.
+func localFileSystemID() string {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(localRoot, &stat); err != nil {
+		return localRoot
+	}
+	// The field name of the fsid array differs between platforms,
+	// so format the struct and strip the decoration: "{[a b]}" -> "a-b"
+	id := strings.Trim(fmt.Sprintf("%x", stat.Fsid), "{}[]")
+	return strings.ReplaceAll(id, " ", "-")
 }
 
 func (local *LocalFileSystem) User(filePath string) (string, error) {

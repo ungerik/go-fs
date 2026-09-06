@@ -37,7 +37,7 @@ func TestPathHelper_CleanPath(t *testing.T) {
 		{"rooted prefix and parts", rooted, []string{"s3://bucket/a", "b"}, "/a/b"},
 		{"rooted empty", rooted, nil, "/"},
 		{"rooted root", rooted, []string{"/"}, "/"},
-		{"rooted unescape", rooted, []string{"a%20b"}, "/a b"},
+		{"rooted no unescape", rooted, []string{"a%20b"}, "/a%20b"},
 		{"backslash join", backslash, []string{"a", "b"}, `\a\b`},
 		{"backslash clean", backslash, []string{`\a\..\b\\c`}, `\b\c`},
 		{"backslash prefix", backslash, []string{`mem://1\a\b`}, `\a\b`},

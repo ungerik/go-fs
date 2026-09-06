@@ -48,7 +48,7 @@ func Test_LocalFileSystem_MakeAllDirs(t *testing.T) {
 		DefaultCreateDirPermissions: UserAndGroupReadWrite,
 	}
 
-	err := localFileSystem.MakeDir(testDir, []Permissions{AllReadWrite})
+	err := localFileSystem.MakeDir(testDir, AllReadWrite)
 	assert.NoError(t, err)
 }
 

@@ -12,12 +12,12 @@ func Filef(format string, args ...any) File {
 
 // CleanFilePath returns a File from uri with cleaned path and a file system prefix
 func CleanFilePath(uri string) File {
-	return GetFileSystem(uri).JoinCleanFile(uri)
+	return fsJoinCleanFile(GetFileSystem(uri), uri)
 }
 
 // JoinCleanFilePath returns a File from joined and cleaned uriParts with a file system prefix
 func JoinCleanFilePath(uriParts ...string) File {
-	return GetFileSystem(uriParts...).JoinCleanFile(uriParts...)
+	return fsJoinCleanFile(GetFileSystem(uriParts...), uriParts...)
 }
 
 // Move moves and/or renames source to destination.
@@ -39,19 +39,25 @@ func Move(ctx context.Context, source, destination File) error {
 	}
 	srcFS, srcPath := source.ParseRawURI()
 	destFS, destPath := destination.ParseRawURI()
-	if srcFS == destFS {
-		if srcFS.JoinCleanPath(srcPath) == srcFS.JoinCleanPath(destPath) {
+	if srcFS == destFS && srcPath == destPath {
+		return nil
+	}
+	// Moving into an existing directory
+	if destination.IsDir() {
+		destination = destination.Join(source.Name())
+		destFS, destPath = destination.ParseRawURI()
+		if srcFS == destFS && srcPath == destPath {
 			return nil
 		}
-		if moveFS, ok := srcFS.(MoveFileSystem); ok {
-			return moveFS.Move(srcPath, destPath)
-		}
+	}
+	if srcFS == destFS {
+		return fsMove(ctx, srcFS, srcPath, destPath)
 	}
 	err := CopyRecursive(ctx, source, destination)
 	if err != nil {
 		return err
 	}
-	return source.RemoveRecursive()
+	return source.RemoveRecursiveContext(ctx)
 }
 
 // Remove removes all files with fileURIs.

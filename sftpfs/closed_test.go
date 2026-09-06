@@ -29,19 +29,19 @@ func TestClosedFileSystem(t *testing.T) {
 	_, err := f.Stat("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = f.MakeDir("/dir", nil)
+	err = f.MakeDir("/dir", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	_, err = f.OpenReader("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	_, err = f.OpenWriter("/file", nil)
+	_, err = f.OpenWriter("/file", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	_, err = f.OpenReadWriter("/file", nil)
+	_, err = f.OpenReadWriter("/file", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	_, err = f.OpenAppendWriter("/file", nil)
+	_, err = f.OpenAppendWriter("/file", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	err = f.Truncate("/file", 0)
@@ -53,6 +53,6 @@ func TestClosedFileSystem(t *testing.T) {
 	err = f.Remove("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = f.ListDirInfo(t.Context(), "/dir", func(*fs.FileInfo) error { return nil }, nil)
+	err = f.ListDir(t.Context(), "/dir", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 }
