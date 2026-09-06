@@ -46,7 +46,7 @@ multipartFS, err := multipartfs.FromRequestForm(request, MaxUploadSize)
 defer multipartFS.Close()
 
 // Access form values as string
-multipartFS.Form.Value["email"] 
+multipartFS.FormValue("email")
 
 // Access form files as fs.File
 file, err := multipartFS.FormFile("file")
@@ -766,7 +766,16 @@ content.
 
 See the introduction for `multipartfs.FromRequestForm` — it wraps an
 uploaded HTML form so files can be consumed using the regular `fs.File`
-API.
+API. `multipartfs.New` does the same for a `*multipart.Form` that was
+parsed by the caller.
+
+The form fields with uploaded files are the directories of the file system,
+so it has exactly two levels. Because a path has to identify exactly one
+file, files uploaded under an already used name get a unique name
+(`a.txt`, `a (2).txt`, ...), and names that are not usable as a path element
+(`.`, `..`) become `unnamed`. Uploaded files carry no modification time.
+`Close` removes the temporary files of the form; every method returns
+`fs.ErrFileSystemClosed` afterwards.
 
 ### MemFileSystem
 

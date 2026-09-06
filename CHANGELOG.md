@@ -164,6 +164,9 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
   the default port (`sftp://u@h:22/x`, `ftp://h:21/x`, `ftps://h:990/x`).
 - `fsimpl.NewWriteOnCloseFileBuffer` for file systems that upload whole files
   on Close; `fsimpl.FileBuffer.Truncate`.
+- `multipartfs.New` wraps a `*multipart.Form` that was parsed by the caller
+  (`FromRequestForm` uses it); `MultipartFileSystem.FormValue` and
+  `FormValues` read the non file form fields.
 
 ### Fixed
 
@@ -189,9 +192,15 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
   only and returns an error instead of panicking on conflicting entries,
   `Remove` reports `ErrReadOnlyFileSystem` and `Stat` reports
   `ErrFileSystemClosed` after `Close`.
-- multipartfs: real sizes instead of `-1`, deterministic modification time,
-  prefixed `FileInfo.File`, `ErrDoesNotExist`/`ErrIsNotDirectory` from listing,
-  idempotent `Close`.
+- multipartfs: real sizes instead of `-1`, prefixed `FileInfo.File`,
+  `ErrDoesNotExist`/`ErrIsNotDirectory` from listing, idempotent `Close`.
+  Every method reports `ErrFileSystemClosed` after `Close` instead of serving
+  the parts that are still in memory; the root directory exists and can be
+  stat-ed; `ListDir` applies the patterns to the form field directories too;
+  files uploaded under an already used name (or under a name that is not a
+  usable path element like `..`) get a unique file system name instead of
+  shadowing each other. Uploaded files carry no modification time, so
+  `FileInfo.Modified` is the zero time.
 - sftpfs: `MakeDir` on an existing path wraps `os.ErrExist`, listing a file
   reports `ErrIsNotDirectory`.
 - uuiddir: `Make` created `baseDir` instead of the UUID directory, `RemoveDir`

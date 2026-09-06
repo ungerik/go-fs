@@ -272,9 +272,15 @@ to return `ErrUnsupported` (the s3fs `Watch` stub goes away).
   `http.NewRequestWithContext`; `PathHelper{Rooted:false}` fixing `Join`
   producing `http:///h/x/y`; `OpenReader` streams the GET body and does not
   HEAD first; `Close` documented as a no-op; not a `WriteFileSystem`.
-- **multipartfs:** real `Size`/`Modified` from the `FileHeader`; delete the
-  `EscapePath` stub (or apply it consistently); idempotent `Close`;
-  `FileInfo.File` carries the prefix; real tests.
+- **multipartfs:** real `Size` from the `FileHeader` (`Modified` stays the zero
+  time: a multipart part carries no modification time); delete the
+  `EscapePath` stub (or apply it consistently); idempotent `Close` and
+  `ErrFileSystemClosed` from every method afterwards, because the parts that
+  stayed in memory would otherwise still be served; an existing root
+  directory; `ListDir` patterns applied on the form field level too; unique
+  file system names for files uploaded under the same name (and for names
+  like `..` which are not path elements); `FileInfo.File` carries the prefix;
+  real tests.
 - **zipfs:** split into `Reader` and `Writer` types (no mode branches);
   `dirtree` panics become errors and handle `a` + `a/b` and
   trailing-slash entries; entry map built at open (no O(n) `findFile`);
