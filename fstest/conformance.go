@@ -936,9 +936,11 @@ func (c *conformance) testWriteErrors(t *testing.T) {
 	// Writing into a missing directory must fail with os.ErrNotExist
 	w, err := c.writeFS.OpenWriter(c.path("no-such-dir/file.txt"), 0)
 	if err == nil {
-		// Object stores have no directories and may allow this,
-		// the object is created when the writer is closed.
-		require.NoError(t, w.Close())
+		// Buffering writers report the error when they are closed
+		err = w.Close()
+	}
+	if err == nil {
+		// Object stores have no directories and may allow this
 		require.NoError(t, c.writeFS.Remove(c.path("no-such-dir/file.txt")))
 	} else {
 		assert.ErrorIs(t, err, os.ErrNotExist, "OpenWriter into a missing directory must wrap os.ErrNotExist")

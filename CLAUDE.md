@@ -12,7 +12,7 @@ Public, dependency-light Go library. Repo-specific rules that override the globa
   (`dropboxfs`, `ftpfs`, `s3fs`, `sftpfs`) plus `tools`. Run `./test-workspace.sh` to test
   and lint every module. Keep the `replace github.com/ungerik/go-fs => ..` + placeholder
   pseudo-version pattern in the backend `go.mod` files.
-- **Tests:** unit tests must run offline. Tests needing Docker (MinIO, sshd, vsftpd) must
+- **Tests:** unit tests must run offline. Tests needing Docker (MinIO, sshd) must
   skip when Docker is unavailable; tests needing credentials or public internet servers
   must be gated behind an environment variable (`GOFS_ONLINE_TESTS=1`,
   `DROPBOX_ACCESS_TOKEN`).

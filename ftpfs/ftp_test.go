@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fstest"
 )
 
 // dialInProcess connects to an in-process test FTP server (see
@@ -178,6 +179,27 @@ func Test_fileSystem_InProcess(t *testing.T) {
 	})
 }
 
+// Test_fileSystem_InProcessConformance runs the conformance suite against
+// the in-process server over plain FTP and over explicit TLS (FTPS with
+// a self-signed certificate), so both paths are verified on every platform
+// without Docker.
+func Test_fileSystem_InProcessConformance(t *testing.T) {
+	for _, scheme := range []string{"ftp", "ftps"} {
+		t.Run(scheme, func(t *testing.T) {
+			srv := newTestFTPServer(t)
+			srv.mkdirAll("/home/testuser")
+			address := fmt.Sprintf("%s://testuser@%s", scheme, srv.addr())
+			ftpFS, err := Dial(t.Context(), address, UsernameAndPassword("testuser", "testpass"), &Options{InsecureSkipVerify: true})
+			require.NoError(t, err, "Dial in-process %s server", scheme)
+			fstest.RunConformance(t, ftpFS, fstest.Config{
+				Name:    strings.ToUpper(scheme),
+				Prefix:  address,
+				TestDir: "/home/testuser/testdata",
+			})
+		})
+	}
+}
+
 func checkAndReadFile(t *testing.T, f fs.File) []byte {
 	t.Helper()
 
@@ -194,7 +216,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 	}
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("ftp://demo@test.rebex.net", func(t *testing.T) {
-		ftpFS, err := DialAndRegister(t.Context(), "ftp://demo@test.rebex.net", Password("password"), os.Stdout)
+		ftpFS, err := DialAndRegister(t.Context(), "ftp://demo@test.rebex.net", Password("password"), &Options{DebugOut: os.Stdout})
 		require.NoError(t, err, "Dial")
 
 		require.Equal(t, "ftp://demo@test.rebex.net", ftpFS.Prefix())
@@ -224,7 +246,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 
 		// Strategy 1: Try FTPS with explicit TLS
 		t.Log("Attempting FTPS connection with explicit TLS...")
-		ftpFS, err = DialAndRegister(t.Context(), "ftps://demo@test.rebex.net", Password("password"), os.Stdout)
+		ftpFS, err = DialAndRegister(t.Context(), "ftps://demo@test.rebex.net", Password("password"), &Options{DebugOut: os.Stdout})
 		if err != nil {
 			t.Logf("FTPS connection failed: %v", err)
 			if strings.Contains(err.Error(), "EOF") ||
@@ -270,7 +292,7 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 			ftpFS.Close() // Close FTPS connection
 
 			// Try regular FTP as fallback
-			ftpFS, err = DialAndRegister(t.Context(), "ftp://demo@test.rebex.net", Password("password"), os.Stdout)
+			ftpFS, err = DialAndRegister(t.Context(), "ftp://demo@test.rebex.net", Password("password"), &Options{DebugOut: os.Stdout})
 			if err != nil {
 				t.Logf("FTP fallback connection failed: %v", err)
 				t.Skip("Both FTPS and FTP connections failed - server may be unavailable")

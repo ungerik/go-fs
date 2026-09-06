@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 	output, err := buildCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to build Docker image: %v\nOutput: %s", err, output)
-		dockerSFTPAvailable = false
+		fstest.DockerSetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}
@@ -73,7 +73,7 @@ func TestMain(m *testing.M) {
 	output, err = runCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to start Docker container: %v\nOutput: %s", err, output)
-		dockerSFTPAvailable = false
+		fstest.DockerSetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}
@@ -107,6 +107,7 @@ func TestMain(m *testing.M) {
 		// Cleanup before exit
 		exec.Command("docker", "stop", testContainerName).Run()
 		exec.Command("docker", "rm", testContainerName).Run()
+		fstest.DockerSetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}

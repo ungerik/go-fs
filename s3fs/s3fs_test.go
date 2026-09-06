@@ -49,9 +49,10 @@ func TestMain(m *testing.M) {
 
 	// Setup MinIO server
 	dockerMinioAvailable = setupMinioServer(ctx)
-	if dockerMinioAvailable {
-		testS3Endpoint = fmt.Sprintf("http://127.0.0.1:%s", testS3Port)
+	if !dockerMinioAvailable {
+		fstest.DockerSetupFailed("MinIO")
 	}
+	testS3Endpoint = fmt.Sprintf("http://127.0.0.1:%s", testS3Port)
 
 	// Run tests
 	exitCode := m.Run()
