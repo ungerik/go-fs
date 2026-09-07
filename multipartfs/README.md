@@ -69,7 +69,7 @@ The root package also has `fs.ParseRequestMultipartFormMemFiles` and
   system; every method returns `fs.ErrFileSystemClosed` afterwards. Always
   `defer formFS.Close()` in the handler.
 - **URI prefix.** `multipart://` followed by a random id, so concurrent
-  requests each get their own file system. `ID()` is that whole prefix.
+  requests each get their own file system. `ID()` is that prefix.
 
 ## Testing
 

@@ -117,6 +117,9 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 - The 23 `fs.Permissions` values (`UserRead`, `AllReadWrite`, ...) are `const`
   instead of `var`, so they can't be reassigned by a consumer and can be used
   in constant expressions.
+- `zipfs.Reader.ID()` returns the prefix of the archive (`zip://<id>`) like
+  `zipfs.Writer`, `tarfs` and `multipartfs`, instead of the prefix without
+  the scheme that it inherited from the embedded `fs.StdFileSystem`.
 
 ### Added
 

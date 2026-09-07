@@ -29,6 +29,8 @@ func TestZipFileSystem(t *testing.T) {
 			assert.NoError(t, zipWriter.Close(), "zipWriter.Close() should not error")
 		})
 
+		assert.Equal(t, zipWriter.Prefix(), zipWriter.ID(), "ID is the unique prefix of the archive")
+
 		// Create test directory structure
 		testDir := "test"
 		err = zipWriter.MakeDir(testDir, 0)
@@ -78,7 +80,10 @@ func TestZipFileSystem(t *testing.T) {
 			assert.Contains(t, zipReader.Name(), "Zip reader filesystem", "Name() should contain 'Zip reader filesystem'")
 			assert.True(t, len(zipReader.Prefix()) > 0, "Prefix() should not be empty")
 
-			assert.NotEmpty(t, zipReader.ID(), "ID() should not be empty")
+			// A Reader and a Writer of an archive must report their id
+			// in the same form, so that neither can be mistaken for the
+			// other when file systems are compared by id.
+			assert.Equal(t, zipReader.Prefix(), zipReader.ID(), "ID is the unique prefix of the archive")
 
 			rootDir := zipReader.RootDir()
 			assert.NotEmpty(t, rootDir, "RootDir() should not be empty")

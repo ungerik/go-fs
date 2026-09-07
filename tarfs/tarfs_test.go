@@ -24,6 +24,10 @@ func TestConformance(t *testing.T) {
 			t.Run("Writer", func(t *testing.T) {
 				writer, err := NewWriter(tarFile)
 				require.NoError(t, err, "NewWriter")
+				// A Reader and a Writer of an archive must report their
+				// id in the same form, so that neither can be mistaken
+				// for the other when file systems are compared by id.
+				require.Equal(t, writer.Prefix(), writer.ID(), "ID is the unique prefix of the archive")
 				fstest.RunConformance(t, writer, fstest.Config{
 					Name:    "Tar writer filesystem",
 					Prefix:  writer.Prefix(),
@@ -37,6 +41,7 @@ func TestConformance(t *testing.T) {
 				}
 				reader, err := NewReader(tarFile)
 				require.NoError(t, err, "NewReader")
+				require.Equal(t, reader.Prefix(), reader.ID(), "ID is the unique prefix of the archive")
 				fstest.RunConformance(t, reader, fstest.Config{
 					Name:    "Tar reader filesystem",
 					Prefix:  reader.Prefix(),

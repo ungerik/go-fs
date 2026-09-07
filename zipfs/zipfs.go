@@ -71,6 +71,16 @@ func NewReader(file fs.FileReader) (*Reader, error) {
 	return zipfs, nil
 }
 
+// ID returns the URI prefix of the file system,
+// which is unique per opened archive.
+//
+// It overrides the embedded fs.StdFileSystem, whose id is the prefix
+// without the scheme, so that a Reader and a Writer of an archive
+// report their id in the same form.
+func (f *Reader) ID() string {
+	return f.URIPrefix
+}
+
 // Close unregisters the file system and closes the archive file.
 func (f *Reader) Close() error {
 	if f.closer == nil {

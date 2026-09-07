@@ -583,8 +583,7 @@ expose one, so those use the coordinates that identify the store instead.
 | `MemFileSystem`                                    | Random id, or the one passed to `WithID`           |
 | `StdFileSystem`, `SubFileSystem`, `OverlayFileSystem` | The id part of the prefix, random if none was passed |
 | `httpfs`                                           | `http` / `https`                                   |
-| `zipfs.Reader`                                     | The random id of the archive                       |
-| `zipfs.Writer`, `tarfs`, `multipartfs`             | The prefix of the archive or form, `zip://<id>`, `tar://<id>`, `multipart://<id>` |
+| `zipfs`, `tarfs`, `multipartfs`                    | The prefix of the archive or form: `zip://<id>`, `tar://<id>`, `multipart://<id>` |
 | `s3fs`                                             | Bucket name                                        |
 | `azureblobfs`                                      | `<host>/<container>`                               |
 | `sftpfs`, `ftpfs`                                  | The connection prefix, `sftp://user@host` / `ftp://user@host` |
