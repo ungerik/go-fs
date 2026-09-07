@@ -29,6 +29,8 @@ type RangeReader struct {
 	closed bool
 }
 
+// Read reads from the body opened for the current position,
+// opening one if necessary.
 func (r *RangeReader) Read(p []byte) (int, error) {
 	if r.closed {
 		return 0, os.ErrClosed
@@ -51,6 +53,8 @@ func (r *RangeReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Seek sets the position of the next Read and closes the current body,
+// so the next Read opens a new one from the new position.
 func (r *RangeReader) Seek(offset int64, whence int) (int64, error) {
 	var pos int64
 	switch whence {

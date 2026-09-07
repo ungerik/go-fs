@@ -9,6 +9,8 @@ import (
 	"sync"
 )
 
+// PrefixSeparator separates the scheme of a file system URI
+// from the rest of the URI, as in "sftp://host/path".
 const PrefixSeparator = "://"
 
 var (
@@ -18,6 +20,9 @@ var (
 		DefaultCreateDirPermissions: UserAndGroupReadWrite,
 	}
 
+	// Invalid is the file system of files with an unknown or
+	// unregistered prefix. Every operation on it returns
+	// ErrInvalidFileSystem.
 	Invalid InvalidFileSystem
 )
 

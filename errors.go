@@ -10,6 +10,7 @@ import (
 // SentinelError is used for const sentinel errors
 type SentinelError string
 
+// Error implements the error interface
 func (e SentinelError) Error() string {
 	return string(e)
 }
@@ -27,11 +28,17 @@ const (
 	// ErrFileSystemClosed is returned after a file system Close method was called
 	ErrFileSystemClosed SentinelError = "file system is closed"
 
+	// ErrUnmarshalJSON wraps the error of File.ReadJSON and MemFile.ReadJSON
 	ErrUnmarshalJSON SentinelError = "can't unmarshal JSON"
-	ErrMarshalJSON   SentinelError = "can't marshal JSON"
 
+	// ErrMarshalJSON wraps the error of File.WriteJSON and MemFile.WriteJSON
+	ErrMarshalJSON SentinelError = "can't marshal JSON"
+
+	// ErrUnmarshalXML wraps the error of File.ReadXML and MemFile.ReadXML
 	ErrUnmarshalXML SentinelError = "can't unmarshal XML"
-	ErrMarshalXML   SentinelError = "can't marshal XML"
+
+	// ErrMarshalXML wraps the error of File.WriteXML and MemFile.WriteXML
+	ErrMarshalXML SentinelError = "can't marshal XML"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -46,7 +53,7 @@ func RemoveErrDoesNotExist(err error) error {
 	return err
 }
 
-// ErrEmptyPath indications an empty file path
+// ErrEmptyPath indicates an empty file path
 var ErrEmptyPath = NewErrDoesNotExist(InvalidFile)
 
 // ErrDoesNotExist is returned when a file does not exist
@@ -107,6 +114,7 @@ func (err ErrDoesNotExist) FileReader() (file FileReader, ok bool) {
 	return file, ok
 }
 
+// ServeHTTP implements http.Handler by responding with http.NotFound
 func (err ErrDoesNotExist) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
@@ -130,6 +138,7 @@ func NewErrPermission(file File) ErrPermission {
 	return ErrPermission{file}
 }
 
+// Error implements the error interface
 func (err ErrPermission) Error() string {
 	return fmt.Sprintf("file lacks permission: %s", err.file)
 }
@@ -144,6 +153,7 @@ func (err ErrPermission) File() File {
 	return err.file
 }
 
+// ServeHTTP implements http.Handler by responding with 403 Forbidden
 func (err ErrPermission) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 }
@@ -164,6 +174,7 @@ func NewErrAlreadyExists(file File) ErrAlreadyExists {
 	return ErrAlreadyExists{file}
 }
 
+// Error implements the error interface
 func (err ErrAlreadyExists) Error() string {
 	return fmt.Sprintf("file already exists: %s", err.file)
 }
@@ -192,6 +203,7 @@ func NewErrIsDirectory(file any) ErrIsDirectory {
 	return ErrIsDirectory{file}
 }
 
+// Error implements the error interface
 func (err ErrIsDirectory) Error() string {
 	fileStr := fmt.Sprintf("%s", err.file)
 	if fileStr == "" {
@@ -230,6 +242,7 @@ func NewErrIsNotDirectory(file any) ErrIsNotDirectory {
 	return ErrIsNotDirectory{file}
 }
 
+// Error implements the error interface
 func (err ErrIsNotDirectory) Error() string {
 	fileStr := fmt.Sprintf("%s", err.file)
 	if fileStr == "" {
@@ -289,6 +302,10 @@ func translateErrFile(err error, mapFile func(File) File) error {
 ///////////////////////////////////////////////////////////////////////////////
 // ErrUnsupported
 
+// ErrUnsupported is returned when a file system does not support
+// an operation. It wraps errors.ErrUnsupported, check for it with:
+//
+//	errors.Is(err, errors.ErrUnsupported)
 type ErrUnsupported struct {
 	fs FileSystem
 	op string
@@ -299,10 +316,12 @@ func NewErrUnsupported(fileSystem FileSystem, operation string) ErrUnsupported {
 	return ErrUnsupported{fileSystem, operation}
 }
 
+// Error implements the error interface
 func (err ErrUnsupported) Error() string {
 	return fmt.Sprintf("%s %s at %s", errors.ErrUnsupported, err.op, err.fs)
 }
 
+// Unwrap returns errors.ErrUnsupported
 func (ErrUnsupported) Unwrap() error {
 	return errors.ErrUnsupported
 }

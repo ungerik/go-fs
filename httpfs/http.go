@@ -27,13 +27,19 @@ func init() {
 }
 
 const (
-	Prefix    = "http://"
+	// Prefix is the URI prefix of FileSystem.
+	Prefix = "http://"
+	// PrefixTLS is the URI prefix of FileSystemTLS.
 	PrefixTLS = "https://"
+	// Separator is the path separator of the file systems.
 	Separator = "/"
 )
 
 var (
-	FileSystem    = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: Prefix}}
+	// FileSystem is the read-only file system for "http://" URLs.
+	FileSystem = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: Prefix}}
+
+	// FileSystemTLS is the read-only file system for "https://" URLs.
 	FileSystemTLS = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: PrefixTLS}}
 
 	// Client is used for all HTTP requests of the file systems.

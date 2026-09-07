@@ -145,22 +145,30 @@ func (s *SubFileSystem) checkClosed() error {
 	return nil
 }
 
+// ReadableWritable returns the readable and writable flags
+// of the parent file system.
 func (s *SubFileSystem) ReadableWritable() (readable, writable bool) {
 	return s.parent.ReadableWritable()
 }
 
+// RootDir returns the root directory of the view,
+// which is the directory of the parent it was created for.
 func (s *SubFileSystem) RootDir() File {
 	return File(s.URIPrefix + "/")
 }
 
+// ID returns the id of the file system, which is part of its URI prefix.
 func (s *SubFileSystem) ID() string {
 	return s.id
 }
 
+// Name returns a descriptive name of the view including the parent's name.
 func (s *SubFileSystem) Name() string {
 	return "sub file system of " + s.parent.Name()
 }
 
+// String returns a descriptive string of the view
+// including its prefix and the parent directory.
 func (s *SubFileSystem) String() string {
 	return s.Name() + " rooted at " + string(s.Dir())
 }
@@ -168,6 +176,8 @@ func (s *SubFileSystem) String() string {
 ///////////////////////////////////////////////////////////////////////////////
 // FileSystem
 
+// Stat returns the FileInfo of the file with the path translated
+// to the parent file system.
 func (s *SubFileSystem) Stat(filePath string) (*FileInfo, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
@@ -192,6 +202,9 @@ func (s *SubFileSystem) subErr(err error) error {
 	return translateErrFile(err, s.subFile)
 }
 
+// ListDir calls the callback for every file in the directory that
+// matches any of the patterns, or for all files if no patterns are passed.
+// The FileInfo passed to the callback has a File of this file system.
 func (s *SubFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -205,6 +218,7 @@ func (s *SubFileSystem) ListDir(ctx context.Context, dirPath string, patterns []
 	return s.subErr(err)
 }
 
+// OpenReader opens the file of the parent file system for reading.
 func (s *SubFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
@@ -229,6 +243,8 @@ func (s *SubFileSystem) Close() error {
 ///////////////////////////////////////////////////////////////////////////////
 // WriteFileSystem
 
+// OpenWriter opens the file of the parent file system for writing,
+// creating it if it does not exist and truncating it if it does.
 func (s *SubFileSystem) OpenWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
@@ -240,6 +256,7 @@ func (s *SubFileSystem) OpenWriter(filePath string, perm Permissions) (io.WriteC
 	return w, s.subErr(err)
 }
 
+// MakeDir creates a directory in the parent file system.
 func (s *SubFileSystem) MakeDir(dirPath string, perm Permissions) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -250,6 +267,8 @@ func (s *SubFileSystem) MakeDir(dirPath string, perm Permissions) error {
 	return s.subErr(fsMakeDir(s.parent, s.parentPath(dirPath), perm))
 }
 
+// Remove removes a file or empty directory from the parent file system.
+// The root directory of the view can't be removed.
 func (s *SubFileSystem) Remove(filePath string) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -268,6 +287,7 @@ func (s *SubFileSystem) Remove(filePath string) error {
 // Optional interfaces, forwarded via the fs package dispatch
 // so the parent's native implementation or the emulation is used
 
+// Exists reports if the file exists in the parent file system.
 func (s *SubFileSystem) Exists(filePath string) (bool, error) {
 	if err := s.checkClosed(); err != nil {
 		return false, err
@@ -278,6 +298,7 @@ func (s *SubFileSystem) Exists(filePath string) (bool, error) {
 	return fsExists(s.parent, s.parentPath(filePath))
 }
 
+// ReadAll reads the complete file from the parent file system.
 func (s *SubFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
@@ -289,6 +310,8 @@ func (s *SubFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, e
 	return data, s.subErr(err)
 }
 
+// WriteAll writes data to the file of the parent file system,
+// creating it if it does not exist and replacing its content if it does.
 func (s *SubFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -299,6 +322,8 @@ func (s *SubFileSystem) WriteAll(ctx context.Context, filePath string, data []by
 	return s.subErr(fsWriteAll(ctx, s.parent, s.parentPath(filePath), data, perm))
 }
 
+// Append appends data to the file of the parent file system,
+// creating it if it does not exist.
 func (s *SubFileSystem) Append(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -309,6 +334,8 @@ func (s *SubFileSystem) Append(ctx context.Context, filePath string, data []byte
 	return s.subErr(fsAppend(ctx, s.parent, s.parentPath(filePath), data, perm))
 }
 
+// OpenAppendWriter opens the file of the parent file system for appending,
+// creating it if it does not exist.
 func (s *SubFileSystem) OpenAppendWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
@@ -320,6 +347,8 @@ func (s *SubFileSystem) OpenAppendWriter(filePath string, perm Permissions) (io.
 	return w, s.subErr(err)
 }
 
+// OpenReadWriter opens the file of the parent file system
+// for reading and writing at any offset.
 func (s *SubFileSystem) OpenReadWriter(filePath string, perm Permissions) (ReadWriteSeekCloser, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
@@ -331,6 +360,7 @@ func (s *SubFileSystem) OpenReadWriter(filePath string, perm Permissions) (ReadW
 	return rw, s.subErr(err)
 }
 
+// Truncate changes the size of the file in the parent file system.
 func (s *SubFileSystem) Truncate(filePath string, size int64) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -341,6 +371,8 @@ func (s *SubFileSystem) Truncate(filePath string, size int64) error {
 	return s.subErr(fsTruncate(context.Background(), s.parent, s.parentPath(filePath), size))
 }
 
+// Touch creates the file in the parent file system if it does not exist,
+// else it updates its modification time.
 func (s *SubFileSystem) Touch(filePath string, perm Permissions) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -351,6 +383,8 @@ func (s *SubFileSystem) Touch(filePath string, perm Permissions) error {
 	return s.subErr(fsTouch(s.parent, s.parentPath(filePath), perm))
 }
 
+// MakeAllDirs creates a directory and all missing parent directories
+// within the view, never above its root.
 func (s *SubFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -361,6 +395,9 @@ func (s *SubFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
 	return s.subErr(fsMakeAllDirs(s.parent, s.parentPath(dirPath), perm))
 }
 
+// RemoveAll removes the file or directory with all its content
+// from the parent file system. The root directory of the view
+// can't be removed.
 func (s *SubFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -375,6 +412,7 @@ func (s *SubFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return s.subErr(fsRemoveAll(ctx, s.parent, parentPath))
 }
 
+// CopyFile copies a file within the view using the parent file system.
 func (s *SubFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -389,6 +427,8 @@ func (s *SubFileSystem) CopyFile(ctx context.Context, srcFile string, destFile s
 	return s.subErr(CopyFile(ctx, src, dest))
 }
 
+// Move moves and/or renames a file within the view
+// using the parent file system.
 func (s *SubFileSystem) Move(filePath string, destPath string) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -399,6 +439,8 @@ func (s *SubFileSystem) Move(filePath string, destPath string) error {
 	return s.subErr(fsMove(context.Background(), s.parent, s.parentPath(filePath), s.parentPath(destPath)))
 }
 
+// Rename renames a file within its directory in the parent file system
+// and returns the new path within the view.
 func (s *SubFileSystem) Rename(filePath string, newName string) (newPath string, err error) {
 	if err := s.checkClosed(); err != nil {
 		return "", err
@@ -413,6 +455,8 @@ func (s *SubFileSystem) Rename(filePath string, newName string) (newPath string,
 	return s.subPath(newParentPath), nil
 }
 
+// ListDirMax returns at most max files of the directory that match any
+// of the patterns, or all of them if max is negative.
 func (s *SubFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
@@ -431,6 +475,8 @@ func (s *SubFileSystem) ListDirMax(ctx context.Context, dirPath string, max int,
 	return files, nil
 }
 
+// ListDirRecursive calls the callback for every file below the directory
+// that matches any of the patterns.
 func (s *SubFileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -444,6 +490,7 @@ func (s *SubFileSystem) ListDirRecursive(ctx context.Context, dirPath string, pa
 	return s.subErr(err)
 }
 
+// SetPermissions sets the permissions of the file in the parent file system.
 func (s *SubFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -454,6 +501,8 @@ func (s *SubFileSystem) SetPermissions(filePath string, perm Permissions) error 
 	return NewErrUnsupported(s, "SetPermissions")
 }
 
+// IsSymbolicLink reports if the file is a symbolic link
+// in the parent file system.
 func (s *SubFileSystem) IsSymbolicLink(filePath string) bool {
 	if s.closed.Load() {
 		return false
@@ -496,6 +545,8 @@ func (s *SubFileSystem) ReadSymbolicLink(linkPath string) (targetPath string, er
 	return target, nil
 }
 
+// Watch registers the callback for file system events of the file
+// at the parent file system and returns a cancel function.
 func (s *SubFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err

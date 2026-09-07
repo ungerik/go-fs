@@ -136,6 +136,13 @@ type memWatch struct {
 	isDir    bool
 }
 
+// NewMemFileSystem creates and registers a new MemFileSystem
+// with the passed separator, which must be "/" or "\\",
+// and adds the initialFiles with the current time as modification time.
+// The FileName of an initial file can be a path with the separator,
+// in which case all directories of the path are created.
+// Use MemFileSystem.WithID to give the file system a stable URI prefix,
+// and Close to unregister it again.
 func NewMemFileSystem(separator string, initialFiles ...MemFile) (*MemFileSystem, error) {
 	// Validate arguments
 	if separator != `/` && separator != `\` {
@@ -209,12 +216,17 @@ func newMemFileNode(f MemFile, modified time.Time, perm Permissions) *memFileNod
 	}
 }
 
+// SetReadOnly makes the file system reject every write operation
+// with ErrReadOnlyFileSystem, or allow writes again.
 func (fs *MemFileSystem) SetReadOnly(readOnly bool) {
 	fs.mtx.Lock()
 	fs.readOnly = readOnly
 	fs.mtx.Unlock()
 }
 
+// WithID re-registers the file system under a new id, which becomes
+// part of its URI prefix ("mem://<id>"), and returns it to allow
+// chaining after NewMemFileSystem. Panics if id is empty.
 func (fs *MemFileSystem) WithID(id string) *MemFileSystem {
 	if id == "" {
 		panic("empty id")
@@ -229,6 +241,9 @@ func (fs *MemFileSystem) WithID(id string) *MemFileSystem {
 	return fs
 }
 
+// WithVolume re-registers the file system with a volume name that is
+// prepended to all paths ("mem://<id>/<volume>") to emulate a Windows
+// drive letter, and returns it to allow chaining after NewMemFileSystem.
 func (fs *MemFileSystem) WithVolume(volume string) *MemFileSystem {
 	if volume == fs.volume {
 		return fs
@@ -352,6 +367,8 @@ func (fs *MemFileSystem) pathParentDirNode(filePath string) (parent *memFileNode
 	return parent, parentDir, name, nil
 }
 
+// MakeDir creates a directory. Returns ErrAlreadyExists if dirPath
+// exists and ErrDoesNotExist if the parent directory does not.
 func (fs *MemFileSystem) MakeDir(dirPath string, perm Permissions) error {
 	fs.mtx.Lock()
 	err := fs.makeDir(dirPath, perm)
@@ -381,6 +398,9 @@ func (fs *MemFileSystem) makeDir(dirPath string, _ Permissions) error {
 	return nil
 }
 
+// MakeAllDirs creates a directory and all missing parent directories.
+// It does nothing if dirPath is an existing directory and returns
+// ErrIsNotDirectory if any path component is an existing file.
 func (fs *MemFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
 	fs.mtx.Lock()
 	created, err := fs.makeAllDirsCollect(dirPath, perm)
@@ -425,6 +445,8 @@ func (fs *MemFileSystem) makeAllDirsCollect(dirPath string, perm Permissions) ([
 	return created, nil
 }
 
+// ReadableWritable returns true for readable and true for writable
+// unless SetReadOnly(true) was called.
 func (fs *MemFileSystem) ReadableWritable() (readable, writable bool) {
 	fs.mtx.Lock()
 	defer fs.mtx.Unlock()
@@ -432,10 +454,13 @@ func (fs *MemFileSystem) ReadableWritable() (readable, writable bool) {
 	return true, !fs.readOnly
 }
 
+// RootDir returns the root directory of the file system.
 func (fs *MemFileSystem) RootDir() File {
 	return File(fs.URIPrefix + fs.Separator())
 }
 
+// ID returns the id of the file system, which is part of its URI prefix.
+// A random id is assigned by NewMemFileSystem, see WithID.
 func (fs *MemFileSystem) ID() string {
 	return fs.id
 }
@@ -458,18 +483,24 @@ func (fs *MemFileSystem) updatePrefix() {
 	}
 }
 
+// Name returns "memory file system".
 func (*MemFileSystem) Name() string {
 	return "memory file system"
 }
 
+// String returns a descriptive string of the file system including its prefix.
 func (fs *MemFileSystem) String() string {
 	return fmt.Sprintf("MemFileSystem(%s)", fs.URIPrefix)
 }
 
+// JoinCleanFile joins the URI parts and returns a File
+// with the cleaned path and the prefix of this file system.
 func (fs *MemFileSystem) JoinCleanFile(uri ...string) File {
 	return File(fs.JoinCleanURI(uri...))
 }
 
+// VolumeName returns the volume prefix of filePath,
+// or an empty string if the file system has no volume, see WithVolume.
 func (fs *MemFileSystem) VolumeName(filePath string) string {
 	if len(filePath) < len(fs.volume) {
 		return ""
@@ -477,10 +508,12 @@ func (fs *MemFileSystem) VolumeName(filePath string) string {
 	return filePath[:len(fs.volume)]
 }
 
+// Volume returns the volume name of the file system, see WithVolume.
 func (fs *MemFileSystem) Volume() string {
 	return fs.volume
 }
 
+// Stat returns the FileInfo of the file, following symbolic links.
 func (fs *MemFileSystem) Stat(filePath string) (*FileInfo, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -521,6 +554,7 @@ func (fs *MemFileSystem) nodeInfo(file File, node *memFileNode) *FileInfo {
 	}
 }
 
+// Exists reports if the file exists.
 func (fs *MemFileSystem) Exists(filePath string) (bool, error) {
 	if filePath == "" {
 		return false, nil
@@ -535,6 +569,7 @@ func (fs *MemFileSystem) Exists(filePath string) (bool, error) {
 	return node != nil, nil
 }
 
+// IsSymbolicLink reports if the file is a symbolic link.
 func (fs *MemFileSystem) IsSymbolicLink(filePath string) bool {
 	if filePath == "" {
 		return false
@@ -603,6 +638,10 @@ func (fs *MemFileSystem) ReadSymbolicLink(linkPath string) (string, error) {
 	return node.SymlinkTarget, nil
 }
 
+// ListDir calls the callback for every file in the directory that
+// matches any of the patterns, or for all files if no patterns are passed.
+// The directory is snapshotted before the first callback, so the callback
+// may modify the file system.
 func (fs *MemFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -790,6 +829,7 @@ func (fs *MemFileSystem) walkDirInfoRecursive(node *memFileNode, dirPath string,
 	return nil
 }
 
+// SetPermissions sets the permissions of the file.
 func (fs *MemFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -828,6 +868,8 @@ func (fs *MemFileSystem) User(filePath string) (string, error) {
 	return node.User, nil
 }
 
+// SetUser sets the user owning the file. The user is a free-form string
+// that is only stored, not interpreted.
 func (fs *MemFileSystem) SetUser(filePath string, user string) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -865,6 +907,8 @@ func (fs *MemFileSystem) Group(filePath string) (string, error) {
 	return node.Group, nil
 }
 
+// SetGroup sets the group owning the file. The group is a free-form string
+// that is only stored, not interpreted.
 func (fs *MemFileSystem) SetGroup(filePath string, group string) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -995,6 +1039,8 @@ func (fs *MemFileSystem) RemoveXAttr(filePath string, name string, _ bool) error
 	return nil
 }
 
+// Touch creates an empty file if it does not exist,
+// else it updates the modification time to the current time.
 func (fs *MemFileSystem) Touch(filePath string, perm Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -1028,6 +1074,7 @@ func (fs *MemFileSystem) Touch(filePath string, perm Permissions) error {
 	return nil
 }
 
+// ReadAll returns a copy of the file's content.
 func (fs *MemFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -1052,6 +1099,8 @@ func (fs *MemFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, 
 	return node.FileData, nil
 }
 
+// WriteAll writes data to the file, creating it if it does not exist
+// and replacing its content if it does.
 func (fs *MemFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1089,6 +1138,7 @@ func (fs *MemFileSystem) WriteAll(ctx context.Context, filePath string, data []b
 	return nil
 }
 
+// Append appends data to the file, creating it if it does not exist.
 func (fs *MemFileSystem) Append(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1126,6 +1176,9 @@ func (fs *MemFileSystem) Append(ctx context.Context, filePath string, data []byt
 	return nil
 }
 
+// OpenReader opens the file for reading. The returned reader sees the
+// content as of the time the file was opened; a later WriteAll or
+// OpenWriter replaces the content and does not affect it.
 func (fs *MemFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1147,6 +1200,9 @@ func (fs *MemFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(node.FileData, node), nil
 }
 
+// OpenWriter opens the file for writing, creating it if it does not exist
+// and truncating it if it does. Every Write is immediately visible to
+// readers of the file.
 func (fs *MemFileSystem) OpenWriter(filePath string, perm Permissions) (WriteCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1182,6 +1238,8 @@ func (fs *MemFileSystem) OpenWriter(filePath string, perm Permissions) (WriteClo
 	return &memFileWriter{fs: fs, node: newNode, path: filePath, closeEvent: fsnotify.Create | fsnotify.Write}, nil
 }
 
+// OpenAppendWriter opens the file for appending,
+// creating it if it does not exist.
 func (fs *MemFileSystem) OpenAppendWriter(filePath string, perm Permissions) (WriteCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1214,6 +1272,8 @@ func (fs *MemFileSystem) OpenAppendWriter(filePath string, perm Permissions) (Wr
 	return &memFileWriter{fs: fs, node: newNode, append: true, path: filePath, closeEvent: fsnotify.Create | fsnotify.Write}, nil
 }
 
+// OpenReadWriter opens the file for reading and writing at any offset,
+// creating it if it does not exist without truncating existing content.
 func (fs *MemFileSystem) OpenReadWriter(filePath string, perm Permissions) (ReadWriteSeekCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1362,6 +1422,8 @@ func (fs *MemFileSystem) emitEvent(path string, op fsnotify.Op) {
 	}
 }
 
+// Truncate changes the size of the file,
+// padding with zero bytes when growing it.
 func (fs *MemFileSystem) Truncate(filePath string, newSize int64) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -1395,6 +1457,8 @@ func (fs *MemFileSystem) Truncate(filePath string, newSize int64) error {
 	return nil
 }
 
+// CopyFile copies a file within the file system
+// by copying its content and permissions.
 func (fs *MemFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1529,6 +1593,8 @@ func (fs *MemFileSystem) Move(filePath string, destPath string) error {
 	return nil
 }
 
+// Remove removes a file or an empty directory,
+// use File.RemoveRecursive for a directory with content.
 func (fs *MemFileSystem) Remove(filePath string) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -1594,6 +1660,9 @@ func (fs *MemFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return nil
 }
 
+// Close unregisters the file system and discards all its files.
+// Every following operation returns ErrFileSystemClosed.
+// Closing an already closed file system is a no-op.
 func (fs *MemFileSystem) Close() error {
 	fs.mtx.Lock()
 	if fs.root.Dir == nil {
@@ -1611,6 +1680,8 @@ func (fs *MemFileSystem) Close() error {
 	return nil
 }
 
+// Clear removes all files and directories
+// but keeps the file system usable.
 func (fs *MemFileSystem) Clear() {
 	fs.mtx.Lock()
 	defer fs.mtx.Unlock()

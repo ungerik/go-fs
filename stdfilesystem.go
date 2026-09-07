@@ -114,26 +114,36 @@ func (s *StdFileSystem) file(filePath string) File {
 	return File(s.JoinCleanURI(filePath))
 }
 
+// ReadableWritable returns true for readable and false for writable,
+// because an io/fs.FS is read-only.
 func (s *StdFileSystem) ReadableWritable() (readable, writable bool) {
 	return true, false
 }
 
+// RootDir returns the root directory of the file system.
 func (s *StdFileSystem) RootDir() File {
 	return File(s.URIPrefix + "/")
 }
 
+// ID returns the id of the file system, which is part of its URI prefix.
 func (s *StdFileSystem) ID() string {
 	return s.id
 }
 
+// Name returns the name passed to NewStdFileSystemWithPrefix,
+// or "io/fs file system".
 func (s *StdFileSystem) Name() string {
 	return s.name
 }
 
+// String returns a descriptive string of the file system
+// including its name and prefix.
 func (s *StdFileSystem) String() string {
 	return s.Name() + " with prefix " + s.URIPrefix
 }
 
+// Stat returns the FileInfo of the file. Names beginning with a dot
+// are reported as hidden.
 func (s *StdFileSystem) Stat(filePath string) (*FileInfo, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
@@ -152,6 +162,10 @@ func (s *StdFileSystem) Stat(filePath string) (*FileInfo, error) {
 	return fileInfo, nil
 }
 
+// ListDir calls the callback for every file in the directory that
+// matches any of the patterns, or for all files if no patterns are passed.
+// The io/fs.ReadDirFS method of the wrapped file system is used if
+// it implements it.
 func (s *StdFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if err := s.checkClosed(); err != nil {
 		return err

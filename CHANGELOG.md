@@ -114,9 +114,21 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
   existing file returns `ErrUnsupported`; `Remove` refuses a non-empty
   folder; native `RemoveAll`; `OpenReader` streams the download; the
   metadata cache is invalidated on writes.
+- The 23 `fs.Permissions` values (`UserRead`, `AllReadWrite`, ...) are `const`
+  instead of `var`, so they can't be reassigned by a consumer and can be used
+  in constant expressions.
 
 ### Added
 
+- A README for every module and every sub package that implements a
+  `FileSystem`: `sftpfs`, `ftpfs`, `webdavfs`, `smbfs`, `azureblobfs`,
+  `tools`, `httpfs`, `zipfs`, `tarfs` and `multipartfs`, next to the
+  existing ones for `s3fs` and `dropboxfs`.
+- Runnable `Example` functions for the `fs`, `httpfs`, `zipfs`, `tarfs`,
+  `multipartfs` and `uuiddir` packages, and compile-only examples for the
+  constructors of the seven backend modules, so the documented usage is
+  verified by `go test` and shown on pkg.go.dev.
+- A doc comment on every exported symbol of every package.
 - `fs.StdFileSystem` adapts any `io/fs.FS` (`embed.FS`, `os.DirFS`,
   `zip.Reader`, `testing/fstest.MapFS`) as a read-only file system with the
   prefix `stdfs://<id>`; the counterpart of `StdFS`.

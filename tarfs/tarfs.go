@@ -24,7 +24,9 @@ import (
 )
 
 const (
-	Prefix    = "tar://"
+	// Prefix is the URI prefix of tar file systems, followed by the id.
+	Prefix = "tar://"
+	// Separator is the path separator of tar file systems.
 	Separator = "/"
 )
 
@@ -169,22 +171,29 @@ func (f *Reader) index() error {
 	}
 }
 
+// ReadableWritable returns true for readable and false for writable,
+// because an archive that is being read can't be written to.
 func (f *Reader) ReadableWritable() (readable, writable bool) {
 	return true, false
 }
 
+// RootDir returns the root directory of the archive.
 func (f *Reader) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
+// ID returns the URI prefix of the file system,
+// which is unique per opened archive.
 func (f *Reader) ID() string {
 	return f.URIPrefix
 }
 
+// Name returns "Tar reader filesystem".
 func (f *Reader) Name() string {
 	return "Tar reader filesystem"
 }
 
+// String returns the name of the file system and its prefix.
 func (f *Reader) String() string {
 	return f.Name() + " with prefix " + f.URIPrefix
 }
@@ -242,6 +251,7 @@ func (f *Reader) lookup(filePath string) (*fsimpl.DirTreeNode, error) {
 	return node, nil
 }
 
+// Stat returns the FileInfo of an entry of the archive.
 func (f *Reader) Stat(filePath string) (*fs.FileInfo, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
@@ -253,6 +263,7 @@ func (f *Reader) Stat(filePath string) (*fs.FileInfo, error) {
 	return f.nodeInfo(node), nil
 }
 
+// Exists reports if the archive contains the path.
 func (f *Reader) Exists(filePath string) (bool, error) {
 	if err := f.checkClosed(); err != nil {
 		return false, err
@@ -263,6 +274,8 @@ func (f *Reader) Exists(filePath string) (bool, error) {
 	return f.tree.Lookup(entryName(filePath)) != nil, nil
 }
 
+// ListDir calls the callback for every entry in the directory that
+// matches any of the patterns, or for all entries if no patterns are passed.
 func (f *Reader) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	return f.listDir(ctx, dirPath, patterns, callback, false)
 }
@@ -391,22 +404,29 @@ func NewWriter(file fs.File) (*Writer, error) {
 	return tarfs, nil
 }
 
+// ReadableWritable returns false for readable and true for writable,
+// because an archive that is being written can't be read.
 func (f *Writer) ReadableWritable() (readable, writable bool) {
 	return false, true
 }
 
+// RootDir returns the root directory of the archive.
 func (f *Writer) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
+// ID returns the URI prefix of the file system,
+// which is unique per created archive.
 func (f *Writer) ID() string {
 	return f.URIPrefix
 }
 
+// Name returns "Tar writer filesystem".
 func (f *Writer) Name() string {
 	return "Tar writer filesystem"
 }
 
+// String returns the name of the file system and its prefix.
 func (f *Writer) String() string {
 	return f.Name() + " with prefix " + f.URIPrefix
 }

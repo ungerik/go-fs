@@ -100,22 +100,29 @@ func (o *OverlayFileSystem) Upper() WriteFileSystem {
 	return o.upper
 }
 
+// ReadableWritable returns true for readable and true for writable,
+// because the upper layer is always writable.
 func (o *OverlayFileSystem) ReadableWritable() (readable, writable bool) {
 	return true, true
 }
 
+// RootDir returns the root directory of the overlay.
 func (o *OverlayFileSystem) RootDir() File {
 	return File(o.URIPrefix + "/")
 }
 
+// ID returns the id of the file system, which is part of its URI prefix.
 func (o *OverlayFileSystem) ID() string {
 	return o.id
 }
 
+// Name returns a descriptive name including the names of both layers.
 func (o *OverlayFileSystem) Name() string {
 	return "overlay file system"
 }
 
+// String returns a descriptive string of the overlay
+// including its prefix and both layers.
 func (o *OverlayFileSystem) String() string {
 	return fmt.Sprintf("%s with prefix %s of %s over %s", o.Name(), o.URIPrefix, o.upper, o.base)
 }
@@ -241,6 +248,8 @@ func (o *OverlayFileSystem) statLayer(filePath string) (info *FileInfo, layer Fi
 	return o.overlayInfo(o.base, info), o.base, layerPath, nil
 }
 
+// Stat returns the FileInfo of the file, looking in the upper layer
+// first and falling back to the base layer.
 func (o *OverlayFileSystem) Stat(filePath string) (*FileInfo, error) {
 	info, _, _, err := o.statLayer(filePath)
 	return info, err
@@ -298,6 +307,8 @@ func (o *OverlayFileSystem) ListDir(ctx context.Context, dirPath string, pattern
 	return nil
 }
 
+// OpenReader opens the file for reading from the upper layer,
+// or from the base layer if it only exists there.
 func (o *OverlayFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	info, layer, layerPath, err := o.statLayer(filePath)
 	if err != nil {
@@ -310,6 +321,8 @@ func (o *OverlayFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return r, o.overlayErr(layer, err)
 }
 
+// ReadAll reads the complete file from the upper layer,
+// or from the base layer if it only exists there.
 func (o *OverlayFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	info, layer, layerPath, err := o.statLayer(filePath)
 	if err != nil {
@@ -385,6 +398,8 @@ func (o *OverlayFileSystem) prepareWrite(ctx context.Context, filePath string) e
 	return o.prepareUpper(filePath)
 }
 
+// OpenWriter opens the file in the upper layer for writing,
+// creating it if it does not exist and truncating it if it does.
 func (o *OverlayFileSystem) OpenWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
 	if err := o.checkClosed(); err != nil {
 		return nil, err
@@ -399,6 +414,8 @@ func (o *OverlayFileSystem) OpenWriter(filePath string, perm Permissions) (io.Wr
 	return w, o.overlayErr(o.upper, err)
 }
 
+// WriteAll writes data to the file in the upper layer, creating it
+// if it does not exist and replacing its content if it does.
 func (o *OverlayFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 	if err := o.checkClosed(); err != nil {
 		return err
@@ -412,6 +429,8 @@ func (o *OverlayFileSystem) WriteAll(ctx context.Context, filePath string, data 
 	return o.overlayErr(o.upper, fsWriteAll(ctx, o.upper, o.upperPath(filePath), data, perm))
 }
 
+// Append copies a base-only file up to the upper layer
+// and appends data to it there.
 func (o *OverlayFileSystem) Append(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 	if err := o.checkClosed(); err != nil {
 		return err
@@ -425,6 +444,8 @@ func (o *OverlayFileSystem) Append(ctx context.Context, filePath string, data []
 	return o.overlayErr(o.upper, fsAppend(ctx, o.upper, o.upperPath(filePath), data, perm))
 }
 
+// OpenAppendWriter copies a base-only file up to the upper layer
+// and opens it for appending there.
 func (o *OverlayFileSystem) OpenAppendWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
 	if err := o.checkClosed(); err != nil {
 		return nil, err
@@ -439,6 +460,8 @@ func (o *OverlayFileSystem) OpenAppendWriter(filePath string, perm Permissions) 
 	return w, o.overlayErr(o.upper, err)
 }
 
+// OpenReadWriter copies a base-only file up to the upper layer and
+// opens it there for reading and writing at any offset.
 func (o *OverlayFileSystem) OpenReadWriter(filePath string, perm Permissions) (ReadWriteSeekCloser, error) {
 	if err := o.checkClosed(); err != nil {
 		return nil, err
@@ -453,6 +476,8 @@ func (o *OverlayFileSystem) OpenReadWriter(filePath string, perm Permissions) (R
 	return rw, o.overlayErr(o.upper, err)
 }
 
+// Truncate copies a base-only file up to the upper layer
+// and changes its size there.
 func (o *OverlayFileSystem) Truncate(filePath string, size int64) error {
 	if err := o.checkClosed(); err != nil {
 		return err
@@ -466,6 +491,8 @@ func (o *OverlayFileSystem) Truncate(filePath string, size int64) error {
 	return o.overlayErr(o.upper, fsTruncate(context.Background(), o.upper, o.upperPath(filePath), size))
 }
 
+// Touch creates a missing file in the upper layer, or copies a
+// base-only file up and updates its modification time there.
 func (o *OverlayFileSystem) Touch(filePath string, perm Permissions) error {
 	if err := o.checkClosed(); err != nil {
 		return err
@@ -479,6 +506,7 @@ func (o *OverlayFileSystem) Touch(filePath string, perm Permissions) error {
 	return o.overlayErr(o.upper, fsTouch(o.upper, o.upperPath(filePath), perm))
 }
 
+// MakeDir creates a directory in the upper layer.
 func (o *OverlayFileSystem) MakeDir(dirPath string, perm Permissions) error {
 	if err := o.checkClosed(); err != nil {
 		return err
@@ -495,6 +523,8 @@ func (o *OverlayFileSystem) MakeDir(dirPath string, perm Permissions) error {
 	return o.overlayErr(o.upper, fsMakeDir(o.upper, o.upperPath(dirPath), perm))
 }
 
+// MakeAllDirs creates a directory and all missing parent directories
+// in the upper layer.
 func (o *OverlayFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
 	if err := o.checkClosed(); err != nil {
 		return err

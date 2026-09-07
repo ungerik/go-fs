@@ -208,18 +208,25 @@ func (f *MultipartFileSystem) checkClosed() error {
 	return nil
 }
 
+// RootDir returns the root directory of the file system,
+// which lists the form fields that have uploaded files.
 func (f *MultipartFileSystem) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
+// ID returns the URI prefix of the file system,
+// which is unique per parsed form.
 func (f *MultipartFileSystem) ID() string {
 	return f.URIPrefix
 }
 
+// ReadableWritable returns true for readable and false for writable,
+// because uploaded files can only be read.
 func (*MultipartFileSystem) ReadableWritable() (readable, writable bool) {
 	return true, false
 }
 
+// Name returns "multipart file system" and the id of the file system.
 func (f *MultipartFileSystem) Name() string {
 	return "multipart file system " + path.Base(f.URIPrefix)
 }
@@ -229,10 +236,14 @@ func (f *MultipartFileSystem) String() string {
 	return f.Name() + " with prefix " + f.Prefix()
 }
 
+// File returns a File of this file system for the path,
+// which has the form "/<form field>/<file name>".
 func (f *MultipartFileSystem) File(filePath string) fs.File {
 	return f.JoinCleanFile(filePath)
 }
 
+// JoinCleanFile joins the URI parts and returns a File
+// with the cleaned path and the prefix of this file system.
 func (f *MultipartFileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(f.JoinCleanURI(uriParts...))
 }
@@ -272,6 +283,8 @@ func (f *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 	return &info
 }
 
+// Stat returns the FileInfo of a form field directory
+// or of an uploaded file.
 func (f *MultipartFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	if err := f.checkClosed(); err != nil {
 		return nil, err
@@ -283,6 +296,7 @@ func (f *MultipartFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	return info, nil
 }
 
+// Exists reports if the form field directory or uploaded file exists.
 func (f *MultipartFileSystem) Exists(filePath string) (bool, error) {
 	if err := f.checkClosed(); err != nil {
 		return false, err
@@ -290,6 +304,10 @@ func (f *MultipartFileSystem) Exists(filePath string) (bool, error) {
 	return f.info(filePath).Exists, nil
 }
 
+// ListDir calls the callback for every form field with uploaded files
+// when dirPath is the root directory, or for every file uploaded under
+// the form field named by dirPath. Only entries matching any of the
+// patterns are reported, or all of them if no patterns are passed.
 func (f *MultipartFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) (err error) {
 	if err := f.checkClosed(); err != nil {
 		return err
@@ -349,6 +367,7 @@ func (f *MultipartFileSystem) ListDir(ctx context.Context, dirPath string, patte
 	return nil
 }
 
+// ReadAll reads the complete content of an uploaded file.
 func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -362,6 +381,7 @@ func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 	return fs.ReadAllContext(ctx, file)
 }
 
+// OpenReader opens an uploaded file for reading.
 func (f *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	header, err := f.GetMultipartFileHeader(filePath)
 	if err != nil {

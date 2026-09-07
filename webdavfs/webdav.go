@@ -242,6 +242,7 @@ type StatusError struct {
 	Status     string
 }
 
+// Error implements the error interface
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("webdavfs: %s %s: %s", e.Method, e.File, e.Status)
 }

@@ -33,7 +33,9 @@ import (
 )
 
 const (
-	Prefix    = "sftp://"
+	// Prefix is the URI prefix of SFTP file systems.
+	Prefix = "sftp://"
+	// Separator is the path separator of SFTP file systems.
 	Separator = "/"
 )
 

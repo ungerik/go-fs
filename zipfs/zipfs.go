@@ -117,22 +117,29 @@ func NewWriter(file fs.File) (*Writer, error) {
 	return zipfs, nil
 }
 
+// ReadableWritable returns false for readable and true for writable,
+// because an archive that is being written can't be read.
 func (f *Writer) ReadableWritable() (readable, writable bool) {
 	return false, true
 }
 
+// RootDir returns the root directory of the archive.
 func (f *Writer) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
+// ID returns the URI prefix of the file system,
+// which is unique per created archive.
 func (f *Writer) ID() string {
 	return f.URIPrefix
 }
 
+// Name returns "Zip writer filesystem" and the archive name.
 func (f *Writer) Name() string {
 	return "Zip writer filesystem " + path.Base(f.URIPrefix)
 }
 
+// String returns the name of the file system and its prefix.
 func (f *Writer) String() string {
 	return f.Name() + " with prefix " + f.Prefix()
 }

@@ -38,8 +38,11 @@ import (
 )
 
 const (
-	Prefix    = "ftp://"
+	// Prefix is the URI prefix of unencrypted FTP file systems.
+	Prefix = "ftp://"
+	// PrefixTLS is the URI prefix of FTP file systems using TLS.
 	PrefixTLS = "ftps://"
+	// Separator is the path separator of FTP file systems.
 	Separator = "/"
 
 	defaultPort     = "21"

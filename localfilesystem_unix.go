@@ -39,6 +39,8 @@ func localFileSystemID() string {
 	return strings.ReplaceAll(id, " ", "-")
 }
 
+// User returns the name of the user owning the file.
+// Only available on Unix systems.
 func (local *LocalFileSystem) User(filePath string) (string, error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
@@ -60,6 +62,8 @@ func (local *LocalFileSystem) User(filePath string) (string, error) {
 	return u.Username, nil
 }
 
+// SetUser changes the user owning the file.
+// Only available on Unix systems.
 func (local *LocalFileSystem) SetUser(filePath string, username string) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -77,6 +81,8 @@ func (local *LocalFileSystem) SetUser(filePath string, username string) error {
 	return os.Chown(filePath, uid, -1)
 }
 
+// Group returns the name of the group owning the file.
+// Only available on Unix systems.
 func (local *LocalFileSystem) Group(filePath string) (string, error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
@@ -98,6 +104,8 @@ func (local *LocalFileSystem) Group(filePath string) (string, error) {
 	return g.Name, nil
 }
 
+// SetGroup changes the group owning the file.
+// Only available on Unix systems.
 func (local *LocalFileSystem) SetGroup(filePath string, group string) error {
 	filePath = expandTilde(filePath)
 

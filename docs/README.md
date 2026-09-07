@@ -48,7 +48,27 @@ cover what spans several types.
 | [fsimpl](reference-fsimpl.md)                      | Helpers for implementing a backend                 |
 | [fstest](reference-fstest.md)                      | The conformance suite, mocks and the Docker gate   |
 | [uuiddir](reference-uuiddir.md)                    | UUID-named directories without unbounded fan-out   |
+
+### Backend and package READMEs
+
+Every module and every sub package that implements a `FileSystem` has a
+README of its own with its setup, its concept mapping and how to run its
+tests.
+
+| Document                                           | Contents                                           |
+| -------------------------------------------------- | -------------------------------------------------- |
 | [s3fs](../s3fs/README.md)                          | S3 credentials, S3-compatible services, concept mapping |
+| [azureblobfs](../azureblobfs/README.md)            | Azure credentials, blob name mapping, Azurite tests |
+| [sftpfs](../sftpfs/README.md)                      | Host keys, reconnects, shared connections          |
+| [ftpfs](../ftpfs/README.md)                        | FTPS TLS options, control connection behaviour     |
+| [smbfs](../smbfs/README.md)                        | NTLM authentication, share paths, Samba tests      |
+| [webdavfs](../webdavfs/README.md)                  | Basic auth and bearer tokens, WebDAV method mapping |
+| [dropboxfs](../dropboxfs/README.md)                | Dropbox app setup, access token, manual test run   |
+| [httpfs](../httpfs/README.md)                      | Reading HTTP URLs as files, the shared http.Client |
+| [zipfs](../zipfs/README.md)                        | Reading and writing ZIP archives                   |
+| [tarfs](../tarfs/README.md)                        | Reading and writing tar, .tar.gz and .tgz archives |
+| [multipartfs](../multipartfs/README.md)            | Uploaded form files as a file system               |
+| [tools](../tools/README.md)                        | The pinned staticcheck and gosec versions          |
 
 ## Explanation — why it works this way
 

@@ -569,6 +569,12 @@ helpers, no change to the `File` API.
 - [x] Test coverage for the `slices` helpers, the closed and empty-path
       guards of `SubFileSystem`/`OverlayFileSystem`, `fsimpl.DirTree` and
       the generic emulations in `dispatch.go`.
+- [x] API freeze polish: the 23 `Permissions` values became `const` instead
+      of `var`, every exported symbol of every package has a doc comment,
+      runnable `Example` functions for `fs`, `httpfs`, `zipfs`, `tarfs`,
+      `multipartfs` and `uuiddir` plus compile-only examples for the seven
+      backend modules, a README for every module and every `FileSystem`
+      sub package, and the CI dependency cache covers all modules.
 
 ## Verification (overall)
 

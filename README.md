@@ -636,6 +636,7 @@ data, err := fs.File("https://example.com/file.txt").ReadAll(ctx)
 
 Read-only. Useful for treating remote files uniformly with local ones.
 `httpfs.Client` is the `*http.Client` used for all requests.
+[httpfs/README.md](httpfs/README.md) has the details.
 
 ### s3fs
 
@@ -679,6 +680,8 @@ A lost connection is re-dialed transparently. `EnsureRegistered` shares one
 connection per address between callers with reference counting. URIs with
 embedded credentials (`sftp://user:password@host/path`) dial a connection per
 operation and require `sftpfs.URLHostKeyCallback` to be set.
+[sftpfs/README.md](sftpfs/README.md) has the host key setup and the full
+concept mapping.
 
 ### ftpfs
 
@@ -698,6 +701,8 @@ defer ftpFS.Close()
 with port 990). Server certificates are verified unless
 `ftpfs.Options.InsecureSkipVerify` is set. The single control connection is
 used by one operation at a time; `OpenReader` streams over its own connection.
+[ftpfs/README.md](ftpfs/README.md) has the TLS options and the full concept
+mapping.
 
 ### dropboxfs
 
@@ -713,6 +718,8 @@ err = dbxFS.RootDir().Join("Apps", "MyApp", "notes.md").WriteAllString(ctx, "...
 
 The second argument is the metadata cache timeout (zero disables the cache),
 the third mutes the notifications Dropbox sends for changed files.
+[dropboxfs/README.md](dropboxfs/README.md) has the app and access token
+setup and how to run the tests against a real account.
 
 ### webdavfs
 
@@ -729,6 +736,8 @@ notes, err := fs.File("webdav://cloud.example.com/remote.php/dav/files/alice/not
 Standard library only, so one module covers every WebDAV server. Paths map
 to URL paths below the base URL, `PROPFIND` backs `Stat` and `ListDir`,
 `MOVE` and `COPY` are native, and readers seek with `Range` requests.
+[webdavfs/README.md](webdavfs/README.md) has the authentication options and
+the full concept mapping.
 
 ### smbfs
 
@@ -748,6 +757,8 @@ random access file handles, so nearly every optional interface is native:
 append and read-write handles, `Truncate`, `Touch`, `MakeAllDirs`,
 `RemoveAll`, server-side `Move`, symbolic links. Permissions are the SMB
 read-only attribute, so only the user write bit is stored.
+[smbfs/README.md](smbfs/README.md) has the authentication options and the
+full concept mapping.
 
 ### azureblobfs
 
@@ -765,6 +776,8 @@ takes a configured `container.Client` for other credential types.
 Directories are blob name prefixes with marker blobs like in s3fs, reads
 seek with range requests, `CopyFile` is a server-side copy and `Touch`
 updates the modification time by setting the blob metadata.
+[azureblobfs/README.md](azureblobfs/README.md) has the credential setup and
+the full concept mapping.
 
 ### zipfs
 
@@ -787,6 +800,7 @@ defer out.Close()
 
 `Reader` is a `StdFileSystem` over the `io/fs.FS` of `archive/zip.Reader`;
 `Writer` writes entries sequentially.
+[zipfs/README.md](zipfs/README.md) has the details.
 
 ### tarfs
 
@@ -806,7 +820,7 @@ err = out.Close() // finishes the archive
 A reader indexes the archive once and reads file content on demand; a
 gzip compressed archive is decompressed into memory. A writer buffers each
 file until its writer is closed, because tar needs the size before the
-content.
+content. [tarfs/README.md](tarfs/README.md) has the details.
 
 ### multipartfs
 
@@ -822,6 +836,7 @@ file, files uploaded under an already used name get a unique name
 (`.`, `..`) become `unnamed`. Uploaded files carry no modification time.
 `Close` removes the temporary files of the form; every method returns
 `fs.ErrFileSystemClosed` afterwards.
+[multipartfs/README.md](multipartfs/README.md) has the details.
 
 ### MemFileSystem
 

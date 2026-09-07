@@ -24,11 +24,14 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: |
             go.sum
+            azureblobfs/go.sum
             dropboxfs/go.sum
             ftpfs/go.sum
             s3fs/go.sum
             sftpfs/go.sum
+            smbfs/go.sum
             tools/go.sum
+            webdavfs/go.sum
 
       - name: Build all workspace modules
         shell: bash
@@ -62,11 +65,14 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: |
             go.sum
+            azureblobfs/go.sum
             dropboxfs/go.sum
             ftpfs/go.sum
             s3fs/go.sum
             sftpfs/go.sum
+            smbfs/go.sum
             tools/go.sum
+            webdavfs/go.sum
 
       # "go tool" resolves the tools of every workspace module,
       # so staticcheck and gosec can be run from any module directory.
