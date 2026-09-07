@@ -14,6 +14,46 @@ Version 1.0 is in beta; the v1 API is being iterated in beta releases
 before it is frozen. Upgrading from v0.x is mechanical, see
 [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md).
 
+Documentation
+-------------
+
+The rest of this README is an API tour. For task-oriented guides,
+design rationale and the implementer reference see **[docs/](docs/README.md)**.
+
+*Tutorials*
+
+- [Getting started](docs/tutorial-getting-started.md) — read and write files
+  against local disk, memory and HTTP with the same code
+- [Implement a file system](docs/tutorial-implement-a-filesystem.md) — a
+  complete backend in ~120 lines that passes the conformance suite
+
+*How-to*
+
+- [Connect a remote backend](docs/howto-connect-a-remote-backend.md) — S3,
+  SFTP, FTP, SMB, WebDAV, Azure Blob, Dropbox
+- [Test with MemFileSystem](docs/howto-test-with-memfilesystem.md)
+- [Serve files over HTTP](docs/howto-serve-files-over-http.md)
+- [Handle form uploads](docs/howto-handle-form-uploads.md)
+- [Work with archives](docs/howto-work-with-archives.md)
+- [Copy, move and compare](docs/howto-copy-move-and-compare.md)
+- [Run the conformance suite](docs/howto-run-the-conformance-suite.md)
+- [Migrating to v1.0](docs/MIGRATION_v1.md)
+
+*Reference*
+
+- [FileSystem interfaces](docs/reference-filesystem-interfaces.md) — all 28
+  interfaces, every fallback, the backend support matrix
+- [Errors](docs/reference-errors.md) · [fsimpl](docs/reference-fsimpl.md) ·
+  [fstest](docs/reference-fstest.md) · [uuiddir](docs/reference-uuiddir.md)
+- Full API on [pkg.go.dev](https://pkg.go.dev/github.com/ungerik/go-fs)
+
+*Explanation*
+
+- [Why File is a string](docs/explanation-the-file-type.md) ·
+  [Paths, URIs and the registry](docs/explanation-path-and-uri-model.md) ·
+  [The context rule](docs/explanation-context-rule.md) ·
+  [Optional interfaces and emulation](docs/explanation-optional-interfaces.md)
+
 Introduction
 ------------
 
