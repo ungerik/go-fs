@@ -39,7 +39,7 @@ Taken 2026-09-05/06:
   constructor (which takes ctx and may fail). Useful as meta information, e.g.
   `fs.File("/path").FileSystem().ID()`.
 - **Errors:** standard library `errors`/`fmt` only, no `go-errs` dependency
-  (see `CLAUDE.md`).
+  (see `AGENTS.md`).
 - **`MemDir` is dropped**; `MemFile` keeps its trailing-slash directory
   semantics.
 - **Delivery:** this roadmap lives in the repo; all of the v1.0 work lands
