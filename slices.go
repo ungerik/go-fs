@@ -55,13 +55,13 @@ func ContainsLocalPath[F interface{ LocalPath() string }](files []F, localPath s
 }
 
 // ContentHashIndex returns the slice index of the first file
-// where the passed hash equals the result from the ContentHashContext method
+// where the passed hash equals the result from the ContentHash method
 // or -1 in case of no match.
 func ContentHashIndex[F interface {
-	ContentHashContext(ctx context.Context) (string, error)
+	ContentHash(ctx context.Context) (string, error)
 }](ctx context.Context, files []F, hash string) (int, error) {
 	for i, f := range files {
-		fHash, err := f.ContentHashContext(ctx)
+		fHash, err := f.ContentHash(ctx)
 		if err != nil {
 			return -1, err
 		}
@@ -156,7 +156,7 @@ func SortBySize[F interface{ Size() int64 }](files []F) {
 	})
 }
 
-func SortByModified[F interface{ Modified() time.Time }](files []File) {
+func SortByModified[F interface{ Modified() time.Time }](files []F) {
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Modified().Before(files[j].Modified())
 	})

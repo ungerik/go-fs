@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	iofs "io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	stdfstest "testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -101,7 +101,7 @@ func TestFileMakeAllDirs(t *testing.T) {
 	}
 	checkDir(dir)
 
-	err = baseDir.Join(pathParts[0]).RemoveRecursive()
+	err = baseDir.Join(pathParts[0]).RemoveRecursive(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func Test_FileJoin(t *testing.T) {
 	f := File("/").Join("1", "2", "3", "4", "5")
 
 	for _, exp := range exptectedPaths {
-		assert.Equal(t, exp, f.LocalPath())
+		assert.Equal(t, filepath.FromSlash(exp), f.LocalPath())
 		// Up one directory
 		f = f.Dir()
 	}
@@ -249,10 +249,13 @@ func TestFile_Watch(t *testing.T) {
 	const sleepDurationForCallback = time.Millisecond * 10
 	var (
 		dir       = File(t.TempDir())
+		mtx       sync.Mutex // the callback runs on the watcher goroutine
 		gotFiles  []File
 		gotEvents []Event
 	)
 	cancel, err := dir.Watch(func(file File, event Event) {
+		mtx.Lock()
+		defer mtx.Unlock()
 		gotFiles = append(gotFiles, file)
 		gotEvents = append(gotEvents, event)
 	})
@@ -274,28 +277,51 @@ func TestFile_Watch(t *testing.T) {
 
 	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
 
-	assert.Equal(t, []File{newFile, renamedFile, newFile, renamedFile}, gotFiles)
-	assert.Equal(t, []Event{eventCreate, eventCreate, eventRename, eventRemove}, gotEvents)
+	// The order in which fsnotify delivers the events differs between
+	// platforms (inotify reports the RENAME of newFile before the CREATE
+	// of renamedFile, kqueue the other way round), so compare as a set.
+	type fileEvent struct {
+		file  File
+		event Event
+	}
+	mtx.Lock()
+	defer mtx.Unlock()
+	var got []fileEvent
+	for i := range gotFiles {
+		got = append(got, fileEvent{gotFiles[i], gotEvents[i]})
+	}
+	assert.ElementsMatch(t,
+		[]fileEvent{
+			{newFile, eventCreate},
+			{newFile, eventRename},
+			{renamedFile, eventCreate},
+			{renamedFile, eventRemove},
+		},
+		got,
+	)
 
 	err = cancel()
 	assert.NoError(t, err, "cancel watch")
 }
 
-func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
-	// Create test directory structure
-	dir := MustMakeTempDir()
-	t.Cleanup(func() { dir.RemoveRecursive() })
+// mapFSDir registers a read-only StdFileSystem over the MapFS
+// fixture for the test and returns its root directory.
+func mapFSDir(t *testing.T, fixture stdfstest.MapFS) File {
+	t.Helper()
+	stdFS := NewStdFileSystemAndRegister(fixture, "")
+	t.Cleanup(func() { _ = stdFS.Close() })
+	return stdFS.RootDir()
+}
 
-	// Create a nested directory structure:
-	// dir/
-	//   file1.txt
-	//   file2.log
-	//   subdir1/
-	//     file3.txt
-	//     file4.log
-	//     subdir2/
-	//       file5.txt
-	//       file6.md
+func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
+	dir := mapFSDir(t, stdfstest.MapFS{
+		"file1.txt":                 {},
+		"file2.log":                 {},
+		"subdir1/file3.txt":         {},
+		"subdir1/file4.log":         {},
+		"subdir1/subdir2/file5.txt": {},
+		"subdir1/subdir2/file6.md":  {},
+	})
 	file1 := dir.Join("file1.txt")
 	file2 := dir.Join("file2.log")
 	subdir1 := dir.Join("subdir1")
@@ -305,17 +331,9 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 	file5 := subdir2.Join("file5.txt")
 	file6 := subdir2.Join("file6.md")
 
-	require.NoError(t, subdir2.MakeAllDirs())
-	require.NoError(t, file1.Touch())
-	require.NoError(t, file2.Touch())
-	require.NoError(t, file3.Touch())
-	require.NoError(t, file4.Touch())
-	require.NoError(t, file5.Touch())
-	require.NoError(t, file6.Touch())
-
 	t.Run("all files without pattern", func(t *testing.T) {
 		var files []File
-		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursive(t.Context(), func(info *FileInfo) error {
 			files = append(files, info.File)
 			return nil
 		})
@@ -329,7 +347,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("filter by pattern *.txt", func(t *testing.T) {
 		var files []File
-		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursive(t.Context(), func(info *FileInfo) error {
 			files = append(files, info.File)
 			return nil
 		}, "*.txt")
@@ -343,7 +361,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("filter by pattern *.log", func(t *testing.T) {
 		var files []File
-		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursive(t.Context(), func(info *FileInfo) error {
 			files = append(files, info.File)
 			return nil
 		}, "*.log")
@@ -357,7 +375,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("filter by multiple patterns", func(t *testing.T) {
 		var files []File
-		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursive(t.Context(), func(info *FileInfo) error {
 			files = append(files, info.File)
 			return nil
 		}, "*.txt", "*.md")
@@ -371,7 +389,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("callback returns error", func(t *testing.T) {
 		expectedErr := errors.New("callback error")
-		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursive(t.Context(), func(info *FileInfo) error {
 			return expectedErr
 		})
 		assert.Error(t, err)
@@ -382,7 +400,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel() // Cancel immediately
 
-		err := dir.ListDirInfoRecursiveContext(ctx, func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursive(ctx, func(info *FileInfo) error {
 			return nil
 		})
 		// Should return context.Canceled or similar error
@@ -391,7 +409,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("empty file path", func(t *testing.T) {
 		emptyFile := File("")
-		err := emptyFile.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
+		err := emptyFile.ListDirInfoRecursive(t.Context(), func(info *FileInfo) error {
 			return nil
 		})
 		assert.Equal(t, ErrEmptyPath, err)
@@ -399,7 +417,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("non-existent directory", func(t *testing.T) {
 		nonExistent := dir.Join("nonexistent")
-		err := nonExistent.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
+		err := nonExistent.ListDirInfoRecursive(t.Context(), func(info *FileInfo) error {
 			return nil
 		})
 		// Should return an error (likely file not found)
@@ -408,7 +426,7 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 
 	t.Run("verify info fields", func(t *testing.T) {
 		var infos []*FileInfo
-		err := dir.ListDirInfoRecursiveContext(t.Context(), func(info *FileInfo) error {
+		err := dir.ListDirInfoRecursive(t.Context(), func(info *FileInfo) error {
 			infos = append(infos, info)
 			return nil
 		}, "*.txt")
@@ -424,22 +442,14 @@ func TestFile_ListDirInfoRecursiveContext(t *testing.T) {
 }
 
 func TestFile_ListDir(t *testing.T) {
-	dir, err := MakeTempDir()
-	require.NoError(t, err, "MakeTempDir")
-	t.Cleanup(func() { dir.RemoveRecursive() })
-
+	dir := mapFSDir(t, stdfstest.MapFS{"a": {}, "b": {}, "c": {}})
 	files := map[File]bool{
 		dir.Join("a"): true,
 		dir.Join("b"): true,
 		dir.Join("c"): true,
 	}
 
-	for file := range files {
-		err := file.Touch()
-		require.NoError(t, err)
-	}
-
-	err = dir.ListDir(func(file File) error {
+	err := dir.ListDir(t.Context(), func(file File) error {
 		if !files[file] {
 			t.Errorf("unexpected file: %s", file)
 		}
@@ -451,52 +461,45 @@ func TestFile_ListDir(t *testing.T) {
 }
 
 func TestFile_ListDirIter(t *testing.T) {
-	dir, err := MakeTempDir()
-	require.NoError(t, err, "MakeTempDir")
-	t.Cleanup(func() { dir.RemoveRecursive() })
-
+	dir := mapFSDir(t, stdfstest.MapFS{"a": {}, "b": {}, "c": {}})
 	files := map[File]bool{
 		dir.Join("a"): true,
 		dir.Join("b"): true,
 		dir.Join("c"): true,
 	}
 
-	for file := range files {
-		err := file.Touch()
-		require.NoError(t, err)
-	}
-
-	for file, err := range dir.ListDirIter() {
+	for file, err := range dir.ListDirIter(t.Context()) {
 		require.NoError(t, err, "ListDirIter should not return an error")
 		if !files[file] {
 			t.Errorf("unexpected file: %s", file)
 		}
 		delete(files, file)
 	}
-	require.NoError(t, err)
 	require.Empty(t, files, "not all files listed")
 }
 
 func TestFile_Glob(t *testing.T) {
-	dir := MustMakeTempDir()
-	t.Cleanup(func() { dir.RemoveRecursive() })
+	rootDir := mapFSDir(t, stdfstest.MapFS{
+		"seed/a/b/c/cFile":                   {},
+		"seed/a/b/c/Hello/World/x/file1.txt": {},
+		"seed/a/b/c/Hello/World/x/file2.txt": {},
+		"seed/a/b/c/Hello/World/x/file3.txt": {},
+		"seed/a/b/c/Hello/World/y":           {Mode: iofs.ModeDir},
+	})
+	dir := rootDir.Join("seed")
 	xDir := dir.Join("a", "b", "c", "Hello", "World", "x")
-	yDir := dir.Join("a", "b", "c", "Hello", "World", "y")
-	require.NoError(t, xDir.MakeAllDirs())
-	require.NoError(t, yDir.MakeAllDirs())
 	cFile := dir.Join("a", "b", "c", "cFile")
-	require.NoError(t, cFile.Touch())
 	xFile1 := xDir.Join("file1.txt")
-	require.NoError(t, xFile1.Touch())
 	xFile2 := xDir.Join("file2.txt")
-	require.NoError(t, xFile2.Touch())
 	xFile3 := xDir.Join("file3.txt")
-	require.NoError(t, xFile3.Touch())
 
 	type result struct {
 		file   File
 		values []string
 	}
+
+	// Absolute patterns below are relative to the root directory
+	dirPathFromRoot := dir.Path()
 
 	tests := []struct {
 		name    string
@@ -583,8 +586,8 @@ func TestFile_Glob(t *testing.T) {
 		},
 		{
 			name:    "root dir base",
-			file:    "/",
-			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/*.txt",
+			file:    rootDir,
+			pattern: dirPathFromRoot + "/a/b/c/Hello/World/x/*.txt",
 			want: []result{
 				{xFile1, []string{"file1.txt"}},
 				{xFile2, []string{"file2.txt"}},
@@ -601,7 +604,7 @@ func TestFile_Glob(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotIter, err := tt.file.Glob(tt.pattern)
+			gotIter, err := tt.file.Glob(t.Context(), tt.pattern)
 			if tt.wantErr {
 				require.Error(t, err, "File.Glob")
 				return
@@ -612,7 +615,7 @@ func TestFile_Glob(t *testing.T) {
 				require.Truef(t, file.Exists(), "file %s does not exist", file)
 				got = append(got, result{file, values})
 			}
-			sort.Slice(got, func(i, j int) bool { return got[i].file.LocalPath() < got[j].file.LocalPath() })
+			sort.Slice(got, func(i, j int) bool { return got[i].file.Path() < got[j].file.Path() })
 			require.Equal(t, tt.want, got, "file path sorted results")
 		})
 	}
@@ -620,7 +623,7 @@ func TestFile_Glob(t *testing.T) {
 
 func TestGlob(t *testing.T) {
 	dir := MustMakeTempDir()
-	t.Cleanup(func() { dir.RemoveRecursive() })
+	t.Cleanup(func() { dir.RemoveRecursive(context.Background()) })
 	xDir := dir.Join("a", "b", "c", "Hello", "World", "x")
 	yDir := dir.Join("a", "b", "c", "Hello", "World", "y")
 	require.NoError(t, xDir.MakeAllDirs())
@@ -719,7 +722,7 @@ func TestGlob(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotIter, err := Glob(tt.pattern)
+			gotIter, err := Glob(t.Context(), tt.pattern)
 			if tt.wantErr {
 				require.Error(t, err, "Glob")
 				return
@@ -736,55 +739,13 @@ func TestGlob(t *testing.T) {
 	}
 }
 
-// mockFileInfo implements io/fs.FileInfo for testing
-type mockFileInfo struct {
-	name    string
-	size    int64
-	mode    os.FileMode
-	modTime time.Time
-	isDir   bool
-}
-
-func (m *mockFileInfo) Name() string       { return m.name }
-func (m *mockFileInfo) Size() int64        { return m.size }
-func (m *mockFileInfo) Mode() os.FileMode  { return m.mode }
-func (m *mockFileInfo) ModTime() time.Time { return m.modTime }
-func (m *mockFileInfo) IsDir() bool        { return m.isDir }
-func (m *mockFileInfo) Sys() any           { return nil }
-
-// mockReadCloser implements iofs.File for testing
-type mockReadCloser struct {
-	io.ReadCloser
-}
-
-func (m *mockReadCloser) Stat() (iofs.FileInfo, error) {
-	return &mockFileInfo{name: "test.txt", size: 12}, nil
-}
-
-func (m *mockReadCloser) ReadDir(n int) ([]iofs.DirEntry, error) {
-	return nil, errors.New("not a directory")
-}
-
-// mockWriteCloser implements WriteCloser for testing
-type mockWriteCloser struct {
-	io.Writer
-}
-
-func (m *mockWriteCloser) Close() error {
-	return nil
-}
-
-func (m *mockWriteCloser) Write(p []byte) (n int, err error) {
-	return len(p), nil
-}
-
 // noRenameMoveFS wraps a FileSystem but only exposes the base FileSystem
 // interface, deliberately hiding any Rename or Move methods of the wrapped
 // implementation. This forces File.Rename into its default copy-and-remove
 // fallback branch for file systems that implement neither RenameFileSystem
 // nor MoveFileSystem (for example s3fs).
 type noRenameMoveFS struct {
-	FileSystem
+	WriteFileSystem
 }
 
 // registerNoRenameMoveFS creates an in-memory file system with the given
@@ -797,7 +758,7 @@ func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
 	// Replace the registered *MemFileSystem (which implements Rename and
 	// Move) with a wrapper that only exposes the base FileSystem interface.
 	Unregister(memFS)
-	wrapped := &noRenameMoveFS{FileSystem: memFS}
+	wrapped := &noRenameMoveFS{WriteFileSystem: memFS}
 	Register(wrapped)
 	t.Cleanup(func() {
 		Unregister(wrapped)
@@ -861,7 +822,7 @@ func TestFile_Rename_DefaultBranch(t *testing.T) {
 func assertFileContent(t *testing.T, file File, want string) {
 	t.Helper()
 	require.True(t, file.Exists(), "file %s must exist", file)
-	got, err := file.ReadAllString()
+	got, err := file.ReadAllString(t.Context())
 	require.NoError(t, err, "ReadAllString %s", file)
 	require.Equal(t, want, got, "content of %s", file)
 }

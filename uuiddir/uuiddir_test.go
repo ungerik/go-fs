@@ -2,9 +2,14 @@ package uuiddir
 
 import (
 	"context"
+	iofs "io/fs"
+	"path/filepath"
+	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	fs "github.com/ungerik/go-fs"
 )
@@ -19,17 +24,17 @@ func Test_Join(t *testing.T) {
 
 	baseDir := fs.File("/")
 	uuidDir := Join(baseDir, uuid)
-	expected := fs.File("/f0/498/fad/437c4954/ad828ec2cc202628")
+	expected := fs.File(filepath.FromSlash("/f0/498/fad/437c4954/ad828ec2cc202628"))
 	assert.Equal(t, expected, uuidDir, "Join")
 
 	baseDir = fs.File("/my/base/dir")
 	uuidDir = Join(baseDir, uuid)
-	expected = fs.File("/my/base/dir/f0/498/fad/437c4954/ad828ec2cc202628")
+	expected = fs.File(filepath.FromSlash("/my/base/dir/f0/498/fad/437c4954/ad828ec2cc202628"))
 	assert.Equal(t, expected, uuidDir, "Join")
 
 	baseDir = fs.File("relativ/dir/")
 	uuidDir = Join(baseDir, uuid)
-	expected = fs.File("relativ/dir/f0/498/fad/437c4954/ad828ec2cc202628")
+	expected = fs.File(filepath.FromSlash("relativ/dir/f0/498/fad/437c4954/ad828ec2cc202628"))
 	assert.Equal(t, expected, uuidDir, "Join")
 }
 
@@ -174,9 +179,25 @@ func makeTestDirs() (baseDir fs.File, dirs map[fs.File]bool, ids map[[16]byte]st
 }
 
 func Test_Enum(t *testing.T) {
-	baseDir, dirs, ids, err := makeTestDirs()
-	assert.NoError(t, err, "makeTestDirs")
-	defer baseDir.RemoveRecursive()
+	// Enum only reads, so the directories are a read-only MapFS fixture
+	fixture := make(fstest.MapFS)
+	dirs := make(map[fs.File]bool)
+	ids := make(map[[16]byte]struct{})
+	stdFS := fs.NewStdFileSystemAndRegister(fixture, "")
+	t.Cleanup(func() { _ = stdFS.Close() })
+	baseDir := stdFS.RootDir()
+	for _, id := range []string{
+		"ced14f11-83f6-4908-b502-8971ff464608",
+		"8e7c40d7-49fa-41e1-8962-263070ecb87f",
+		"4717a9b7-17d8-4c12-89e1-c998fb34e9ac",
+		"10ba4b07-907e-4702-a6df-7b5df92c9c2e",
+		"cc2f6bad-9a2d-4b12-a083-23a05e4207c2",
+	} {
+		uuid := mustParseUUID(id)
+		fixture[strings.Join(Split(uuid), "/")] = &fstest.MapFile{Mode: iofs.ModeDir}
+		dirs[Join(baseDir, uuid)] = true
+		ids[uuid] = struct{}{}
+	}
 
 	Enum(t.Context(), baseDir, func(uuidDir fs.File, uuid [16]byte) error {
 		hasDir := dirs[uuidDir] && uuidDir.IsDir()
@@ -201,12 +222,12 @@ func findUUIDs(ctx context.Context, baseDir fs.File) map[[16]byte]struct{} {
 func Test_RemoveDir(t *testing.T) {
 	baseDir, _, ids, err := makeTestDirs()
 	assert.NoError(t, err, "makeTestDirs")
-	defer baseDir.RemoveRecursive()
+	defer baseDir.RemoveRecursive(context.Background())
 
 	for id := range ids {
 		idDir := Join(baseDir, id)
 		assert.True(t, idDir.IsDir(), "test dir exists")
-		err := RemoveDir(baseDir, idDir)
+		err := RemoveDir(t.Context(), baseDir, idDir)
 		assert.NoError(t, err, "RemoveDir")
 
 		delete(ids, id)
@@ -224,4 +245,37 @@ func idsEqual(a, b map[[16]byte]struct{}) bool {
 		}
 	}
 	return true
+}
+
+func Test_Make(t *testing.T) {
+	baseDir := fs.MustMakeTempDir()
+	t.Cleanup(func() { _ = baseDir.RemoveRecursive(context.Background()) })
+
+	id := mustParseUUID("f0498fad-437c-4954-ad82-8ec2cc202628")
+	uuidDir, err := Make(baseDir, id)
+	require.NoError(t, err, "Make")
+	require.Equal(t, Join(baseDir, id), uuidDir, "Make must return the UUID directory")
+	require.True(t, uuidDir.IsDir(), "Make must create the UUID directory, not just baseDir")
+
+	parsed, err := Parse(uuidDir)
+	require.NoError(t, err)
+	require.Equal(t, id, parsed)
+
+	// Make on an existing directory must not fail
+	_, err = Make(baseDir, id)
+	require.NoError(t, err, "Make on an existing UUID directory")
+}
+
+func Test_RemoveDir_BoundaryCheck(t *testing.T) {
+	tempDir := fs.MustMakeTempDir()
+	t.Cleanup(func() { _ = tempDir.RemoveRecursive(context.Background()) })
+
+	baseDir := tempDir.Join("base")
+	sibling := tempDir.Join("basement", "x")
+	require.NoError(t, baseDir.MakeAllDirs())
+	require.NoError(t, sibling.MakeAllDirs())
+
+	err := RemoveDir(t.Context(), baseDir, sibling)
+	require.Error(t, err, "a directory that merely shares the path prefix must be rejected")
+	require.True(t, sibling.IsDir(), "the rejected directory must not be removed")
 }

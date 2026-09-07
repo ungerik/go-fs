@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ func Test_MakeTempDir(t *testing.T) {
 		t.Fatalf("Error: %s", err)
 	}
 
-	defer tempDir.RemoveRecursive()
+	defer tempDir.RemoveRecursive(context.Background())
 
 	// fmt.Fprintln(os.Stderr, tempDir.Path())
 

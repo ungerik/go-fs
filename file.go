@@ -3,7 +3,6 @@ package fs
 import (
 	"bytes"
 	"context"
-	"encoding/gob"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -21,10 +20,8 @@ import (
 )
 
 var (
-	_ FileReader     = File("")
-	_ fmt.Stringer   = File("")
-	_ gob.GobEncoder = File("")
-	_ gob.GobDecoder = File("")
+	_ FileReader   = File("")
+	_ fmt.Stringer = File("")
 )
 
 // InvalidFile is a file with an empty path and thus invalid.
@@ -56,7 +53,7 @@ func (file File) FileSystem() FileSystem {
 	return GetFileSystem(string(file))
 }
 
-// ParseRawURI returns a FileSystem for the passed URI and the path component within that file system.
+// ParseRawURI returns a FileSystem for the passed URI and the clean path within that file system.
 // Returns the local file system if no other file system could be identified.
 func (file File) ParseRawURI() (fs FileSystem, fsPath string) {
 	return ParseRawURI(string(file))
@@ -76,15 +73,15 @@ func (file File) String() string {
 // URL returns the URL of the file.
 func (file File) URL() string {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.URL(path)
+	return fsURL(fileSystem, path)
 }
 
 // Path returns the cleaned path of the file.
 // It may differ from the string value of File
 // because it will be cleaned depending on the FileSystem.
 func (file File) Path() string {
-	fileSystem, path := file.ParseRawURI()
-	return fileSystem.JoinCleanPath(path)
+	_, path := file.ParseRawURI()
+	return path
 }
 
 // PathWithSlashes returns the cleaned path of the file
@@ -93,7 +90,6 @@ func (file File) Path() string {
 // because it will be cleaned depending on the FileSystem.
 func (file File) PathWithSlashes() string {
 	fileSystem, path := file.ParseRawURI()
-	path = fileSystem.JoinCleanPath(path)
 	if sep := fileSystem.Separator(); sep != "/" {
 		path = strings.ReplaceAll(path, sep, "/")
 	}
@@ -107,7 +103,7 @@ func (file File) LocalPath() string {
 	if fileSystem != Local {
 		return ""
 	}
-	return fileSystem.JoinCleanPath(path)
+	return path
 }
 
 // MustLocalPath returns the cleaned local file-system path of the file,
@@ -140,8 +136,8 @@ func (file File) Dir() File {
 // If filePath is the root of the file system, then an empty string will be returned for name.
 func (file File) DirAndName() (dir File, name string) {
 	fileSystem, path := file.ParseRawURI()
-	dirPath, name := fileSystem.SplitDirAndName(path)
-	return fileSystem.JoinCleanFile(dirPath), name
+	dirPath, name := fsSplitDirAndName(fileSystem, path)
+	return fsJoinCleanFile(fileSystem, dirPath), name
 }
 
 // VolumeName returns the name of the volume at the beginning of the file path,
@@ -190,14 +186,14 @@ func (file File) Join(pathParts ...string) File {
 	if path != "" {
 		pathParts = append([]string{path}, pathParts...)
 	}
-	return fileSystem.JoinCleanFile(pathParts...)
+	return fsJoinCleanFile(fileSystem, pathParts...)
 }
 
 // Joinf returns a new File with fmt.Sprintf(format, args...) cleaned and joined to the current File's URI.
 // The resulting URI path will be cleaned, removing relative directory names like "..".
 func (file File) Joinf(format string, args ...any) File {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.JoinCleanFile(path, fmt.Sprintf(format, args...))
+	return fsJoinCleanFile(fileSystem, path, fmt.Sprintf(format, args...))
 }
 
 // IsReadable returns if the file exists and is readable.
@@ -209,19 +205,19 @@ func (file File) IsReadable() bool {
 		return false
 	}
 	fileSystem, filePath := file.ParseRawURI()
-	if readFS, _ := fileSystem.ReadableWritable(); !readFS {
-		return false
-	}
-	info, err := fileSystem.Stat(filePath)
+	info, err := fsStat(fileSystem, filePath)
 	if err != nil {
 		return false
 	}
-	return (info.Mode().IsDir() || info.Mode().IsRegular()) && (info.Mode()&0400 != 0)
+	return (info.IsDir || info.IsRegular) && info.Permissions&UserRead != 0
 }
 
-// IsWritable returns if the file exists and is writable,
+// IsWritable returns if the file or directory exists and is writable,
 // or in case it doesn't exist,
 // if the parent directory exists and is writable.
+//
+// Only the user write permission bit is checked, not whether the
+// current process can actually write to the file.
 //
 // It does not return an error by design: any error, including the file and
 // its parent directory not existing or not being accessible, results in false.
@@ -229,21 +225,21 @@ func (file File) IsWritable() bool {
 	if file == "" {
 		return false
 	}
-	fileSystem, pathFile := file.ParseRawURI()
-	if _, writeFS := fileSystem.ReadableWritable(); !writeFS {
+	fileSystem, filePath := file.ParseRawURI()
+	if _, err := fsWritable(fileSystem); err != nil {
 		return false
 	}
-	info, err := fileSystem.Stat(pathFile)
+	info, err := fsStat(fileSystem, filePath)
 	if err == nil {
-		return info.Mode().IsRegular() && (info.Mode()&0200 != 0)
+		return (info.IsRegular || info.IsDir) && info.Permissions&UserWrite != 0
 	}
 	// File does not exist, check if parent directory is writable
-	parentDir, _ := fileSystem.SplitDirAndName(pathFile)
-	info, err = fileSystem.Stat(parentDir)
+	parentDir, _ := fsSplitDirAndName(fileSystem, filePath)
+	info, err = fsStat(fileSystem, parentDir)
 	if err != nil {
 		return false // Parent directory does not exist
 	}
-	return info.Mode().IsDir() && (info.Mode()&0200 != 0)
+	return info.IsDir && info.Permissions&UserWrite != 0
 }
 
 // Stat returns a standard library io/fs.FileInfo describing the file.
@@ -252,7 +248,11 @@ func (file File) Stat() (iofs.FileInfo, error) {
 		return nil, ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Stat(path)
+	info, err := fsStat(fileSystem, path)
+	if err != nil {
+		return nil, err
+	}
+	return info.StdFileInfo(), nil
 }
 
 // Info returns FileInfo.
@@ -260,11 +260,11 @@ func (file File) Stat() (iofs.FileInfo, error) {
 // Use File.Stat to get a standard library io/fs.FileInfo.
 func (file File) Info() *FileInfo {
 	fileSystem, path := file.ParseRawURI()
-	info, err := fileSystem.Stat(path)
+	info, err := fsStat(fileSystem, path)
 	if err != nil {
 		return NewNonExistingFileInfo(file)
 	}
-	return NewFileInfo(file, info, fileSystem.IsHidden(path))
+	return info
 }
 
 // Exists returns if a file or directory with the path of File exists.
@@ -273,11 +273,8 @@ func (file File) Info() *FileInfo {
 // being accessible, results in false. Use [File.CheckExists] to get an error.
 func (file File) Exists() bool {
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(ExistsFileSystem); ok {
-		return fs.Exists(path)
-	}
-	_, err := fileSystem.Stat(path)
-	return err == nil
+	exists, err := fsExists(fileSystem, path)
+	return err == nil && exists
 }
 
 // CheckExists returns an ErrDoesNotExist error
@@ -287,7 +284,12 @@ func (file File) CheckExists() error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	if !file.Exists() {
+	fileSystem, path := file.ParseRawURI()
+	exists, err := fsExists(fileSystem, path)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		return NewErrDoesNotExist(file)
 	}
 	return nil
@@ -299,11 +301,9 @@ func (file File) CheckExists() error {
 // existing or not being accessible, results in false. Use [File.CheckIsDir]
 // to get an error.
 func (file File) IsDir() bool {
-	stat, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return stat.IsDir()
+	fileSystem, path := file.ParseRawURI()
+	info, err := fsStat(fileSystem, path)
+	return err == nil && info.IsDir
 }
 
 // CheckIsDir returns an ErrDoesNotExist error
@@ -312,11 +312,12 @@ func (file File) IsDir() bool {
 // if a file exists, but is not a directory,
 // or nil if the file is a directory.
 func (file File) CheckIsDir() error {
-	stat, err := file.Stat()
+	fileSystem, path := file.ParseRawURI()
+	info, err := fsStat(fileSystem, path)
 	switch {
 	case err != nil:
 		return err
-	case stat.IsDir():
+	case info.IsDir:
 		return nil
 	default:
 		return NewErrIsNotDirectory(file)
@@ -327,22 +328,21 @@ func (file File) CheckIsDir() error {
 // depending on the file system.
 func (file File) AbsPath() string {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.AbsPath(path)
+	return fsAbsPath(fileSystem, path)
 }
 
 // HasAbsPath returns whether the file has an absolute
 // path depending on the file system.
 func (file File) HasAbsPath() bool {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.IsAbsPath(path)
+	return fsIsAbsPath(fileSystem, path)
 }
 
 // ToAbsPath returns the File with an absolute
 // path depending on the file system.
 func (file File) ToAbsPath() File {
 	fileSystem, path := file.ParseRawURI()
-	uri := fileSystem.Prefix() + fileSystem.AbsPath(path)
-	return File(strings.TrimPrefix(uri, LocalPrefix))
+	return fsFile(fileSystem, fsAbsPath(fileSystem, path))
 }
 
 // RelPathOf returns the path of target relative to file,
@@ -353,8 +353,7 @@ func (file File) ToAbsPath() File {
 // The result is cleaned and may contain ".." segments.
 //
 // Both files must belong to the same [FileSystem], otherwise an error is returned.
-// An error is also returned if the file system does not implement [RelPathFileSystem],
-// or if target can't be made relative to file
+// An error is also returned if target can't be made relative to file
 // (for example when one path is absolute and the other is not,
 // or when computing the relation would require knowing the current working directory).
 func (file File) RelPathOf(target File) (string, error) {
@@ -363,11 +362,7 @@ func (file File) RelPathOf(target File) (string, error) {
 	if targetFileSystem != fileSystem {
 		return "", fmt.Errorf("file systems do not match: %s and %s", fileSystem, targetFileSystem)
 	}
-	relFS, ok := fileSystem.(RelPathFileSystem)
-	if !ok {
-		return "", NewErrUnsupported(fileSystem, "RelPath")
-	}
-	return relFS.RelPath(basePath, targetPath)
+	return fsRelPath(fileSystem, basePath, targetPath)
 }
 
 // IsRegular reports if this is a regular file.
@@ -375,11 +370,9 @@ func (file File) RelPathOf(target File) (string, error) {
 // It does not return an error by design: any error, including the file not
 // existing or not being accessible, results in false.
 func (file File) IsRegular() bool {
-	stat, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return stat.Mode().IsRegular()
+	fileSystem, path := file.ParseRawURI()
+	info, err := fsStat(fileSystem, path)
+	return err == nil && info.IsRegular
 }
 
 // IsEmptyDir returns if file is an empty directory.
@@ -387,7 +380,7 @@ func (file File) IsRegular() bool {
 // It does not return an error by design: any error, including the directory
 // not existing or not being accessible, results in false.
 func (file File) IsEmptyDir() bool {
-	l, err := file.ListDirMax(1)
+	l, err := file.ListDirMax(context.Background(), 1)
 	return len(l) == 0 && err == nil
 }
 
@@ -395,7 +388,7 @@ func (file File) IsEmptyDir() bool {
 // or if on Windows the hidden file attribute is set.
 func (file File) IsHidden() bool {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.IsHidden(path)
+	return fsIsHidden(fileSystem, path)
 }
 
 // IsSymbolicLink returns if the file is a symbolic link.
@@ -403,10 +396,14 @@ func (file File) IsHidden() bool {
 // to create and resolve symbolic links.
 //
 // It does not return an error by design: any error, including the file not
-// existing or not being accessible, results in false.
+// existing or not being accessible, results in false. File systems without
+// support for symbolic links always return false.
 func (file File) IsSymbolicLink() bool {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.IsSymbolicLink(path)
+	if fs, ok := fileSystem.(SymbolicLinkFileSystem); ok {
+		return fs.IsSymbolicLink(path)
+	}
+	return false
 }
 
 // CreateSymbolicLink creates file as a symbolic link pointing to target.
@@ -426,6 +423,9 @@ func (file File) CreateSymbolicLink(target File) error {
 	targetFS, targetPath := target.ParseRawURI()
 	if linkFS != targetFS {
 		return fmt.Errorf("file systems do not match: %s and %s", linkFS, targetFS)
+	}
+	if _, err := fsWritable(linkFS); err != nil {
+		return err
 	}
 	symlinkFS, ok := linkFS.(SymbolicLinkFileSystem)
 	if !ok {
@@ -458,26 +458,19 @@ func (file File) ReadSymbolicLink() (File, error) {
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.
 func (file File) Size() int64 {
-	stat, err := file.Stat()
+	fileSystem, path := file.ParseRawURI()
+	info, err := fsStat(fileSystem, path)
 	if err != nil {
 		return 0
 	}
-	return stat.Size()
+	return info.Size
 }
 
 // ContentHash returns the DefaultContentHash for the file.
 // If the FileSystem implementation does not have this hash pre-computed,
 // then the whole file is read to compute it.
 // If the file is a directory, then an empty string will be returned.
-func (file File) ContentHash() (string, error) {
-	return file.ContentHashContext(context.Background())
-}
-
-// ContentHashContext returns the DefaultContentHash for the file.
-// If the FileSystem implementation does not have this hash pre-computed,
-// then the whole file is read to compute it.
-// If the file is a directory, then an empty string will be returned.
-func (file File) ContentHashContext(ctx context.Context) (string, error) {
+func (file File) ContentHash(ctx context.Context) (string, error) {
 	if file == "" {
 		return "", ErrEmptyPath
 	}
@@ -495,21 +488,23 @@ func (file File) ContentHashContext(ctx context.Context) (string, error) {
 // Modified returns the modification time of the file,
 // or a zero time.Time if the file does not exist.
 func (file File) Modified() time.Time {
-	stat, err := file.Stat()
+	fileSystem, path := file.ParseRawURI()
+	info, err := fsStat(fileSystem, path)
 	if err != nil {
 		return time.Time{}
 	}
-	return stat.ModTime()
+	return info.Modified
 }
 
 // Permissions returns the file permissions,
 // or NoPermissions if the file does not exist.
 func (file File) Permissions() Permissions {
-	stat, err := file.Stat()
+	fileSystem, path := file.ParseRawURI()
+	info, err := fsStat(fileSystem, path)
 	if err != nil {
-		return 0
+		return NoPermissions
 	}
-	return PermissionsFromStdFileInfo(stat)
+	return info.Permissions
 }
 
 // SetPermissions sets the file permissions.
@@ -518,30 +513,23 @@ func (file File) SetPermissions(perm Permissions) error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
+	if _, err := fsWritable(fileSystem); err != nil {
+		return err
+	}
 	if fs, ok := fileSystem.(PermissionsFileSystem); ok {
 		return fs.SetPermissions(path, perm)
 	}
 	return NewErrUnsupported(fileSystem, "SetPermissions")
 }
 
-// ListDir calls the passed callback function for every file and directory.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDir(callback func(File) error, patterns ...string) error {
-	return file.ListDirContext(context.Background(), callback, patterns...)
-}
-
-// ListDirContext calls the passed callback function for every file and directory in the directory.
+// ListDir calls the passed callback function for every file and directory in the directory.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
 // Canceling the context or returning an error from the callback
 // will stop the listing and return the context or callback error.
-func (file File) ListDirContext(ctx context.Context, callback func(File) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
+func (file File) ListDir(ctx context.Context, callback func(File) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(ctx, path, FileInfoToFileCallback(callback), patterns)
+	return fsListDir(ctx, fileSystem, path, patterns, FileInfoToFileCallback(callback))
 }
 
 // ListDirIter returns an iterator that yields every file and directory in the directory.
@@ -549,29 +537,19 @@ func (file File) ListDirContext(ctx context.Context, callback func(File) error, 
 // at least one of the patterns are returned.
 // In case of an error, the iterator will yield InvalidFile and the error
 // as last key and value and then stop the iteration.
-func (file File) ListDirIter(patterns ...string) iter.Seq2[File, error] {
-	return file.ListDirIterContext(context.Background(), patterns...)
-}
-
-// ListDirIterContext returns an iterator that yields every file and directory in the directory.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-// In case of an error, the iterator will yield InvalidFile and the error
-// as last key and value and then stop the iteration.
 // Canceling the context will stop the iteration and yield the context error.
-func (file File) ListDirIterContext(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
+func (file File) ListDirIter(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
 	return func(yield func(File, error) bool) {
-		var cancel SentinelError
-		err := file.ListDirContext(ctx,
+		err := file.ListDir(ctx,
 			func(listedFile File) error {
 				if !yield(listedFile, nil) {
-					return cancel
+					return errStopListing
 				}
 				return nil
 			},
 			patterns...,
 		)
-		if err != nil && !errors.Is(err, cancel) {
+		if err != nil && !errors.Is(err, errStopListing) {
 			yield(InvalidFile, err)
 		}
 	}
@@ -596,8 +574,8 @@ func (file File) ListDirIterContext(ctx context.Context, patterns ...string) ite
 //
 // MustGlob ignores file system errors such as I/O errors reading directories.
 // The only possible panic is in case of a malformed pattern.
-func MustGlob(pattern string) iter.Seq2[File, []string] {
-	globIter, err := Glob(pattern)
+func MustGlob(ctx context.Context, pattern string) iter.Seq2[File, []string] {
+	globIter, err := Glob(ctx, pattern)
 	if err != nil {
 		panic(err)
 	}
@@ -605,25 +583,12 @@ func MustGlob(pattern string) iter.Seq2[File, []string] {
 }
 
 // MustGlob yields files and wildcard substituting path segments
-// matching a path pattern.
+// matching a path pattern relative to the file.
 //
-// The yielded path segments are the strings necessary
-// to substitute all wildcard containing path segments
-// in the pattern to form a valid path for a yielded file.
-// This includes the name of the yielded file itself
-// if the pattern contains wildcards for the last segment.
-// Non wildcard segments are not included.
-//
-// The syntax of patterns is the same as in [path.Match].
-// It always uses slash '/' as path segment separator
-// independently of the file's file system.
-//
-// A pattern ending with a slash '/' will match only directories.
-//
-// MustGlob ignores file system errors such as I/O errors reading directories.
+// See [File.Glob] for the pattern syntax.
 // The only possible panic is in case of a malformed pattern.
-func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
-	globIter, err := file.Glob(pattern)
+func (file File) MustGlob(ctx context.Context, pattern string) iter.Seq2[File, []string] {
+	globIter, err := file.Glob(ctx, pattern)
 	if err != nil {
 		panic(err)
 	}
@@ -652,26 +617,26 @@ func (file File) MustGlob(pattern string) iter.Seq2[File, []string] {
 // Glob ignores file system errors such as I/O errors reading directories.
 // The only possible returned error is [path.ErrBadPattern],
 // reporting that the pattern is malformed.
-func Glob(pattern string) (iter.Seq2[File, []string], error) {
+func Glob(ctx context.Context, pattern string) (iter.Seq2[File, []string], error) {
 	// Find the first wildcard
 	i := strings.IndexAny(pattern, `*?[\`)
 	if i == -1 {
-		// No wildcard in pattern, yield the pattern as File
-		return File(path.Clean(pattern)).Glob("")
+		// No wildcard in pattern, yield the cleaned pattern as File
+		return CleanFilePath(path.Clean(pattern)).Glob(ctx, "")
 	}
 	// Find the last path separator before the first wildcard
 	i = strings.LastIndexByte(pattern[:i], '/')
 	if i == -1 {
 		// No path separator before the first wildcard
 		// means that the pattern is relative to the current directory
-		return CurrentWorkingDir().Glob(pattern)
+		return CurrentWorkingDir().Glob(ctx, pattern)
 	}
 	// Split pattern into base directory and glob pattern
-	return File(pattern[:i+1]).Glob(pattern[i+1:])
+	return File(pattern[:i+1]).Glob(ctx, pattern[i+1:])
 }
 
 // Glob yields files and wildcard substituting path segments
-// matching a path pattern.
+// matching a path pattern relative to the file.
 //
 // The yielded path segments are the strings necessary
 // to substitute all wildcard containing path segments
@@ -689,7 +654,7 @@ func Glob(pattern string) (iter.Seq2[File, []string], error) {
 // Glob ignores file system errors such as I/O errors reading directories.
 // The only possible returned error is [path.ErrBadPattern],
 // reporting that the pattern is malformed.
-func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
+func (file File) Glob(ctx context.Context, pattern string) (iter.Seq2[File, []string], error) {
 	onlyDirs := strings.HasSuffix(pattern, "/")
 	pattern = strings.Trim(pattern, "/")
 	// Check if the pattern is valid
@@ -713,14 +678,14 @@ func (file File) Glob(pattern string) (iter.Seq2[File, []string], error) {
 		file = file.Join(pSegments[:i]...)
 		pSegments = pSegments[i:]
 	}
-	return file.glob(onlyDirs, pSegments, nil), nil
+	return file.glob(ctx, onlyDirs, pSegments, nil), nil
 }
 
 func containsWildcard(pattern string) bool {
 	return strings.ContainsAny(pattern, `*?[\`)
 }
 
-func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, []string] {
+func (file File) glob(ctx context.Context, onlyDirs bool, segments, values []string) iter.Seq2[File, []string] {
 	return func(yield func(File, []string) bool) {
 		switch len(segments) {
 		case 0:
@@ -733,7 +698,7 @@ func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, 
 			// Last segment, yield all matching files
 			if pattern := segments[0]; containsWildcard(pattern) {
 				// Wildcard in last segment, list directory with segment as pattern
-				for f, err := range file.ListDirIter(pattern) {
+				for f, err := range file.ListDirIter(ctx, pattern) {
 					// If file is not a directory then ErrIsNotDirectory is expected
 					if err != nil {
 						return
@@ -756,16 +721,16 @@ func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, 
 		default:
 			if pattern := segments[0]; containsWildcard(pattern) {
 				// Wildcard in segment, list directory with segment as pattern
-				for matchedFile, err := range file.ListDirIter(pattern) {
+				for matchedFile, err := range file.ListDirIter(ctx, pattern) {
 					// If file is not a directory then ErrIsNotDirectory is expected
 					if err != nil {
 						return
 					}
-					matchedFile.glob(onlyDirs, segments[1:], append(slices.Clone(values), matchedFile.Name()))(yield)
+					matchedFile.glob(ctx, onlyDirs, segments[1:], append(slices.Clone(values), matchedFile.Name()))(yield)
 				}
 			} else {
 				// No wildcard in segment, join path and recurse
-				file.Join(segments[0]).glob(onlyDirs, segments[1:], values)(yield)
+				file.Join(segments[0]).glob(ctx, onlyDirs, segments[1:], values)(yield)
 			}
 		}
 	}
@@ -774,226 +739,71 @@ func (file File) glob(onlyDirs bool, segments, values []string) iter.Seq2[File, 
 // ListDirInfo calls the passed callback function for every file and directory in dirPath.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfo(callback func(*FileInfo) error, patterns ...string) error {
-	return file.ListDirInfoContext(context.Background(), callback, patterns...)
-}
-
-// ListDirInfoContext calls the passed callback function for every file and directory in dirPath.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirInfoContext(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
+func (file File) ListDirInfo(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.ListDirInfo(ctx, path, callback, patterns)
+	return fsListDir(ctx, fileSystem, path, patterns, callback)
 }
 
-// ListDirRecursive returns only files.
+// ListDirRecursive calls the passed callback function for every file (not directory)
+// recursing into all sub-directories.
 // patterns are only applied to files, not to directories
-func (file File) ListDirRecursive(callback func(File) error, patterns ...string) error {
-	return file.ListDirInfoRecursiveContext(context.Background(), FileInfoToFileCallback(callback), patterns...)
+func (file File) ListDirRecursive(ctx context.Context, callback func(File) error, patterns ...string) error {
+	return file.ListDirInfoRecursive(ctx, FileInfoToFileCallback(callback), patterns...)
 }
 
-// ListDirRecursiveContext returns only files.
-// patterns are only applied to files, not to directories
-func (file File) ListDirRecursiveContext(ctx context.Context, callback func(File) error, patterns ...string) error {
-	return file.ListDirInfoRecursiveContext(ctx, FileInfoToFileCallback(callback), patterns...)
-}
-
-// ListDirRecursiveIter returns an iterator that yields every file and directory
-// recursively in the directory and sub-directories.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-// In case of an error, the iterator will yield InvalidFile and the error
-// as last key and value and then stop the iteration.
-func (file File) ListDirRecursiveIter(patterns ...string) iter.Seq2[File, error] {
-	return file.ListDirRecursiveIterContext(context.Background(), patterns...)
-}
-
-// ListDirRecursiveIterContext returns an iterator that yields every file and directory
+// ListDirRecursiveIter returns an iterator that yields every file
 // recursively in the directory and sub-directories.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
 // In case of an error, the iterator will yield InvalidFile and the error
 // as last key and value and then stop the iteration.
 // Canceling the context will stop the iteration and yield the context error.
-func (file File) ListDirRecursiveIterContext(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
+func (file File) ListDirRecursiveIter(ctx context.Context, patterns ...string) iter.Seq2[File, error] {
 	return func(yield func(File, error) bool) {
-		const cancel SentinelError = "cancel"
-		err := file.ListDirRecursiveContext(ctx,
+		err := file.ListDirRecursive(ctx,
 			func(listedFile File) error {
 				if !yield(listedFile, nil) {
-					return cancel
+					return errStopListing
 				}
 				return nil
 			},
 			patterns...,
 		)
-		if err != nil && !errors.Is(err, cancel) {
+		if err != nil && !errors.Is(err, errStopListing) {
 			yield(InvalidFile, err)
 		}
 	}
 }
 
-// ListDirInfoRecursive calls the passed callback function for every file (not directory) in dirPath
-// recursing into all sub-directories.
-// If any patterns are passed, then only files (not directories) with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirInfoRecursive(callback func(*FileInfo) error, patterns ...string) error {
-	return file.ListDirInfoRecursiveContext(context.Background(), callback, patterns...)
-}
-
-// ListDirInfoRecursiveContext calls the passed callback function for every file
+// ListDirInfoRecursive calls the passed callback function for every file
 // (not directory) in dirPath recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirInfoRecursiveContext(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
+func (file File) ListDirInfoRecursive(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(ListDirRecursiveFileSystem); ok {
-		return fs.ListDirInfoRecursive(ctx, path, callback, patterns)
-	}
-	return fileSystem.ListDirInfo(ctx, path,
-		func(info *FileInfo) error {
-			if info.IsDir {
-				// Not returning directories, but recursing into them
-				err := info.File.ListDirInfoRecursiveContext(ctx, callback, patterns...)
-				// Don't mind files that have been deleted while iterating
-				return RemoveErrDoesNotExist(err)
-			}
-			match, err := fileSystem.MatchAnyPattern(info.Name, patterns)
-			if !match || err != nil {
-				return err
-			}
-			return callback(info)
-		},
-		nil, // No patterns
-	)
+	return fsListDirRecursive(ctx, fileSystem, path, patterns, callback)
 }
 
 // ListDirMax returns at most max files and directories in dirPath.
 // A max value of -1 returns all files.
 // If any patterns are passed, then only files or directories with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirMax(max int, patterns ...string) (files []File, err error) {
-	return file.ListDirMaxContext(context.Background(), max, patterns...)
-}
-
-// ListDirMaxContext returns at most max files and directories in dirPath.
-// A max value of -1 returns all files.
-// If any patterns are passed, then only files or directories with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirMaxContext(ctx context.Context, max int, patterns ...string) (files []File, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	if max == 0 {
-		return nil, nil
-	}
+func (file File) ListDirMax(ctx context.Context, max int, patterns ...string) (files []File, err error) {
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(ListDirMaxFileSystem); ok {
-		return fs.ListDirMax(ctx, path, max, patterns)
-	}
-	done := errors.New("done") // used as an internal flag, won't be returned
-	err = fileSystem.ListDirInfo(ctx, path, func(info *FileInfo) error {
-		if max >= 0 && len(files) >= max {
-			return done
-		}
-		if files == nil {
-			// Reserve space for files
-			capacity := max
-			if capacity < 0 {
-				capacity = 64
-			}
-			files = make([]File, 0, capacity)
-		}
-		files = append(files, info.File)
-		return nil
-	}, patterns)
-	if err != nil && !errors.Is(err, done) {
-		return nil, err
-	}
-	return files, nil
+	return fsListDirMax(ctx, fileSystem, path, max, patterns)
 }
 
 // ListDirRecursiveMax returns at most max files from the directory and its sub-directories.
 // A max value of -1 returns all files.
 // If any patterns are passed, then only files with a name that matches
 // at least one of the patterns are returned.
-func (file File) ListDirRecursiveMax(max int, patterns ...string) (files []File, err error) {
-	return file.ListDirRecursiveMaxContext(context.Background(), max, patterns...)
-}
-
-// ListDirRecursiveMaxContext returns at most max files from the directory and its sub-directories.
-// A max value of -1 returns all files.
-// If any patterns are passed, then only files with a name that matches
-// at least one of the patterns are returned.
-func (file File) ListDirRecursiveMaxContext(ctx context.Context, max int, patterns ...string) (files []File, err error) {
+func (file File) ListDirRecursiveMax(ctx context.Context, max int, patterns ...string) (files []File, err error) {
 	if file == "" {
 		return nil, ErrEmptyPath
 	}
 	return listDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
-		return file.ListDirRecursiveContext(ctx, callback, patterns...)
+		return file.ListDirRecursive(ctx, callback, patterns...)
 	})
-}
-
-// ListDirChan returns listed files over a channel.
-// An error or nil will returned from the error channel.
-// The file channel will be closed after sending all files.
-// If cancel is not nil and an error is sent to this channel, then the listing will be canceled
-// and the error returned in the error channel returned by the method.
-// See pipeline pattern: http://blog.golang.org/pipelines
-func (file File) ListDirChan(cancel <-chan error, patterns ...string) (<-chan File, <-chan error) {
-	files := make(chan File)
-	errs := make(chan error, 1)
-
-	go func() {
-		defer close(files)
-
-		callback := func(f File) error {
-			select {
-			case files <- f:
-				return nil
-			case err := <-cancel:
-				return err
-			}
-		}
-
-		errs <- file.ListDir(callback, patterns...)
-	}()
-
-	return files, errs
-}
-
-// ListDirRecursiveChan returns listed files over a channel.
-// An error or nil will returned from the error channel.
-// The file channel will be closed after sending all files.
-// If cancel is not nil and an error is sent to this channel, then the listing will be canceled
-// and the error returned in the error channel returned by the method.
-// See pipeline pattern: http://blog.golang.org/pipelines
-func (file File) ListDirRecursiveChan(cancel <-chan error, patterns ...string) (<-chan File, <-chan error) {
-	files := make(chan File)
-	errs := make(chan error, 1)
-
-	go func() {
-		defer close(files)
-
-		callback := func(f File) error {
-			select {
-			case files <- f:
-				return nil
-			case err := <-cancel:
-				return err
-			}
-		}
-
-		errs <- file.ListDirRecursive(callback, patterns...)
-	}()
-
-	return files, errs
 }
 
 // User returns the user owner of the file.
@@ -1014,6 +824,9 @@ func (file File) SetUser(user string) error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
+	if _, err := fsWritable(fileSystem); err != nil {
+		return err
+	}
 	if fs, ok := fileSystem.(UserFileSystem); ok {
 		return fs.SetUser(path, user)
 	}
@@ -1038,6 +851,9 @@ func (file File) SetGroup(group string) error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
+	if _, err := fsWritable(fileSystem); err != nil {
+		return err
+	}
 	if fs, ok := fileSystem.(GroupFileSystem); ok {
 		return fs.SetGroup(path, group)
 	}
@@ -1045,19 +861,13 @@ func (file File) SetGroup(group string) error {
 }
 
 // Touch creates an empty file or updates the modification time of an existing file.
+//
+// On file systems without native touch support only a missing file is created,
+// touching an existing file returns an ErrUnsupported error
+// instead of destroying its content.
 func (file File) Touch(perm ...Permissions) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(TouchFileSystem); ok {
-		return fs.Touch(path, perm)
-	}
-	w, err := file.OpenWriter(perm...)
-	if err != nil {
-		return err
-	}
-	return w.Close()
+	return fsTouch(fileSystem, path, JoinPermissions(perm, NoPermissions))
 }
 
 // MakeDir creates a directory if it does not exist yet.
@@ -1073,21 +883,24 @@ func (file File) MakeDir(perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	if file.IsDir() {
-		return nil
-	}
 	fileSystem, path := file.ParseRawURI()
-	err := fileSystem.MakeDir(path, perm)
+	if info, err := fsStat(fileSystem, path); err == nil {
+		if info.IsDir {
+			return nil
+		}
+		return NewErrIsNotDirectory(file)
+	}
+	err := fsMakeDir(fileSystem, path, JoinPermissions(perm, NoPermissions))
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, os.ErrExist) {
 		// Race recovery: another goroutine or process may have created the
-		// directory between our IsDir() probe above and the MakeDir call.
+		// directory between our Stat above and the MakeDir call.
 		// Stat the path and only treat the EEXIST as an error if it now
 		// exists as a non-directory entry.
-		if info, statErr := file.Stat(); statErr == nil {
-			if info.IsDir() {
+		if info, statErr := fsStat(fileSystem, path); statErr == nil {
+			if info.IsDir {
 				return nil
 			}
 			return NewErrIsNotDirectory(file)
@@ -1099,28 +912,8 @@ func (file File) MakeDir(perm ...Permissions) error {
 // MakeAllDirs creates all directories up to this one.
 // It does not return an error if the directories already exist.
 func (file File) MakeAllDirs(perm ...Permissions) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	if info, e := file.Stat(); e == nil {
-		// File exists
-		if !info.IsDir() {
-			return NewErrIsNotDirectory(file)
-		}
-		return nil // File is already a directory
-	}
-
-	dir, name := file.DirAndName()
-	if name != "" {
-		// if name != "" then dir is not the root
-		// so we can attempt to make the dir
-		// by recursively calling MakeAllDirs
-		err := dir.MakeAllDirs(perm...)
-		if err != nil {
-			return err
-		}
-	}
-	return file.MakeDir(perm...)
+	fileSystem, path := file.ParseRawURI()
+	return fsMakeAllDirs(fileSystem, path, JoinPermissions(perm, NoPermissions))
 }
 
 // WriteTo implements the io.WriterTo interface
@@ -1140,13 +933,7 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	if file == "" {
 		return 0, ErrEmptyPath
 	}
-	var writer WriteCloser
-	existingPerm := file.Permissions()
-	if existingPerm != NoPermissions {
-		writer, err = file.OpenWriter(existingPerm)
-	} else {
-		writer, err = file.OpenWriter()
-	}
+	writer, err := file.OpenWriter(file.Permissions())
 	if err != nil {
 		return 0, err
 	}
@@ -1156,11 +943,26 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 
 // OpenReader opens the file and returns a io/fs.File that has to be closed after reading.
 func (file File) OpenReader() (ReadCloser, error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.OpenReader(path)
+	reader, err := fsOpenReader(fileSystem, path)
+	if err != nil {
+		return nil, err
+	}
+	if f, ok := reader.(iofs.File); ok {
+		return f, nil
+	}
+	return statReadCloser{ReadCloser: reader, file: file}, nil
+}
+
+// statReadCloser adds a Stat method to an io.ReadCloser
+// to implement io/fs.File.
+type statReadCloser struct {
+	io.ReadCloser
+	file File
+}
+
+func (r statReadCloser) Stat() (iofs.FileInfo, error) {
+	return r.file.Stat()
 }
 
 // OpenReadSeeker opens the file and returns a ReadSeekCloser.
@@ -1168,93 +970,50 @@ func (file File) OpenReader() (ReadCloser, error) {
 // then the complete file is read into memory and wrapped with a ReadSeekCloser.
 // Warning: this can use up a lot of memory for big files.
 func (file File) OpenReadSeeker() (ReadSeekCloser, error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	readCloser, err := fileSystem.OpenReader(path)
+	reader, err := fsOpenReader(fileSystem, path)
 	if err != nil {
 		return nil, err
 	}
-	if r, ok := readCloser.(ReadSeekCloser); ok {
+	if r, ok := reader.(ReadSeekCloser); ok {
 		return r, nil
 	}
+	defer reader.Close()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
-	defer readCloser.Close()
-	return fsimpl.NewReadonlyFileBufferReadAll(readCloser, info)
+	return fsimpl.NewReadonlyFileBufferReadAll(reader, info)
 }
 
 // OpenWriter opens the file for writing and returns a WriteCloser that has to be closed after writing.
 func (file File) OpenWriter(perm ...Permissions) (WriteCloser, error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.OpenWriter(path, perm)
+	return fsOpenWriter(fileSystem, path, JoinPermissions(perm, NoPermissions))
 }
 
 // OpenAppendWriter opens the file for appending and returns a WriteCloser that has to be closed after writing.
 func (file File) OpenAppendWriter(perm ...Permissions) (WriteCloser, error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(AppendWriterFileSystem); ok {
-		return fs.OpenAppendWriter(path, perm)
-	}
-	// Emulate append writer by reading file into
-	// a buffer first and write everything back to
-	// the file on closing that buffer.
-	current, err := file.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-	var fileBuffer *fsimpl.FileBuffer
-	fileBuffer = fsimpl.NewFileBufferWithClose(current, func() error {
-		return file.WriteAll(fileBuffer.Bytes(), perm...)
-	})
-	return fileBuffer, nil
-
+	return fsOpenAppendWriter(fileSystem, path, JoinPermissions(perm, NoPermissions))
 }
 
 // OpenReadWriter opens the file for reading and writing and returns a ReadWriteSeekCloser that has to be closed.
 func (file File) OpenReadWriter(perm ...Permissions) (ReadWriteSeekCloser, error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.OpenReadWriter(path, perm)
+	return fsOpenReadWriter(fileSystem, path, JoinPermissions(perm, NoPermissions))
 }
 
 // ReadAll reads and returns all bytes of the file.
-func (file File) ReadAll() (data []byte, err error) {
-	return file.ReadAllContext(context.Background())
-}
-
-// ReadAllContext reads and returns all bytes of the file.
-func (file File) ReadAllContext(ctx context.Context) (data []byte, err error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
+func (file File) ReadAll(ctx context.Context) (data []byte, err error) {
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(ReadAllFileSystem); ok {
-		return fs.ReadAll(ctx, path)
-	}
-	r, err := fileSystem.OpenReader(path)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	return ReadAllContext(ctx, r)
+	return fsReadAll(ctx, fileSystem, path)
 }
 
 // ReadAllContentHash reads and returns all bytes of the file
 // together with the DefaultContentHash.
 func (file File) ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error) {
-	data, err = file.ReadAllContext(ctx)
+	data, err = file.ReadAll(ctx)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1266,13 +1025,8 @@ func (file File) ReadAllContentHash(ctx context.Context) (data []byte, hash stri
 }
 
 // ReadAllString reads the complete file and returns the content as string.
-func (file File) ReadAllString() (string, error) {
-	return file.ReadAllStringContext(context.Background())
-}
-
-// ReadAllStringContext reads the complete file and returns the content as string.
-func (file File) ReadAllStringContext(ctx context.Context) (string, error) {
-	data, err := file.ReadAllContext(ctx)
+func (file File) ReadAllString(ctx context.Context) (string, error) {
+	data, err := file.ReadAll(ctx)
 	if data == nil || err != nil {
 		return "", err
 	}
@@ -1280,68 +1034,20 @@ func (file File) ReadAllStringContext(ctx context.Context) (string, error) {
 }
 
 // WriteAll writes all data to the file.
-func (file File) WriteAll(data []byte, perm ...Permissions) error {
-	return file.WriteAllContext(context.Background(), data, perm...)
-}
-
-// WriteAllContext writes all data to the file.
-func (file File) WriteAllContext(ctx context.Context, data []byte, perm ...Permissions) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
+func (file File) WriteAll(ctx context.Context, data []byte, perm ...Permissions) error {
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(WriteAllFileSystem); ok {
-		return fs.WriteAll(ctx, path, data, perm)
-	}
-	// Use OpenWriter (O_TRUNC) instead of OpenReadWriter (O_RDWR|O_CREATE
-	// without truncation), otherwise writing fewer bytes over an existing
-	// larger file would leave stale trailing bytes.
-	w, err := fileSystem.OpenWriter(path, perm)
-	if err != nil {
-		return err
-	}
-	defer w.Close()
-	return WriteAllContext(ctx, w, data)
+	return fsWriteAll(ctx, fileSystem, path, data, JoinPermissions(perm, NoPermissions))
 }
 
 // WriteAllString writes a string to the file.
-func (file File) WriteAllString(str string, perm ...Permissions) error {
-	return file.WriteAllStringContext(context.Background(), str, perm...)
-}
-
-// WriteAllStringContext writes a string to the file.
-func (file File) WriteAllStringContext(ctx context.Context, str string, perm ...Permissions) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	return file.WriteAllContext(ctx, []byte(str), perm...)
+func (file File) WriteAllString(ctx context.Context, str string, perm ...Permissions) error {
+	return file.WriteAll(ctx, []byte(str), perm...)
 }
 
 // Append appends data to the file.
 func (file File) Append(ctx context.Context, data []byte, perm ...Permissions) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(AppendFileSystem); ok {
-		return fs.Append(ctx, path, data, perm)
-	}
-	if fs, ok := fileSystem.(AppendWriterFileSystem); ok {
-		w, err := fs.OpenAppendWriter(path, perm)
-		if err != nil {
-			return err
-		}
-		defer w.Close()
-		return WriteAllContext(ctx, w, data)
-	}
-	// Emulate append by first reading all file
-	// content and then writing the file with
-	// appended data.
-	current, err := file.ReadAllContext(ctx)
-	if err != nil {
-		return err
-	}
-	return file.WriteAllContext(ctx, append(current, data...))
+	return fsAppend(ctx, fileSystem, path, data, JoinPermissions(perm, NoPermissions))
 }
 
 // AppendString appends a string to the file.
@@ -1375,97 +1081,21 @@ func (file File) Watch(onEvent func(File, Event)) (cancel func() error, err erro
 // Truncate changes the size of the file.
 // If the file is larger than newSize, it is truncated.
 // If the file is smaller, it is extended with zeros.
-func (file File) Truncate(newSize int64) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	if newSize < 0 {
-		return fmt.Errorf("negative file size: %d", newSize)
-	}
+func (file File) Truncate(ctx context.Context, newSize int64) error {
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(TruncateFileSystem); ok {
-		return fs.Truncate(path, newSize)
-	}
-	info, err := fileSystem.Stat(path)
-	if err != nil {
-		return NewErrDoesNotExist(file)
-	}
-	if info.IsDir() {
-		return NewErrIsDirectory(file)
-	}
-	if info.Size() == newSize {
-		return nil
-	}
-	if info.Size() < newSize {
-		// Append zeros if current file is smaller than newSize
-		zeros := make([]byte, newSize-info.Size())
-		return file.Append(context.Background(), zeros)
-	}
-	// Truncate be reading up to newSize and then rewriting the file
-	r, err := fileSystem.OpenReader(path)
-	if err != nil {
-		return err
-	}
-	data := make([]byte, newSize)
-	_, err = io.ReadFull(r, data)
-	err = errors.Join(err, r.Close())
-	if err != nil {
-		return err
-	}
-	w, err := fileSystem.OpenWriter(path, []Permissions{PermissionsFromStdFileInfo(info)})
-	if err != nil {
-		return err
-	}
-	n, err := w.Write(data)
-	if err != nil {
-		return errors.Join(err, w.Close())
-	}
-	if int64(n) < newSize {
-		return errors.Join(fmt.Errorf("%w from truncating file %s", io.ErrShortWrite, file), w.Close())
-	}
-	return w.Close()
+	return fsTruncate(ctx, fileSystem, path, newSize)
 }
 
 // Rename changes the name of a file where newName is the name part after file.Dir().
 // Note: this does not move the file like in other rename implementations,
 // it only changes the name of the file within its directory.
 func (file File) Rename(newName string) (renamedFile File, err error) {
-	if file == "" {
-		return "", ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	if strings.ContainsAny(newName, fileSystem.Separator()) {
-		return "", fmt.Errorf("newName %#v for File.Rename contains path separator %s", newName, fileSystem.Separator())
+	newPath, err := fsRename(fileSystem, path, newName)
+	if err != nil {
+		return "", err
 	}
-	switch fs := fileSystem.(type) {
-	case RenameFileSystem:
-		newPath, err := fs.Rename(path, newName)
-		if err != nil {
-			return "", err
-		}
-		return fs.RootDir().Join(newPath), nil
-	case MoveFileSystem:
-		dir, _ := fs.SplitDirAndName(path)
-		newPath := fs.JoinCleanPath(dir, newName)
-		err = fs.Move(path, newPath)
-		if err != nil {
-			return "", err
-		}
-		return fs.RootDir().Join(newPath), nil
-	default:
-		// Fallback for file systems that implement neither
-		// RenameFileSystem nor MoveFileSystem: copy to the new name
-		// and then remove the source. CopyRecursive and RemoveRecursive
-		// both handle single files and directories with their contents,
-		// so a non-empty directory is moved completely instead of being
-		// replaced by an empty directory and left behind undeleted.
-		renamedFile = file.Dir().Join(newName)
-		err = CopyRecursive(context.Background(), file, renamedFile)
-		if err != nil {
-			return "", err
-		}
-		return renamedFile, file.RemoveRecursive()
-	}
+	return fsFile(fileSystem, newPath), nil
 }
 
 // Renamef changes the name of a file where fmt.Sprintf(newNameFormat, args...)
@@ -1486,81 +1116,35 @@ func (file File) Renamef(newNameFormat string, args ...any) (renamedFile File, e
 // When file and destination resolve to the same location, MoveTo
 // returns nil without touching the file, matching the no-op behavior
 // of [os.Rename]. See [Move] for the full contract.
-func (file File) MoveTo(destination File) error {
-	return Move(context.Background(), file, destination)
+func (file File) MoveTo(ctx context.Context, destination File) error {
+	return Move(ctx, file, destination)
 }
 
 // Remove deletes the file.
 func (file File) Remove() error {
-	if file == "" {
-		return ErrEmptyPath
-	}
 	fileSystem, path := file.ParseRawURI()
-	return fileSystem.Remove(path)
+	return fsRemove(fileSystem, path)
 }
 
 // RemoveRecursive deletes the file or if it's a directory
 // the complete recursive directory tree.
-func (file File) RemoveRecursive() error {
-	if file.IsDir() {
-		err := file.RemoveDirContentsRecursive()
-		if err != nil {
-			return err
-		}
-	}
-	return file.Remove()
-}
-
-// RemoveRecursiveContext deletes the file or if it's a directory
-// the complete recursive directory tree.
-func (file File) RemoveRecursiveContext(ctx context.Context) error {
-	if file.IsDir() {
-		err := file.RemoveDirContentsRecursiveContext(ctx)
-		if err != nil {
-			return err
-		}
-	}
-	return file.Remove()
+// No error is returned if the file does not exist.
+func (file File) RemoveRecursive(ctx context.Context) error {
+	fileSystem, path := file.ParseRawURI()
+	return fsRemoveAll(ctx, fileSystem, path)
 }
 
 // RemoveDirContentsRecursive deletes all files and directories in this directory recursively.
-func (file File) RemoveDirContentsRecursive() error {
-	return file.ListDir(func(f File) error {
-		err := f.RemoveRecursive()
-		// Ignore files that have been deleted,
-		// after all we wanted to get rid of the in the first place,
-		// so this is not an error for us
-		return RemoveErrDoesNotExist(err)
-	})
-}
-
-// RemoveDirContentsRecursiveContext deletes all files and directories in this directory recursively.
-func (file File) RemoveDirContentsRecursiveContext(ctx context.Context) error {
-	return file.ListDirContext(ctx, func(f File) error {
-		err := f.RemoveRecursiveContext(ctx)
-		// Ignore files that have been deleted,
-		// after all we wanted to get rid of the in the first place,
-		// so this is not an error for us
-		return RemoveErrDoesNotExist(err)
+func (file File) RemoveDirContentsRecursive(ctx context.Context) error {
+	return file.ListDir(ctx, func(f File) error {
+		return f.RemoveRecursive(ctx)
 	})
 }
 
 // RemoveDirContents deletes all files in this directory,
 // or if given all files with patterns from the this directory.
-func (file File) RemoveDirContents(patterns ...string) error {
-	return file.ListDir(func(f File) error {
-		err := f.Remove()
-		// Ignore files that have been deleted,
-		// after all we wanted to get rid of the in the first place,
-		// so this is not an error for us
-		return RemoveErrDoesNotExist(err)
-	}, patterns...)
-}
-
-// RemoveDirContentsContext deletes all files in this directory,
-// or if given all files with patterns from the this directory.
-func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...string) error {
-	return file.ListDirContext(ctx, func(f File) error {
+func (file File) RemoveDirContents(ctx context.Context, patterns ...string) error {
+	return file.ListDir(ctx, func(f File) error {
 		err := f.Remove()
 		// Ignore files that have been deleted,
 		// after all we wanted to get rid of the in the first place,
@@ -1573,7 +1157,7 @@ func (file File) RemoveDirContentsContext(ctx context.Context, patterns ...strin
 //
 // Returns a wrapped ErrUnmarshalJSON when the unmarshalling failed.
 func (file File) ReadJSON(ctx context.Context, output any) error {
-	data, err := file.ReadAllContext(ctx)
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return err
 	}
@@ -1601,14 +1185,14 @@ func (file File) WriteJSON(ctx context.Context, input any, indent ...string) (er
 	if err != nil {
 		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
-	return file.WriteAllContext(ctx, data)
+	return file.WriteAll(ctx, data)
 }
 
 // ReadXML reads and unmarshalles the XML content of the file to output.
 //
 // Returns a wrapped ErrUnmarshalXML when the unmarshalling failed.
 func (file File) ReadXML(ctx context.Context, output any) error {
-	data, err := file.ReadAllContext(ctx)
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return err
 	}
@@ -1637,59 +1221,7 @@ func (file File) WriteXML(ctx context.Context, input any, indent ...string) (err
 		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
 	data = append([]byte(xml.Header), data...)
-	return file.WriteAllContext(ctx, data)
-}
-
-// GobEncode reads and gob encodes the file name and content,
-// implementing encoding/gob.GobEncoder.
-func (file File) GobEncode() ([]byte, error) {
-	if file == "" {
-		return nil, ErrEmptyPath
-	}
-	fileName := file.Name()
-	fileData, err := file.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("File.GobEncode: error reading file data: %w", err)
-	}
-	buf := bytes.NewBuffer(make([]byte, 0, 16+len(fileName)+len(fileData)))
-	enc := gob.NewEncoder(buf)
-	err = enc.Encode(fileName)
-	if err != nil {
-		return nil, fmt.Errorf("File.GobEncode: error encoding file name: %w", err)
-	}
-	err = enc.Encode(fileData)
-	if err != nil {
-		return nil, fmt.Errorf("File.GobEncode: error encoding file data: %w", err)
-	}
-	return buf.Bytes(), nil
-
-}
-
-// GobDecode decodes a file name and content from gobBytes
-// and writes the content to this file ignoring the decoded name.
-// Implements encoding/gob.GobDecoder.
-func (file File) GobDecode(gobBytes []byte) error {
-	if file == "" {
-		return ErrEmptyPath
-	}
-	var (
-		fileName string
-		fileData []byte
-	)
-	dec := gob.NewDecoder(bytes.NewReader(gobBytes))
-	err := dec.Decode(&fileName)
-	if err != nil {
-		return fmt.Errorf("File.GobDecode: error decoding file name: %w", err)
-	}
-	err = dec.Decode(&fileData)
-	if err != nil {
-		return fmt.Errorf("File.GobDecode: error decoding file data: %w", err)
-	}
-	err = file.WriteAll(fileData)
-	if err != nil {
-		return fmt.Errorf("File.GobDecode: error writing file data: %w", err)
-	}
-	return nil
+	return file.WriteAll(ctx, data)
 }
 
 // StdFS wraps the file as a StdFS struct that
@@ -1700,7 +1232,6 @@ func (file File) GobDecode(gobBytes []byte) error {
 //   - io/fs.FS
 //   - io/fs.SubFS
 //   - io/fs.StatFS
-//   - io/fs.GlobFS
 //   - io/fs.ReadDirFS
 //   - io/fs.ReadFileFS
 func (file File) StdFS() StdFS {
@@ -1718,19 +1249,17 @@ func (file File) StdDirEntry() StdDirEntry {
 // Symbolic links are resolved to their target.
 // Returns ErrUnsupported if the file system does not support extended attributes.
 func (file File) ListXAttr() ([]string, error) {
-	const followSymlinks = true
-	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(XAttrFileSystem); ok {
-		return fs.ListXAttr(path, followSymlinks)
-	}
-	return nil, NewErrUnsupported(fileSystem, "ListXAttr")
+	return file.listXAttr(true)
 }
 
 // LListXAttr returns the names of all extended attributes for the file.
 // Symbolic links are not resolved.
 // Returns ErrUnsupported if the file system does not support extended attributes.
 func (file File) LListXAttr() ([]string, error) {
-	const followSymlinks = false
+	return file.listXAttr(false)
+}
+
+func (file File) listXAttr(followSymlinks bool) ([]string, error) {
 	fileSystem, path := file.ParseRawURI()
 	if fs, ok := fileSystem.(XAttrFileSystem); ok {
 		return fs.ListXAttr(path, followSymlinks)
@@ -1742,19 +1271,17 @@ func (file File) LListXAttr() ([]string, error) {
 // Symbolic links are resolved to their target.
 // Returns ErrUnsupported if the file system does not support extended attributes.
 func (file File) GetXAttr(name string) ([]byte, error) {
-	const followSymlinks = true
-	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(XAttrFileSystem); ok {
-		return fs.GetXAttr(path, name, followSymlinks)
-	}
-	return nil, NewErrUnsupported(fileSystem, "GetXAttr")
+	return file.getXAttr(name, true)
 }
 
 // LGetXAttr returns the value of the named extended attribute.
 // Symbolic links are not resolved.
 // Returns ErrUnsupported if the file system does not support extended attributes.
 func (file File) LGetXAttr(name string) ([]byte, error) {
-	const followSymlinks = false
+	return file.getXAttr(name, false)
+}
+
+func (file File) getXAttr(name string, followSymlinks bool) ([]byte, error) {
 	fileSystem, path := file.ParseRawURI()
 	if fs, ok := fileSystem.(XAttrFileSystem); ok {
 		return fs.GetXAttr(path, name, followSymlinks)
@@ -1768,16 +1295,7 @@ func (file File) LGetXAttr(name string) ([]byte, error) {
 // (e.g., xattr.XATTR_CREATE, xattr.XATTR_REPLACE).
 // Returns ErrUnsupported if the file system does not support extended attributes.
 func (file File) SetXAttr(name string, data []byte, flags ...int) error {
-	const followSymlinks = true
-	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(XAttrFileSystem); ok {
-		combinedFlags := 0
-		for _, flag := range flags {
-			combinedFlags |= flag
-		}
-		return fs.SetXAttr(path, name, data, combinedFlags, followSymlinks)
-	}
-	return NewErrUnsupported(fileSystem, "SetXAttr")
+	return file.setXAttr(name, data, flags, true)
 }
 
 // LSetXAttr sets the value of the named extended attribute.
@@ -1786,8 +1304,14 @@ func (file File) SetXAttr(name string, data []byte, flags ...int) error {
 // (e.g., xattr.XATTR_CREATE, xattr.XATTR_REPLACE).
 // Returns ErrUnsupported if the file system does not support extended attributes.
 func (file File) LSetXAttr(name string, data []byte, flags ...int) error {
-	const followSymlinks = false
+	return file.setXAttr(name, data, flags, false)
+}
+
+func (file File) setXAttr(name string, data []byte, flags []int, followSymlinks bool) error {
 	fileSystem, path := file.ParseRawURI()
+	if _, err := fsWritable(fileSystem); err != nil {
+		return err
+	}
 	if fs, ok := fileSystem.(XAttrFileSystem); ok {
 		combinedFlags := 0
 		for _, flag := range flags {
@@ -1802,20 +1326,21 @@ func (file File) LSetXAttr(name string, data []byte, flags ...int) error {
 // Symbolic links are resolved to their target.
 // Returns ErrUnsupported if the file system does not support extended attributes.
 func (file File) RemoveXAttr(name string) error {
-	const followSymlinks = true
-	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(XAttrFileSystem); ok {
-		return fs.RemoveXAttr(path, name, followSymlinks)
-	}
-	return NewErrUnsupported(fileSystem, "RemoveXAttr")
+	return file.removeXAttr(name, true)
 }
 
 // LRemoveXAttr removes the named extended attribute from the file.
 // Symbolic links are not resolved.
 // Returns ErrUnsupported if the file system does not support extended attributes.
 func (file File) LRemoveXAttr(name string) error {
-	const followSymlinks = false
+	return file.removeXAttr(name, false)
+}
+
+func (file File) removeXAttr(name string, followSymlinks bool) error {
 	fileSystem, path := file.ParseRawURI()
+	if _, err := fsWritable(fileSystem); err != nil {
+		return err
+	}
 	if fs, ok := fileSystem.(XAttrFileSystem); ok {
 		return fs.RemoveXAttr(path, name, followSymlinks)
 	}
@@ -1832,16 +1357,13 @@ func (file File) LRemoveXAttr(name string) error {
 //
 // This is useful for file systems that don't support true random access writes,
 // such as ZIP archives, where files must be completely rewritten.
-//
-// The implementation:
-//  1. Lazily reads all file content into memory on first read/write operation
-//  2. Performs all read/write/seek operations in memory using a FileBuffer
-//  3. Writes the complete modified content back to the file on Close()
 func NewFileReadWriteAllSeekCloser(file File, permissions ...Permissions) ReadWriteSeekCloser {
 	return fsimpl.NewReadWriteAllSeekCloser(
-		file.ReadAll,
+		func() ([]byte, error) {
+			return file.ReadAll(context.Background())
+		},
 		func(data []byte) error {
-			return file.WriteAll(data, permissions...)
+			return file.WriteAll(context.Background(), data, permissions...)
 		},
 		// File.ReadAll and File.WriteAll open and close their own handles
 		// internally, so there is no persistent handle to release here.

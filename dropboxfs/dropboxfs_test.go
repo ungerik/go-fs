@@ -2,13 +2,14 @@ package dropboxfs
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fstest"
 )
 
 func Test_fileSystem(t *testing.T) {
@@ -28,8 +29,9 @@ func Test_fileSystem(t *testing.T) {
 	mute := muteStr == "true" || muteStr == "1"
 
 	// Create the filesystem
-	dbfs := NewAndRegister(accessToken, 5*time.Minute, mute)
-	require.NotNil(t, dbfs, "NewAndRegister should return a filesystem")
+	dbfs, err := NewAndRegister(t.Context(), accessToken, 5*time.Minute, mute)
+	require.NoError(t, err, "NewAndRegister")
+	assert.True(t, strings.HasPrefix(dbfs.ID(), "dbid:"), "ID must be the Dropbox account id")
 
 	// Clean up after test
 	t.Cleanup(func() {
@@ -39,14 +41,11 @@ func Test_fileSystem(t *testing.T) {
 	})
 
 	// Run comprehensive filesystem tests
-	fs.RunFileSystemTests(
-		t.Context(),
-		t,
-		dbfs,                  // filesystem
-		"Dropbox file system", // expected name
-		"dropbox://",          // expected prefix
-		testDir,               // test directory
-	)
+	fstest.RunConformance(t, dbfs, fstest.Config{
+		Name:    "Dropbox file system",
+		Prefix:  dbfs.Prefix(),
+		TestDir: testDir,
+	})
 }
 
 func Test_fileSystem_MuteConfiguration(t *testing.T) {
@@ -63,8 +62,8 @@ func Test_fileSystem_MuteConfiguration(t *testing.T) {
 
 	// Test with mute enabled
 	t.Run("MuteEnabled", func(t *testing.T) {
-		dbfs := NewAndRegister(accessToken, 5*time.Minute, true)
-		require.NotNil(t, dbfs, "NewAndRegister with mute=true should return a filesystem")
+		dbfs, err := NewAndRegister(t.Context(), accessToken, 5*time.Minute, true)
+		require.NoError(t, err, "NewAndRegister with mute=true")
 
 		t.Cleanup(func() {
 			if err := dbfs.Close(); err != nil {
@@ -83,8 +82,8 @@ func Test_fileSystem_MuteConfiguration(t *testing.T) {
 
 	// Test with mute disabled
 	t.Run("MuteDisabled", func(t *testing.T) {
-		dbfs := NewAndRegister(accessToken, 5*time.Minute, false)
-		require.NotNil(t, dbfs, "NewAndRegister with mute=false should return a filesystem")
+		dbfs, err := NewAndRegister(t.Context(), accessToken, 5*time.Minute, false)
+		require.NoError(t, err, "NewAndRegister with mute=false")
 
 		t.Cleanup(func() {
 			if err := dbfs.Close(); err != nil {

@@ -1,19 +1,34 @@
-// Package ftpfs implements a FTP(S) client file system.
+// Package ftpfs implements a FTP and FTPS client file system.
+//
+// A file system dialed with Dial, DialAndRegister or EnsureRegistered
+// keeps one control connection that is used by one operation at a time.
+// If the connection breaks, the next operation reconnects with the stored
+// credentials and is retried once. OpenReader dials a dedicated connection
+// for the transfer so a streaming read never blocks other operations.
+//
+// The package also registers file systems for the plain "ftp://" and
+// "ftps://" prefixes that dial a connection per operation for URIs with
+// embedded credentials like "ftp://user:password@host/path".
+//
+// "ftps://" uses explicit TLS (AUTH TLS) on port 21 by default and
+// implicit TLS if the port is 990. The server certificate is verified
+// unless Options.InsecureSkipVerify is set.
 package ftpfs
 
 import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
-	iofs "io/fs"
+	"net"
 	"net/textproto"
 	"net/url"
+	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jlaffaye/ftp"
@@ -26,16 +41,40 @@ const (
 	Prefix    = "ftp://"
 	PrefixTLS = "ftps://"
 	Separator = "/"
+
+	defaultPort     = "21"
+	implicitTLSPort = "990"
+)
+
+var (
+	// DefaultPermissions reported for FTP files
+	DefaultPermissions = fs.UserAndGroupReadWrite
+
+	// DefaultDirPermissions reported for FTP directories
+	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllExecute
+
+	// Compile-time interface checks
+	_ fs.FileSystem                 = new(fileSystem)
+	_ fs.WriteFileSystem            = new(fileSystem)
+	_ fs.ReadAllFileSystem          = new(fileSystem)
+	_ fs.WriteAllFileSystem         = new(fileSystem)
+	_ fs.AppendFileSystem           = new(fileSystem)
+	_ fs.AppendWriterFileSystem     = new(fileSystem)
+	_ fs.ReadWriterFileSystem       = new(fileSystem)
+	_ fs.TouchFileSystem            = new(fileSystem)
+	_ fs.MoveFileSystem             = new(fileSystem)
+	_ fs.RemoveAllFileSystem        = new(fileSystem)
+	_ fs.ListDirRecursiveFileSystem = new(fileSystem)
 )
 
 func init() {
 	// Register with prefix ftp:// and ftps:// for URLs with
 	// ftp(s)://username:password@host:port schema.
-	fs.Register(&fileSystem{secure: false, prefix: Prefix})
-	fs.Register(&fileSystem{secure: true, prefix: PrefixTLS})
+	fs.Register(&fileSystem{secure: false, PathHelper: pathHelper(Prefix)})
+	fs.Register(&fileSystem{secure: true, PathHelper: pathHelper(PrefixTLS)})
 }
 
-// CredentialsCallback is called by Dial to get the username and password for a SFTP connection.
+// CredentialsCallback is called by Dial to get the username and password for a FTP connection.
 type CredentialsCallback func(*url.URL) (username, password string, err error)
 
 // Password returns a CredentialsCallback that always returns
@@ -55,85 +94,90 @@ func UsernameAndPassword(username, password string) CredentialsCallback {
 	}
 }
 
-// // UsernameAndPasswordFromURL is a CredentialsCallback that returns
-// // the username and password encoded in the passed URL.
-// func UsernameAndPasswordFromURL(u *url.URL) (username, password string, err error) {
-// 	password, ok := u.User.Password()
-// 	if !ok {
-// 		return "", "", fmt.Errorf("no password in URL: %s", u.String())
-// 	}
-// 	return u.User.Username(), password, nil
-// }
+// Options for dialing FTP(S) connections. A nil *Options uses the defaults.
+type Options struct {
+	// TLSConfig is used for FTPS connections. If nil, a configuration
+	// that verifies the server certificate for the dialed host is used.
+	// A ServerName is filled in from the dialed host if empty.
+	TLSConfig *tls.Config
 
-type fileSystem struct {
-	conn   *ftp.ServerConn
-	prefix string
-	secure bool
-	closed bool
+	// InsecureSkipVerify disables the verification of the server
+	// certificate, also for a non-nil TLSConfig.
+	InsecureSkipVerify bool
+
+	// DebugOut receives the FTP protocol log if not nil.
+	DebugOut io.Writer
 }
 
-// Dial a new FTP or FTPS connection and registers it as file system.
+func (o *Options) orDefault() Options {
+	if o == nil {
+		return Options{}
+	}
+	return *o
+}
+
+type fileSystem struct {
+	fsimpl.PathHelper
+
+	mtx    sync.Mutex      // serializes the use of conn
+	conn   *ftp.ServerConn // nil before the first dial and after a connection loss
+	closed bool
+	secure bool
+	opts   Options
+
+	// Dial arguments for reconnecting after a connection loss,
+	// empty for the file systems registered for the plain prefixes
+	address             string
+	credentialsCallback CredentialsCallback
+}
+
+// pathHelper returns the PathHelper for a file system prefix.
+// URIs with the default port 21 are accepted as well.
+func pathHelper(prefix string) fsimpl.PathHelper {
+	return fsimpl.PathHelper{
+		URIPrefix:   prefix,
+		AltPrefixes: []string{prefix + ":" + defaultPort},
+		Rooted:      true,
+	}
+}
+
+// Dial dials a new FTP or FTPS connection without registering it as file system.
 //
-// The passed address can be a URL with scheme `ftp:` or `ftps:`.
-func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback, debugOut io.Writer) (fs.FileSystem, error) {
+// The passed address can be a URL with scheme `ftp:` or `ftps:` or just a host name.
+// If no port is provided in the address, then port 21 will be used.
+// The address can contain a username or a username and password.
+func Dial(ctx context.Context, address string, credentialsCallback CredentialsCallback, opts *Options) (fs.FileSystem, error) {
 	u, username, password, prefix, secure, err := prepareDial(address, credentialsCallback)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := dial(ctx, u.Host, username, password, secure, debugOut)
-	if err != nil {
-		return nil, err
-	}
-	return &fileSystem{
-		conn:   conn,
-		prefix: prefix,
-		secure: secure,
-	}, nil
+	return dialPrepared(ctx, u, username, password, prefix, secure, address, credentialsCallback, opts)
 }
 
-func dial(ctx context.Context, host, username, password string, secure bool, debugOut io.Writer) (conn *ftp.ServerConn, err error) {
-	dialOptions := []ftp.DialOption{
-		ftp.DialWithContext(ctx),
-		ftp.DialWithDebugOutput(debugOut),
-		ftp.DialWithDisabledEPSV(true), // Disable EPSV to use regular PASV mode
+// dialPrepared dials a file system with the results of prepareDial.
+func dialPrepared(ctx context.Context, u *url.URL, username, password, prefix string, secure bool, address string, credentialsCallback CredentialsCallback, opts *Options) (fs.FileSystem, error) {
+	f := &fileSystem{
+		PathHelper:          pathHelper(prefix),
+		secure:              secure,
+		opts:                opts.orDefault(),
+		address:             address,
+		credentialsCallback: credentialsCallback,
 	}
-	if secure {
-		if !strings.ContainsRune(host, ':') {
-			host += ":21" // Use port 21 for explicit TLS
-		}
-		// Use very permissive TLS configuration for FTPS to work around jlaffaye/ftp library issues
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,             //#nosec G402 -- Accept any certificate (self-signed, expired, etc.)
-			ServerName:         "",               // Don't verify server name
-			MinVersion:         tls.VersionTLS10, // Accept TLS 1.0+ (more permissive)
-			MaxVersion:         tls.VersionTLS13, // Support up to TLS 1.3
-			// Disable certificate verification completely
-			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error { //#nosec G123 -- intentional: FTPS workaround already accepts any certificate via InsecureSkipVerify
-				return nil // Accept any certificate
-			},
-		}
-		dialOptions = append(dialOptions, ftp.DialWithExplicitTLS(tlsConfig))
-	} else {
-		if !strings.ContainsRune(host, ':') {
-			host += ":21"
-		}
-	}
-	conn, err = ftp.Dial(host, dialOptions...)
+	var err error
+	f.conn, err = f.dial(ctx, u.Host, username, password)
 	if err != nil {
 		return nil, err
 	}
-	err = conn.Login(username, password)
-	if err != nil {
-		return nil, errors.Join(err, conn.Quit())
-	}
-	return conn, nil
+	return f, nil
 }
 
 // DialAndRegister dials a new FTP or FTPS connection and register it as file system.
 //
-// The passed address can be a URL with scheme `ftp:` or `ftps:`.
-func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback, debugOut io.Writer) (fs.FileSystem, error) {
-	fileSystem, err := Dial(ctx, address, credentialsCallback, debugOut)
+// The passed address can be a URL with scheme `ftp:` or `ftps:` or just a host name.
+// If no port is provided in the address, then port 21 will be used.
+// The address can contain a username or a username and password.
+func DialAndRegister(ctx context.Context, address string, credentialsCallback CredentialsCallback, opts *Options) (fs.FileSystem, error) {
+	fileSystem, err := Dial(ctx, address, credentialsCallback, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +190,7 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 // The returned free function has to be called to decrease the file system's
 // reference count and close it when the reference count reaches 0.
 // The returned free function will never be nil.
-func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, debugOut io.Writer) (free func() error, err error) {
+func EnsureRegistered(ctx context.Context, address string, credentialsCallback CredentialsCallback, opts *Options) (free func() error, err error) {
 	u, username, password, prefix, secure, err := prepareDial(address, credentialsCallback)
 	if err != nil {
 		return nop, err
@@ -156,14 +200,9 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return func() error { return f.Close() }, nil
 	}
 
-	conn, err := dial(ctx, u.Host, username, password, secure, debugOut)
+	newFS, err := dialPrepared(ctx, u, username, password, prefix, secure, address, credentialsCallback, opts)
 	if err != nil {
 		return nop, err
-	}
-	newFS := &fileSystem{
-		conn:   conn,
-		prefix: prefix,
-		secure: secure,
 	}
 	// Register dedups by prefix. If another caller registered a file system
 	// with the same prefix while we were dialing, our freshly dialed connection
@@ -172,8 +211,8 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	// ref-count aware (it closes the connection only when the last reference is
 	// released), so it can never close a file system another caller still holds.
 	fs.Register(newFS)
-	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != fs.FileSystem(newFS) {
-		_ = newFS.closeConn()
+	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != newFS {
+		_ = newFS.(*fileSystem).closeConn()
 		return func() error { return registered.Close() }, nil
 	}
 	return func() error { return newFS.Close() }, nil
@@ -187,7 +226,7 @@ func prepareDial(address string, credentialsCallback CredentialsCallback) (u *ur
 		address = "ftp://" + address
 	}
 	if credentialsCallback == nil {
-		return nil, "", "", "", false, errors.New("nil credentialsCall")
+		return nil, "", "", "", false, errors.New("nil credentialsCallback")
 	}
 	u, err = url.Parse(address)
 	if err != nil {
@@ -197,12 +236,7 @@ func prepareDial(address string, credentialsCallback CredentialsCallback) (u *ur
 		return nil, "", "", "", false, fmt.Errorf("not an FTP or FTPS URL scheme: %s", address)
 	}
 	// Trim default port number
-	switch u.Scheme {
-	case "ftp":
-		u.Host = strings.TrimSuffix(u.Host, ":21")
-	case "ftps":
-		u.Host = strings.TrimSuffix(u.Host, ":990")
-	}
+	u.Host = strings.TrimSuffix(u.Host, ":"+defaultPort)
 
 	username, password, err = credentialsCallback(u)
 	if err != nil {
@@ -222,39 +256,197 @@ func prepareDial(address string, credentialsCallback CredentialsCallback) (u *ur
 
 func nop() error { return nil }
 
-func (f *fileSystem) getConn(ctx context.Context, filePath string) (conn *ftp.ServerConn, clientPath string, release func() error, err error) {
-	if err = ctx.Err(); err != nil {
-		return nil, "", nop, err
+// dial dials and logs in a new connection.
+func (f *fileSystem) dial(ctx context.Context, host, username, password string) (*ftp.ServerConn, error) {
+	hostname, port, err := net.SplitHostPort(host)
+	if err != nil {
+		hostname, port = host, defaultPort
 	}
-	// A closed file system must not be used, and in particular must not
-	// silently dial a new connection below using credentials from the URL.
-	if f.closed {
-		return nil, "", nop, fs.ErrFileSystemClosed
+	dialOptions := []ftp.DialOption{
+		ftp.DialWithContext(ctx),
+		ftp.DialWithDebugOutput(f.opts.DebugOut),
+		ftp.DialWithDisabledEPSV(true), // Disable EPSV to use regular PASV mode
 	}
-	if f.conn != nil {
-		return f.conn, filePath, nop, nil
+	if f.secure {
+		tlsConfig := f.opts.TLSConfig.Clone()
+		if tlsConfig == nil {
+			tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
+		if tlsConfig.ServerName == "" {
+			tlsConfig.ServerName = hostname
+		}
+		if f.opts.InsecureSkipVerify {
+			tlsConfig.InsecureSkipVerify = true //#nosec G402 -- explicitly requested via Options.InsecureSkipVerify
+		}
+		if port == implicitTLSPort {
+			dialOptions = append(dialOptions, ftp.DialWithTLS(tlsConfig))
+		} else {
+			dialOptions = append(dialOptions, ftp.DialWithExplicitTLS(tlsConfig))
+		}
 	}
+	conn, err := ftp.Dial(net.JoinHostPort(hostname, port), dialOptions...)
+	if err != nil {
+		return nil, err
+	}
+	err = conn.Login(username, password)
+	if err != nil {
+		return nil, errors.Join(err, conn.Quit())
+	}
+	return conn, nil
+}
 
-	// fmt.Printf("%s file system not registered, trying to dial with credentials from URL: %s", f.Name(), f.URL(filePath))
+// dialStored dials a new connection with the stored dial arguments.
+func (f *fileSystem) dialStored(ctx context.Context) (*ftp.ServerConn, error) {
+	u, username, password, _, _, err := prepareDial(f.address, f.credentialsCallback)
+	if err != nil {
+		return nil, err
+	}
+	return f.dial(ctx, u.Host, username, password)
+}
 
+// dialURL dials a new connection with the credentials from the URL
+// of filePath for the file systems registered for the plain prefixes.
+func (f *fileSystem) dialURL(ctx context.Context, filePath string) (conn *ftp.ServerConn, clientPath string, err error) {
 	u, err := url.Parse(f.URL(filePath))
 	if err != nil {
-		return nil, "", nop, err
+		return nil, "", err
 	}
 	username := u.User.Username()
 	if username == "" {
-		return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
+		return nil, "", fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
 	}
 	password, ok := u.User.Password()
 	if !ok {
-		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
+		return nil, "", fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
 	}
+	conn, err = f.dial(ctx, u.Host, username, password)
+	if err != nil {
+		return nil, "", err
+	}
+	return conn, u.Path, nil
+}
 
-	conn, err = dial(ctx, u.Host, username, password, f.secure, nil)
+// reconnectable returns true if the file system
+// has the dial arguments to reconnect.
+func (f *fileSystem) reconnectable() bool {
+	return f.address != "" && f.credentialsCallback != nil
+}
+
+// acquire returns the connection to use exclusively until release is called.
+// For a dialed file system this is the shared connection under the mutex,
+// reconnected if it was lost. For the file systems registered for the plain
+// prefixes a connection is dialed per call and quit by release.
+func (f *fileSystem) acquire(ctx context.Context, filePath string) (conn *ftp.ServerConn, clientPath string, release func() error, err error) {
+	if err = ctx.Err(); err != nil {
+		return nil, "", nop, err
+	}
+	if !f.reconnectable() {
+		if err = f.checkClosed(); err != nil {
+			return nil, "", nop, err
+		}
+		conn, clientPath, err = f.dialURL(ctx, filePath)
+		if err != nil {
+			return nil, "", nop, err
+		}
+		return conn, clientPath, conn.Quit, nil
+	}
+	f.mtx.Lock()
+	if f.closed {
+		f.mtx.Unlock()
+		return nil, "", nop, fs.ErrFileSystemClosed
+	}
+	if f.conn == nil {
+		f.conn, err = f.dialStored(ctx)
+		if err != nil {
+			f.mtx.Unlock()
+			return nil, "", nop, fmt.Errorf("FTP reconnect to %s failed: %w", f.address, err)
+		}
+	}
+	return f.conn, filePath, func() error { f.mtx.Unlock(); return nil }, nil
+}
+
+// acquireDedicated dials a connection for a single transfer
+// that is quit by the returned release function.
+func (f *fileSystem) acquireDedicated(ctx context.Context, filePath string) (conn *ftp.ServerConn, clientPath string, release func() error, err error) {
+	if err = ctx.Err(); err != nil {
+		return nil, "", nop, err
+	}
+	if !f.reconnectable() {
+		return f.acquire(ctx, filePath)
+	}
+	if err = f.checkClosed(); err != nil {
+		return nil, "", nop, err
+	}
+	conn, err = f.dialStored(ctx)
 	if err != nil {
 		return nil, "", nop, err
 	}
-	return conn, u.Path, func() error { return conn.Quit() }, nil
+	return conn, filePath, conn.Quit, nil
+}
+
+// dropConn forgets and quits the shared connection if it is still conn.
+func (f *fileSystem) dropConn(conn *ftp.ServerConn) {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.conn == conn {
+		_ = conn.Quit()
+		f.conn = nil
+	}
+}
+
+// do runs op with the connection. If op fails with a connection
+// error on a reconnectable file system, it reconnects and retries once.
+func (f *fileSystem) do(ctx context.Context, filePath string, op func(conn *ftp.ServerConn, clientPath string) error) error {
+	for attempt := 0; ; attempt++ {
+		conn, clientPath, release, err := f.acquire(ctx, filePath)
+		if err != nil {
+			return err
+		}
+		err = errors.Join(op(conn, clientPath), release())
+		if err != nil && attempt == 0 && f.reconnectable() && isConnectionError(err) {
+			f.dropConn(conn)
+			continue
+		}
+		return err
+	}
+}
+
+// isConnectionError returns true if the error indicates a connection loss
+func isConnectionError(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	if _, ok := errors.AsType[net.Error](err); ok {
+		return true
+	}
+	return statusCode(err) == ftp.StatusNotAvailable // 421 service not available, closing control connection
+}
+
+// statusCode returns the FTP reply code of a textproto.Error or 0.
+func statusCode(err error) int {
+	if e, ok := errors.AsType[*textproto.Error](err); ok {
+		return e.Code
+	}
+	return 0
+}
+
+// ignoreSuccessReply maps errors that carry a 1xx or 2xx reply
+// code to nil. Some servers reply to a completed data transfer
+// in a way the client library reports as error.
+func ignoreSuccessReply(err error) error {
+	if code := statusCode(err); code != 0 && code < 300 {
+		return nil
+	}
+	return err
+}
+
+// notExist maps a 550 "file unavailable" reply to an error wrapping
+// os.ErrNotExist for operations where that is what the reply means.
+func (f *fileSystem) notExist(filePath string, err error) error {
+	if statusCode(err) == ftp.StatusFileUnavailable {
+		return fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
+	}
+	return err
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
@@ -262,18 +454,12 @@ func (f *fileSystem) ReadableWritable() (readable, writable bool) {
 }
 
 func (f *fileSystem) RootDir() fs.File {
-	return fs.File(f.prefix + Separator)
+	return fs.File(f.URIPrefix + Separator)
 }
 
-func (f *fileSystem) ID() (string, error) {
-	return f.prefix, nil
+func (f *fileSystem) ID() string {
+	return f.URIPrefix
 }
-
-func (f *fileSystem) Prefix() string {
-	return f.prefix
-}
-
-func (f *fileSystem) Separator() string { return Separator }
 
 func (f *fileSystem) Name() string {
 	if f.secure {
@@ -283,521 +469,421 @@ func (f *fileSystem) Name() string {
 }
 
 func (f *fileSystem) String() string {
-	return f.prefix + " file system"
-}
-
-func (f *fileSystem) URL(cleanPath string) string {
-	return f.prefix + cleanPath
-}
-
-func (f *fileSystem) CleanPathFromURI(uri string) string {
-	port := ":21"
-	if f.secure {
-		port = ":990"
-	}
-	return path.Clean(
-		strings.TrimPrefix(
-			strings.TrimPrefix(uri, f.prefix),
-			port, // In case f.prefix has no port number and url has the default port number
-		),
-	)
-}
-
-func (f *fileSystem) JoinCleanPath(uriParts ...string) string {
-	if f.secure {
-		return fsimpl.JoinCleanPath(uriParts, PrefixTLS)
-	}
-	return fsimpl.JoinCleanPath(uriParts, Prefix)
+	return f.URIPrefix + " file system"
 }
 
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	path := f.JoinCleanPath(uriParts...)
-	if strings.HasSuffix(f.prefix, Separator) && strings.HasPrefix(path, Separator) {
-		// For example: "sftp://" + "/example.com/absolute/path"
-		// should not result in 3 slashes: "sftp:///example.com/absolute/path"
-		path = path[len(Separator):]
-	}
-	return fs.File(f.prefix + path)
+	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
-func (f *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.prefix, Separator)
-}
-
-func (f *fileSystem) IsAbsPath(filePath string) bool {
-	if f.secure {
-		return strings.HasPrefix(filePath, PrefixTLS)
-	}
-	return strings.HasPrefix(filePath, Prefix)
-}
-
-func (f *fileSystem) AbsPath(filePath string) string {
-	if f.IsAbsPath(filePath) {
-		return filePath
-	}
-	return Prefix + strings.TrimPrefix(filePath, Separator)
-}
-
-func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
-}
-
-type fileInfo struct {
-	entry *ftp.Entry
-}
-
-func (i fileInfo) Name() string        { return i.entry.Name }
-func (i fileInfo) Size() int64         { return int64(i.entry.Size) } //#nosec G115 -- int64 limit will not be exceeded in real world use cases
-func (i fileInfo) Mode() iofs.FileMode { return 0666 }
-func (i fileInfo) ModTime() time.Time  { return i.entry.Time }
-func (i fileInfo) IsDir() bool         { return i.entry.Type == ftp.EntryTypeFolder }
-func (i fileInfo) Sys() any            { return nil }
-
-func entryToFileInfo(entry *ftp.Entry, file fs.File) *fs.FileInfo {
-	return &fs.FileInfo{
-		File:        file,
-		Name:        entry.Name,
+// entryToFileInfo converts an ftp.Entry to the fs.FileInfo of filePath.
+func (f *fileSystem) entryToFileInfo(entry *ftp.Entry, filePath string) *fs.FileInfo {
+	isDir := entry.Type == ftp.EntryTypeFolder
+	name := path.Base(filePath)
+	info := &fs.FileInfo{
+		File:        f.JoinCleanFile(filePath),
+		Name:        name,
 		Exists:      true,
-		IsDir:       entry.Type == ftp.EntryTypeFolder,
-		IsRegular:   entry.Type != ftp.EntryTypeLink,
-		IsHidden:    false,
-		Size:        int64(entry.Size), //#nosec G115 -- int64 limit will not be exceeded in real world use cases
+		IsDir:       isDir,
+		IsRegular:   !isDir,
+		IsSymlink:   entry.Type == ftp.EntryTypeLink,
+		IsHidden:    strings.HasPrefix(name, "."),
 		Modified:    entry.Time,
-		Permissions: 0666,
+		Permissions: DefaultPermissions,
+	}
+	if isDir {
+		info.Permissions = DefaultDirPermissions
+	} else {
+		info.Size = int64(entry.Size) //#nosec G115 -- int64 limit will not be exceeded in real world use cases
+	}
+	return info
+}
+
+func (f *fileSystem) rootInfo() *fs.FileInfo {
+	return &fs.FileInfo{
+		File:        f.RootDir(),
+		Name:        Separator,
+		Exists:      true,
+		IsDir:       true,
+		Permissions: DefaultDirPermissions,
 	}
 }
 
-func (f *fileSystem) Stat(filePath string) (info iofs.FileInfo, err error) {
-	defer f.convertResultError(&err, filePath)
-
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
+// stat returns the FileInfo of clientPath. It uses the MLST command
+// via GetEntry and falls back to listing the parent directory
+// for servers without MLST support.
+func (f *fileSystem) stat(conn *ftp.ServerConn, clientPath, filePath string) (*fs.FileInfo, error) {
+	if path.Clean(clientPath) == Separator {
+		return f.rootInfo(), nil
+	}
+	entry, err := conn.GetEntry(clientPath)
+	if err == nil {
+		return f.entryToFileInfo(entry, filePath), nil
+	}
+	if isConnectionError(err) {
 		return nil, err
 	}
-	defer release()
-
-	// Try GetEntry first (uses STAT command)
-	entry, err := conn.GetEntry(filePath)
-	if err != nil {
-		// If GetEntry fails (e.g., 502 Command not implemented),
-		// fall back to using List on the parent directory
-		dir, name := f.SplitDirAndName(filePath)
-		if dir == "" {
-			dir = "/"
-		}
-
-		entries, listErr := conn.List(dir)
-		if listErr != nil {
-			return nil, err // Return original GetEntry error
-		}
-
-		// Find the entry in the list
-		for _, e := range entries {
-			if e.Name == name {
-				return fileInfo{e}, nil
+	dir, name := path.Split(strings.TrimSuffix(clientPath, Separator))
+	if dir == "" {
+		dir = Separator
+	}
+	entries, err := conn.List(dir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.Name == name {
+				return f.entryToFileInfo(entry, filePath), nil
 			}
 		}
-
-		// If not found in list, return original error
+		return nil, fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
+	}
+	if isConnectionError(err) {
 		return nil, err
 	}
-	return fileInfo{entry}, nil
+	// Last resort for servers without listing support: SIZE works for files
+	size, err := conn.FileSize(clientPath)
+	if err != nil {
+		if isConnectionError(err) {
+			return nil, err
+		}
+		return nil, fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
+	}
+	return f.entryToFileInfo(&ftp.Entry{Name: name, Type: ftp.EntryTypeFile, Size: uint64(size)}, filePath), nil //#nosec G115 -- sizes are not negative
 }
 
-func (f *fileSystem) IsHidden(filePath string) bool { return false }
+func (f *fileSystem) Stat(filePath string) (info *fs.FileInfo, err error) {
+	err = f.do(context.Background(), filePath, func(conn *ftp.ServerConn, clientPath string) error {
+		info, err = f.stat(conn, clientPath, filePath)
+		return err
+	})
+	return info, err
+}
 
-func (f *fileSystem) IsSymbolicLink(filePath string) bool {
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
-		return false
-	}
-	defer release()
-
-	// Try GetEntry first
-	entry, err := conn.GetEntry(filePath)
-	if err != nil {
-		// Fall back to List if GetEntry fails
-		dir, name := f.SplitDirAndName(filePath)
-		if dir == "" {
-			dir = "/"
+// ListDir lists the directory. The connection is released before the
+// callbacks are called, so callbacks can use the file system.
+func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	var infos []*fs.FileInfo
+	err := f.do(ctx, dirPath, func(conn *ftp.ServerConn, clientPath string) error {
+		entries, err := conn.List(clientPath)
+		if err != nil {
+			if isConnectionError(err) {
+				return err
+			}
+			info, statErr := f.stat(conn, clientPath, dirPath)
+			if statErr == nil && !info.IsDir {
+				return fs.NewErrIsNotDirectory(f.JoinCleanFile(dirPath))
+			}
+			return f.notExist(dirPath, err)
 		}
-
-		entries, listErr := conn.List(dir)
-		if listErr != nil {
-			return false
-		}
-
-		// Find the entry in the list
-		for _, e := range entries {
-			if e.Name == name {
-				return e.Type == ftp.EntryTypeLink
+		// Listing a file returns the file itself on many servers
+		if len(entries) == 1 && entries[0].Type != ftp.EntryTypeFolder && entries[0].Name == path.Base(clientPath) {
+			info, statErr := f.stat(conn, clientPath, dirPath)
+			if statErr == nil && !info.IsDir {
+				return fs.NewErrIsNotDirectory(f.JoinCleanFile(dirPath))
 			}
 		}
-		return false
-	}
-	return entry.Type == ftp.EntryTypeLink
-}
-
-func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) (err error) {
-	defer f.convertResultError(&err, dirPath)
-
-	conn, dirPath, release, err := f.getConn(ctx, dirPath)
+		for _, entry := range entries {
+			if entry.Name == "." || entry.Name == ".." {
+				continue
+			}
+			match, err := fsimpl.MatchAnyPattern(entry.Name, patterns)
+			if err != nil {
+				return err
+			}
+			if match {
+				infos = append(infos, f.entryToFileInfo(entry, f.CleanPath(dirPath, entry.Name)))
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	defer release()
+	return callInfos(ctx, infos, callback)
+}
 
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	entries, err := conn.List(dirPath)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		match, err := fsimpl.MatchAnyPattern(entry.Name, patterns)
+// ListDirRecursive walks the directory tree and calls callback
+// for every file (not directory) matching the patterns.
+// The connection is released before the callbacks are called.
+func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	var infos []*fs.FileInfo
+	err := f.do(ctx, dirPath, func(conn *ftp.ServerConn, clientPath string) error {
+		info, err := f.stat(conn, clientPath, dirPath)
 		if err != nil {
 			return err
 		}
-		if !match {
-			continue
+		if !info.IsDir {
+			return fs.NewErrIsNotDirectory(info.File)
 		}
-		err = callback(entryToFileInfo(entry, f.JoinCleanFile(dirPath, entry.Name)))
-		if err != nil {
+		walker := conn.Walk(clientPath)
+		for walker.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := walker.Err(); err != nil {
+				return err
+			}
+			entry := walker.Stat()
+			if entry.Type == ftp.EntryTypeFolder {
+				continue
+			}
+			match, err := fsimpl.MatchAnyPattern(entry.Name, patterns)
+			if err != nil {
+				return err
+			}
+			if !match {
+				continue
+			}
+			// The walker path is below clientPath, map it back below dirPath
+			rel := strings.TrimPrefix(walker.Path(), strings.TrimSuffix(clientPath, Separator))
+			infos = append(infos, f.entryToFileInfo(entry, f.CleanPath(dirPath, rel)))
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return callInfos(ctx, infos, callback)
+}
+
+// callInfos calls callback for every info until an error or the context is done.
+func callInfos(ctx context.Context, infos []*fs.FileInfo, callback func(*fs.FileInfo) error) error {
+	for _, info := range infos {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := callback(info); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
-}
-
-func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) (err error) {
-	defer f.convertResultError(&err, dirPath)
-
-	conn, dirPath, release, err := f.getConn(context.Background(), dirPath)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	return ignoreFTPSuccessResponse(conn.MakeDir(dirPath))
-}
-
-// ignoreFTPSuccessResponse maps error values that actually carry a success
-// status reply back to nil. Some FTP servers (and the jlaffaye/ftp library
-// when used with the permissive FTPS configuration above) surface 1xx/2xx
-// status replies from a data transfer as errors.
-func ignoreFTPSuccessResponse(err error) error {
-	if err == nil {
-		return nil
-	}
-	msg := err.Error()
-	if strings.Contains(msg, "226 Transfer complete") ||
-		strings.Contains(msg, "227 Entering Passive Mode") ||
-		strings.Contains(msg, "257") ||
-		strings.Contains(msg, "150 Opening") ||
-		strings.Contains(msg, "150 Ok to send data") {
-		return nil
-	}
-	return err
-}
-
 type fileReader struct {
-	path     string
-	conn     *ftp.ServerConn
-	response *ftp.Response
-	release  func() error
+	*ftp.Response
+	release func() error
 }
 
-func (f *fileReader) Stat() (iofs.FileInfo, error) {
-	// Try GetEntry first
-	entry, err := f.conn.GetEntry(f.path)
-	if err != nil {
-		// Fall back to List if GetEntry fails
-		dir, name := path.Split(f.path)
-		if dir == "" {
-			dir = "/"
-		}
-
-		entries, listErr := f.conn.List(dir)
-		if listErr != nil {
-			return nil, err // Return original GetEntry error
-		}
-
-		// Find the entry in the list
-		for _, e := range entries {
-			if e.Name == name {
-				return fileInfo{e}, nil
-			}
-		}
-
-		// If not found in list, return original error
-		return nil, err
-	}
-	return fileInfo{entry}, nil
+func (r *fileReader) Close() error {
+	return errors.Join(r.Response.Close(), r.release())
 }
 
-func (f *fileReader) Read(buf []byte) (int, error) {
-	return f.response.Read(buf)
-}
-
-func (f *fileReader) Close() error {
-	return errors.Join(f.response.Close(), f.release())
-}
-
-func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+// OpenReader streams the file with a RETR command
+// over a dedicated connection that is quit on Close.
+func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+	conn, clientPath, release, err := f.acquireDedicated(context.Background(), filePath)
 	if err != nil {
 		return nil, err
 	}
-
-	response, err := conn.Retr(filePath)
+	response, err := conn.Retr(clientPath)
 	if err != nil {
-		return nil, errors.Join(err, release())
+		return nil, errors.Join(f.notExist(filePath, err), release())
 	}
-
-	return &fileReader{
-		path:     filePath,
-		conn:     conn,
-		response: response,
-		release:  release,
-	}, nil
+	return &fileReader{Response: response, release: release}, nil
 }
 
 // ReadAll downloads the complete content of the file at filePath
 // with a single RETR command.
 func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte, err error) {
-	defer f.convertResultError(&err, filePath)
-
-	conn, filePath, release, err := f.getConn(ctx, filePath)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
-	response, err := conn.Retr(filePath)
-	if err != nil {
-		return nil, err
-	}
-	data, err = io.ReadAll(response)
-	return data, errors.Join(err, response.Close())
+	err = f.do(ctx, filePath, func(conn *ftp.ServerConn, clientPath string) error {
+		response, err := conn.Retr(clientPath)
+		if err != nil {
+			return f.notExist(filePath, err)
+		}
+		data, err = fs.ReadAllContext(ctx, response)
+		return errors.Join(err, response.Close())
+	})
+	return data, err
 }
 
 // WriteAll writes data to the file at filePath with a single STOR command,
 // creating it if it does not exist or truncating it if it does exist.
-func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) (err error) {
-	defer f.convertResultError(&err, filePath)
-
-	conn, filePath, release, err := f.getConn(ctx, filePath)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	return ignoreFTPSuccessResponse(conn.Stor(filePath, bytes.NewReader(data)))
-}
-
-// fileSystem implements fs.TouchFileSystem. The other optional interfaces it
-// could add over FTP (Exists/...) would be identical to the generic emulation
-// in package fs, so they are intentionally left to that emulation.
-var _ fs.TouchFileSystem = new(fileSystem)
-
-// Touch implements fs.TouchFileSystem. Unlike the generic emulation — which
-// opens the file with O_TRUNC and would therefore destroy the content of an
-// existing file — this updates the modification time of an existing file in
-// place (via the FTP MFMT command, when the server advertises support) and
-// only creates an empty file when it does not exist yet.
-func (f *fileSystem) Touch(filePath string, perm []fs.Permissions) (err error) {
-	defer f.convertResultError(&err, filePath)
-
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	if f.connFileExists(conn, filePath) {
-		if conn.IsSetTimeSupported() {
-			return conn.SetTime(filePath, time.Now())
-		}
-		// The file exists but the server cannot set the modification time;
-		// leave its content intact rather than truncating it.
-		return nil
-	}
-	// Does not exist yet: create an empty file.
-	return ignoreFTPSuccessResponse(conn.Stor(filePath, bytes.NewReader(nil)))
-}
-
-// connFileExists reports whether filePath exists. It tries SIZE and STAT first
-// (widely supported and cheap) and falls back to a directory listing, so it
-// works across servers with different command support.
-func (f *fileSystem) connFileExists(conn *ftp.ServerConn, filePath string) bool {
-	if _, err := conn.FileSize(filePath); err == nil {
-		return true
-	}
-	if _, err := conn.GetEntry(filePath); err == nil {
-		return true
-	}
-	dir, name := f.SplitDirAndName(filePath)
-	if dir == "" {
-		dir = "/"
-	}
-	entries, err := conn.List(dir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if e.Name == name {
-			return true
-		}
-	}
-	return false
+func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
+	return f.do(ctx, filePath, func(conn *ftp.ServerConn, clientPath string) error {
+		return f.notExist(filePath, ignoreSuccessReply(conn.Stor(clientPath, bytes.NewReader(data))))
+	})
 }
 
 // Append appends data to the file at filePath with a single APPE command,
 // creating it if it does not exist.
-func (f *fileSystem) Append(ctx context.Context, filePath string, data []byte, perm []fs.Permissions) (err error) {
-	defer f.convertResultError(&err, filePath)
-
-	conn, filePath, release, err := f.getConn(ctx, filePath)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	return ignoreFTPSuccessResponse(conn.Append(filePath, bytes.NewReader(data)))
+func (f *fileSystem) Append(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
+	return f.do(ctx, filePath, func(conn *ftp.ServerConn, clientPath string) error {
+		return f.notExist(filePath, ignoreSuccessReply(conn.Append(clientPath, bytes.NewReader(data))))
+	})
 }
 
 // OpenWriter opens the file at filePath for writing, creating it if it does
 // not exist or truncating it if it does exist.
 //
 // FTP has no random-access I/O, so the written bytes are buffered in memory
-// and flushed to the server with a single STOR command when the returned
-// writer is closed. For bulk data prefer WriteAll, which streams directly
-// to the server without buffering the whole file in memory.
-func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	var buf *fsimpl.FileBuffer
-	buf = fsimpl.NewFileBufferWithClose(nil, func() error {
-		return f.WriteAll(context.Background(), filePath, buf.Bytes(), perm)
-	})
-	return buf, nil
+// and stored with a single STOR command when the returned writer is closed.
+func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+	if err := f.checkClosed(); err != nil {
+		return nil, err
+	}
+	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+		return f.WriteAll(context.Background(), filePath, data, perm)
+	}), nil
 }
 
 // OpenAppendWriter opens the file at filePath for appending,
 // creating it if it does not exist.
 //
-// The written bytes are buffered in memory and appended to the server file
-// with a single APPE command when the returned writer is closed. Only the
-// appended data is held in memory, not the whole file.
-func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	var buf *fsimpl.FileBuffer
-	buf = fsimpl.NewFileBufferWithClose(nil, func() error {
-		return f.Append(context.Background(), filePath, buf.Bytes(), perm)
-	})
-	return buf, nil
-}
-
-// OpenReadWriter opens the file at filePath for reading and writing.
-//
-// FTP has no random-access I/O, so the complete file is downloaded into an
-// in-memory buffer that supports Read, Write and Seek. The buffer is flushed
-// back to the server with a single STOR command when closed. The file must
-// already exist and this is not suitable for very large files.
-func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (rw fs.ReadWriteSeekCloser, err error) {
-	defer f.convertResultError(&err, filePath)
-
-	data, err := f.ReadAll(context.Background(), filePath)
-	if err != nil {
+// The written bytes are buffered in memory and appended with a single
+// APPE command when the returned writer is closed.
+func (f *fileSystem) OpenAppendWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+	if err := f.checkClosed(); err != nil {
 		return nil, err
 	}
-	var buf *fsimpl.FileBuffer
-	buf = fsimpl.NewFileBufferWithClose(data, func() error {
-		return f.WriteAll(context.Background(), filePath, buf.Bytes(), perm)
-	})
-	return buf, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+		return f.Append(context.Background(), filePath, data, perm)
+	}), nil
 }
 
-// Move renames filePath to destPath via the FTP RNFR/RNTO commands.
+// OpenReadWriter downloads the file (or starts empty for a missing one)
+// into a memory buffer supporting Read, Write and Seek that is stored
+// with a single STOR command when closed.
+func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+	data, err := f.ReadAll(context.Background(), filePath)
+	if err != nil && !isNotExist(err) {
+		return nil, err
+	}
+	return fsimpl.NewWriteOnCloseFileBuffer(data, func(data []byte) error {
+		return f.WriteAll(context.Background(), filePath, data, perm)
+	}), nil
+}
+
+// Touch updates the modification time of an existing file in place via
+// the MFMT command when the server supports it, and only creates an
+// empty file when it does not exist yet.
+func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
+	return f.do(context.Background(), filePath, func(conn *ftp.ServerConn, clientPath string) error {
+		_, err := f.stat(conn, clientPath, filePath)
+		if isNotExist(err) {
+			return f.notExist(filePath, ignoreSuccessReply(conn.Stor(clientPath, bytes.NewReader(nil))))
+		}
+		if err != nil {
+			return err
+		}
+		if conn.IsSetTimeSupported() {
+			return conn.SetTime(clientPath, time.Now())
+		}
+		return nil
+	})
+}
+
+// MakeDir creates a directory with the MKD command.
+// It returns an error wrapping os.ErrExist if the path exists.
+func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
+	return f.do(context.Background(), dirPath, func(conn *ftp.ServerConn, clientPath string) error {
+		err := ignoreSuccessReply(conn.MakeDir(clientPath))
+		if err == nil {
+			return nil
+		}
+		if isConnectionError(err) {
+			return err
+		}
+		if _, statErr := f.stat(conn, clientPath, dirPath); statErr == nil {
+			return fs.NewErrAlreadyExists(f.JoinCleanFile(dirPath))
+		}
+		return f.notExist(dirPath, err)
+	})
+}
+
+// Move renames filePath to destPath via the RNFR and RNTO commands.
 //
 // When filePath and destPath resolve to the same location after path
 // cleaning, Move returns nil without contacting the server, matching the
 // no-op behavior required by the [fs.MoveFileSystem] contract. (Many FTP
 // servers would otherwise reject the rename with a "file unavailable"
 // reply.)
-func (f *fileSystem) Move(filePath string, destPath string) (err error) {
-	defer f.convertResultError(&err, filePath)
-
+func (f *fileSystem) Move(filePath string, destPath string) error {
 	filePath = path.Clean(filePath)
 	destPath = path.Clean(destPath)
 	if filePath == destPath {
 		return nil
 	}
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	return conn.Rename(filePath, destPath)
+	return f.do(context.Background(), filePath, func(conn *ftp.ServerConn, clientPath string) error {
+		// clientPath is the URL path for the plain prefix file systems,
+		// the destination path has the same URL form and needs the
+		// same translation
+		if clientPath != filePath {
+			destClientPath, err := f.destClientPath(filePath, destPath)
+			if err != nil {
+				return err
+			}
+			destPath = destClientPath
+		}
+		return f.notExist(filePath, conn.Rename(clientPath, destPath))
+	})
 }
 
-func (f *fileSystem) Remove(filePath string) (err error) {
-	defer f.convertResultError(&err, filePath)
-
-	conn, filePath, release, err := f.getConn(context.Background(), filePath)
+// destClientPath translates a destination path to the path to use with
+// the connection of filePath. Only the file systems registered for the
+// plain prefixes need it: their paths carry the URI authority
+// (/user:password@host/dir/file) while the connection uses the server
+// path (/dir/file). A single RNFR/RNTO can't cross connections, so a
+// destination on another server is rejected instead of renaming to a
+// nonsense path.
+func (f *fileSystem) destClientPath(filePath, destPath string) (string, error) {
+	srcURL, err := url.Parse(f.URL(filePath))
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer release()
-
-	// Try GetEntry first to determine if it's a file or directory
-	entry, err := conn.GetEntry(filePath)
+	destURL, err := url.Parse(f.URL(destPath))
 	if err != nil {
-		// Fall back to List if GetEntry fails
-		dir, name := f.SplitDirAndName(filePath)
-		if dir == "" {
-			dir = "/"
-		}
+		return "", err
+	}
+	if destURL.Host != srcURL.Host || destURL.User.Username() != srcURL.User.Username() {
+		return "", fmt.Errorf("%s can't move %s to another server: %s", f.Name(), filePath, destPath)
+	}
+	return destURL.Path, nil
+}
 
-		entries, listErr := conn.List(dir)
-		if listErr != nil {
-			// If we can't determine the type, try to delete as file first
-			err = conn.Delete(filePath)
-			if err != nil {
-				// If file deletion fails, try directory deletion
-				return conn.RemoveDir(filePath)
-			}
+// Remove deletes a file with the DELE command
+// or an empty directory with the RMD command.
+func (f *fileSystem) Remove(filePath string) error {
+	return f.do(context.Background(), filePath, func(conn *ftp.ServerConn, clientPath string) error {
+		info, err := f.stat(conn, clientPath, filePath)
+		if err != nil {
+			return err
+		}
+		if info.IsDir {
+			return conn.RemoveDir(clientPath)
+		}
+		return f.notExist(filePath, conn.Delete(clientPath))
+	})
+}
+
+// RemoveAll deletes a file or a directory with its content.
+// A missing path is not an error.
+func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
+	return f.do(ctx, filePath, func(conn *ftp.ServerConn, clientPath string) error {
+		info, err := f.stat(conn, clientPath, filePath)
+		if isNotExist(err) {
 			return nil
 		}
-
-		// Find the entry in the list
-		for _, e := range entries {
-			if e.Name == name {
-				if e.Type == ftp.EntryTypeFolder {
-					return conn.RemoveDir(filePath)
-				}
-				return conn.Delete(filePath)
-			}
-		}
-
-		// If not found in list, try both deletion methods
-		err = conn.Delete(filePath)
 		if err != nil {
-			return conn.RemoveDir(filePath)
+			return err
 		}
-		return nil
-	}
+		if info.IsDir {
+			return conn.RemoveDirRecur(clientPath)
+		}
+		return conn.Delete(clientPath)
+	})
+}
 
-	if entry.Type == ftp.EntryTypeFolder {
-		return conn.RemoveDir(filePath)
+// isNotExist reports whether err wraps os.ErrNotExist.
+func isNotExist(err error) bool {
+	return errors.Is(err, os.ErrNotExist)
+}
+
+func (f *fileSystem) checkClosed() error {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
+		return fs.ErrFileSystemClosed
 	}
-	return conn.Delete(filePath)
+	return nil
 }
 
 // Close quits the underlying FTP connection and unregisters the file system.
@@ -806,11 +892,13 @@ func (f *fileSystem) Remove(filePath string) (err error) {
 // file system that never connected, is a safe no-op.
 // Close decreases the file system's reference count in the registry and only
 // closes the underlying FTP connection once the last reference is released, so
-// it never closes a connection another caller still holds. Calling Close on an
-// already-closed file system is a safe no-op.
+// it never closes a connection another caller still holds.
 func (f *fileSystem) Close() error {
-	if f.closed || f.conn == nil {
-		return nil // already closed or never connected
+	if !f.reconnectable() {
+		return nil // the plain prefix file systems are never closed
+	}
+	if f.checkClosed() != nil {
+		return nil
 	}
 	if fs.Unregister(f) > 0 {
 		return nil // still referenced by another caller
@@ -822,29 +910,16 @@ func (f *fileSystem) Close() error {
 // It is used both by Close once the last reference is released and to discard a
 // redundant connection that lost the registration race in EnsureRegistered.
 func (f *fileSystem) closeConn() error {
-	if f.closed || f.conn == nil {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
+		return nil
+	}
+	f.closed = true
+	if f.conn == nil {
 		return nil
 	}
 	err := f.conn.Quit()
 	f.conn = nil
-	f.closed = true
 	return err
-}
-
-func (f *fileSystem) convertResultError(err *error, path string) {
-	if err == nil || *err == nil {
-		return
-	}
-	var e *textproto.Error
-	if errors.As(*err, &e) {
-		if e.Code == ftp.StatusFileUnavailable {
-			*err = fs.NewErrDoesNotExist(f.JoinCleanFile(path))
-			return
-		}
-		if e.Msg == "" {
-			e.Msg = ftp.StatusText(e.Code)
-			*err = e
-			return
-		}
-	}
 }

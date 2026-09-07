@@ -4,6 +4,7 @@ import (
 	"errors"
 	iofs "io/fs"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -16,10 +17,12 @@ type FileInfo struct {
 	Exists      bool
 	IsDir       bool
 	IsRegular   bool
+	IsSymlink   bool // The path itself is a symbolic link, the other fields describe the link target
 	IsHidden    bool
 	Size        int64
 	Modified    time.Time
 	Permissions Permissions
+	Sys         any // Underlying data source (can return nil)
 }
 
 // Validate returns an error if the FileInfo is invalid.
@@ -46,10 +49,12 @@ func NewFileInfo(file File, info iofs.FileInfo, hidden bool) *FileInfo {
 		Exists:      true,
 		IsDir:       mode.IsDir(),
 		IsRegular:   mode.IsRegular(),
+		IsSymlink:   mode&iofs.ModeSymlink != 0,
 		IsHidden:    hidden,
 		Size:        info.Size(),
 		Modified:    info.ModTime(),
 		Permissions: Permissions(mode.Perm()),
+		Sys:         info.Sys(),
 	}
 }
 
@@ -64,7 +69,7 @@ func NewNonExistingFileInfo(file File) *FileInfo {
 		File:     file,
 		Name:     name,
 		Exists:   false,
-		IsHidden: len(name) > 0 && name[0] == '.',
+		IsHidden: strings.HasPrefix(name, "."),
 	}
 }
 
@@ -77,7 +82,14 @@ type fileInfo struct{ i *FileInfo }
 
 func (f fileInfo) Name() string       { return f.i.Name }
 func (f fileInfo) Size() int64        { return f.i.Size }
-func (f fileInfo) Mode() os.FileMode  { return f.i.Permissions.FileMode(f.i.IsDir) }
 func (f fileInfo) ModTime() time.Time { return f.i.Modified }
 func (f fileInfo) IsDir() bool        { return f.i.IsDir }
-func (f fileInfo) Sys() any           { return nil }
+func (f fileInfo) Sys() any           { return f.i.Sys }
+
+func (f fileInfo) Mode() os.FileMode {
+	m := f.i.Permissions.FileMode(f.i.IsDir)
+	if f.i.IsSymlink {
+		m |= os.ModeSymlink
+	}
+	return m
+}

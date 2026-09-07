@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fstest"
 )
 
 const (
@@ -30,7 +31,7 @@ var (
 
 func TestMain(m *testing.M) {
 	// Check if Docker is available
-	if _, err := exec.LookPath("docker"); err != nil {
+	if !fstest.DockerAvailable() {
 		log.Println("Docker not available, skipping Docker-based SFTP tests")
 		dockerSFTPAvailable = false
 		os.Exit(m.Run())
@@ -55,7 +56,7 @@ func TestMain(m *testing.M) {
 	output, err := buildCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to build Docker image: %v\nOutput: %s", err, output)
-		dockerSFTPAvailable = false
+		fstest.DockerSetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}
@@ -66,13 +67,13 @@ func TestMain(m *testing.M) {
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", testContainerName,
-		"-p", fmt.Sprintf("%s:22", testSFTPPort),
+		"-p", fmt.Sprintf("127.0.0.1:%s:22", testSFTPPort),
 		"sftp-test-server",
 	)
 	output, err = runCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to start Docker container: %v\nOutput: %s", err, output)
-		dockerSFTPAvailable = false
+		fstest.DockerSetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}
@@ -106,6 +107,7 @@ func TestMain(m *testing.M) {
 		// Cleanup before exit
 		exec.Command("docker", "stop", testContainerName).Run()
 		exec.Command("docker", "rm", testContainerName).Run()
+		fstest.DockerSetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}
@@ -129,25 +131,26 @@ func checkAndReadFile(t *testing.T, f fs.File) []byte {
 
 	assert.True(t, f.Exists(), "Exists")
 	assert.False(t, f.IsDir(), "not IsDir")
-	data, err := f.ReadAll()
+	data, err := f.ReadAll(t.Context())
 	assert.NoError(t, err)
 	return data
 }
 
 func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
+	if os.Getenv("GOFS_ONLINE_TESTS") == "" {
+		t.Skip("set GOFS_ONLINE_TESTS=1 to run tests against public internet SFTP servers")
+	}
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("test.rebex.net", func(t *testing.T) {
 		sftpFS, err := DialAndRegister(t.Context(), "demo@test.rebex.net:22", Password("password"), AcceptAnyHostKey, nil)
 		require.NoError(t, err, "Dial")
 
 		require.Equal(t, "sftp://demo@test.rebex.net", sftpFS.Prefix())
-		id, err := sftpFS.ID()
-		require.NoError(t, err)
-		require.Equal(t, "sftp://demo@test.rebex.net", id)
+		require.Equal(t, "sftp://demo@test.rebex.net", sftpFS.ID())
 		require.Equal(t, "sftp://demo@test.rebex.net file system", sftpFS.String())
 		require.Equal(t, "SFTP", sftpFS.Name())
-		require.Equal(t, "/a/b", sftpFS.JoinCleanPath("a", "skip", "..", "/", "b", "/"))
-		require.Equal(t, fs.File("sftp://demo@test.rebex.net/a/b"), sftpFS.JoinCleanFile("a", "skip", "..", "/", "b", "/"))
+		require.Equal(t, "/a/b", sftpFS.CleanPath("a", "skip", "..", "/", "b", "/"))
+		require.Equal(t, fs.File("sftp://demo@test.rebex.net/a/b"), sftpFS.(*fileSystem).JoinCleanFile("a", "skip", "..", "/", "b", "/"))
 
 		f := fs.File("sftp://demo@test.rebex.net/readme.txt")
 		assert.Equal(t, "readme.txt", f.Name())
@@ -178,6 +181,13 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 }
 
 func TestPasswordURLWithPublicOnlineServers(t *testing.T) {
+	if os.Getenv("GOFS_ONLINE_TESTS") == "" {
+		t.Skip("set GOFS_ONLINE_TESTS=1 to run tests against public internet SFTP servers")
+	}
+	// URLs with embedded credentials dial per operation and
+	// need a host key callback for the servers they dial.
+	URLHostKeyCallback = AcceptAnyHostKey
+	t.Cleanup(func() { URLHostKeyCallback = nil })
 	// https://www.sftp.net/public-online-sftp-servers
 	t.Run("demo.wftpserver.com", func(t *testing.T) {
 		// http://demo.wftpserver.com/main.html
@@ -205,12 +215,9 @@ func Test_fileSystem(t *testing.T) {
 	expectedPrefix := fmt.Sprintf("sftp://%s@localhost:%s", testUsername, testSFTPPort)
 
 	// Run comprehensive filesystem tests
-	fs.RunFileSystemTests(
-		ctx,
-		t,
-		sftpFS,
-		"SFTP",         // name
-		expectedPrefix, // prefix
-		testDataDir,    // testDir
-	)
+	fstest.RunConformance(t, sftpFS, fstest.Config{
+		Name:    "SFTP",
+		Prefix:  expectedPrefix,
+		TestDir: testDataDir,
+	})
 }

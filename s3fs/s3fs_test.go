@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fstest"
 	"github.com/ungerik/go-fs/s3fs"
 )
 
@@ -36,7 +37,7 @@ var (
 
 func TestMain(m *testing.M) {
 	// Check if Docker is available
-	if _, err := exec.LookPath("docker"); err != nil {
+	if !fstest.DockerAvailable() {
 		log.Println("Docker not available, skipping Docker-based MinIO S3 tests")
 		m.Run()
 		return
@@ -48,9 +49,10 @@ func TestMain(m *testing.M) {
 
 	// Setup MinIO server
 	dockerMinioAvailable = setupMinioServer(ctx)
-	if dockerMinioAvailable {
-		testS3Endpoint = fmt.Sprintf("http://127.0.0.1:%s", testS3Port)
+	if !dockerMinioAvailable {
+		fstest.DockerSetupFailed("MinIO")
 	}
+	testS3Endpoint = fmt.Sprintf("http://127.0.0.1:%s", testS3Port)
 
 	// Run tests
 	exitCode := m.Run()
@@ -82,8 +84,8 @@ func setupMinioServer(ctx context.Context) bool {
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", containerName,
-		"-p", fmt.Sprintf("%s:9000", testS3Port),
-		"-p", fmt.Sprintf("%s:9001", testS3ConsolePort),
+		"-p", fmt.Sprintf("127.0.0.1:%s:9000", testS3Port),
+		"-p", fmt.Sprintf("127.0.0.1:%s:9001", testS3ConsolePort),
 		"-e", fmt.Sprintf("MINIO_ROOT_USER=%s", testAccessKey),
 		"-e", fmt.Sprintf("MINIO_ROOT_PASSWORD=%s", testSecretKey),
 		"minio/minio:latest",
@@ -159,7 +161,6 @@ func Test_fileSystem(t *testing.T) {
 	if !dockerMinioAvailable {
 		t.Skip("Docker MinIO server not available")
 	}
-
 	ctx := t.Context()
 
 	// Create S3 client and filesystem
@@ -176,14 +177,11 @@ func Test_fileSystem(t *testing.T) {
 	expectedPrefix := fmt.Sprintf("s3://%s", testBucketName)
 
 	// Run comprehensive filesystem tests
-	fs.RunFileSystemTests(
-		ctx,
-		t,
-		s3fs,
-		fmt.Sprintf("S3 file system for bucket: s.bucketName"), // name - matches Name() method
-		expectedPrefix,                                           // prefix
-		testDataDir,                                              // testDir
-	)
+	fstest.RunConformance(t, s3fs, fstest.Config{
+		Name:    fmt.Sprintf("S3 file system for bucket: %s", testBucketName),
+		Prefix:  expectedPrefix,
+		TestDir: testDataDir,
+	})
 
 	// Clean up after tests
 	cleanupTestDir(ctx, t, client, testDataDir)
@@ -240,17 +238,17 @@ func Test_fileSystem_MultipartUploadDownload(t *testing.T) {
 		largeData[i] = byte(i % 256)
 	}
 
-	testFilePath := s3fs.JoinCleanPath(testDataDir, "large-test-file.bin")
+	testFilePath := s3fs.CleanPath(testDataDir, "large-test-file.bin")
 
 	// Test multipart upload via WriteAll
 	t.Run("MultipartUpload", func(t *testing.T) {
-		err := s3fs.(fs.WriteAllFileSystem).WriteAll(ctx, testFilePath, largeData, nil)
+		err := s3fs.(fs.WriteAllFileSystem).WriteAll(ctx, testFilePath, largeData, 0)
 		require.NoError(t, err, "WriteAll should succeed for large file")
 
 		// Verify file exists
 		info, err := s3fs.Stat(testFilePath)
 		require.NoError(t, err, "Stat should work on uploaded file")
-		require.Equal(t, int64(largeFileSize), info.Size(), "File size should match")
+		require.Equal(t, int64(largeFileSize), info.Size, "File size should match")
 	})
 
 	// Test multipart download via ReadAll
@@ -274,6 +272,6 @@ func Test_fileSystem_MultipartUploadDownload(t *testing.T) {
 	})
 
 	// Clean up
-	err := s3fs.Remove(testFilePath)
+	err := s3fs.(fs.WriteFileSystem).Remove(testFilePath)
 	require.NoError(t, err, "Cleanup should succeed")
 }

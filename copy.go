@@ -50,9 +50,12 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 	switch f := src.(type) {
 	case File:
 		// Use same file system copy if possible
-		if fs := f.FileSystem(); fs == dest.FileSystem() {
-			if copyFS, ok := fs.(CopyFileSystem); ok {
-				return copyFS.CopyFile(ctx, f.Path(), dest.Path(), buf)
+		if srcFS, srcPath := f.ParseRawURI(); srcFS == dest.FileSystem() {
+			if srcPath == dest.Path() {
+				return nil // Copying a file onto itself is a no-op
+			}
+			if copyFS, ok := srcFS.(CopyFileSystem); ok {
+				return copyFS.CopyFile(ctx, srcPath, dest.Path())
 			}
 		}
 		// Else use at least same permissions
@@ -61,7 +64,7 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf *[]byte, pe
 		}
 	case MemFile:
 		// Don't use io.CopyBuffer in case of MemFile
-		return dest.WriteAllContext(ctx, f.FileData, perm...)
+		return dest.WriteAll(ctx, f.FileData, perm...)
 	}
 
 	r, err := src.OpenReader()
@@ -135,16 +138,15 @@ func copyRecursive(ctx context.Context, src, dest File, patterns []string, buf *
 		return fmt.Errorf("can not copy a directory (%s) over a file (%s)", src.URL(), dest.URL())
 	}
 
-	// TODO better check
 	if !dest.Exists() {
-		err := dest.MakeDir()
+		err := dest.MakeAllDirs()
 		if err != nil {
 			return fmt.Errorf("copyRecursive: can't make dest dir %q: %w", dest, err)
 		}
 	}
 
 	// Copy directories recursive
-	return src.ListDirContext(ctx, func(file File) error {
+	return src.ListDir(ctx, func(file File) error {
 		return copyRecursive(ctx, file, dest.Join(file.Name()), patterns, buf)
 	}, patterns...)
 }

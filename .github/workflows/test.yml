@@ -1,0 +1,83 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            go.sum
+            dropboxfs/go.sum
+            ftpfs/go.sum
+            s3fs/go.sum
+            sftpfs/go.sum
+            tools/go.sum
+
+      - name: Build all workspace modules
+        shell: bash
+        run: |
+          for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
+            go -C "$dir" build ./...
+          done
+
+      - name: Vet all workspace modules
+        shell: bash
+        run: |
+          for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
+            go -C "$dir" vet ./...
+          done
+
+      - name: Test all workspace modules (race detector)
+        shell: bash
+        run: |
+          for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
+            go -C "$dir" test -race -count=1 ./...
+          done
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            go.sum
+            dropboxfs/go.sum
+            ftpfs/go.sum
+            s3fs/go.sum
+            sftpfs/go.sum
+            tools/go.sum
+
+      # "go tool" resolves the tools of every workspace module,
+      # so staticcheck and gosec can be run from any module directory.
+      - name: staticcheck
+        run: |
+          for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
+            go -C "$dir" tool staticcheck ./...
+          done
+
+      - name: gosec
+        run: |
+          for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
+            go -C "$dir" tool gosec -quiet ./...
+          done

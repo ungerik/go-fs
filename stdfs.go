@@ -1,9 +1,12 @@
 package fs
 
 import (
+	"context"
 	"errors"
-	"fmt"
+	"io"
 	iofs "io/fs"
+	"os"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -50,7 +53,75 @@ func (f StdFS) Open(name string) (iofs.File, error) {
 	if err := checkStdFSName(name); err != nil {
 		return nil, err
 	}
-	return f.File.Join(name).OpenReader()
+	file := f.File.Join(name)
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		// Directories are opened as io/fs.ReadDirFile,
+		// which not every file system's OpenReader supports
+		return &stdDirFile{file: file, info: info}, nil
+	}
+	return file.OpenReader()
+}
+
+// stdDirFile is the io/fs.ReadDirFile of a directory opened by StdFS.
+type stdDirFile struct {
+	file    File
+	info    iofs.FileInfo
+	entries []iofs.DirEntry // loaded by the first ReadDir
+	loaded  bool
+	offset  int
+	closed  bool
+}
+
+func (d *stdDirFile) Stat() (iofs.FileInfo, error) {
+	if d.closed {
+		return nil, &iofs.PathError{Op: "stat", Path: d.file.Path(), Err: os.ErrClosed}
+	}
+	return d.info, nil
+}
+
+func (d *stdDirFile) Read([]byte) (int, error) {
+	return 0, &iofs.PathError{Op: "read", Path: d.file.Path(), Err: NewErrIsDirectory(d.file)}
+}
+
+// Close makes the directory unusable for further I/O like os.File.Close,
+// subsequent Stat and ReadDir calls return os.ErrClosed.
+// Close is idempotent.
+func (d *stdDirFile) Close() error {
+	d.closed = true
+	return nil
+}
+
+// ReadDir reads the directory entries sorted by name like io/fs.ReadDir,
+// n entries at a time for n > 0 and all remaining entries otherwise.
+func (d *stdDirFile) ReadDir(n int) ([]iofs.DirEntry, error) {
+	if d.closed {
+		return nil, &iofs.PathError{Op: "readdir", Path: d.file.Path(), Err: os.ErrClosed}
+	}
+	if !d.loaded {
+		entries, err := stdReadDir(d.file)
+		if err != nil {
+			return nil, err
+		}
+		d.entries = entries
+		d.loaded = true
+	}
+	remaining := d.entries[d.offset:]
+	if n <= 0 {
+		d.offset = len(d.entries)
+		return remaining, nil
+	}
+	if len(remaining) == 0 {
+		return nil, io.EOF
+	}
+	if len(remaining) > n {
+		remaining = remaining[:n]
+	}
+	d.offset += len(remaining)
+	return remaining, nil
 }
 
 // ReadFile reads the named file and returns its contents.
@@ -60,7 +131,7 @@ func (f StdFS) ReadFile(name string) ([]byte, error) {
 	if err := checkStdFSName(name); err != nil {
 		return nil, err
 	}
-	return f.File.Join(name).ReadAll()
+	return f.File.Join(name).ReadAll(context.Background())
 }
 
 // ReadDir reads the named directory
@@ -71,8 +142,13 @@ func (f StdFS) ReadDir(name string) ([]iofs.DirEntry, error) {
 	if err := checkStdFSName(name); err != nil {
 		return nil, err
 	}
+	return stdReadDir(f.File.Join(name))
+}
+
+// stdReadDir lists the entries of dir sorted by name like io/fs.ReadDir.
+func stdReadDir(dir File) ([]iofs.DirEntry, error) {
 	var entries []iofs.DirEntry
-	err := f.File.Join(name).ListDir(func(file File) error {
+	err := dir.ListDir(context.Background(), func(file File) error {
 		entries = append(entries, file.StdDirEntry())
 		return nil
 	})
@@ -83,12 +159,17 @@ func (f StdFS) ReadDir(name string) ([]iofs.DirEntry, error) {
 	return entries, nil
 }
 
+// checkStdFSName validates name like the io/fs package does,
+// so files like "dir/.gitignore" are accepted.
+// Like os.DirFS it rejects backslashes and colons on Windows,
+// because io/fs names are always slash separated and must not
+// be reinterpreted by the underlying file system.
 func checkStdFSName(name string) error {
 	if name == "" {
 		return errors.New("empty filename")
 	}
-	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.Contains(name, "/.") || strings.Contains(name, "//") {
-		return fmt.Errorf("invalid filename: %s", name)
+	if !iofs.ValidPath(name) || runtime.GOOS == "windows" && strings.ContainsAny(name, `\:`) {
+		return &iofs.PathError{Op: "open", Path: name, Err: iofs.ErrInvalid}
 	}
 	return nil
 }

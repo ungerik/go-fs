@@ -3,6 +3,7 @@ package fs
 import (
 	"cmp"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -88,8 +89,8 @@ func Unregister(fs FileSystem) int {
 // RegisteredFileSystems returns the registered file systems
 // sorted by their prefix.
 func RegisteredFileSystems() []FileSystem {
-	registryMtx.Lock()
-	defer registryMtx.Unlock()
+	registryMtx.RLock()
+	defer registryMtx.RUnlock()
 
 	return slices.Clone(registrySorted)
 }
@@ -101,8 +102,8 @@ func IsRegistered(fs FileSystem) bool {
 		return false
 	}
 
-	registryMtx.Lock()
-	defer registryMtx.Unlock()
+	registryMtx.RLock()
+	defer registryMtx.RUnlock()
 
 	_, ok := registry[fs.Prefix()]
 	return ok
@@ -111,8 +112,8 @@ func IsRegistered(fs FileSystem) bool {
 // GetFileSystemByPrefixOrNil returns the file system registered
 // with the passed prefix, or nil if it can't be found.
 func GetFileSystemByPrefixOrNil(prefix string) FileSystem {
-	registryMtx.Lock()
-	defer registryMtx.Unlock()
+	registryMtx.RLock()
+	defer registryMtx.RUnlock()
 
 	f, ok := registry[prefix]
 	if !ok {
@@ -132,8 +133,11 @@ func GetFileSystem(uriParts ...string) FileSystem {
 	return fs
 }
 
-// ParseRawURI returns a FileSystem for the passed URI and the path component within that file system.
+// ParseRawURI returns a FileSystem for the passed URI and the clean path within that file system.
 // Returns the local file system if no other file system could be identified.
+//
+// URL escapes in a URI that carries a scheme are decoded, a scheme-less
+// local path is used verbatim, so a local file literally named "a%20b" is reachable.
 func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	if uri == "" {
 		return Invalid, ""
@@ -143,10 +147,19 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 
 	// Find fs with longest matching prefix
 	// by iterating in reverse order of sorted registry
-	for i := len(registrySorted) - 1; i >= 0; i-- {
-		fs = registrySorted[i]
+	for _, fs = range slices.Backward(registrySorted) {
 		if strings.HasPrefix(uri, fs.Prefix()) {
-			return fs, fs.CleanPathFromURI(uri)
+			return fs, fs.CleanPath(unescapeURI(uri))
+		}
+	}
+	// Then try the prefix aliases of the registered file systems
+	for _, fs = range slices.Backward(registrySorted) {
+		if aliasFS, ok := fs.(PrefixAliasFileSystem); ok {
+			for _, alias := range aliasFS.PrefixAliases() {
+				if strings.HasPrefix(uri, alias) {
+					return fs, fs.CleanPath(fs.Prefix() + strings.TrimPrefix(unescapeURI(uri), alias))
+				}
+			}
 		}
 	}
 
@@ -164,5 +177,14 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	}
 
 	// No scheme: assume uri is a path for the local file system
-	return Local, uri
+	return Local, Local.CleanPath(uri)
+}
+
+// unescapeURI decodes URL escapes in uri,
+// returning uri unchanged if it can't be decoded.
+func unescapeURI(uri string) string {
+	if unescaped, err := url.PathUnescape(uri); err == nil {
+		return unescaped
+	}
+	return uri
 }
