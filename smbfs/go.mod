@@ -16,6 +16,6 @@ require (
 	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/pkg/xattr v0.4.12 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.0.0-20200728195943-123391ffb6de // indirect
+	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
