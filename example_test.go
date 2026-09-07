@@ -13,40 +13,50 @@ import (
 
 // ExampleFile shows the path methods of File, which are pure string
 // operations that don't touch a file system.
+//
+// Path returns the file system specific path, which uses the separator of
+// the operating system for local files, PathWithSlashes always uses "/".
 func ExampleFile() {
 	file := fs.File("/home/erik/data/report.pdf")
 
 	fmt.Println(file.Name())
 	fmt.Println(file.Ext())
-	fmt.Println(file.Dir().Path())
-	fmt.Println(file.Dir().Join("other.txt").Path())
-
-	// A File derived from another one carries the prefix of its
-	// file system, use Path to get the file system specific path
-	fmt.Println(file.Dir())
+	fmt.Println(file.Dir().PathWithSlashes())
+	fmt.Println(file.Dir().Join("other.txt").PathWithSlashes())
 
 	// Output:
 	// report.pdf
 	// .pdf
 	// /home/erik/data
 	// /home/erik/data/other.txt
-	// file:///home/erik/data
 }
 
-// ExampleFile_uri shows that a File is either a local path or a URI
-// with the prefix of a registered file system.
+// ExampleFile_uri shows that a File is either a local path or a URI with
+// the prefix of a registered file system. Which one it is follows from the
+// prefix, and the file system of an unregistered prefix is invalid.
 func ExampleFile_uri() {
+	memFS, err := fs.NewMemFileSystem("/")
+	if err != nil {
+		panic(err)
+	}
+	defer memFS.Close()
+
 	local := fs.File("/var/log/messages")
-	remote := fs.File("https://example.com/data/report.pdf")
+	inMemory := memFS.RootDir().Join("data", "report.pdf")
+	unregistered := fs.File("s3://some-bucket/report.pdf")
 
 	fmt.Println(local.FileSystem().Name())
-	fmt.Println(local.LocalPath())
-	fmt.Println(remote.Name())
+	fmt.Println(inMemory.FileSystem().Name())
+	fmt.Println(unregistered.FileSystem().Name())
+
+	// LocalPath is empty for a file that is not on the local file system
+	fmt.Println(inMemory.Name(), inMemory.LocalPath() == "")
 
 	// Output:
 	// local file system
-	// /var/log/messages
-	// report.pdf
+	// memory file system
+	// invalid file system
+	// report.pdf true
 }
 
 // ExampleNewMemFileSystem writes and reads a file in memory,
