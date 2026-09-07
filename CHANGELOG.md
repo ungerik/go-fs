@@ -5,11 +5,252 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## v1.0.0-beta.1 - 2026-09-06
+
+First beta of the v1 API; further beta releases iterate on it before
+v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
+`docs/MIGRATION_v1.md`; the design decisions are recorded in
+`docs/V1_ROADMAP.md`. All modules (`s3fs`, `sftpfs`, `ftpfs`, `dropboxfs`,
+`webdavfs`, `smbfs`, `azureblobfs`, `tools`) are tagged in lockstep.
+
+### Changed
+
+- **`FileSystem` interface redesigned (Phase 3).** The core interface holds
+  the primitives only: `ID() string`, `Prefix`, `Name`, `String`, `Separator`,
+  `ReadableWritable`, `RootDir`, `CleanPath`, `Stat(path) (*FileInfo, error)`,
+  `ListDir(ctx, dirPath, patterns, callback)`, `OpenReader(path) (io.ReadCloser,
+  error)`, `Close`. Writing moved to `WriteFileSystem` (`OpenWriter`, `MakeDir`,
+  `Remove`); read-only file systems implement no write stubs, the package
+  returns `ErrReadOnlyFileSystem` / `ErrWriteOnlyFileSystem` itself based on
+  `ReadableWritable`. Permissions are a single `Permissions` value (zero means
+  the file system default). Removed from the interface: `URL`,
+  `CleanPathFromURI`, `JoinCleanFile`, `JoinCleanPath`, `SplitPath`,
+  `SplitDirAndName`, `MatchAnyPattern`, `IsHidden` (`HiddenFileSystem`,
+  default dot rule), `IsSymbolicLink` (part of `SymbolicLinkFileSystem`),
+  `IsAbsPath`/`AbsPath` (`AbsPathFileSystem`, which also absorbs `RelPath`),
+  `OpenReadWriter` (`ReadWriterFileSystem`). `ExistsFileSystem.Exists` returns
+  `(bool, error)`, `ListDirRecursiveFileSystem.ListDirRecursive` takes the
+  patterns before the callback, `CopyFileSystem.CopyFile` lost the buffer
+  parameter, `MoveFileSystem.Move` always gets the final destination path
+  (`File.MoveTo` resolves "into directory"), new `RemoveAllFileSystem` and
+  `PrefixAliasFileSystem` (sftpfs/ftpfs default ports). `ReadOnlyBase` and
+  `FullyFeaturedFileSystem` are gone. `FileInfo` gained `IsSymlink` and `Sys`.
+  `ParseRawURI` decodes URL escapes only for URIs with a scheme, so a local
+  file literally named `a%20b` is reachable.
+- **Backends implement only the optional interfaces they do better than the
+  generic emulation.** `dispatch.go` already emulates `Exists`, `ReadAll`,
+  `Touch`, `Append`, `OpenAppendWriter`, `OpenReadWriter` and `Truncate` on top
+  of the core primitives, so a backend that had no native advantage now drops
+  its implementation rather than restating the emulation. Behaviour is
+  unchanged for callers, who reach these through the `File` API either way.
+- `LocalFileSystem.ID()` returns the real id of the root file system (statfs
+  `f_fsid` on Unix, the volume serial number on Windows); `Stat` follows
+  symbolic links and reports `IsSymlink`; the default permissions come from the
+  receiver instead of the `Local` singleton; `MakeAllDirs` on an existing file
+  reports `ErrIsNotDirectory`; `Watch` expands a leading `~`.
+- `File.Touch` on a file system without native touch creates a missing file and
+  returns `ErrUnsupported` for an existing one instead of truncating it;
+  `File.RemoveRecursive` no longer fails for a missing path and uses native
+  `RemoveAll` where available; `File.IsSymbolicLink` is false on file systems
+  without symbolic link support.
+
+- **`File`, `FileReader` and `MemFile` follow the context rule (Phase 4).**
+  A method takes `ctx` first only if it is a potentially long-running read or
+  write: content transfer (`ReadAll`, `ReadAllString`, `ContentHash`,
+  `WriteAll`, `WriteAllString`, `Truncate`, `MoveTo`), directory iteration
+  (`ListDir*`, `Glob`, `MustGlob`, `RemoveRecursive`, `RemoveDirContents*`) and
+  `TempFileCopy`, `uuiddir.Remove`, `uuiddir.RemoveDir`. The `*Context` twins
+  are gone. See `docs/MIGRATION_v1.md` for the rename table and sed recipes.
+- `File.IsWritable` is true for an existing writable directory as well;
+  `StdFS` accepts every `io/fs.ValidPath` name (like `dir/.gitignore`);
+  `MakeTempDir` uses `os.MkdirTemp`; `LocalFileSystem.Close` stops the watcher
+  goroutine; `MemFileSystem` ids are random strings instead of heap addresses.
+- The test suite is green on Windows and the Windows CI job is blocking:
+  `StdFS` rejects names containing `\` or `:` on Windows like `os.DirFS`,
+  `LocalFileSystem` XAttr methods return `ErrUnsupported` on platforms
+  without extended attributes, `zipfs.NewWriter` closes the underlying
+  file on `Close` (the handle used to leak), and `fs.Glob` yields files
+  cleaned for their file system's separator.
+
+- **s3fs rework (Phase 5).** Object keys are derived consistently from the
+  rooted file system paths (objects used to be written with a leading slash
+  but listed without). `Stat` recognises marker and implicit directories,
+  `MakeDir` on an existing path wraps `os.ErrExist`, `Remove` wraps
+  `os.ErrNotExist` and refuses non-empty directories, `RemoveAll` uses
+  batched `DeleteObjects`, `ListDirRecursive` is a single paginated listing,
+  `OpenReader` streams the object body, `OpenReadWriter` creates a missing
+  object, `CopyFile` URL-encodes the copy source. `MultipartUploadThreshold`
+  and `MultipartDownloadThreshold` are variables now. The `Watch` stub and
+  the `Exists` method are gone (the generic emulations cover both).
+- **sftpfs rework (Phase 5).** A lost connection is reconnected with the
+  stored credentials and host key callback and the operation retried once;
+  the old reconnect code was unreachable and would have accepted any host
+  key. URIs with embedded credentials (`sftp://user:pw@host/…`) now require
+  `sftpfs.URLHostKeyCallback` to be set (use `sftpfs.AcceptAnyHostKey` for
+  the old behaviour). Native `MakeAllDirs`, `ListDirRecursive`, `RemoveAll`,
+  `SetPermissions` and symbolic link support; `Stat` reports symlinks; the
+  `perm` argument is applied to created files and directories.
+- **ftpfs rework (Phase 5).** `Dial`, `DialAndRegister` and
+  `EnsureRegistered` take `*ftpfs.Options` (nil for defaults) instead of a
+  debug writer; FTPS verifies the server certificate unless
+  `Options.InsecureSkipVerify` is set; `ftps://` is explicit TLS on port 21
+  and implicit TLS on port 990. Operations are serialised on the single
+  control connection, a lost connection is reconnected and the operation
+  retried once, `OpenReader` streams over a dedicated connection. FTP reply
+  codes are checked instead of reply texts; `Remove` no longer tries `RMD`
+  for a file that could not be deleted; `MakeDir` on an existing path wraps
+  `os.ErrExist`; native `RemoveAll` and `ListDirRecursive`. The ftpfs tests
+  run the conformance suite for FTP and FTPS against an in-process server
+  on every platform; the dockerized vsftpd is gone.
+- `httpfs` streams `OpenReader` from the GET body without a HEAD request
+  first, uses `http.NewRequestWithContext` for `ReadAll`, and makes the
+  `*http.Client` injectable via `httpfs.Client`. `multipartfs.EscapePath`
+  (a stub that only replaced quotes) is removed. `CopyRecursive` creates
+  missing destination directories with `MakeAllDirs`.
+- **dropboxfs rework (Phase 5).** `NewAndRegister(ctx, token, cacheTimeout,
+  mute)` fetches the account and returns an error; `ID()` and the prefix
+  are derived from the account id instead of a random string. Only typed
+  API errors are mapped to `os.ErrNotExist` / `os.ErrExist`; `Touch` of an
+  existing file returns `ErrUnsupported`; `Remove` refuses a non-empty
+  folder; native `RemoveAll`; `OpenReader` streams the download; the
+  metadata cache is invalidated on writes.
+- The 23 `fs.Permissions` values (`UserRead`, `AllReadWrite`, ...) are `const`
+  instead of `var`, so they can't be reassigned by a consumer and can be used
+  in constant expressions.
+- `zipfs.Reader.ID()` returns the prefix of the archive (`zip://<id>`) like
+  `zipfs.Writer`, `tarfs` and `multipartfs`, instead of the prefix without
+  the scheme that it inherited from the embedded `fs.StdFileSystem`.
+
+### Added
+
+- A README for every module and every sub package that implements a
+  `FileSystem`: `sftpfs`, `ftpfs`, `webdavfs`, `smbfs`, `azureblobfs`,
+  `tools`, `httpfs`, `zipfs`, `tarfs` and `multipartfs`, next to the
+  existing ones for `s3fs` and `dropboxfs`.
+- Runnable `Example` functions for the `fs`, `httpfs`, `zipfs`, `tarfs`,
+  `multipartfs` and `uuiddir` packages, and compile-only examples for the
+  constructors of the seven backend modules, so the documented usage is
+  verified by `go test` and shown on pkg.go.dev.
+- A doc comment on every exported symbol of every package.
+- `fs.StdFileSystem` adapts any `io/fs.FS` (`embed.FS`, `os.DirFS`,
+  `zip.Reader`, `testing/fstest.MapFS`) as a read-only file system with the
+  prefix `stdfs://<id>`; the counterpart of `StdFS`.
+- `fs.SubFileSystem` is a view of a directory of another file system with
+  the prefix `sub://<id>`, forwarding every operation (including the
+  optional interfaces) to the parent with translated paths.
+- `smbfs` module: an SMB2/3 client file system on the pure Go go-smb2,
+  with native append and read-write handles, `Truncate`, `Touch`,
+  `MakeAllDirs`, `RemoveAll`, server-side `Move`, `SetPermissions`
+  (read-only attribute) and symbolic links where the server allows them;
+  tested against a Samba container.
+- `azureblobfs` module: Azure Blob Storage with marker-blob directories,
+  seeking reads via range requests, server-side `CopyFile` and `Touch` via
+  metadata; tested against the Azurite emulator.
+- `fstest.Config.PermissionMask` declares which permission bits a file
+  system stores, so the suite checks `SetPermissions` for those bits only.
+- `webdavfs` module: a WebDAV client file system with the standard library
+  only (`PROPFIND` for `Stat` and `ListDir`, `PUT`, `MKCOL`, `DELETE`,
+  native `MOVE` and `COPY`, seeking reads with `Range` requests), tested
+  against an in-process `golang.org/x/net/webdav` server.
+- `fs.OverlayFileSystem` stacks a writable upper layer on a read-only base
+  with the prefix `overlay://<id>`: reads fall through, listings are the
+  union, writes go to the upper layer with copy-up for in-place changes,
+  removed base entries are hidden by in-memory whiteouts.
+- `fs.NewStdFileSystemWithPrefix` builds a `StdFileSystem` with a scheme of
+  its own; zipfs uses it: `zipfs.Reader` is a `StdFileSystem` over
+  `archive/zip.Reader` and `zipfs.Writer` the sequential writer,
+  replacing the mode-switching `ZipFileSystem` type. Reader listings are
+  sorted by name and report the modes stored in the archive.
+- `tarfs`: read-only and write-only file systems for tar archives,
+  optionally gzip compressed, mirroring `zipfs` with separate `tarfs.Reader`
+  and `tarfs.Writer` types (root module, standard library only).
+  `fsimpl.DirTree` is the directory tree of archive entries (formerly
+  internal to zipfs).
+- `fs.CreateTempFile` creates a temporary file atomically (`fs.TempFile` only
+  returns a path).
+- **`fstest.RunConformance`** replaces `fs.RunFileSystemTests` and the `tests`
+  package. The suite seeds one directory tree, reads it back through the
+  `FileSystem` methods and the `File` API on every backend including the
+  read-only ones, verifies content (not just existence) for every write
+  operation and optional interface, and checks the error contract:
+  `os.ErrNotExist`, `os.ErrExist`, `ErrReadOnlyFileSystem`,
+  `ErrWriteOnlyFileSystem`, `ErrFileSystemClosed`, context cancellation.
+  httpfs, zipfs and multipartfs now run it too.
+- CI runs build, vet, race tests, staticcheck and gosec for every module on
+  ubuntu, macOS and Windows (Windows tests non-blocking for now).
+- **`fsimpl.PathHelper`** implements the path methods of a `FileSystem`
+  (prefix stripping, joining, cleaning, splitting, URL, hidden check) for a URI
+  prefix, separator and optional volume; every backend embeds it instead of
+  duplicating the same code. sftpfs and ftpfs now also resolve URIs that carry
+  the default port (`sftp://u@h:22/x`, `ftp://h:21/x`, `ftps://h:990/x`).
+- `fsimpl.NewWriteOnCloseFileBuffer` for file systems that upload whole files
+  on Close; `fsimpl.FileBuffer.Truncate`.
+- **`fsimpl.RangeReader`** implements `io.ReadSeekCloser` and `io.ReaderAt`
+  over a backend that serves byte ranges; webdavfs and azureblobfs share it
+  instead of each carrying a private copy.
+- `multipartfs.New` wraps a `*multipart.Form` that was parsed by the caller
+  (`FromRequestForm` uses it); `MultipartFileSystem.FormValue` and
+  `FormValues` read the non file form fields.
+
+### Fixed
+
+- The generic `OpenAppendWriter` emulation (used by file systems without a
+  native append writer) overwrote the beginning of the file instead of
+  appending.
+- `s3fs.DefaultDirPermissions` was `0660 + 0666`, which cleared the user
+  write bit and made `File.IsWritable` false for new S3 objects.
+
+- `JoinCleanPath` no longer modifies the passed slice (all file systems).
+- `fsimpl.FileBuffer.WriteAt` no longer panics on a negative offset and honors
+  the `io.WriterAt` contract; `Stat` of a buffer without a `FileInfo` returns an
+  error instead of a nil `FileInfo`.
+- `CleanPathFromURI` returns a cleaned path on every file system; `IsHidden`
+  applies the dot rule on sftpfs, ftpfs and httpfs (was always false); `AbsPath`
+  on sftpfs and ftpfs returns a rooted path instead of a URI.
+- `MemFileSystem`: paths with the `\` separator are cleaned correctly,
+  `Remove` refuses non-empty directories, `Stat`/`OpenReader`/`ReadAll` follow
+  symbolic links, and operations after `Close` return `ErrFileSystemClosed`.
+- httpfs: `Join` no longer produces `http:///host/...` URLs, and file infos
+  are readable (`IsReadable` was always false).
+- zipfs: listed files carry the `zip://` prefix, recursive listing lists files
+  only and returns an error instead of panicking on conflicting entries,
+  `Remove` reports `ErrReadOnlyFileSystem` and `Stat` reports
+  `ErrFileSystemClosed` after `Close`.
+- multipartfs: real sizes instead of `-1`, prefixed `FileInfo.File`,
+  `ErrDoesNotExist`/`ErrIsNotDirectory` from listing, idempotent `Close`.
+  Every method reports `ErrFileSystemClosed` after `Close` instead of serving
+  the parts that are still in memory; the root directory exists and can be
+  stat-ed; `ListDir` applies the patterns to the form field directories too;
+  files uploaded under an already used name (or under a name that is not a
+  usable path element like `..`) get a unique file system name instead of
+  shadowing each other. Uploaded files carry no modification time, so
+  `FileInfo.Modified` is the zero time.
+- sftpfs: `MakeDir` on an existing path wraps `os.ErrExist`, listing a file
+  reports `ErrIsNotDirectory`.
+- uuiddir: `Make` created `baseDir` instead of the UUID directory, `RemoveDir`
+  accepted siblings sharing the path prefix (`/base` vs `/basement`), `Enum`
+  aborted on one unparsable directory.
+
+### Removed
+
+- `fs.RunFileSystemTests` and the `tests` package (use `fstest.RunConformance`).
+- `File.ListDirChan`, `File.ListDirRecursiveChan`, `File.GobEncode`/`GobDecode`
+  (`FileReader` no longer requires `GobEncode`; `MemFile` keeps it), `fs.MemDir`,
+  `fs.FileInfoCache`, all `*Context` method twins.
+- `fs.ReadOnlyBase`, `fs.FullyFeaturedFileSystem`, `fs.RelPathFileSystem`
+  (merged into `fs.AbsPathFileSystem`), `s3fs` `Watch` and `VolumeName` stubs,
+  `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
+  `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
+- `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
+  `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
+- `fs.MemFileSystem.ReadAll` on a directory returns `ErrIsDirectory` instead
+  of empty data.
+
 ## v0.1.0 - 2026-06-30
 
 First release, and a v1.0 preparation pass: a broad audit of the library that
 fixes data-loss and crash bugs across the backends, tightens the public API, and
-adds cross-backend test coverage. `TODOS.md` tracks the remaining road to v1.0.
+adds cross-backend test coverage. `docs/V1_ROADMAP.md` tracks the remaining road to v1.0.
 
 ### Fixed
 

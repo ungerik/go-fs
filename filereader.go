@@ -8,6 +8,10 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
+// FileReader is the read-only view of a file that File and MemFile implement.
+//
+// Methods that transfer content take a context for cancellation,
+// metadata and open methods don't (see the package documentation).
 type FileReader interface {
 	// String returns the name and meta information for the FileReader.
 	String() string
@@ -43,26 +47,17 @@ type FileReader interface {
 	CheckIsDir() error
 
 	// ContentHash returns the DefaultContentHash for the file.
-	ContentHash() (string, error)
-
-	// ContentHashContext returns the DefaultContentHash for the file.
-	ContentHashContext(ctx context.Context) (string, error)
+	ContentHash(ctx context.Context) (string, error)
 
 	// ReadAll reads and returns all bytes of the file
-	ReadAll() (data []byte, err error)
-
-	// ReadAllContext reads and returns all bytes of the file
-	ReadAllContext(context.Context) (data []byte, err error)
+	ReadAll(ctx context.Context) (data []byte, err error)
 
 	// ReadAllContentHash reads and returns all bytes of the file
 	// together with the DefaultContentHash.
-	ReadAllContentHash(context.Context) (data []byte, hash string, err error)
+	ReadAllContentHash(ctx context.Context) (data []byte, hash string, err error)
 
 	// ReadAllString reads the complete file and returns the content as string.
-	ReadAllString() (string, error)
-
-	// ReadAllStringContext reads the complete file and returns the content as string.
-	ReadAllStringContext(context.Context) (string, error)
+	ReadAllString(ctx context.Context) (string, error)
 
 	// WriteTo implements the io.WriterTo interface
 	WriteTo(writer io.Writer) (n int64, err error)
@@ -80,10 +75,6 @@ type FileReader interface {
 
 	// ReadXML reads and unmarshalles the XML content of the file to output.
 	ReadXML(ctx context.Context, output any) error
-
-	// GobEncode reads and gob encodes the file name and content,
-	// implementing encoding/gob.GobEncoder.
-	GobEncode() ([]byte, error)
 }
 
 // AsFileReaders converts the passed files to []FileReader.

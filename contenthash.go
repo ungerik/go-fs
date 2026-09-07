@@ -9,7 +9,7 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-// ContentHashFunc is used tot return the string representation of a content hash
+// ContentHashFunc is used to return the string representation of a content hash
 // by reading from an io.Reader until io.EOF or the context is cancelled.
 type ContentHashFunc func(ctx context.Context, reader io.Reader) (string, error)
 

@@ -55,13 +55,13 @@ func ContainsLocalPath[F interface{ LocalPath() string }](files []F, localPath s
 }
 
 // ContentHashIndex returns the slice index of the first file
-// where the passed hash equals the result from the ContentHashContext method
+// where the passed hash equals the result from the ContentHash method
 // or -1 in case of no match.
 func ContentHashIndex[F interface {
-	ContentHashContext(ctx context.Context) (string, error)
+	ContentHash(ctx context.Context) (string, error)
 }](ctx context.Context, files []F, hash string) (int, error) {
 	for i, f := range files {
-		fHash, err := f.ContentHashContext(ctx)
+		fHash, err := f.ContentHash(ctx)
 		if err != nil {
 			return -1, err
 		}
@@ -121,12 +121,15 @@ func FileNames[T interface{ Name() string }](files []T) []string {
 	return names
 }
 
+// SortByName sorts the files by name in ascending order.
 func SortByName[F interface{ Name() string }](files []F) {
 	slices.SortFunc(files, func(a, b F) int {
 		return cmp.Compare(a.Name(), b.Name())
 	})
 }
 
+// SortByNameDirsFirst sorts the files by name in ascending order,
+// listing directories before files.
 func SortByNameDirsFirst[F FileReader](files []F) {
 	sort.Slice(files, func(i, j int) bool {
 		fi := files[i]
@@ -138,30 +141,40 @@ func SortByNameDirsFirst[F FileReader](files []F) {
 	})
 }
 
+// SortByPath sorts the files by their file system specific path
+// in ascending order.
 func SortByPath[F interface{ Path() string }](files []F) {
 	slices.SortFunc(files, func(a, b F) int {
 		return cmp.Compare(a.Path(), b.Path())
 	})
 }
 
+// SortByLocalPath sorts the files by their local path in ascending order.
+// Files that are not on the local file system have an empty local path
+// and are sorted first.
 func SortByLocalPath[F interface{ LocalPath() string }](files []F) {
 	slices.SortFunc(files, func(a, b F) int {
 		return cmp.Compare(a.LocalPath(), b.LocalPath())
 	})
 }
 
+// SortBySize sorts the files by size in ascending order.
 func SortBySize[F interface{ Size() int64 }](files []F) {
 	slices.SortFunc(files, func(a, b F) int {
 		return cmp.Compare(a.Size(), b.Size())
 	})
 }
 
-func SortByModified[F interface{ Modified() time.Time }](files []File) {
+// SortByModified sorts the files by modification time,
+// oldest first.
+func SortByModified[F interface{ Modified() time.Time }](files []F) {
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Modified().Before(files[j].Modified())
 	})
 }
 
+// SortByModifiedDirsFirst sorts the files by modification time,
+// oldest first, listing directories before files.
 func SortByModifiedDirsFirst(files []File) {
 	sort.Slice(files, func(i, j int) bool {
 		fi := files[i]

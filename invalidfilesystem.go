@@ -2,16 +2,16 @@ package fs
 
 import (
 	"context"
-	iofs "io/fs"
-	"net/url"
-	"path"
+	"io"
 	"strings"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-// Ensure that InvalidFileSystem implements the FullyFeaturedFileSystem interface
-var _ FullyFeaturedFileSystem = InvalidFileSystem("")
+var (
+	_ FileSystem      = InvalidFileSystem("")
+	_ WriteFileSystem = InvalidFileSystem("")
+)
 
 // InvalidFileSystem is a file system where all operations are invalid.
 // A File with an empty path defaults to this FS.
@@ -22,18 +22,13 @@ var _ FullyFeaturedFileSystem = InvalidFileSystem("")
 // for debugging or testing purposes.
 type InvalidFileSystem string
 
-func (InvalidFileSystem) ReadableWritable() (readable, writable bool) {
-	return false, false
+// ID returns the same string as String.
+func (fs InvalidFileSystem) ID() string {
+	return fs.String()
 }
 
-func (InvalidFileSystem) RootDir() File {
-	return "" // InvalidFile
-}
-
-func (fs InvalidFileSystem) ID() (string, error) {
-	return fs.String(), nil
-}
-
+// Prefix returns "invalid://", extended with the name
+// of the file system if the underlying string is not empty.
 func (fs InvalidFileSystem) Prefix() string {
 	if fs == "" {
 		return "invalid://"
@@ -41,6 +36,8 @@ func (fs InvalidFileSystem) Prefix() string {
 	return "invalid://" + strings.Trim(string(fs), "/") + "/"
 }
 
+// Name returns the underlying string of the file system
+// or "invalid file system" if it is empty.
 func (fs InvalidFileSystem) Name() string {
 	if fs == "" {
 		return "invalid file system"
@@ -48,6 +45,8 @@ func (fs InvalidFileSystem) Name() string {
 	return string(fs)
 }
 
+// String returns "invalid file system", followed by
+// the underlying string if it is not empty.
 func (fs InvalidFileSystem) String() string {
 	if fs == "" {
 		return "invalid file system"
@@ -55,177 +54,58 @@ func (fs InvalidFileSystem) String() string {
 	return "invalid file system" + " " + string(fs)
 }
 
-func (fs InvalidFileSystem) JoinCleanFile(uri ...string) File {
-	if fs == "" && strings.Join(uri, "") == "" {
-		return "" // InvalidFile
-	}
-	return File(fs.Prefix() + fs.JoinCleanPath(uri...))
-}
-
-func (InvalidFileSystem) IsAbsPath(filePath string) bool {
-	return path.IsAbs(filePath)
-}
-
-func (fs InvalidFileSystem) AbsPath(filePath string) string {
-	return fs.JoinCleanPath(filePath)
-}
-
-func (fs InvalidFileSystem) URL(cleanPath string) string {
-	return fs.Prefix() + cleanPath
-}
-
-func (fs InvalidFileSystem) CleanPathFromURI(uri string) string {
-	return path.Clean(strings.TrimPrefix(uri, fs.Prefix()))
-}
-
-func (fs InvalidFileSystem) JoinCleanPath(uriParts ...string) string {
-	if len(uriParts) > 0 {
-		uriParts[0] = strings.TrimPrefix(uriParts[0], fs.Prefix())
-	}
-	cleanPath := path.Join(uriParts...)
-	unescPath, err := url.PathUnescape(cleanPath)
-	if err == nil {
-		cleanPath = unescPath
-	}
-	cleanPath = path.Clean(cleanPath)
-	return cleanPath
-}
-
-func (fs InvalidFileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, fs.Prefix(), fs.Separator())
-}
-
+// Separator returns "/".
 func (InvalidFileSystem) Separator() string {
 	return "/"
 }
 
-func (InvalidFileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return false, ErrInvalidFileSystem
+// ReadableWritable returns false, false because no operation is possible.
+func (InvalidFileSystem) ReadableWritable() (readable, writable bool) {
+	return false, false
 }
 
-func (fs InvalidFileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	if fs == "" {
-		return "", ""
-	}
-	return fsimpl.SplitDirAndName(filePath, 0, fs.Separator())
+// RootDir returns InvalidFile.
+func (InvalidFileSystem) RootDir() File {
+	return InvalidFile
 }
 
-func (InvalidFileSystem) VolumeName(filePath string) string {
-	return "invalid:"
+// CleanPath cleans the path without a leading separator,
+// because the prefix already ends with a slash (like httpfs).
+func (fs InvalidFileSystem) CleanPath(uriParts ...string) string {
+	return fsimpl.PathHelper{URIPrefix: fs.Prefix()}.CleanPath(uriParts...)
 }
 
-func (InvalidFileSystem) Stat(filePath string) (iofs.FileInfo, error) {
+// Stat returns ErrInvalidFileSystem.
+func (InvalidFileSystem) Stat(filePath string) (*FileInfo, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) Exists(filePath string) bool {
-	return false
-}
-
-func (InvalidFileSystem) IsHidden(filePath string) bool {
-	return false
-}
-
-func (InvalidFileSystem) IsSymbolicLink(filePath string) bool {
-	return false
-}
-
-func (InvalidFileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
+// ListDir returns ErrInvalidFileSystem.
+func (InvalidFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	return ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) ListDirInfoRecursive(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) ListDirMax(ctx context.Context, dirPath string, n int, patterns []string) (files []File, err error) {
+// OpenReader returns ErrInvalidFileSystem.
+func (InvalidFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) SetPermissions(filePath string, perm Permissions) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) User(filePath string) (string, error) {
-	return "", ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) SetUser(filePath string, user string) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) Group(filePath string) (string, error) {
-	return "", ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) SetGroup(filePath string, group string) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) Touch(filePath string, perm []Permissions) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) MakeDir(dirPath string, perm []Permissions) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) MakeAllDirs(dirPath string, perm []Permissions) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+// OpenWriter returns ErrInvalidFileSystem.
+func (InvalidFileSystem) OpenWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
 	return nil, ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
+// MakeDir returns ErrInvalidFileSystem.
+func (InvalidFileSystem) MakeDir(dirPath string, perm Permissions) error {
 	return ErrInvalidFileSystem
 }
 
-func (InvalidFileSystem) Append(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) OpenReader(filePath string) (ReadCloser, error) {
-	return nil, ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) OpenWriter(filePath string, perm []Permissions) (WriteCloser, error) {
-	return nil, ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) OpenAppendWriter(filePath string, perm []Permissions) (WriteCloser, error) {
-	return nil, ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) OpenReadWriter(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
-	return nil, ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
-	return nil, ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) Truncate(filePath string, size int64) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string, buf *[]byte) error {
-	return ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) Rename(filePath string, newName string) (string, error) {
-	return "", ErrInvalidFileSystem
-}
-
-func (InvalidFileSystem) Move(filePath string, destPath string) error {
-	return ErrInvalidFileSystem
-}
-
+// Remove returns ErrInvalidFileSystem.
 func (InvalidFileSystem) Remove(filePath string) error {
 	return ErrInvalidFileSystem
 }
 
+// Close does nothing and returns nil.
 func (InvalidFileSystem) Close() error {
-	return ErrInvalidFileSystem
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"io"
 	iofs "io/fs"
+	"math"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -540,7 +541,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 		}
 
 		data := []byte("Test data")
-		buf := NewReadonlyFileBufferWithClose(data, nil, closeFunc)
+		buf := NewFileBufferWithClose(data, closeFunc)
 
 		// Close should call the callback
 		err := buf.Close()
@@ -625,4 +626,24 @@ func TestReadonlyFileBuffer(t *testing.T) {
 		var _ io.Seeker = buf
 		var _ io.Closer = buf
 	})
+}
+
+// TestFileBufferWriteAtOffsetOverflow verifies that an absurd offset is
+// rejected with an error. int(off) truncated on 32 bit and pos+len(p)
+// wrapped negative near the maximum, so the write panicked on the slice
+// bounds instead of failing cleanly.
+func TestFileBufferWriteAtOffsetOverflow(t *testing.T) {
+	buf := NewFileBuffer([]byte("data"))
+
+	n, err := buf.WriteAt([]byte("x"), math.MaxInt64)
+	require.Error(t, err, "an offset that cannot be indexed must be an error")
+	assert.Zero(t, n)
+	assert.Equal(t, "data", string(buf.Bytes()), "a rejected write must not change the buffer")
+
+	// Seek then Write must fail the same way rather than panic
+	_, err = buf.Seek(math.MaxInt64, io.SeekStart)
+	require.NoError(t, err, "seeking beyond the end is allowed")
+	n, err = buf.Write([]byte("x"))
+	require.Error(t, err)
+	assert.Zero(t, n)
 }

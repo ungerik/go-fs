@@ -10,8 +10,8 @@ import (
 	"context"
 	"errors"
 	"io"
-	iofs "io/fs"
 	"os"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -24,38 +24,14 @@ import (
 	"github.com/ungerik/go-fs/fstest"
 )
 
-// mockFileInfo implements io/fs.FileInfo for testing.
-type mockFileInfo struct {
-	name    string
-	size    int64
-	mode    os.FileMode
-	modTime time.Time
-	isDir   bool
-}
-
-func (m *mockFileInfo) Name() string       { return m.name }
-func (m *mockFileInfo) Size() int64        { return m.size }
-func (m *mockFileInfo) Mode() os.FileMode  { return m.mode }
-func (m *mockFileInfo) ModTime() time.Time { return m.modTime }
-func (m *mockFileInfo) IsDir() bool        { return m.isDir }
-func (m *mockFileInfo) Sys() any           { return nil }
-
-// mockReadCloser implements iofs.File for testing.
-type mockReadCloser struct {
-	io.ReadCloser
-}
-
-func (m *mockReadCloser) Stat() (iofs.FileInfo, error) {
-	return &mockFileInfo{name: "test.txt", size: 12}, nil
-}
-
-func (m *mockReadCloser) ReadDir(n int) ([]iofs.DirEntry, error) {
-	return nil, errors.New("not a directory")
-}
-
 // TestFile comprehensively tests File methods using MockFileSystem with different Permissions
 func TestFile(t *testing.T) {
-	// Helper to create a mock file system with minimal setup
+	// Helper to create a mock file system with minimal setup.
+	//
+	// MockFullyFeaturedFileSystem implements every optional interface and the
+	// fs package dispatches to an optional interface whenever it is implemented,
+	// so every hook a File method can reach has to be set here or in the test.
+	// The fs package always hands the mock cleaned paths ("/a/b" form, prefix stripped).
 	createMockFS := func(prefix string) *fstest.MockFullyFeaturedFileSystem {
 		mockFS := &fstest.MockFullyFeaturedFileSystem{}
 		mockFS.MockFileSystem = fstest.MockFileSystem{
@@ -63,115 +39,66 @@ func TestFile(t *testing.T) {
 			MockReadableWritable: func() (bool, bool) {
 				return true, true // Mock filesystem is both readable and writable
 			},
-			MockURL: func(path string) string {
-				// Simply concatenate prefix and path (path should have leading / for absolute paths)
-				return prefix + strings.TrimPrefix(path, "/")
-			},
-			MockCleanPathFromURI: func(uri string) string {
-				// Simple implementation that removes the prefix and returns the path
-				if after, ok := strings.CutPrefix(uri, prefix); ok {
-					path := after
-					// Ensure path starts with /
-					if !strings.HasPrefix(path, "/") {
-						path = "/" + path
-					}
-					return path
-				}
-				return uri
-			},
-			MockSplitDirAndName: func(path string) (string, string) {
-				// Simple implementation that splits on the last /
-				lastSlash := strings.LastIndex(path, "/")
-				if lastSlash == -1 {
-					return "", path
-				}
-				return path[:lastSlash], path[lastSlash+1:]
-			},
-			MockJoinCleanFile: func(elements ...string) File {
-				// Simple implementation that joins elements with /
-				path := strings.Join(elements, "/")
-				// Clean up double slashes
-				path = strings.ReplaceAll(path, "//", "/")
-				return File(prefix + path)
-			},
-			MockJoinCleanPath: func(elements ...string) string {
-				// Simple implementation that joins elements with /
-				path := strings.Join(elements, "/")
-				// Clean up double slashes
-				path = strings.ReplaceAll(path, "//", "/")
-				return path
-			},
-			MockStat: func(path string) (iofs.FileInfo, error) {
-				// Default implementation that returns a file info
-				return &mockFileInfo{
-					name:  "file.txt",
-					isDir: false,
-					size:  100,
-					mode:  0644,
+			MockStat: func(filePath string) (*FileInfo, error) {
+				// Default implementation that returns an existing regular file.
+				// File is left empty so the fs package fills it in.
+				return &FileInfo{
+					Name:        path.Base(filePath),
+					Exists:      true,
+					IsRegular:   true,
+					Size:        100,
+					Permissions: 0644,
 				}, nil
 			},
-			MockMakeDir: func(dirPath string, perm []Permissions) error {
+			MockListDir: func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
+				// Default implementation that returns empty directory
+				return nil
+			},
+			MockOpenReader: func(filePath string) (io.ReadCloser, error) {
+				// Return a reader with the content of MockReadAll (empty by default)
+				data, err := mockFS.MockReadAll(t.Context(), filePath)
+				if err != nil {
+					return nil, err
+				}
+				return io.NopCloser(bytes.NewReader(data)), nil
+			},
+			MockMakeDir: func(dirPath string, perm Permissions) error {
 				return nil
 			},
 			MockRemove: func(filePath string) error {
 				return nil
 			},
-			MockAbsPath: func(path string) string {
-				// For mock purposes, just ensure it starts with / (but only add if not present)
-				if !strings.HasPrefix(path, "/") {
-					return "/" + path
-				}
-				return path
-			},
-			MockSeparator: func() string {
-				return "/"
-			},
-			MockIsHidden: func(path string) bool {
-				// Check if filename starts with dot
-				_, name := mockFS.MockSplitDirAndName(path)
-				return strings.HasPrefix(name, ".")
-			},
-			MockIsAbsPath: func(path string) bool {
-				return strings.HasPrefix(path, "/")
-			},
-			MockIsSymbolicLink: func(path string) bool {
-				// Mock filesystem doesn't support symbolic links
-				return false
-			},
 			MockRootDir: func() File {
-				return File(prefix + "/")
-			},
-			MockOpenReader: func(filePath string) (ReadCloser, error) {
-				// Return a reader with empty content by default
-				data, err := mockFS.MockReadAll(t.Context(), filePath)
-				if err != nil {
-					return nil, err
-				}
-				return &mockReadCloser{ReadCloser: io.NopCloser(bytes.NewReader(data))}, nil
+				return File(prefix)
 			},
 		}
-		mockFS.MockExists = func(filePath string) bool {
+		mockFS.MockExists = func(filePath string) (bool, error) {
 			_, err := mockFS.MockStat(filePath)
-			return err == nil
+			switch {
+			case err == nil:
+				return true, nil
+			case errors.Is(err, os.ErrNotExist):
+				return false, nil
+			default:
+				return false, err
+			}
 		}
-		mockFS.MockOpenAppendWriter = func(filePath string, perm []Permissions) (WriteCloser, error) {
+		mockFS.MockOpenAppendWriter = func(filePath string, perm Permissions) (WriteCloser, error) {
 			// Emulate the fallback implementation: read existing content,
 			// return a buffer that calls WriteAll on close
 			current, err := mockFS.MockReadAll(t.Context(), filePath)
 			if err != nil {
 				current = []byte{} // Empty if file doesn't exist
 			}
-			var fileBuffer *fsimpl.FileBuffer
-			fileBuffer = fsimpl.NewFileBufferWithClose(current, func() error {
-				return mockFS.MockWriteAll(t.Context(), filePath, fileBuffer.Bytes(), perm)
-			})
-			return fileBuffer, nil
+			return fsimpl.NewWriteOnCloseFileBuffer(current, func(data []byte) error {
+				return mockFS.MockWriteAll(t.Context(), filePath, data, perm)
+			}), nil
 		}
 		mockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
 			// Default implementation that returns empty data
 			return []byte{}, nil
 		}
-		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
+		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 			// Default implementation that does nothing
 			return nil
 		}
@@ -179,13 +106,31 @@ func TestFile(t *testing.T) {
 			// Default implementation that returns empty list
 			return []File{}, nil
 		}
+		mockFS.MockListDirRecursive = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
+			// Default implementation that returns empty directory
+			return nil
+		}
 		mockFS.MockVolumeName = func(filePath string) string {
 			// Mock file systems don't have volumes
 			return ""
 		}
-		mockFS.MockListDirInfo = func(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
-			// Default implementation that returns empty directory
-			return nil
+		mockFS.MockAbsPath = func(filePath string) string {
+			// For mock purposes, just ensure it starts with / (but only add if not present)
+			if !strings.HasPrefix(filePath, "/") {
+				return "/" + filePath
+			}
+			return filePath
+		}
+		mockFS.MockIsAbsPath = func(filePath string) bool {
+			return strings.HasPrefix(filePath, "/")
+		}
+		mockFS.MockIsHidden = func(filePath string) bool {
+			// Check if filename starts with dot
+			return strings.HasPrefix(path.Base(filePath), ".")
+		}
+		mockFS.MockIsSymbolicLink = func(filePath string) bool {
+			// Mock filesystem doesn't support symbolic links
+			return false
 		}
 		mockFS.MockSetPermissions = func(filePath string, perm Permissions) error {
 			// Default implementation that does nothing
@@ -207,7 +152,7 @@ func TestFile(t *testing.T) {
 			// Default implementation that does nothing
 			return nil
 		}
-		mockFS.MockTouch = func(filePath string, perm []Permissions) error {
+		mockFS.MockTouch = func(filePath string, perm Permissions) error {
 			// Default implementation that does nothing
 			return nil
 		}
@@ -221,8 +166,7 @@ func TestFile(t *testing.T) {
 		}
 		mockFS.MockRename = func(filePath string, newName string) (newPath string, err error) {
 			// Default implementation that returns a new path
-			dir, _ := mockFS.MockSplitDirAndName(filePath)
-			return dir + "/" + newName, nil
+			return path.Join(path.Dir(filePath), newName), nil
 		}
 		mockFS.MockMove = func(filePath string, destinationPath string) error {
 			// Default implementation that does nothing
@@ -231,24 +175,28 @@ func TestFile(t *testing.T) {
 		return mockFS
 	}
 
-	// Test different permission combinations for each method
+	// Test different permission combinations for each method.
+	// The file system receives a single Permissions value:
+	// all passed permissions OR-ed together, or zero (NoPermissions)
+	// meaning the default of the file system when none are passed.
 	permissionTests := []struct {
 		name        string
 		permissions []Permissions
+		want        Permissions
 	}{
-		{"NoPermissions", []Permissions{}},
-		{"SinglePermission", []Permissions{0644}},
-		{"MultiplePermissions", []Permissions{0644, 0755}},
-		{"ReadOnly", []Permissions{0444}},
-		{"WriteOnly", []Permissions{0222}},
-		{"ExecuteOnly", []Permissions{0111}},
-		{"FullPermissions", []Permissions{0777}},
-		{"UserReadWrite", []Permissions{0600}},
-		{"GroupReadWrite", []Permissions{0660}},
-		{"OtherReadWrite", []Permissions{0606}},
-		{"StickyBit", []Permissions{01777}},
-		{"SetUID", []Permissions{04755}},
-		{"SetGID", []Permissions{02755}},
+		{"NoPermissions", []Permissions{}, NoPermissions},
+		{"SinglePermission", []Permissions{0644}, 0644},
+		{"MultiplePermissions", []Permissions{0644, 0755}, 0644 | 0755},
+		{"ReadOnly", []Permissions{0444}, 0444},
+		{"WriteOnly", []Permissions{0222}, 0222},
+		{"ExecuteOnly", []Permissions{0111}, 0111},
+		{"FullPermissions", []Permissions{0777}, 0777},
+		{"UserReadWrite", []Permissions{0600}, 0600},
+		{"GroupReadWrite", []Permissions{0660}, 0660},
+		{"OtherReadWrite", []Permissions{0606}, 0606},
+		{"StickyBit", []Permissions{01777}, 01777},
+		{"SetUID", []Permissions{04755}, 04755},
+		{"SetGID", []Permissions{02755}, 02755},
 	}
 
 	t.Run("MakeDir", func(t *testing.T) {
@@ -261,16 +209,22 @@ func TestFile(t *testing.T) {
 
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-				var capturedPerms []Permissions
-				mockFS.MockMakeDir = func(dirPath string, perm []Permissions) error {
-					capturedPerms = perm
+				// MakeDir stats first and is a no-op for an existing directory
+				// (or an error for an existing file), so the path must not exist
+				mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+					return nil, os.ErrNotExist
+				}
+
+				var capturedPerm Permissions
+				mockFS.MockMakeDir = func(dirPath string, perm Permissions) error {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", dirPath)
 					return nil
 				}
 
 				err := file.MakeDir(permTest.permissions...)
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -285,20 +239,19 @@ func TestFile(t *testing.T) {
 
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-				// Mock Stat to return file not found
-				mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-					return nil, errors.New("file not found")
-				}
-
-				var capturedPerms []Permissions
-				mockFS.MockMakeDir = func(dirPath string, perm []Permissions) error {
-					capturedPerms = perm
+				// MockFullyFeaturedFileSystem implements MakeAllDirsFileSystem,
+				// so the permissions are passed to the native MakeAllDirs
+				// instead of the per-directory MakeDir emulation.
+				var capturedPerm Permissions
+				mockFS.MockMakeAllDirs = func(dirPath string, perm Permissions) error {
+					capturedPerm = perm
+					assert.Equal(t, "/test/path/to/file.txt", dirPath)
 					return nil
 				}
 
 				err := file.MakeAllDirs(permTest.permissions...)
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -313,9 +266,9 @@ func TestFile(t *testing.T) {
 
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-				var capturedPerms []Permissions
-				mockFS.MockOpenWriter = func(filePath string, perm []Permissions) (WriteCloser, error) {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockOpenWriter = func(filePath string, perm Permissions) (WriteCloser, error) {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", filePath)
 					return &fsimpl.FileBuffer{}, nil
 				}
@@ -323,7 +276,7 @@ func TestFile(t *testing.T) {
 				writer, err := file.OpenWriter(permTest.permissions...)
 				require.NoError(t, err)
 				require.NotNil(t, writer)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -343,9 +296,9 @@ func TestFile(t *testing.T) {
 					return []byte("existing content"), nil
 				}
 
-				var capturedPerms []Permissions
-				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
 					return nil
 				}
 
@@ -356,7 +309,7 @@ func TestFile(t *testing.T) {
 				// Close to trigger WriteAll
 				err = writer.Close()
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -371,9 +324,9 @@ func TestFile(t *testing.T) {
 
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-				var capturedPerms []Permissions
-				mockFS.MockOpenReadWriter = func(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockOpenReadWriter = func(filePath string, perm Permissions) (ReadWriteSeekCloser, error) {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", filePath)
 					return &fsimpl.FileBuffer{}, nil
 				}
@@ -381,7 +334,7 @@ func TestFile(t *testing.T) {
 				readWriter, err := file.OpenReadWriter(permTest.permissions...)
 				require.NoError(t, err)
 				require.NotNil(t, readWriter)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -397,17 +350,17 @@ func TestFile(t *testing.T) {
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 				testData := []byte("test content")
-				var capturedPerms []Permissions
-				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", filePath)
 					require.Equal(t, testData, data)
 					return nil
 				}
 
-				err := file.WriteAll(testData, permTest.permissions...)
+				err := file.WriteAll(t.Context(), testData, permTest.permissions...)
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -423,17 +376,17 @@ func TestFile(t *testing.T) {
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 				testData := []byte("test content")
-				var capturedPerms []Permissions
-				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
 					require.Equal(t, "/test/path/to/file.txt", filePath)
 					require.Equal(t, testData, data)
 					return nil
 				}
 
-				err := file.WriteAllContext(t.Context(), testData, permTest.permissions...)
+				err := file.WriteAll(t.Context(), testData, permTest.permissions...)
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -449,17 +402,17 @@ func TestFile(t *testing.T) {
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 				testStr := "test content"
-				var capturedPerms []Permissions
-				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", filePath)
 					assert.Equal(t, []byte(testStr), data)
 					return nil
 				}
 
-				err := file.WriteAllString(testStr, permTest.permissions...)
+				err := file.WriteAllString(t.Context(), testStr, permTest.permissions...)
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -475,17 +428,17 @@ func TestFile(t *testing.T) {
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 				testStr := "test content"
-				var capturedPerms []Permissions
-				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", filePath)
 					assert.Equal(t, []byte(testStr), data)
 					return nil
 				}
 
-				err := file.WriteAllStringContext(t.Context(), testStr, permTest.permissions...)
+				err := file.WriteAllString(t.Context(), testStr, permTest.permissions...)
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -501,9 +454,9 @@ func TestFile(t *testing.T) {
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 				testData := []byte("appended content")
-				var capturedPerms []Permissions
-				mockFS.MockAppend = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockAppend = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", filePath)
 					require.Equal(t, testData, data)
 					return nil
@@ -511,7 +464,7 @@ func TestFile(t *testing.T) {
 
 				err := file.Append(t.Context(), testData, permTest.permissions...)
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -527,9 +480,9 @@ func TestFile(t *testing.T) {
 				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 				testStr := "appended content"
-				var capturedPerms []Permissions
-				mockFS.MockAppend = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockAppend = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", filePath)
 					assert.Equal(t, []byte(testStr), data)
 					return nil
@@ -537,7 +490,7 @@ func TestFile(t *testing.T) {
 
 				err := file.AppendString(t.Context(), testStr, permTest.permissions...)
 				require.NoError(t, err)
-				require.Equal(t, permTest.permissions, capturedPerms)
+				require.Equal(t, permTest.want, capturedPerm)
 			})
 		}
 	})
@@ -552,9 +505,9 @@ func TestFile(t *testing.T) {
 		file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 		testData := map[string]any{"name": "test", "value": 123}
-		var capturedPerms []Permissions
-		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-			capturedPerms = perm
+		capturedPerm := Permissions(0777) // Sentinel that must be overwritten
+		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+			capturedPerm = perm
 			assert.Equal(t, "/test/path/to/file.txt", filePath)
 			// Verify it's valid JSON
 			assert.Contains(t, string(data), `"name":"test"`)
@@ -564,8 +517,8 @@ func TestFile(t *testing.T) {
 
 		err := file.WriteJSON(t.Context(), testData)
 		require.NoError(t, err)
-		// WriteJSON doesn't support permissions, so it should pass nil
-		require.Nil(t, capturedPerms)
+		// WriteJSON doesn't support permissions, so it should pass the default
+		require.Equal(t, NoPermissions, capturedPerm)
 	})
 
 	t.Run("WriteXML", func(t *testing.T) {
@@ -583,9 +536,9 @@ func TestFile(t *testing.T) {
 			Value   int      `xml:"value"`
 		}{Name: "test", Value: 123}
 
-		var capturedPerms []Permissions
-		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-			capturedPerms = perm
+		capturedPerm := Permissions(0777) // Sentinel that must be overwritten
+		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+			capturedPerm = perm
 			assert.Equal(t, "/test/path/to/file.txt", filePath)
 			// Verify it's valid XML with header
 			assert.Contains(t, string(data), `<?xml version="1.0" encoding="UTF-8"?>`)
@@ -596,8 +549,8 @@ func TestFile(t *testing.T) {
 
 		err := file.WriteXML(t.Context(), testData)
 		require.NoError(t, err)
-		// WriteXML doesn't support permissions, so it should pass nil
-		require.Nil(t, capturedPerms)
+		// WriteXML doesn't support permissions, so it should pass the default
+		require.Equal(t, NoPermissions, capturedPerm)
 	})
 
 	t.Run("ReadFrom", func(t *testing.T) {
@@ -613,17 +566,19 @@ func TestFile(t *testing.T) {
 				testReader := strings.NewReader("test content")
 
 				// Mock Stat to return existing file with permissions
-				mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-					return &mockFileInfo{
-						name: "file.txt",
-						size: 0,
-						mode: 0644,
+				mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+					return &FileInfo{
+						Name:        "file.txt",
+						Exists:      true,
+						IsRegular:   true,
+						Size:        0,
+						Permissions: 0644,
 					}, nil
 				}
 
-				var capturedPerms []Permissions
-				mockFS.MockOpenWriter = func(filePath string, perm []Permissions) (WriteCloser, error) {
-					capturedPerms = perm
+				var capturedPerm Permissions
+				mockFS.MockOpenWriter = func(filePath string, perm Permissions) (WriteCloser, error) {
+					capturedPerm = perm
 					assert.Equal(t, "/test/path/to/file.txt", filePath)
 					return &fsimpl.FileBuffer{}, nil
 				}
@@ -632,40 +587,9 @@ func TestFile(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, int64(12), n) // "test content" length
 				// ReadFrom should use existing file permissions, not the test permissions
-				assert.Equal(t, []Permissions{0644}, capturedPerms)
+				assert.Equal(t, Permissions(0644), capturedPerm)
 			})
 		}
-	})
-
-	t.Run("GobDecode", func(t *testing.T) {
-		// GobDecode doesn't accept permissions, so we just test it once
-		// Create mock file system for this test with only needed functions
-		mockFS := createMockFS("mock" + t.Name() + "://")
-		Register(mockFS)
-		t.Cleanup(func() { Unregister(mockFS) })
-
-		file := File("mock" + t.Name() + "://test/path/to/file.txt")
-
-		// First encode some data
-		mockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
-			return []byte("test content"), nil
-		}
-
-		encodedData, err := file.GobEncode()
-		require.NoError(t, err)
-
-		// Now decode it - GobDecode doesn't take permissions, but WriteAll does
-		var capturedPerms []Permissions
-		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm []Permissions) error {
-			capturedPerms = perm
-			assert.Equal(t, []byte("test content"), data)
-			return nil
-		}
-
-		err = file.GobDecode(encodedData)
-		require.NoError(t, err)
-		// GobDecode doesn't support permissions, so it should pass nil
-		require.Nil(t, capturedPerms)
 	})
 
 	// Test methods that don't take permissions but should still work
@@ -743,7 +667,7 @@ func TestFile(t *testing.T) {
 
 		t.Run("VolumeName", func(t *testing.T) {
 			volume := file.VolumeName()
-			assert.Equal(t, "", volume) // MockFileSystem doesn't implement VolumeNameFileSystem
+			assert.Equal(t, "", volume) // MockVolumeName reports no volume
 		})
 
 		t.Run("Ext", func(t *testing.T) {
@@ -778,13 +702,17 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
 			// Mock Stat to return a readable file
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name:  "file.txt",
-					isDir: false,
-					size:  100,
-					mode:  0644,
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:        "file.txt",
+					Exists:      true,
+					IsRegular:   true,
+					Size:        100,
+					Permissions: 0644,
 				}, nil
 			}
 
@@ -798,13 +726,17 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
 			// Mock Stat to return a writable file
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name:  "file.txt",
-					isDir: false,
-					size:  100,
-					mode:  0644,
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:        "file.txt",
+					Exists:      true,
+					IsRegular:   true,
+					Size:        100,
+					Permissions: 0644,
 				}, nil
 			}
 
@@ -818,20 +750,28 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
-			expectedInfo := &mockFileInfo{
-				name:  "file.txt",
-				isDir: false,
-				size:  100,
-				mode:  0644,
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
+			expectedInfo := &FileInfo{
+				Name:        "file.txt",
+				Exists:      true,
+				IsRegular:   true,
+				Size:        100,
+				Permissions: 0644,
 			}
 
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
 				return expectedInfo, nil
 			}
 
+			// Stat returns the io/fs.FileInfo view of the FileInfo returned by the file system
 			info, err := file.Stat()
 			require.NoError(t, err)
-			require.Equal(t, expectedInfo, info)
+			assert.Equal(t, "file.txt", info.Name())
+			assert.Equal(t, int64(100), info.Size())
+			assert.Equal(t, os.FileMode(0644), info.Mode())
+			assert.False(t, info.IsDir())
 		})
 
 		t.Run("Info", func(t *testing.T) {
@@ -840,20 +780,24 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
-			expectedInfo := &mockFileInfo{
-				name:  "file.txt",
-				isDir: false,
-				size:  100,
-				mode:  0644,
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
+			expectedInfo := &FileInfo{
+				Name:        "file.txt",
+				Exists:      true,
+				IsRegular:   true,
+				Size:        100,
+				Permissions: 0644,
 			}
 
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
 				return expectedInfo, nil
 			}
 
 			info := file.Info()
 			require.NotNil(t, info)
-			assert.Equal(t, file, info.File)
+			assert.Equal(t, file, info.File) // Filled in by the fs package from the Name
 		})
 
 		t.Run("Exists", func(t *testing.T) {
@@ -862,9 +806,12 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
 			// Mock Stat to return no error (file exists)
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{name: "file.txt"}, nil
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{Name: "file.txt", Exists: true}, nil
 			}
 
 			exists := file.Exists()
@@ -880,16 +827,16 @@ func TestFile(t *testing.T) {
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			// Test with existing file
-			testMockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{name: "file.txt"}, nil
+			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{Name: "file.txt", Exists: true}, nil
 			}
 
 			err := testFile.CheckExists()
 			require.NoError(t, err)
 
 			// Test with non-existing file
-			testMockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return nil, errors.New("file not found")
+			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return nil, os.ErrNotExist
 			}
 
 			err = testFile.CheckExists()
@@ -900,10 +847,11 @@ func TestFile(t *testing.T) {
 		t.Run("IsDir", func(t *testing.T) {
 			// Use the shared mockFS and override MockStat temporarily
 			originalMockStat := mockFS.MockStat
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name:  "file.txt",
-					isDir: true,
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:   "file.txt",
+					Exists: true,
+					IsDir:  true,
 				}, nil
 			}
 			defer func() { mockFS.MockStat = originalMockStat }()
@@ -917,10 +865,11 @@ func TestFile(t *testing.T) {
 			originalMockStat := mockFS.MockStat
 
 			// Test with directory
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name:  "file.txt",
-					isDir: true,
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:   "file.txt",
+					Exists: true,
+					IsDir:  true,
 				}, nil
 			}
 
@@ -928,10 +877,11 @@ func TestFile(t *testing.T) {
 			require.NoError(t, err)
 
 			// Test with file (not directory)
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name:  "file.txt",
-					isDir: false,
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:      "file.txt",
+					Exists:    true,
+					IsRegular: true,
 				}, nil
 			}
 
@@ -954,9 +904,7 @@ func TestFile(t *testing.T) {
 
 		t.Run("ToAbsPath", func(t *testing.T) {
 			absFile := file.ToAbsPath()
-			// ToAbsPath does Prefix() + AbsPath(), which adds extra /
-			// Expected: mockTestFile/NonPermissionMethods:///test/path/to/file.txt
-			assert.True(t, strings.HasSuffix(string(absFile), "test/path/to/file.txt"))
+			assert.Equal(t, file, absFile) // Already absolute
 		})
 
 		t.Run("IsRegular", func(t *testing.T) {
@@ -969,11 +917,12 @@ func TestFile(t *testing.T) {
 			file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			// Mock Stat to return a regular file
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name:  "file.txt",
-					isDir: false,
-					mode:  0644, // Regular file mode
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:        "file.txt",
+					Exists:      true,
+					IsRegular:   true,
+					Permissions: 0644,
 				}, nil
 			}
 
@@ -1005,6 +954,8 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
+			// MockFullyFeaturedFileSystem implements HiddenFileSystem,
+			// MockIsHidden uses the dot rule
 			hiddenFile := File("mock" + t.Name() + "://test/path/to/.hidden")
 			hidden := hiddenFile.IsHidden()
 			assert.True(t, hidden)
@@ -1016,8 +967,11 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
 			symlink := file.IsSymbolicLink()
-			assert.False(t, symlink) // MockFileSystem returns false
+			assert.False(t, symlink) // MockIsSymbolicLink returns false
 		})
 
 		t.Run("Size", func(t *testing.T) {
@@ -1029,10 +983,11 @@ func TestFile(t *testing.T) {
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			// Mock Stat to return a file with size
-			testMockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name: "file.txt",
-					size: 1024,
+			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:   "file.txt",
+					Exists: true,
+					Size:   1024,
 				}, nil
 			}
 
@@ -1046,12 +1001,15 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
 			// Mock OpenReader to return a reader with content
-			mockFS.MockOpenReader = func(path string) (ReadCloser, error) {
-				return &mockReadCloser{io.NopCloser(strings.NewReader("test content"))}, nil
+			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("test content")), nil
 			}
 
-			hash, err := file.ContentHash()
+			hash, err := file.ContentHash(t.Context())
 			require.NoError(t, err)
 			assert.NotEmpty(t, hash)
 		})
@@ -1062,12 +1020,15 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
 			// Mock OpenReader to return a reader with content
-			mockFS.MockOpenReader = func(path string) (ReadCloser, error) {
-				return &mockReadCloser{io.NopCloser(strings.NewReader("test content"))}, nil
+			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("test content")), nil
 			}
 
-			hash, err := file.ContentHashContext(t.Context())
+			hash, err := file.ContentHash(t.Context())
 			require.NoError(t, err)
 			assert.NotEmpty(t, hash)
 		})
@@ -1081,10 +1042,11 @@ func TestFile(t *testing.T) {
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			expectedTime := time.Now()
-			testMockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name:    "file.txt",
-					modTime: expectedTime,
+			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:     "file.txt",
+					Exists:   true,
+					Modified: expectedTime,
 				}, nil
 			}
 
@@ -1098,10 +1060,14 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name: "file.txt",
-					mode: 0644,
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:        "file.txt",
+					Exists:      true,
+					Permissions: 0644,
 				}, nil
 			}
 
@@ -1135,9 +1101,10 @@ func TestFile(t *testing.T) {
 				File("mock" + t.Name() + "://test/path/to/dir/file2.txt"),
 			}
 
-			testMockFS.MockListDirInfo = func(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
+			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
+				assert.Equal(t, "/test/path/to/dir", dirPath)
 				for _, f := range expectedFiles {
-					info := &FileInfo{File: f, Name: f.Name(), IsDir: false}
+					info := &FileInfo{File: f, Name: f.Name(), Exists: true, IsRegular: true}
 					if err := callback(info); err != nil {
 						return err
 					}
@@ -1146,7 +1113,7 @@ func TestFile(t *testing.T) {
 			}
 
 			var listedFiles []File
-			err := testFile.ListDir(func(f File) error {
+			err := testFile.ListDir(t.Context(), func(f File) error {
 				listedFiles = append(listedFiles, f)
 				return nil
 			})
@@ -1168,9 +1135,9 @@ func TestFile(t *testing.T) {
 				File("mock" + t.Name() + "://test/path/to/dir/file2.txt"),
 			}
 
-			testMockFS.MockListDirInfo = func(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
+			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 				for _, f := range expectedFiles {
-					info := &FileInfo{File: f, Name: f.Name(), IsDir: false}
+					info := &FileInfo{File: f, Name: f.Name(), Exists: true, IsRegular: true}
 					if err := callback(info); err != nil {
 						return err
 					}
@@ -1179,7 +1146,7 @@ func TestFile(t *testing.T) {
 			}
 
 			var listedFiles []File
-			err := testFile.ListDirContext(t.Context(), func(f File) error {
+			err := testFile.ListDir(t.Context(), func(f File) error {
 				listedFiles = append(listedFiles, f)
 				return nil
 			})
@@ -1201,9 +1168,9 @@ func TestFile(t *testing.T) {
 				File("mock" + t.Name() + "://test/path/to/dir/file2.txt"),
 			}
 
-			testMockFS.MockListDirInfo = func(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
+			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 				for _, f := range expectedFiles {
-					info := &FileInfo{File: f, Name: f.Name(), IsDir: false}
+					info := &FileInfo{File: f, Name: f.Name(), Exists: true, IsRegular: true}
 					if err := callback(info); err != nil {
 						return err
 					}
@@ -1212,7 +1179,7 @@ func TestFile(t *testing.T) {
 			}
 
 			var listedFiles []File
-			for f, err := range testFile.ListDirIter() {
+			for f, err := range testFile.ListDirIter(t.Context()) {
 				require.NoError(t, err)
 				listedFiles = append(listedFiles, f)
 			}
@@ -1237,7 +1204,7 @@ func TestFile(t *testing.T) {
 				return expectedFiles, nil
 			}
 
-			files, err := testFile.ListDirMax(10)
+			files, err := testFile.ListDirMax(t.Context(), 10)
 			require.NoError(t, err)
 			assert.Equal(t, expectedFiles, files)
 		})
@@ -1317,8 +1284,8 @@ func TestFile(t *testing.T) {
 
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-			testMockFS.MockOpenReader = func(path string) (ReadCloser, error) {
-				return &mockReadCloser{io.NopCloser(strings.NewReader("test content"))}, nil
+			testMockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("test content")), nil
 			}
 
 			var buf bytes.Buffer
@@ -1336,14 +1303,23 @@ func TestFile(t *testing.T) {
 
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-			expectedReader := &mockReadCloser{io.NopCloser(strings.NewReader("test content"))}
-			testMockFS.MockOpenReader = func(path string) (ReadCloser, error) {
-				return expectedReader, nil
+			testMockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
+				assert.Equal(t, "/test/path/to/file.txt", filePath)
+				return io.NopCloser(strings.NewReader("test content")), nil
 			}
 
+			// An io.ReadCloser without a Stat method is wrapped
+			// so that the result implements io/fs.File with Stat
+			// backed by File.Stat.
 			reader, err := testFile.OpenReader()
 			require.NoError(t, err)
-			assert.Equal(t, expectedReader, reader)
+			data, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			assert.Equal(t, "test content", string(data))
+			info, err := reader.Stat()
+			require.NoError(t, err)
+			assert.Equal(t, "file.txt", info.Name())
+			require.NoError(t, reader.Close())
 		})
 
 		t.Run("OpenReadSeeker", func(t *testing.T) {
@@ -1352,15 +1328,18 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
-			expectedReader := &mockReadCloser{io.NopCloser(strings.NewReader("test content"))}
-			mockFS.MockOpenReader = func(path string) (ReadCloser, error) {
-				return expectedReader, nil
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+
+			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("test content")), nil
 			}
 
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name: "file.txt",
-					size: 12,
+			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{
+					Name:   "file.txt",
+					Exists: true,
+					Size:   12,
 				}, nil
 			}
 
@@ -1382,7 +1361,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			data, err := testFile.ReadAll()
+			data, err := testFile.ReadAll(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, expectedData, data)
 		})
@@ -1400,7 +1379,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			data, err := testFile.ReadAllContext(t.Context())
+			data, err := testFile.ReadAll(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, expectedData, data)
 		})
@@ -1437,7 +1416,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			str, err := testFile.ReadAllString()
+			str, err := testFile.ReadAllString(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, "test content", str)
 		})
@@ -1455,7 +1434,7 @@ func TestFile(t *testing.T) {
 				return expectedData, nil
 			}
 
-			str, err := testFile.ReadAllStringContext(t.Context())
+			str, err := testFile.ReadAllString(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, "test content", str)
 		})
@@ -1503,21 +1482,6 @@ func TestFile(t *testing.T) {
 			assert.Equal(t, 123, result.Value)
 		})
 
-		t.Run("GobEncode", func(t *testing.T) {
-			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
-			Register(mockFS)
-			t.Cleanup(func() { Unregister(mockFS) })
-
-			mockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
-				return []byte("test content"), nil
-			}
-
-			data, err := file.GobEncode()
-			require.NoError(t, err)
-			assert.NotEmpty(t, data)
-		})
-
 		t.Run("Watch", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
 			testMockFS := createMockFS("mock" + t.Name() + "://")
@@ -1545,7 +1509,7 @@ func TestFile(t *testing.T) {
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Truncate
-			err := testFile.Truncate(100)
+			err := testFile.Truncate(t.Context(), 100)
 			require.NoError(t, err)
 		})
 
@@ -1586,9 +1550,40 @@ func TestFile(t *testing.T) {
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 			dest := File("mock" + t.Name() + "://test/path/to/destination.txt")
 
-			// fstest.MockFullyFeaturedFileSystem implements Move
-			err := testFile.MoveTo(dest)
+			// fstest.MockFullyFeaturedFileSystem implements Move,
+			// the destination is a file (default MockStat) so it is the final path
+			var movedTo string
+			testMockFS.MockMove = func(filePath string, destPath string) error {
+				assert.Equal(t, "/test/path/to/file.txt", filePath)
+				movedTo = destPath
+				return nil
+			}
+			err := testFile.MoveTo(t.Context(), dest)
 			require.NoError(t, err)
+			assert.Equal(t, "/test/path/to/destination.txt", movedTo)
+		})
+
+		t.Run("MoveTo_IntoDir", func(t *testing.T) {
+			// An existing directory as destination means "move into":
+			// MoveFileSystem.Move always receives the final path.
+			testMockFS := createMockFS("mock" + t.Name() + "://")
+			Register(testMockFS)
+			t.Cleanup(func() { Unregister(testMockFS) })
+
+			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			destDir := File("mock" + t.Name() + "://test/other")
+
+			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
+				return &FileInfo{Name: path.Base(filePath), Exists: true, IsDir: filePath == "/test/other"}, nil
+			}
+			var movedTo string
+			testMockFS.MockMove = func(filePath string, destPath string) error {
+				movedTo = destPath
+				return nil
+			}
+			err := testFile.MoveTo(t.Context(), destDir)
+			require.NoError(t, err)
+			assert.Equal(t, "/test/other/file.txt", movedTo)
 		})
 
 		t.Run("MoveTo_SamePath", func(t *testing.T) {
@@ -1597,14 +1592,14 @@ func TestFile(t *testing.T) {
 			// falling through to the copy+delete recursive fallback.
 			// The latter would silently destroy the file.
 			tmp := MustMakeTempDir()
-			t.Cleanup(func() { _ = tmp.RemoveRecursive() })
+			t.Cleanup(func() { _ = tmp.RemoveRecursive(context.Background()) })
 
 			file := tmp.Join("a.txt")
-			require.NoError(t, file.WriteAll([]byte("payload")))
+			require.NoError(t, file.WriteAll(t.Context(), []byte("payload")))
 
-			require.NoError(t, file.MoveTo(file), "File.MoveTo(self) must be a no-op")
+			require.NoError(t, file.MoveTo(t.Context(), file), "File.MoveTo(t.Context(), self) must be a no-op")
 			require.True(t, file.Exists(), "file survives same-path MoveTo")
-			got, err := file.ReadAllString()
+			got, err := file.ReadAllString(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, "payload", got, "content preserved")
 
@@ -1618,6 +1613,9 @@ func TestFile(t *testing.T) {
 			mockFS := createMockFS("mock" + t.Name() + "://")
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
+
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			mockFS.MockRemove = func(filePath string) error {
 				assert.Equal(t, "/test/path/to/file.txt", filePath)
@@ -1634,26 +1632,21 @@ func TestFile(t *testing.T) {
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
-			// Mock IsDir to return true
-			mockFS.MockStat = func(path string) (iofs.FileInfo, error) {
-				return &mockFileInfo{
-					name:  "file.txt",
-					isDir: true,
-				}, nil
-			}
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-			// Mock ListDir to return empty list
-			mockFS.MockListDirInfo = func(ctx context.Context, dirPath string, callback func(*FileInfo) error, patterns []string) error {
+			// RemoveRecursive uses the native RemoveAll of
+			// fstest.MockFullyFeaturedFileSystem instead of
+			// listing and removing the entries one by one
+			removed := ""
+			mockFS.MockRemoveAll = func(ctx context.Context, filePath string) error {
+				removed = filePath
 				return nil
 			}
 
-			// Mock Remove
-			mockFS.MockRemove = func(filePath string) error {
-				return nil
-			}
-
-			err := file.RemoveRecursive()
+			err := file.RemoveRecursive(context.Background())
 			require.NoError(t, err)
+			assert.Equal(t, "/test/path/to/file.txt", removed)
 		})
 
 		t.Run("StdFS", func(t *testing.T) {
@@ -1661,6 +1654,9 @@ func TestFile(t *testing.T) {
 			mockFS := createMockFS("mock" + t.Name() + "://")
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
+
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			stdFS := file.StdFS()
 			assert.NotNil(t, stdFS)
@@ -1672,6 +1668,9 @@ func TestFile(t *testing.T) {
 			mockFS := createMockFS("mock" + t.Name() + "://")
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
+
+			// Use a file with the prefix of this mock file system
+			file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
 			stdDirEntry := file.StdDirEntry()
 			assert.NotNil(t, stdDirEntry)
@@ -1712,31 +1711,18 @@ func TestFile_WriteAllContext_FallbackTruncates(t *testing.T) {
 	// stored holds the current file content for a single mock file.
 	var stored []byte
 
-	// Base MockFileSystem deliberately does NOT implement WriteAllFileSystem,
-	// so File.WriteAllContext exercises the OpenWriter/OpenReadWriter fallback.
+	// Base MockFileSystem deliberately does NOT implement WriteAllFileSystem
+	// (nor ReadWriterFileSystem anymore), so File.WriteAllContext exercises
+	// the OpenWriter fallback.
 	mockFS := &fstest.MockFileSystem{
 		MockPrefix: "mockwritealltrunc://",
-		MockCleanPathFromURI: func(uri string) string {
-			return strings.TrimPrefix(uri, "mockwritealltrunc://")
-		},
 		// OpenWriter mimics O_TRUNC: writing starts from an empty buffer.
-		MockOpenWriter: func(filePath string, perm []Permissions) (WriteCloser, error) {
-			var buf *fsimpl.FileBuffer
-			buf = fsimpl.NewFileBufferWithClose(nil, func() error {
-				stored = bytes.Clone(buf.Bytes())
+		MockOpenWriter: func(filePath string, perm Permissions) (WriteCloser, error) {
+			assert.Equal(t, "/test.json", filePath)
+			return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+				stored = bytes.Clone(data)
 				return nil
-			})
-			return buf, nil
-		},
-		// OpenReadWriter mimics O_RDWR|O_CREATE: existing content is preserved
-		// and writes overwrite in place without truncating (the buggy path).
-		MockOpenReadWriter: func(filePath string, perm []Permissions) (ReadWriteSeekCloser, error) {
-			var buf *fsimpl.FileBuffer
-			buf = fsimpl.NewFileBufferWithClose(bytes.Clone(stored), func() error {
-				stored = bytes.Clone(buf.Bytes())
-				return nil
-			})
-			return buf, nil
+			}), nil
 		},
 	}
 	Register(mockFS)
@@ -1749,7 +1735,7 @@ func TestFile_WriteAllContext_FallbackTruncates(t *testing.T) {
 
 	// Overwrite with a smaller JSON document.
 	small := []byte(`{"k":1}`)
-	err := file.WriteAll(small)
+	err := file.WriteAll(t.Context(), small)
 	require.NoError(t, err)
 
 	// The fallback must truncate: no stale trailing bytes from the larger file.

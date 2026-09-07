@@ -1,33 +1,65 @@
 package httpfs
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
 )
 
+const testFileContent = "# go-fs\n\nA unified file system for Go.\n"
+
+// newFileTestServer serves a single file at /README.md
+// and returns the server address without the "http://" scheme.
+func newFileTestServer(t *testing.T) (addr string) {
+	t.Helper()
+	mux := http.NewServeMux()
+	modTime := time.Date(2015, 10, 21, 7, 28, 0, 0, time.UTC)
+	mux.HandleFunc("/README.md", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "README.md", modTime, strings.NewReader(testFileContent))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return strings.TrimPrefix(server.URL, "http://")
+}
+
 func TestStat(t *testing.T) {
-	osInfo, err := FileSystemTLS.Stat("raw.githubusercontent.com/ungerik/go-fs/master/README.md")
-	assert.NoError(t, err)
-	assert.False(t, osInfo.IsDir())
-	assert.Greater(t, osInfo.Size(), int64(0), "file size greater zero")
-	assert.NotZero(t, osInfo.ModTime(), "has modified time")
+	addr := newFileTestServer(t)
 
-	file := fs.File("https://raw.githubusercontent.com/ungerik/go-fs/master/README.md")
-	info := file.Info()
+	info, err := FileSystem.Stat(addr + "/README.md")
+	require.NoError(t, err)
+	assert.False(t, info.IsDir)
+	assert.True(t, info.IsRegular)
+	assert.Equal(t, int64(len(testFileContent)), info.Size)
+	assert.NotZero(t, info.Modified, "has modified time")
 
-	// Note that this can fail when the file time changes between the two calls
-	assert.Equal(t, fs.NewFileInfo(file, osInfo, false), info)
+	file := fs.File("http://" + addr + "/README.md")
+	assert.Equal(t, file, info.File)
+	assert.Equal(t, info, file.Info())
 }
 
 func TestReadAll(t *testing.T) {
-	data, err := FileSystemTLS.ReadAll(t.Context(), "raw.githubusercontent.com/ungerik/go-fs/master/README.md")
-	assert.NoError(t, err)
-	assert.Greater(t, len(data), 0, "file size greater zero")
+	addr := newFileTestServer(t)
 
-	data2, err := fs.File("https://raw.githubusercontent.com/ungerik/go-fs/master/README.md").ReadAll()
-	assert.NoError(t, err)
+	data, err := FileSystem.ReadAll(t.Context(), addr+"/README.md")
+	require.NoError(t, err)
+	assert.Equal(t, testFileContent, string(data))
+
+	data2, err := fs.File("http://" + addr + "/README.md").ReadAll(t.Context())
+	require.NoError(t, err)
 	assert.Equal(t, data, data2)
+
+	r, err := fs.File("http://" + addr + "/README.md").OpenReader()
+	require.NoError(t, err)
+	data3, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.NoError(t, r.Close())
+	assert.Equal(t, data, data3)
 }

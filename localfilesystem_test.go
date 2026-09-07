@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"os/user"
 	"path/filepath"
 	"testing"
@@ -9,33 +10,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLocalFileSystem(t *testing.T) {
-	testDir := MustMakeTempDir()
-	t.Cleanup(func() {
-		assert.NoError(t, testDir.RemoveRecursive(), "testDir.RemoveRecursive() should not return an error")
-	})
-
-	RunFileSystemTests(
-		t.Context(),
-		t,
-		Local,               // fs
-		"local file system", // name
-		"file://",           // prefix
-		testDir.LocalPath(), // testDir
-	)
-}
-
 func Test_LocalFileSystem_MoveSameSrcDest(t *testing.T) {
 	tmp := MustMakeTempDir()
-	t.Cleanup(func() { _ = tmp.RemoveRecursive() })
+	t.Cleanup(func() { _ = tmp.RemoveRecursive(context.Background()) })
 
 	file := tmp.Join("a.txt")
-	require.NoError(t, file.WriteAll([]byte("hello")))
+	require.NoError(t, file.WriteAll(t.Context(), []byte("hello")))
 
 	// File: Move(src, src) is a no-op, matching os.Rename.
 	srcPath := file.LocalPath()
 	require.NoError(t, Local.Move(srcPath, srcPath), "Move(file, file) must be a no-op")
-	got, err := file.ReadAllString()
+	got, err := file.ReadAllString(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "hello", got, "file content preserved")
 
@@ -56,15 +41,15 @@ func Test_LocalFileSystem_MoveSameSrcDest(t *testing.T) {
 
 func Test_LocalFileSystem_MakeAllDirs(t *testing.T) {
 	const testDir = "TestDir"
-	File(testDir).RemoveRecursive()
-	defer File(testDir).RemoveRecursive()
+	File(testDir).RemoveRecursive(context.Background())
+	defer File(testDir).RemoveRecursive(context.Background())
 
 	localFileSystem := LocalFileSystem{
 		DefaultCreatePermissions:    UserAndGroupReadWrite,
 		DefaultCreateDirPermissions: UserAndGroupReadWrite,
 	}
 
-	err := localFileSystem.MakeDir(testDir, []Permissions{AllReadWrite})
+	err := localFileSystem.MakeDir(testDir, AllReadWrite)
 	assert.NoError(t, err)
 }
 

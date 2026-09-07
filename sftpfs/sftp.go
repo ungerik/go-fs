@@ -1,4 +1,15 @@
-// Package sftpfs implements a SFTP client file system.
+// Package sftpfs implements an SFTP client file system.
+//
+// A file system dialed with Dial, DialAndRegister or EnsureRegistered
+// keeps one SFTP connection. If the connection breaks, the next
+// operation reconnects with the stored credentials and host key callback
+// and is retried once.
+//
+// The package also registers a file system for the plain "sftp://"
+// prefix that dials a connection per operation for URIs with embedded
+// credentials like "sftp://user:password@host/path". Such connections
+// verify the host key with URLHostKeyCallback, which must be set before
+// use.
 package sftpfs
 
 import (
@@ -6,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	iofs "io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -23,14 +33,39 @@ import (
 )
 
 const (
-	Prefix    = "sftp://"
+	// Prefix is the URI prefix of SFTP file systems.
+	Prefix = "sftp://"
+	// Separator is the path separator of SFTP file systems.
 	Separator = "/"
+)
+
+var (
+	// URLHostKeyCallback verifies the host keys of servers that are
+	// dialed for URIs with embedded credentials via the file system
+	// registered for the plain "sftp://" prefix.
+	// It is nil by default, so such URIs fail until it is set.
+	// AcceptAnyHostKey disables the verification.
+	URLHostKeyCallback ssh.HostKeyCallback
+
+	// Compile-time interface checks
+	_ fs.FileSystem                 = new(fileSystem)
+	_ fs.WriteFileSystem            = new(fileSystem)
+	_ fs.AppendWriterFileSystem     = new(fileSystem)
+	_ fs.ReadWriterFileSystem       = new(fileSystem)
+	_ fs.TruncateFileSystem         = new(fileSystem)
+	_ fs.TouchFileSystem            = new(fileSystem)
+	_ fs.MakeAllDirsFileSystem      = new(fileSystem)
+	_ fs.RemoveAllFileSystem        = new(fileSystem)
+	_ fs.MoveFileSystem             = new(fileSystem)
+	_ fs.ListDirRecursiveFileSystem = new(fileSystem)
+	_ fs.PermissionsFileSystem      = new(fileSystem)
+	_ fs.SymbolicLinkFileSystem     = new(fileSystem)
 )
 
 func init() {
 	// Register with prefix sftp:// for URLs with
 	// sftp://username:password@host:port schema.
-	fs.Register(&fileSystem{prefix: Prefix})
+	fs.Register(&fileSystem{PathHelper: pathHelper(Prefix)})
 }
 
 // CredentialsCallback is called by Dial to get the username and password for a SFTP connection.
@@ -60,16 +95,18 @@ func AcceptAnyHostKey(hostname string, remote net.Addr, key ssh.PublicKey) error
 }
 
 type fileSystem struct {
-	prefix    string
-	client    *sftp.Client
-	closed    bool
-	clientMtx sync.RWMutex
+	fsimpl.PathHelper
+
+	mtx    sync.RWMutex
+	client *sftp.Client // nil before the first dial and after a connection loss
+	closed bool
 
 	// connLogger is optional (can be nil) and will be used
 	// to log connection events like dialing and reconnecting
 	connLogger fs.Logger
 
-	// Dial arguments for reconnecting after a connection loss
+	// Dial arguments for reconnecting after a connection loss,
+	// empty for the file system registered for the plain prefix
 	address             string
 	credentialsCallback CredentialsCallback
 	hostKeyCallback     ssh.HostKeyCallback
@@ -88,18 +125,35 @@ func Dial(ctx context.Context, address string, credentialsCallback CredentialsCa
 	if err != nil {
 		return nil, err
 	}
-	client, err := dial(ctx, u.Host, username, password, hostKeyCallback, connLogger)
-	if err != nil {
-		return nil, err
-	}
-	return &fileSystem{
-		client:              client,
+	return dialPrepared(ctx, u, username, password, prefix, address, credentialsCallback, hostKeyCallback, connLogger)
+}
+
+// dialPrepared dials a file system with the results of prepareDial.
+func dialPrepared(ctx context.Context, u *url.URL, username, password, prefix, address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (fs.FileSystem, error) {
+	f := &fileSystem{
+		PathHelper:          pathHelper(prefix),
 		connLogger:          connLogger,
-		prefix:              prefix,
 		address:             address,
 		credentialsCallback: credentialsCallback,
 		hostKeyCallback:     hostKeyCallback,
-	}, nil
+	}
+	var err error
+	f.client, err = dialRetry(ctx, u.Host, username, password, hostKeyCallback, connLogger)
+	if err != nil {
+		return nil, err
+	}
+	f.watchConnection(f.client)
+	return f, nil
+}
+
+// pathHelper returns the PathHelper for a file system prefix.
+// URIs with the default SFTP port 22 are accepted as well.
+func pathHelper(prefix string) fsimpl.PathHelper {
+	return fsimpl.PathHelper{
+		URIPrefix:   prefix,
+		AltPrefixes: []string{prefix + ":22"},
+		Rooted:      true,
+	}
 }
 
 func prepareDial(address string, credentialsCallback CredentialsCallback, hostKeyCallback ssh.HostKeyCallback) (u *url.URL, username, password, prefix string, err error) {
@@ -110,7 +164,7 @@ func prepareDial(address string, credentialsCallback CredentialsCallback, hostKe
 		address = "sftp://" + address
 	}
 	if credentialsCallback == nil {
-		return nil, "", "", "", errors.New("nil credentialsCall")
+		return nil, "", "", "", errors.New("nil credentialsCallback")
 	}
 	if hostKeyCallback == nil {
 		return nil, "", "", "", errors.New("nil hostKeyCallback")
@@ -175,17 +229,9 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 		return func() error { return f.Close() }, nil
 	}
 
-	client, err := dial(ctx, u.Host, username, password, hostKeyCallback, connLogger)
+	newFS, err := dialPrepared(ctx, u, username, password, prefix, address, credentialsCallback, hostKeyCallback, connLogger)
 	if err != nil {
 		return nop, err
-	}
-	newFS := &fileSystem{
-		client:              client,
-		connLogger:          connLogger,
-		prefix:              prefix,
-		address:             address,
-		credentialsCallback: credentialsCallback,
-		hostKeyCallback:     hostKeyCallback,
 	}
 	// Register dedups by prefix. If another caller registered a file system
 	// with the same prefix while we were dialing, our freshly dialed connection
@@ -194,12 +240,14 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	// ref-count aware (it closes the connection only when the last reference is
 	// released), so it can never close a file system another caller still holds.
 	fs.Register(newFS)
-	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != fs.FileSystem(newFS) {
-		_ = newFS.closeConn()
+	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != newFS {
+		_ = newFS.(*fileSystem).closeConn()
 		return func() error { return registered.Close() }, nil
 	}
 	return func() error { return newFS.Close() }, nil
 }
+
+func nop() error { return nil }
 
 func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (*sftp.Client, error) {
 	config := &ssh.ClientConfig{
@@ -219,153 +267,198 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, host, config)
 	if err != nil {
+		_ = conn.Close() // ssh did not take ownership of the TCP connection
+		return nil, err
+	}
+	// ssh.NewClient owns sshConn, closing the client closes the connection
+	sshClient := ssh.NewClient(sshConn, chans, reqs)
+	client, err := sftp.NewClient(sshClient)
+	if err != nil {
+		_ = sshClient.Close() // the dial failed, the close error adds nothing
 		return nil, err
 	}
 	if connLogger != nil {
 		connLogger.Printf("Dialed SFTP connection to %s with user %s", host, user)
 	}
-	return sftp.NewClient(ssh.NewClient(sshConn, chans, reqs))
+	return client, nil
 }
 
-func nop() error { return nil }
+// dialRetry dials with up to MaxConnectRetries retries
+// and exponential backoff starting at InitialRetryBackoff.
+func dialRetry(ctx context.Context, host, user, password string, hostKeyCallback ssh.HostKeyCallback, connLogger fs.Logger) (*sftp.Client, error) {
+	backoff := InitialRetryBackoff
+	for attempt := 0; ; attempt++ {
+		client, err := dial(ctx, host, user, password, hostKeyCallback, connLogger)
+		if err == nil {
+			return client, nil
+		}
+		if attempt >= MaxConnectRetries || !isConnectionError(err) {
+			return nil, err
+		}
+		if connLogger != nil {
+			connLogger.Printf("Waiting %s before retry %d of %d of SFTP connection to %s: %s", backoff, attempt+1, MaxConnectRetries, host, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+			backoff *= 2
+		}
+	}
+}
 
 // isConnectionError returns true if the error indicates a connection loss
 func isConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, io.EOF) {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, sftp.ErrSSHFxConnectionLost) {
+		return true
+	}
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}
 	errStr := strings.ToLower(err.Error())
 	return strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "closed network connection") ||
 		strings.Contains(errStr, "connection closed") ||
 		strings.Contains(errStr, "connection lost") ||
 		strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "connection reset") ||
-		strings.Contains(errStr, "connection timed out") ||
-		strings.Contains(errStr, "network is unreachable") ||
-		strings.Contains(errStr, "no route to host") ||
-		strings.Contains(errStr, "software caused connection abort") ||
-		strings.Contains(errStr, "ssh_msg_disconnect") ||
-		strings.Contains(errStr, "transport endpoint") ||
-		strings.Contains(errStr, "use of closed")
+		strings.Contains(errStr, "ssh_msg_disconnect")
 }
 
-// reconnectAndSetClient attempts to re-establish the SFTP connection using stored credentials.
-// It uses prepareDial and dial to recreate the connection
-// and stores the new connection in f.client while locking the f.clientMtx.
-func (f *fileSystem) reconnectAndSetClient(ctx context.Context) error {
-	// Check if we have the necessary connection parameters
-	if f.address == "" || f.credentialsCallback == nil || f.hostKeyCallback == nil {
-		return fmt.Errorf("cannot reconnect: missing connection parameters")
-	}
+// watchConnection drops the client when its connection ends,
+// so the next operation reconnects instead of failing.
+func (f *fileSystem) watchConnection(client *sftp.Client) {
+	go func() {
+		_ = client.Wait()
+		f.dropClient(client)
+	}()
+}
 
-	if f.connLogger != nil {
-		f.connLogger.Printf("Reconnecting SFTP to %s", f.address)
-	}
-
-	// Use prepareDial to get connection details
-	u, username, password, _, err := prepareDial(f.address, f.credentialsCallback, f.hostKeyCallback)
-	if err != nil {
-		return fmt.Errorf("reconnect prepareDial failed: %w", err)
-	}
-
-	f.clientMtx.Lock()
-	defer f.clientMtx.Unlock()
-
-	// Close existing broken connection if any
-	if f.client != nil {
-		_ = f.client.Close() // ignore error
+// dropClient forgets the client if it is still the current one.
+func (f *fileSystem) dropClient(client *sftp.Client) {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.client == client && !f.closed {
 		f.client = nil
+		if f.connLogger != nil {
+			f.connLogger.Printf("Lost SFTP connection to %s", f.address)
+		}
 	}
-
-	// Establish new connection using dial
-	f.client, err = dial(ctx, u.Host, username, password, f.hostKeyCallback, f.connLogger)
-	if err != nil {
-		return fmt.Errorf("reconnect dial failed: %w", err)
-	}
-
-	return nil
 }
 
+// reconnectable returns true if the file system
+// has the dial arguments to reconnect.
+func (f *fileSystem) reconnectable() bool {
+	return f.address != "" && f.credentialsCallback != nil && f.hostKeyCallback != nil
+}
+
+// getClient returns the SFTP client and the path to use with it.
+// The returned release function is never nil and must be called
+// when the client is not needed anymore.
+//
+// For a dialed file system the client is reconnected if the
+// connection was lost. For the file system registered for the
+// plain prefix a connection is dialed per call with the credentials
+// from the URL and released by the release function.
 func (f *fileSystem) getClient(ctx context.Context, filePath string) (client *sftp.Client, clientPath string, release func() error, err error) {
 	if err = ctx.Err(); err != nil {
 		return nil, "", nop, err
 	}
-
-	// A closed file system must not be used, and in particular must not
-	// silently reconnect below using the stored credentials.
-	f.clientMtx.RLock()
-	closed := f.closed
-	f.clientMtx.RUnlock()
+	f.mtx.RLock()
+	client, closed := f.client, f.closed
+	f.mtx.RUnlock()
 	if closed {
 		return nil, "", nop, fs.ErrFileSystemClosed
 	}
-
-	// Progressive reconnection with exponential backoff
-	backoff := InitialRetryBackoff
-	maxRetries := MaxConnectRetries
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// Apply backoff delay for retries
-		if attempt > 0 {
-			if f.connLogger != nil {
-				f.connLogger.Printf("Waiting %s before retry attempt %d of %d of SFTP connection to %s", backoff, attempt, maxRetries, f.address)
-			}
-			select {
-			case <-ctx.Done():
-				return nil, "", nop, ctx.Err()
-			case <-time.After(backoff):
-				backoff *= 2 // Exponential backoff: 100ms, 200ms, 400ms
-			}
-		}
-
-		f.clientMtx.RLock()
-		client = f.client
-		f.clientMtx.RUnlock()
-		if client != nil {
-			return client, filePath, nop, nil
-		}
-
-		// If we have connection parameters, try to reconnect
-		if f.address != "" && f.credentialsCallback != nil && f.hostKeyCallback != nil {
-			err = f.reconnectAndSetClient(ctx)
-			if err == nil {
-				return f.client, filePath, nop, nil
-			}
-			// On connection error during reconnect, retry
-			if attempt < MaxConnectRetries {
-				continue
-			}
-			return nil, "", nop, fmt.Errorf("failed to reconnect after %d attempts: %w", MaxConnectRetries, err)
-		}
-
-		// Fallback: try to dial with credentials from URL
-		u, parseErr := url.Parse(f.URL(filePath))
-		if parseErr != nil {
-			return nil, "", nop, parseErr
-		}
-		username := u.User.Username()
-		if username == "" {
-			return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
-		}
-		password, ok := u.User.Password()
-		if !ok {
-			return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
-		}
-		client, err = dial(ctx, u.Host, username, password, AcceptAnyHostKey, f.connLogger)
+	if client != nil {
+		return client, filePath, nop, nil
+	}
+	if f.reconnectable() {
+		client, err = f.reconnect(ctx)
 		if err != nil {
-			if attempt < MaxConnectRetries && isConnectionError(err) {
-				continue
-			}
 			return nil, "", nop, err
 		}
-		return client, u.Path, func() error { return client.Close() }, nil
+		return client, filePath, nop, nil
 	}
 
-	return nil, "", nop, fmt.Errorf("failed to get client after %d attempts", MaxConnectRetries)
+	// Dial with credentials from the URL, never with the
+	// stored host key callback of another file system
+	u, err := url.Parse(f.URL(filePath))
+	if err != nil {
+		return nil, "", nop, err
+	}
+	username := u.User.Username()
+	if username == "" {
+		return nil, "", nop, fmt.Errorf("no username in %s URL: %s", f.Name(), f.URL(filePath))
+	}
+	password, ok := u.User.Password()
+	if !ok {
+		return nil, "", nop, fmt.Errorf("no password in %s URL: %s", f.Name(), f.URL(filePath))
+	}
+	if URLHostKeyCallback == nil {
+		return nil, "", nop, errors.New("sftpfs.URLHostKeyCallback must be set to dial sftp URLs with embedded credentials")
+	}
+	client, err = dialRetry(ctx, u.Host, username, password, URLHostKeyCallback, f.connLogger)
+	if err != nil {
+		return nil, "", nop, err
+	}
+	return client, u.Path, client.Close, nil
+}
+
+// reconnect dials a new connection with the stored dial arguments
+// unless another call reconnected in the meantime.
+func (f *fileSystem) reconnect(ctx context.Context) (*sftp.Client, error) {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
+		return nil, fs.ErrFileSystemClosed
+	}
+	if f.client != nil {
+		return f.client, nil
+	}
+	if f.connLogger != nil {
+		f.connLogger.Printf("Reconnecting SFTP to %s", f.address)
+	}
+	u, username, password, _, err := prepareDial(f.address, f.credentialsCallback, f.hostKeyCallback)
+	if err != nil {
+		return nil, err
+	}
+	client, err := dialRetry(ctx, u.Host, username, password, f.hostKeyCallback, f.connLogger)
+	if err != nil {
+		return nil, fmt.Errorf("SFTP reconnect to %s failed: %w", f.address, err)
+	}
+	f.client = client
+	f.watchConnection(client)
+	return client, nil
+}
+
+// retry runs op with the SFTP client. op owns the release function
+// and must call it when it is done with the client. If op fails with
+// a connection error on a reconnectable file system, retry reconnects
+// and runs op once more.
+func (f *fileSystem) retry(ctx context.Context, filePath string, op func(client *sftp.Client, clientPath string, release func() error) error) error {
+	for attempt := 0; ; attempt++ {
+		client, clientPath, release, err := f.getClient(ctx, filePath)
+		if err != nil {
+			return err
+		}
+		err = op(client, clientPath, release)
+		if err != nil && attempt == 0 && f.reconnectable() && isConnectionError(err) {
+			f.dropClient(client)
+			continue
+		}
+		return err
+	}
+}
+
+// do runs op with the SFTP client and releases the client afterwards,
+// reconnecting and retrying once on a connection error, see retry.
+func (f *fileSystem) do(ctx context.Context, filePath string, op func(client *sftp.Client, clientPath string) error) error {
+	return f.retry(ctx, filePath, func(client *sftp.Client, clientPath string, release func() error) error {
+		return errors.Join(op(client, clientPath), release())
+	})
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
@@ -373,132 +466,121 @@ func (f *fileSystem) ReadableWritable() (readable, writable bool) {
 }
 
 func (f *fileSystem) RootDir() fs.File {
-	return fs.File(f.prefix + Separator)
+	return fs.File(f.URIPrefix + Separator)
 }
 
-func (f *fileSystem) ID() (string, error) {
-	return f.prefix, nil
+func (f *fileSystem) ID() string {
+	return f.URIPrefix
 }
-
-func (f *fileSystem) Prefix() string {
-	return f.prefix
-}
-
-func (f *fileSystem) Separator() string { return Separator }
 
 func (f *fileSystem) Name() string {
 	return "SFTP"
 }
 
 func (f *fileSystem) String() string {
-	return f.prefix + " file system"
-}
-
-func (f *fileSystem) URL(cleanPath string) string {
-	return f.prefix + cleanPath
-}
-
-func (f *fileSystem) CleanPathFromURI(uri string) string {
-	return path.Clean(
-		strings.TrimPrefix(
-			strings.TrimPrefix(uri, f.prefix),
-			":22", // In case f.prefix has no port number and url has the default port number
-		),
-	)
-}
-
-func (*fileSystem) JoinCleanPath(uriParts ...string) string {
-	return fsimpl.JoinCleanPath(uriParts, Prefix)
+	return f.URIPrefix + " file system"
 }
 
 func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	path := f.JoinCleanPath(uriParts...)
-	if strings.HasSuffix(f.prefix, Separator) && strings.HasPrefix(path, Separator) {
-		// For example: "sftp://" + "/example.com/absolute/path"
-		// should not result in 3 slashes: "sftp:///example.com/absolute/path"
-		path = path[len(Separator):]
-	}
-	return fs.File(f.prefix + path)
+	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
-func (f *fileSystem) SplitPath(filePath string) []string {
-	return fsimpl.SplitPath(filePath, f.prefix, Separator)
-}
-
-func (f *fileSystem) IsAbsPath(filePath string) bool {
-	return strings.HasPrefix(filePath, Prefix)
-}
-
-func (f *fileSystem) AbsPath(filePath string) string {
-	if f.IsAbsPath(filePath) {
-		return filePath
-	}
-	return Prefix + strings.TrimPrefix(filePath, Separator)
-}
-
-func (*fileSystem) SplitDirAndName(filePath string) (dir, name string) {
-	return fsimpl.SplitDirAndName(filePath, 0, Separator)
-}
-
-func (f *fileSystem) MatchAnyPattern(name string, patterns []string) (bool, error) {
-	return fsimpl.MatchAnyPattern(name, patterns)
-}
-
-func (f *fileSystem) MakeDir(dirPath string, perm []fs.Permissions) error {
-	client, dirPath, release, err := f.getClient(context.Background(), dirPath)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	return client.Mkdir(dirPath)
-}
-
-func (f *fileSystem) Stat(filePath string) (iofs.FileInfo, error) {
-	client, filePath, release, err := f.getClient(context.Background(), filePath)
+// stat returns the FileInfo with the symlink flag set
+// from Lstat and the other fields from Stat like os does.
+func (f *fileSystem) stat(client *sftp.Client, clientPath, filePath string) (*fs.FileInfo, error) {
+	linkInfo, err := client.Lstat(clientPath)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
-
-	return client.Stat(filePath)
+	info := linkInfo
+	if linkInfo.Mode()&os.ModeSymlink != 0 {
+		info, err = client.Stat(clientPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	fileInfo := fs.NewFileInfo(f.JoinCleanFile(filePath), info, f.IsHidden(filePath))
+	fileInfo.IsSymlink = linkInfo.Mode()&os.ModeSymlink != 0
+	return fileInfo, nil
 }
 
-func (f *fileSystem) IsHidden(filePath string) bool       { return false }
-func (f *fileSystem) IsSymbolicLink(filePath string) bool { return false }
-
-func (f *fileSystem) ListDirInfo(ctx context.Context, dirPath string, callback func(*fs.FileInfo) error, patterns []string) error {
-	client, dirPath, release, err := f.getClient(ctx, dirPath)
-	if err != nil {
+func (f *fileSystem) Stat(filePath string) (info *fs.FileInfo, err error) {
+	err = f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+		info, err = f.stat(client, clientPath, filePath)
 		return err
-	}
-	defer release()
+	})
+	return info, err
+}
 
-	infos, err := client.ReadDirContext(ctx, dirPath)
-	if err != nil {
-		// Should we replace alls os.ErrNotExist errors with fs.ErrDoesNotExist?
-		// if errors.Is(err, os.ErrNotExist) {
-		// 	return fs.NewErrDoesNotExist(f.JoinCleanFile(dirPath))
-		// }
-		return err
-	}
-	for _, info := range infos {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		match, err := fsimpl.MatchAnyPattern(info.Name(), patterns)
+func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	return f.do(ctx, dirPath, func(client *sftp.Client, clientPath string) error {
+		infos, err := client.ReadDirContext(ctx, clientPath)
 		if err != nil {
+			// Distinguish a missing directory from a path that is not a directory
+			info, statErr := client.Stat(clientPath)
+			switch {
+			case statErr == nil && !info.IsDir():
+				return fs.NewErrIsNotDirectory(f.JoinCleanFile(dirPath))
+			case errors.Is(err, os.ErrNotExist) || errors.Is(statErr, os.ErrNotExist):
+				return fs.NewErrDoesNotExist(f.JoinCleanFile(dirPath))
+			}
 			return err
 		}
-		if !match {
-			continue
+		for _, info := range infos {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			match, err := fsimpl.MatchAnyPattern(info.Name(), patterns)
+			if err != nil {
+				return err
+			}
+			if !match {
+				continue
+			}
+			err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, info.Name()), info, f.IsHidden(info.Name())))
+			if err != nil {
+				return err
+			}
 		}
-		err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, info.Name()), info, false))
-		if err != nil {
+		return nil
+	})
+}
+
+// ListDirRecursive walks the directory tree with a single connection
+// and calls callback for every file (not directory) matching the patterns.
+func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	return f.do(ctx, dirPath, func(client *sftp.Client, clientPath string) error {
+		if _, err := client.Stat(clientPath); err != nil {
 			return err
 		}
-	}
-	return nil
+		walker := client.Walk(clientPath)
+		for walker.Step() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := walker.Err(); err != nil {
+				return err
+			}
+			info := walker.Stat()
+			if info.IsDir() {
+				continue
+			}
+			match, err := fsimpl.MatchAnyPattern(info.Name(), patterns)
+			if err != nil {
+				return err
+			}
+			if !match {
+				continue
+			}
+			// The walker path is below clientPath, map it back below dirPath
+			rel := strings.TrimPrefix(walker.Path(), clientPath)
+			err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, rel), info, f.IsHidden(info.Name())))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 type sftpFile struct {
@@ -510,71 +592,124 @@ func (f *sftpFile) Close() error {
 	return errors.Join(f.File.Close(), f.release())
 }
 
-func (f *fileSystem) openFile(filePath string, flags int) (*sftpFile, error) {
-	client, filePath, release, err := f.getClient(context.Background(), filePath)
+// openFile opens a file with the flags. A file created by the
+// call gets the permissions perm if perm is not zero.
+func (f *fileSystem) openFile(filePath string, flags int, perm fs.Permissions) (opened *sftpFile, err error) {
+	err = f.retry(context.Background(), filePath, func(client *sftp.Client, clientPath string, release func() error) error {
+		created := false
+		if perm != 0 && flags&os.O_CREATE != 0 {
+			_, statErr := client.Stat(clientPath)
+			created = errors.Is(statErr, os.ErrNotExist)
+		}
+		file, err := client.OpenFile(clientPath, flags)
+		if err != nil {
+			return errors.Join(err, release())
+		}
+		if created {
+			err = file.Chmod(os.FileMode(perm))
+			if err != nil {
+				return errors.Join(err, file.Close(), release())
+			}
+		}
+		opened = &sftpFile{file, release}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	file, err := client.OpenFile(filePath, flags)
-	if err != nil {
-		return nil, errors.Join(err, release())
-	}
-	return &sftpFile{file, release}, nil
+	return opened, nil
 }
 
-func (f *fileSystem) OpenReader(filePath string) (reader iofs.File, err error) {
-	return f.openFile(filePath, os.O_RDONLY)
+func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+	return f.openFile(filePath, os.O_RDONLY, 0)
 }
 
-func (f *fileSystem) OpenWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	return f.openFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+	return f.openFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 }
 
-func (f *fileSystem) OpenAppendWriter(filePath string, perm []fs.Permissions) (fs.WriteCloser, error) {
-	return f.openFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
+func (f *fileSystem) OpenAppendWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+	return f.openFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, perm)
 }
 
-func (f *fileSystem) OpenReadWriter(filePath string, perm []fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	return f.openFile(filePath, os.O_RDWR|os.O_CREATE)
+func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error) {
+	return f.openFile(filePath, os.O_RDWR|os.O_CREATE, perm)
 }
 
 func (f *fileSystem) Truncate(filePath string, size int64) error {
-	file, err := f.openFile(filePath, os.O_RDWR)
-	if err != nil {
-		return err
-	}
-	return errors.Join(
-		file.Truncate(size),
-		file.Close(),
-	)
+	return f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+		return client.Truncate(clientPath, size)
+	})
 }
 
-// fileSystem implements fs.TouchFileSystem. The other optional interfaces
-// (Exists/ReadAll/WriteAll/Append/...) are intentionally NOT implemented:
-// over SFTP they would be identical to the generic emulation in package fs
-// (a single Stat, or open+stream), so they would add no benefit.
-var _ fs.TouchFileSystem = new(fileSystem)
-
-// Touch implements fs.TouchFileSystem. Unlike the generic emulation — which
-// opens the file with O_TRUNC and would therefore destroy the content of an
-// existing file — this updates the modification time of an existing file in
-// place via the SFTP SETSTAT packet, and only creates an empty file when it
-// does not exist yet.
-func (f *fileSystem) Touch(filePath string, perm []fs.Permissions) error {
-	client, filePath, release, err := f.getClient(context.Background(), filePath)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if _, err = client.Stat(filePath); err != nil {
-		file, err := client.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+// Touch updates the modification time of an existing file in place
+// via the SFTP SETSTAT packet and only creates an empty file
+// with the permissions perm when it does not exist yet.
+func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
+	return f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+		_, err := client.Stat(clientPath)
+		if errors.Is(err, os.ErrNotExist) {
+			file, err := client.OpenFile(clientPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+			if err != nil {
+				return err
+			}
+			if perm != 0 {
+				err = file.Chmod(os.FileMode(perm))
+			}
+			return errors.Join(err, file.Close())
+		}
 		if err != nil {
 			return err
 		}
-		return file.Close()
-	}
-	now := time.Now()
-	return client.Chtimes(filePath, now, now)
+		now := time.Now()
+		return client.Chtimes(clientPath, now, now)
+	})
+}
+
+func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
+	return f.do(context.Background(), dirPath, func(client *sftp.Client, clientPath string) error {
+		err := client.Mkdir(clientPath)
+		if err != nil {
+			// SFTP reports a generic failure for an existing path,
+			// map it to os.ErrExist like os.Mkdir does
+			if _, statErr := client.Stat(clientPath); statErr == nil {
+				return fs.NewErrAlreadyExists(f.JoinCleanFile(dirPath))
+			}
+			return err
+		}
+		if perm != 0 {
+			return client.Chmod(clientPath, os.FileMode(perm))
+		}
+		return nil
+	})
+}
+
+// MakeAllDirs creates the directory and all missing parents
+// with a single SFTP client MkdirAll call.
+func (f *fileSystem) MakeAllDirs(dirPath string, perm fs.Permissions) error {
+	return f.do(context.Background(), dirPath, func(client *sftp.Client, clientPath string) error {
+		info, err := client.Stat(clientPath)
+		if err == nil {
+			if !info.IsDir() {
+				return fs.NewErrIsNotDirectory(f.JoinCleanFile(dirPath))
+			}
+			return nil
+		}
+		err = client.MkdirAll(clientPath)
+		if err != nil {
+			return err
+		}
+		if perm != 0 {
+			return client.Chmod(clientPath, os.FileMode(perm))
+		}
+		return nil
+	})
+}
+
+func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
+	return f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+		return client.Chmod(clientPath, os.FileMode(perm))
+	})
 }
 
 // Move renames filePath to destPath via the SFTP RENAME packet.
@@ -589,23 +724,109 @@ func (f *fileSystem) Move(filePath string, destPath string) error {
 	if filePath == destPath {
 		return nil
 	}
-	client, filePath, release, err := f.getClient(context.Background(), filePath)
-	if err != nil {
-		return err
-	}
-	defer release()
+	return f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+		// clientPath is the URL path for the plain prefix file system,
+		// the destination path has the same URL form and needs the
+		// same translation
+		if clientPath != filePath {
+			destClientPath, err := f.destClientPath(filePath, destPath)
+			if err != nil {
+				return err
+			}
+			destPath = destClientPath
+		}
+		return client.Rename(clientPath, destPath)
+	})
+}
 
-	return client.Rename(filePath, destPath)
+// destClientPath translates a destination path to the path to use with
+// the client of filePath. Only the file system registered for the plain
+// prefix needs it: its paths carry the URI authority
+// (/user:password@host/dir/file) while the client uses the server path
+// (/dir/file). A single RENAME can't cross connections, so a destination
+// on another server is rejected instead of renaming to a nonsense path.
+func (f *fileSystem) destClientPath(filePath, destPath string) (string, error) {
+	srcURL, err := url.Parse(f.URL(filePath))
+	if err != nil {
+		return "", err
+	}
+	destURL, err := url.Parse(f.URL(destPath))
+	if err != nil {
+		return "", err
+	}
+	if destURL.Host != srcURL.Host || destURL.User.Username() != srcURL.User.Username() {
+		return "", fmt.Errorf("%s can't move %s to another server: %s", f.Name(), filePath, destPath)
+	}
+	return destURL.Path, nil
 }
 
 func (f *fileSystem) Remove(filePath string) error {
-	client, filePath, release, err := f.getClient(context.Background(), filePath)
+	return f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+		return client.Remove(clientPath)
+	})
+}
+
+// RemoveAll removes the file or directory tree over one connection.
+// Symbolic links are removed, not followed. A missing path is not an error.
+func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
+	return f.do(ctx, filePath, func(client *sftp.Client, clientPath string) error {
+		info, err := client.Lstat(clientPath)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return removeAll(ctx, client, clientPath, info)
+	})
+}
+
+// removeAll removes path with the Lstat info recursively.
+func removeAll(ctx context.Context, client *sftp.Client, path string, info os.FileInfo) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return client.Remove(path)
+	}
+	entries, err := client.ReadDir(path)
 	if err != nil {
 		return err
 	}
-	defer release()
+	for _, entry := range entries {
+		err = removeAll(ctx, client, path+Separator+entry.Name(), entry)
+		if err != nil {
+			return err
+		}
+	}
+	return client.RemoveDirectory(path)
+}
 
-	return client.Remove(filePath)
+func (f *fileSystem) IsSymbolicLink(filePath string) bool {
+	var isLink bool
+	err := f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+		info, err := client.Lstat(clientPath)
+		if err != nil {
+			return err
+		}
+		isLink = info.Mode()&os.ModeSymlink != 0
+		return nil
+	})
+	return err == nil && isLink
+}
+
+func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
+	return f.do(context.Background(), linkPath, func(client *sftp.Client, clientPath string) error {
+		return client.Symlink(targetPath, clientPath)
+	})
+}
+
+func (f *fileSystem) ReadSymbolicLink(linkPath string) (targetPath string, err error) {
+	err = f.do(context.Background(), linkPath, func(client *sftp.Client, clientPath string) error {
+		targetPath, err = client.ReadLink(clientPath)
+		return err
+	})
+	return targetPath, err
 }
 
 // Close closes the underlying SFTP connection and unregisters the file system.
@@ -614,14 +835,13 @@ func (f *fileSystem) Remove(filePath string) error {
 // file system that never connected, is a safe no-op.
 // Close decreases the file system's reference count in the registry and only
 // closes the underlying SFTP connection once the last reference is released, so
-// it never closes a connection another caller still holds. Calling Close on an
-// already-closed file system is a safe no-op.
+// it never closes a connection another caller still holds.
 func (f *fileSystem) Close() error {
-	f.clientMtx.Lock()
-	alreadyClosed := f.closed || f.client == nil
-	f.clientMtx.Unlock()
+	f.mtx.RLock()
+	alreadyClosed := f.closed || !f.reconnectable()
+	f.mtx.RUnlock()
 	if alreadyClosed {
-		return nil // already closed or never connected
+		return nil // already closed or the plain prefix file system
 	}
 	if fs.Unregister(f) > 0 {
 		return nil // still referenced by another caller
@@ -634,13 +854,16 @@ func (f *fileSystem) Close() error {
 // discard a redundant connection that lost the registration race in
 // EnsureRegistered.
 func (f *fileSystem) closeConn() error {
-	f.clientMtx.Lock()
-	defer f.clientMtx.Unlock()
-	if f.closed || f.client == nil {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
+		return nil
+	}
+	f.closed = true
+	if f.client == nil {
 		return nil
 	}
 	err := f.client.Close()
 	f.client = nil
-	f.closed = true
 	return err
 }

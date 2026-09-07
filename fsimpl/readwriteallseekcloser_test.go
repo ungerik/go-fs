@@ -173,33 +173,6 @@ func TestReadWriteAllSeekCloser(t *testing.T) {
 		rw.Close()
 	})
 
-	t.Run("InvalidateBuffer", func(t *testing.T) {
-		initialData := []byte("Hello, World!")
-		mockFile := &mockReadWriteAllFile{data: initialData}
-
-		rw := NewReadWriteAllSeekCloser(mockFile.ReadAll, mockFile.WriteAll, nil)
-
-		// Read some data
-		buf := make([]byte, 5)
-		_, err := rw.Read(buf)
-		require.NoError(t, err, "Read should not error")
-		assert.Equal(t, "Hello", string(buf), "Should read initial content")
-
-		// Modify the underlying file
-		mockFile.data = []byte("Updated content!")
-
-		// Invalidate buffer
-		rw.InvalidateBuffer()
-
-		// Next read should get new content
-		buf = make([]byte, 7)
-		_, err = rw.Read(buf)
-		require.NoError(t, err, "Read after invalidate should not error")
-		assert.Equal(t, "Updated", string(buf), "Should read updated content after invalidate")
-
-		rw.Close()
-	})
-
 	t.Run("FunctionPointerConstructor", func(t *testing.T) {
 		// Test using function pointers directly
 		data := []byte("Hello, World!")

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -25,6 +26,21 @@ func hasLocalFileAttributeHidden(string) (bool, error) {
 	return false, nil
 }
 
+// localFileSystemID returns the statfs f_fsid of the root directory
+// formatted as hex, or "/" if it can't be determined.
+func localFileSystemID() string {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(localRoot, &stat); err != nil {
+		return localRoot
+	}
+	// The field name of the fsid array differs between platforms,
+	// so format the struct and strip the decoration: "{[a b]}" -> "a-b"
+	id := strings.Trim(fmt.Sprintf("%x", stat.Fsid), "{}[]")
+	return strings.ReplaceAll(id, " ", "-")
+}
+
+// User returns the name of the user owning the file.
+// Only available on Unix systems.
 func (local *LocalFileSystem) User(filePath string) (string, error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
@@ -46,6 +62,8 @@ func (local *LocalFileSystem) User(filePath string) (string, error) {
 	return u.Username, nil
 }
 
+// SetUser changes the user owning the file.
+// Only available on Unix systems.
 func (local *LocalFileSystem) SetUser(filePath string, username string) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -63,6 +81,8 @@ func (local *LocalFileSystem) SetUser(filePath string, username string) error {
 	return os.Chown(filePath, uid, -1)
 }
 
+// Group returns the name of the group owning the file.
+// Only available on Unix systems.
 func (local *LocalFileSystem) Group(filePath string) (string, error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
@@ -84,6 +104,8 @@ func (local *LocalFileSystem) Group(filePath string) (string, error) {
 	return g.Name, nil
 }
 
+// SetGroup changes the group owning the file.
+// Only available on Unix systems.
 func (local *LocalFileSystem) SetGroup(filePath string, group string) error {
 	filePath = expandTilde(filePath)
 

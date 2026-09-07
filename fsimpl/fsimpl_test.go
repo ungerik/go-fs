@@ -84,90 +84,23 @@ func ExampleTrimExt() {
 	// dir.with
 }
 
-func TestJoinCleanPath(t *testing.T) {
-	type args struct {
-		uriParts   []string
-		trimPrefix string
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: `empty`,
-			args: args{uriParts: nil, trimPrefix: ``},
-			want: `/`,
-		},
-		{
-			name: `dot`,
-			args: args{uriParts: []string{`.`}, trimPrefix: ``},
-			want: `/`,
-		},
-		{
-			name: `relative is made absolute`,
-			args: args{uriParts: []string{`relative`}, trimPrefix: ``},
-			want: `/relative`,
-		},
-		{
-			name: `already absolute`,
-			args: args{uriParts: []string{`/a/b`}, trimPrefix: ``},
-			want: `/a/b`,
-		},
-		{
-			name: `joins parts and collapses trailing slash`,
-			args: args{uriParts: []string{`a/b/`, `./c/`}, trimPrefix: ``},
-			want: `/a/b/c`,
-		},
-		{
-			name: `resolves dot dot`,
-			args: args{uriParts: []string{`a/b`, `../c`}, trimPrefix: ``},
-			want: `/a/c`,
-		},
-		{
-			name: `trims prefix from first part`,
-			args: args{uriParts: []string{`myprefix/a`, `b`}, trimPrefix: `myprefix`},
-			want: `/a/b`,
-		},
-		{
-			name: `url unescapes`,
-			args: args{uriParts: []string{`a%20b/c`}, trimPrefix: ``},
-			want: `/a b/c`,
-		},
-		{
-			name: `ftp scheme prefix`,
-			args: args{uriParts: []string{`ftp://example.com/dir/`, `./subdir/`}, trimPrefix: `ftp://`},
-			want: `/example.com/dir/subdir`,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := JoinCleanPath(tt.args.uriParts, tt.args.trimPrefix); got != tt.want {
-				t.Errorf("JoinCleanPath(%#v, %#v) = %#v, want %#v", tt.args.uriParts, tt.args.trimPrefix, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestSplitPath(t *testing.T) {
 	tests := []struct {
 		name      string
 		filePath  string
-		prefix    string
 		separator string
 		want      []string
 	}{
-		{name: `empty`, filePath: ``, prefix: ``, separator: `/`, want: nil},
-		{name: `only separators`, filePath: `///`, prefix: ``, separator: `/`, want: nil},
-		{name: `single element`, filePath: `dir`, prefix: ``, separator: `/`, want: []string{`dir`}},
-		{name: `multiple elements`, filePath: `a/b/c`, prefix: ``, separator: `/`, want: []string{`a`, `b`, `c`}},
-		{name: `leading and trailing separators trimmed`, filePath: `/a/b/`, prefix: ``, separator: `/`, want: []string{`a`, `b`}},
-		{name: `prefix trimmed`, filePath: `file:///a/b`, prefix: `file://`, separator: `/`, want: []string{`a`, `b`}},
-		{name: `backslash separator`, filePath: `\a\b\`, prefix: ``, separator: `\`, want: []string{`a`, `b`}},
+		{name: `empty`, filePath: ``, separator: `/`, want: nil},
+		{name: `only separators`, filePath: `///`, separator: `/`, want: nil},
+		{name: `single element`, filePath: `dir`, separator: `/`, want: []string{`dir`}},
+		{name: `multiple elements`, filePath: `a/b/c`, separator: `/`, want: []string{`a`, `b`, `c`}},
+		{name: `leading and trailing separators trimmed`, filePath: `/a/b/`, separator: `/`, want: []string{`a`, `b`}},
+		{name: `backslash separator`, filePath: `\a\b\`, separator: `\`, want: []string{`a`, `b`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, SplitPath(tt.filePath, tt.prefix, tt.separator))
+			require.Equal(t, tt.want, SplitPath(tt.filePath, tt.separator))
 		})
 	}
 }
