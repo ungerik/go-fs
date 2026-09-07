@@ -568,10 +568,34 @@ values with that prefix transparently route to the right backend.
 | (built-in)    | `sub://<id>`            | `fs.NewSubFileSystem(parent, dir)`: view rooted at a directory | as parent | as parent |
 | (built-in)    | `overlay://<id>`        | `fs.NewOverlayFileSystem(base, upper)`: writable layer over a read-only base | yes | yes |
 
-Every registered file system has a stable `ID()`: the file system id of the
-root volume for the local file system, the bucket for s3fs, `user@host` for
-sftpfs and ftpfs, the account id for dropboxfs, and the host with the base
-path, share or container for webdavfs, smbfs and azureblobfs.
+Every registered file system has an `ID()`: a string that identifies it
+uniquely among the registered file systems and stays the same for its whole
+lifetime, computed at construction and never blocking.
+
+Where the backing store has an identifier of its own, that one is used. Only
+two do: the local file system has the volume's file system id, and Dropbox
+has the account id. Neither SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage
+expose one, so those use the coordinates that identify the store instead.
+
+| File system                                        | `ID()`                                             |
+| -------------------------------------------------- | -------------------------------------------------- |
+| `fs.Local`                                         | File system id of the root volume: the `statfs` `f_fsid` on Unix, the volume serial number on Windows |
+| `MemFileSystem`                                    | Random id, or the one passed to `WithID`           |
+| `StdFileSystem`, `SubFileSystem`, `OverlayFileSystem` | The id part of the prefix, random if none was passed |
+| `httpfs`                                           | `http` / `https`                                   |
+| `zipfs.Reader`                                     | The random id of the archive                       |
+| `zipfs.Writer`, `tarfs`, `multipartfs`             | The prefix of the archive or form, `zip://<id>`, `tar://<id>`, `multipart://<id>` |
+| `s3fs`                                             | Bucket name                                        |
+| `azureblobfs`                                      | `<host>/<container>`                               |
+| `sftpfs`, `ftpfs`                                  | The connection prefix, `sftp://user@host` / `ftp://user@host` |
+| `smbfs`                                            | `<user>@<host>/<share>`                            |
+| `webdavfs`                                         | `<host>/<base path>`                               |
+| `dropboxfs`                                        | Dropbox account id                                 |
+
+The format is specific to the implementation and promises nothing beyond
+uniqueness and stability. Use it to tell two file systems apart, to key a
+cache, or as meta information — don't parse it. `Prefix()` builds URIs,
+`Name()` is for human readable output.
 
 ### Optional interface support
 

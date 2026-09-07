@@ -76,6 +76,8 @@ err = out.Close()
   `tarfs.DefaultDirPermissions` unless permissions are passed explicitly.
 - **URI prefix.** `tar://` followed by a random id, so several archives can
   be registered at the same time. `Close` unregisters the file system.
+- **`ID()`.** There is no backing store with an identifier of its own, so the
+  whole prefix (`tar://<id>`) is used.
 
 ## Testing
 

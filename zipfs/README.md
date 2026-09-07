@@ -70,6 +70,9 @@ set of files into a byte slice without a file system.
   directory — an archive whose writer was not closed is incomplete.
 - **URI prefix.** `zip://` followed by a random id, so several archives can
   be registered at the same time. `Close` unregisters the file system.
+- **`ID()`.** There is no backing store with an identifier of its own, so the
+  random id of the archive is used: `Reader.ID()` is that id,
+  `Writer.ID()` is the whole prefix (`zip://<id>`).
 
 ## Testing
 

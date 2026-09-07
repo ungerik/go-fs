@@ -112,8 +112,12 @@ func (f *FileSystem) Close() error {
 }
 ```
 
-`ID()` must be a **stable identifier of the backing store** that never blocks —
-a volume id, a bucket name, a `user@host`. Compute it at construction.
+`ID()` must be **a string that identifies your file system uniquely among the
+registered ones** and never changes, and it must not block. Use an identifier
+the backing store gives you if it has one — a volume id, an account id —
+otherwise the coordinates that identify it: a bucket name, a `user@host`, or a
+generated id. Compute it at construction. The format is yours; callers are
+documented not to parse it.
 
 `ReadableWritable` is the runtime switch. Return `false` for writable and every
 write returns `ErrReadOnlyFileSystem` without your code doing a single check.

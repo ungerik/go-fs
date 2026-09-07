@@ -38,11 +38,25 @@ type (
 // don't need to implement any checks, the package returns [ErrReadOnlyFileSystem]
 // and [ErrWriteOnlyFileSystem] based on [FileSystem.ReadableWritable].
 type FileSystem interface {
-	// ID returns a stable identifier of the backing store
-	// of the file system that is unique among registered file systems,
-	// like the volume ID of a local file system, the bucket name
-	// of an object store, or the user@host of a remote server.
-	// It is computed at construction time and never blocks.
+	// ID returns a string that identifies this file system
+	// uniquely among the registered file systems and stays
+	// the same for its whole lifetime. It is computed at
+	// construction time and never blocks.
+	//
+	// Where the backing store has an identifier of its own, that
+	// one is used: [LocalFileSystem.ID] is the file system id of
+	// the root volume, dropboxfs uses the Dropbox account id.
+	// The other remote file systems have no such identifier -
+	// neither SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage
+	// expose one - so they use the coordinates that identify the
+	// store instead: the bucket, the container, the share, or the
+	// user and host of the connection.
+	//
+	// The format is therefore specific to the implementation and
+	// carries no promise beyond uniqueness and stability. Use it
+	// to tell two file systems apart, to key a cache, or as meta
+	// information; don't parse it. Use [FileSystem.Prefix] to
+	// build URIs and [FileSystem.Name] for human readable output.
 	ID() string
 
 	// Prefix returns the URI prefix for this file system (e.g., "file://", "sftp://").

@@ -20,7 +20,7 @@ Every backend implements this. Nothing works without it.
 
 | Method             | Signature                                          | Notes                                              |
 | ------------------ | -------------------------------------------------- | -------------------------------------------------- |
-| `ID`               | `ID() string`                                      | Stable identifier of the backing store, unique among registered file systems. Computed at construction, never blocks. |
+| `ID`               | `ID() string`                                      | A string that identifies this file system uniquely among the registered ones and never changes. Computed at construction, never blocks. Format is implementation specific, see [ID](#id). |
 | `Prefix`           | `Prefix() string`                                  | URI prefix, e.g. `"file://"`, `"sftp://"`. Must not be empty. |
 | `Name`             | `Name() string`                                    | Name of the implementation.                        |
 | `String`           | `String() string`                                  | Descriptive string for debug output.               |
@@ -32,6 +32,27 @@ Every backend implements this. Nothing works without it.
 | `ListDir`          | `ListDir(ctx, dirPath string, patterns []string, callback func(*FileInfo) error) error` | Non-recursive. A callback error or a cancelled context stops the listing and is returned. |
 | `OpenReader`       | `OpenReader(filePath string) (io.ReadCloser, error)` |                                                    |
 | `Close`            | `Close() error`                                    | Idempotent: calling it more than once returns nil. Unregisters the file system. File systems that can't be closed do nothing. |
+
+### ID
+
+`ID()` is a string that identifies one file system uniquely among the
+registered ones and never changes for its lifetime. It is computed at
+construction and must never block, so it can be read from any code path.
+
+Where the backing store has an identifier of its own, that one is used —
+only two of the backends in this repository can: the local file system uses
+the file system id of the root volume, dropboxfs the Dropbox account id.
+Neither SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage exposes such an
+identifier, so those use the coordinates that identify the store instead: the
+bucket, the container, the share, or the user and host of the connection. The
+in-memory, archive and form file systems have no backing store at all and use
+a generated id.
+
+The format is therefore specific to the implementation and promises nothing
+beyond uniqueness and stability. Use `ID()` to tell two file systems apart,
+to key a cache, or as meta information; don't parse it. `Prefix()` is what
+builds URIs and `Name()` is for human readable output. The value of every
+file system is tabulated in the [README](../README.md#file-system-implementations).
 
 ## WriteFileSystem (required for writing)
 

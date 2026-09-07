@@ -30,6 +30,7 @@ func main() {
     defer dbxFS.Close()
 
     // The prefix is dropbox://<account id>, so it is stable per account
+    // and ID() is the account id itself
     file := dbxFS.RootDir().Join("notes.md")
 
     err = file.WriteAllString(ctx, "Hello, Dropbox!")

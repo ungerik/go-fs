@@ -30,14 +30,22 @@ Taken 2026-09-05/06:
   implement standard library interfaces (`WriteTo`, `ReadFrom`, `GobEncode`,
   `String`). Where a pair exists today, the ctx variant survives under the
   short name.
-- **`FileSystem.ID()` stays** as `ID() string`: a stable identifier of the
-  backing store, unique among registered file systems, computed at
-  construction, never blocking. Local: the real underlying file system id of the root volume
-  (`statfs` `f_fsid` on Unix, `GetVolumeInformation` volume serial on Windows),
-  obtained lazily once via `sync.Once`; s3: bucket;
-  sftp/ftp: `user@host`; mem: generated id; dropbox: account id fetched by the
-  constructor (which takes ctx and may fail). Useful as meta information, e.g.
-  `fs.File("/path").FileSystem().ID()`.
+- **`FileSystem.ID()` stays** as `ID() string`: a string that identifies the
+  file system uniquely among the registered ones and never changes, computed
+  at construction, never blocking. Where the backing store has an identifier
+  of its own it is used - local: the real underlying file system id of the root
+  volume (`statfs` `f_fsid` on Unix, `GetVolumeInformation` volume serial on
+  Windows), obtained lazily once via `sync.Once`; dropbox: the account id
+  fetched by the constructor (which takes ctx and may fail). No other remote
+  protocol in this repo exposes one (checked for SFTP, FTP, WebDAV, SMB, S3
+  and Azure Blob Storage), so those use the coordinates that identify the
+  store: s3: bucket; azblob: `host/container`; smb: `user@host/share`;
+  webdav: `host/base path`; sftp/ftp: the connection prefix
+  (`sftp://user@host`). Mem and the archive/form file systems use a generated
+  id. The format is implementation specific and promises nothing beyond
+  uniqueness and stability - useful as meta information, e.g.
+  `fs.File("/path").FileSystem().ID()`, not for parsing. The per-file-system
+  values are tabulated in the README.
 - **Errors:** standard library `errors`/`fmt` only, no `go-errs` dependency
   (see `AGENTS.md`).
 - **`MemDir` is dropped**; `MemFile` keeps its trailing-slash directory
