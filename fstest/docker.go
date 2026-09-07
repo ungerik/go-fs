@@ -1,13 +1,33 @@
 package fstest
 
 import (
+	"context"
 	"log"
 	"os"
+	"os/exec"
 	"runtime"
+	"time"
 )
 
+// DockerAvailable reports whether Docker can actually run containers,
+// meaning the CLI is installed and its daemon answers.
+//
+// A CLI without a reachable daemon is the common case on CI runners and
+// on developer machines with Docker Desktop stopped. Treating it as
+// "installed" would fail the whole test run instead of skipping the
+// Docker based tests as the repository policy requires.
+func DockerAvailable() bool {
+	if _, err := exec.LookPath("docker"); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// docker info exits non-zero when the daemon is not reachable
+	return exec.CommandContext(ctx, "docker", "info").Run() == nil
+}
+
 // DockerSetupFailed is called by the TestMain of the backends with
-// Docker based tests when Docker is installed but the test server
+// Docker based tests when Docker is available but the test server
 // could not be built or started.
 //
 // Tests must only be skipped when Docker is not available at all;
@@ -18,6 +38,6 @@ func DockerSetupFailed(server string) {
 		log.Printf("Docker %s test server not available on Windows, skipping its tests", server)
 		return
 	}
-	log.Printf("Docker is installed but the %s test server could not be started, failing instead of skipping", server)
+	log.Printf("Docker is available but the %s test server could not be started, failing instead of skipping", server)
 	os.Exit(1)
 }

@@ -33,17 +33,28 @@ func (n *DirTreeNode) Add(entryName string, modified time.Time, size int64) erro
 	entryName = strings.TrimPrefix(entryName, "/")
 	isDir := strings.HasSuffix(entryName, "/")
 	parts := strings.Split(strings.TrimSuffix(entryName, "/"), "/")
-	current := n
-	for i, part := range parts {
+	// Collect the significant elements before touching the tree, so a
+	// rejected entry leaves no partial path behind. Node paths are built
+	// from these elements only and therefore stay clean: a lookup by the
+	// cleaned path of a listed File must find the node it was listed from.
+	clean := make([]string, 0, len(parts))
+	for _, part := range parts {
 		if part == "" || part == "." {
 			continue
 		}
-		last := i == len(parts)-1
+		if part == ".." {
+			return fmt.Errorf("archive entry %q must not contain a %q path element", entryName, "..")
+		}
+		clean = append(clean, part)
+	}
+	current := n
+	for i, part := range clean {
+		last := i == len(clean)-1
 		childIsDir := isDir || !last
 		child, ok := current.children[part]
 		if !ok {
 			child = &DirTreeNode{
-				Path:     strings.Join(parts[:i+1], "/"),
+				Path:     strings.Join(clean[:i+1], "/"),
 				Name:     part,
 				IsDir:    childIsDir,
 				Modified: modified,

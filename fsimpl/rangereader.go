@@ -83,8 +83,12 @@ func (r *RangeReader) ReadAt(p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, fmt.Errorf("negative offset: %d", off)
 	}
-	if off >= r.Size || len(p) == 0 {
+	if off >= r.Size {
 		return 0, io.EOF
+	}
+	// Zero bytes requested were zero bytes delivered, like bytes.Reader
+	if len(p) == 0 {
+		return 0, nil
 	}
 	count := min(int64(len(p)), r.Size-off)
 	body, err := r.Open(off, count)

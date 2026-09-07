@@ -85,3 +85,31 @@ func TestDirTree_SortedChildren(t *testing.T) {
 
 	assert.Empty(t, tree.Lookup("a.txt").SortedChildren(), "a file has no children")
 }
+
+// TestDirTree_RejectsParentDirElement verifies that a malformed archive
+// entry escaping its own tree is refused. Accepting it created a visible
+// ".." node whose Path could not be reached again through a cleaned
+// File URI, so listings offered entries that could not be opened.
+func TestDirTree_RejectsParentDirElement(t *testing.T) {
+	mod := time.Time{}
+	for _, entryName := range []string{"../evil", "a/../../evil", "..", "a/../b"} {
+		tree := NewDirTree()
+		err := tree.Add(entryName, mod, 1)
+		assert.Error(t, err, "entry %q must be rejected", entryName)
+		assert.Empty(t, tree.SortedChildren(), "entry %q must not be added", entryName)
+	}
+}
+
+// TestDirTree_CleanNodePaths verifies that empty and "." elements do not
+// end up in a node's Path: a lookup by the cleaned path of a listed File
+// must find the node the File was listed from.
+func TestDirTree_CleanNodePaths(t *testing.T) {
+	mod := time.Time{}
+	tree := NewDirTree()
+	require.NoError(t, tree.Add("a//b/./c.txt", mod, 3))
+
+	node := tree.Lookup("a/b/c.txt")
+	require.NotNil(t, node, "the entry must be reachable by its cleaned path")
+	assert.Equal(t, "a/b/c.txt", node.Path)
+	assert.Equal(t, "a/b", tree.Lookup("a/b").Path)
+}

@@ -265,10 +265,14 @@ func dial(ctx context.Context, host, user, password string, hostKeyCallback ssh.
 	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, host, config)
 	if err != nil {
+		_ = conn.Close() // ssh did not take ownership of the TCP connection
 		return nil, err
 	}
-	client, err := sftp.NewClient(ssh.NewClient(sshConn, chans, reqs))
+	// ssh.NewClient owns sshConn, closing the client closes the connection
+	sshClient := ssh.NewClient(sshConn, chans, reqs)
+	client, err := sftp.NewClient(sshClient)
 	if err != nil {
+		_ = sshClient.Close() // the dial failed, the close error adds nothing
 		return nil, err
 	}
 	if connLogger != nil {
@@ -720,12 +724,38 @@ func (f *fileSystem) Move(filePath string, destPath string) error {
 	}
 	return f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
 		// clientPath is the URL path for the plain prefix file system,
-		// the destination path has the same URL form
+		// the destination path has the same URL form and needs the
+		// same translation
 		if clientPath != filePath {
-			destPath = strings.TrimSuffix(clientPath, filePath) + destPath
+			destClientPath, err := f.destClientPath(filePath, destPath)
+			if err != nil {
+				return err
+			}
+			destPath = destClientPath
 		}
 		return client.Rename(clientPath, destPath)
 	})
+}
+
+// destClientPath translates a destination path to the path to use with
+// the client of filePath. Only the file system registered for the plain
+// prefix needs it: its paths carry the URI authority
+// (/user:password@host/dir/file) while the client uses the server path
+// (/dir/file). A single RENAME can't cross connections, so a destination
+// on another server is rejected instead of renaming to a nonsense path.
+func (f *fileSystem) destClientPath(filePath, destPath string) (string, error) {
+	srcURL, err := url.Parse(f.URL(filePath))
+	if err != nil {
+		return "", err
+	}
+	destURL, err := url.Parse(f.URL(destPath))
+	if err != nil {
+		return "", err
+	}
+	if destURL.Host != srcURL.Host || destURL.User.Username() != srcURL.User.Username() {
+		return "", fmt.Errorf("%s can't move %s to another server: %s", f.Name(), filePath, destPath)
+	}
+	return destURL.Path, nil
 }
 
 func (f *fileSystem) Remove(filePath string) error {

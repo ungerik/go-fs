@@ -31,7 +31,7 @@ var (
 
 func TestMain(m *testing.M) {
 	// Check if Docker is available
-	if _, err := exec.LookPath("docker"); err != nil {
+	if !fstest.DockerAvailable() {
 		log.Println("Docker not available, skipping Docker-based SFTP tests")
 		dockerSFTPAvailable = false
 		os.Exit(m.Run())
@@ -67,7 +67,7 @@ func TestMain(m *testing.M) {
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", testContainerName,
-		"-p", fmt.Sprintf("%s:22", testSFTPPort),
+		"-p", fmt.Sprintf("127.0.0.1:%s:22", testSFTPPort),
 		"sftp-test-server",
 	)
 	output, err = runCmd.CombinedOutput()

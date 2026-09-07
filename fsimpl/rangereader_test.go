@@ -86,3 +86,26 @@ func TestRangeReader(t *testing.T) {
 		assert.ErrorIs(t, err, os.ErrClosed)
 	})
 }
+
+// TestRangeReader_ReadAtZeroLength verifies the io.ReaderAt contract for
+// an empty buffer: zero bytes requested were zero bytes delivered, so it
+// must succeed like bytes.Reader instead of reporting io.EOF.
+func TestRangeReader_ReadAtZeroLength(t *testing.T) {
+	src := &rangeSource{data: []byte("hello world")}
+	r := src.reader()
+
+	n, err := r.ReadAt(nil, 0)
+	assert.NoError(t, err, "zero bytes at a valid offset is not an EOF")
+	assert.Zero(t, n)
+
+	n, err = r.ReadAt([]byte{}, int64(len(src.data))-1)
+	assert.NoError(t, err, "still within the data, so not an EOF")
+	assert.Zero(t, n)
+
+	// Past the end stays io.EOF like bytes.Reader, even for an empty buffer
+	n, err = r.ReadAt(nil, int64(len(src.data)))
+	assert.ErrorIs(t, err, io.EOF)
+	assert.Zero(t, n)
+
+	assert.Empty(t, src.opens, "an empty read must not cost a range request")
+}

@@ -804,12 +804,39 @@ func (f *fileSystem) Move(filePath string, destPath string) error {
 	}
 	return f.do(context.Background(), filePath, func(conn *ftp.ServerConn, clientPath string) error {
 		// clientPath is the URL path for the plain prefix file systems,
-		// the destination path has the same URL form
+		// the destination path has the same URL form and needs the
+		// same translation
 		if clientPath != filePath {
-			destPath = strings.TrimSuffix(clientPath, filePath) + destPath
+			destClientPath, err := f.destClientPath(filePath, destPath)
+			if err != nil {
+				return err
+			}
+			destPath = destClientPath
 		}
 		return f.notExist(filePath, conn.Rename(clientPath, destPath))
 	})
+}
+
+// destClientPath translates a destination path to the path to use with
+// the connection of filePath. Only the file systems registered for the
+// plain prefixes need it: their paths carry the URI authority
+// (/user:password@host/dir/file) while the connection uses the server
+// path (/dir/file). A single RNFR/RNTO can't cross connections, so a
+// destination on another server is rejected instead of renaming to a
+// nonsense path.
+func (f *fileSystem) destClientPath(filePath, destPath string) (string, error) {
+	srcURL, err := url.Parse(f.URL(filePath))
+	if err != nil {
+		return "", err
+	}
+	destURL, err := url.Parse(f.URL(destPath))
+	if err != nil {
+		return "", err
+	}
+	if destURL.Host != srcURL.Host || destURL.User.Username() != srcURL.User.Username() {
+		return "", fmt.Errorf("%s can't move %s to another server: %s", f.Name(), filePath, destPath)
+	}
+	return destURL.Path, nil
 }
 
 // Remove deletes a file with the DELE command

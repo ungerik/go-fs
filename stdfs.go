@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	iofs "io/fs"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -72,9 +73,13 @@ type stdDirFile struct {
 	entries []iofs.DirEntry // loaded by the first ReadDir
 	loaded  bool
 	offset  int
+	closed  bool
 }
 
 func (d *stdDirFile) Stat() (iofs.FileInfo, error) {
+	if d.closed {
+		return nil, &iofs.PathError{Op: "stat", Path: d.file.Path(), Err: os.ErrClosed}
+	}
 	return d.info, nil
 }
 
@@ -82,13 +87,20 @@ func (d *stdDirFile) Read([]byte) (int, error) {
 	return 0, &iofs.PathError{Op: "read", Path: d.file.Path(), Err: NewErrIsDirectory(d.file)}
 }
 
+// Close makes the directory unusable for further I/O like os.File.Close,
+// subsequent Stat and ReadDir calls return os.ErrClosed.
+// Close is idempotent.
 func (d *stdDirFile) Close() error {
+	d.closed = true
 	return nil
 }
 
 // ReadDir reads the directory entries sorted by name like io/fs.ReadDir,
 // n entries at a time for n > 0 and all remaining entries otherwise.
 func (d *stdDirFile) ReadDir(n int) ([]iofs.DirEntry, error) {
+	if d.closed {
+		return nil, &iofs.PathError{Op: "readdir", Path: d.file.Path(), Err: os.ErrClosed}
+	}
 	if !d.loaded {
 		entries, err := stdReadDir(d.file)
 		if err != nil {

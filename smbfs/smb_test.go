@@ -31,10 +31,10 @@ var (
 )
 
 // TestMain starts a Samba container (dperson/samba) with one share
-// for the test user. Tests are skipped when Docker is not installed and
-// fail when it is installed but the server can't be started.
+// for the test user. Tests are skipped when Docker is not available and
+// fail when it is available but the server can't be started.
 func TestMain(m *testing.M) {
-	if _, err := exec.LookPath("docker"); err != nil {
+	if !fstest.DockerAvailable() {
 		log.Println("Docker not available, skipping Docker-based SMB tests")
 		os.Exit(m.Run())
 	}
@@ -49,7 +49,7 @@ func TestMain(m *testing.M) {
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", testContainerName,
-		"-p", fmt.Sprintf("%s:445", testSMBPort),
+		"-p", fmt.Sprintf("127.0.0.1:%s:445", testSMBPort),
 		"dperson/samba",
 		"-p",
 		"-u", fmt.Sprintf("%s;%s", testUsername, testPassword),

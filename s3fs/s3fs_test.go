@@ -37,7 +37,7 @@ var (
 
 func TestMain(m *testing.M) {
 	// Check if Docker is available
-	if _, err := exec.LookPath("docker"); err != nil {
+	if !fstest.DockerAvailable() {
 		log.Println("Docker not available, skipping Docker-based MinIO S3 tests")
 		m.Run()
 		return
@@ -84,8 +84,8 @@ func setupMinioServer(ctx context.Context) bool {
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", containerName,
-		"-p", fmt.Sprintf("%s:9000", testS3Port),
-		"-p", fmt.Sprintf("%s:9001", testS3ConsolePort),
+		"-p", fmt.Sprintf("127.0.0.1:%s:9000", testS3Port),
+		"-p", fmt.Sprintf("127.0.0.1:%s:9001", testS3ConsolePort),
 		"-e", fmt.Sprintf("MINIO_ROOT_USER=%s", testAccessKey),
 		"-e", fmt.Sprintf("MINIO_ROOT_PASSWORD=%s", testSecretKey),
 		"minio/minio:latest",

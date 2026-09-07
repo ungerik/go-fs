@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	iofs "io/fs"
+	"math"
 	"slices"
 )
 
@@ -180,6 +181,12 @@ func (buf *FileBuffer) Write(p []byte) (n int, err error) {
 func (buf *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 	if off < 0 {
 		return 0, errors.New("FileBuffer.WriteAt: negative offset")
+	}
+	// int(off) would truncate on 32 bit and pos+len(p) would wrap
+	// negative near the maximum, slicing below would then panic
+	// instead of returning an error
+	if off > math.MaxInt-int64(len(p)) {
+		return 0, errors.New("FileBuffer.WriteAt: offset out of range")
 	}
 	pos := int(off)
 	writeEnd := pos + len(p)

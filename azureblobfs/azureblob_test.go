@@ -34,10 +34,10 @@ const (
 var dockerAzuriteAvailable bool
 
 // TestMain starts an Azurite container (the Azure Storage emulator).
-// Tests are skipped when Docker is not installed and fail when it is
-// installed but the emulator can't be started.
+// Tests are skipped when Docker is not available and fail when it is
+// available but the emulator can't be started.
 func TestMain(m *testing.M) {
-	if _, err := exec.LookPath("docker"); err != nil {
+	if !fstest.DockerAvailable() {
 		log.Println("Docker not available, skipping Docker-based Azure Blob tests")
 		os.Exit(m.Run())
 	}
@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", testContainerName,
-		"-p", fmt.Sprintf("%s:10000", testBlobPort),
+		"-p", fmt.Sprintf("127.0.0.1:%s:10000", testBlobPort),
 		"mcr.microsoft.com/azure-storage/azurite",
 		"azurite-blob", "--blobHost", "0.0.0.0", "--skipApiVersionCheck", "--loose",
 	)

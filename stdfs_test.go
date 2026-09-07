@@ -44,3 +44,35 @@ func TestStdFS(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestStdFSDirFileClose verifies that Close makes a directory opened
+// through StdFS unusable, like os.File.Close. The no-op Close left
+// ReadDir and Stat fully working after the file was closed.
+func TestStdFSDirFileClose(t *testing.T) {
+	mapFS := fstest.MapFS{
+		"dir/a.txt": &fstest.MapFile{Data: []byte("a")},
+		"dir/b.txt": &fstest.MapFile{Data: []byte("b")},
+	}
+	stdFS := NewStdFileSystemAndRegister(mapFS, "")
+	t.Cleanup(func() { _ = stdFS.Close() })
+
+	dir, err := stdFS.RootDir().StdFS().Open("dir")
+	require.NoError(t, err)
+
+	entries, err := dir.(interface {
+		ReadDir(int) ([]os.DirEntry, error)
+	}).ReadDir(1)
+	require.NoError(t, err, "reading before Close works")
+	require.Len(t, entries, 1)
+
+	require.NoError(t, dir.Close())
+	require.NoError(t, dir.Close(), "Close is idempotent")
+
+	_, err = dir.(interface {
+		ReadDir(int) ([]os.DirEntry, error)
+	}).ReadDir(1)
+	require.ErrorIs(t, err, os.ErrClosed, "ReadDir after Close must fail")
+
+	_, err = dir.Stat()
+	require.ErrorIs(t, err, os.ErrClosed, "Stat after Close must fail")
+}

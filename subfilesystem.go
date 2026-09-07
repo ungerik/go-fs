@@ -108,6 +108,18 @@ func (s *SubFileSystem) parentPath(filePath string) string {
 	return s.parent.CleanPath(s.dir, filePath)
 }
 
+// belowDir reports whether the parent path is the root directory
+// or below it. A raw prefix check is not enough: for the root
+// directory "/root" the sibling "/root-other" also has the prefix
+// but is outside, translating it would yield a misleading path.
+func (s *SubFileSystem) belowDir(parentPath string) bool {
+	if parentPath == s.dir {
+		return true
+	}
+	sep := s.parent.Separator()
+	return strings.HasPrefix(parentPath, strings.TrimSuffix(s.dir, sep)+sep)
+}
+
 // subPath translates a parent path below the root directory
 // to a path of this file system.
 func (s *SubFileSystem) subPath(parentPath string) string {
@@ -478,7 +490,7 @@ func (s *SubFileSystem) ReadSymbolicLink(linkPath string) (targetPath string, er
 	if err != nil {
 		return "", s.subErr(err)
 	}
-	if strings.HasPrefix(target, s.dir) {
+	if s.belowDir(target) {
 		return s.subPath(target), nil
 	}
 	return target, nil

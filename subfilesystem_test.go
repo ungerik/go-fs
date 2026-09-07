@@ -265,3 +265,69 @@ func TestSubFileSystem_Watch(t *testing.T) {
 		t.Fatal("expected a watch event for /a.txt")
 	}
 }
+
+// TestSubFileSystem_ReadSymbolicLinkSiblingRoot verifies that a link
+// target outside the view is returned untranslated. A raw prefix check
+// treated the sibling "/root-other" as being below the root "/root" and
+// rewrote it to the misleading in-view path "/-other/file".
+func TestSubFileSystem_ReadSymbolicLinkSiblingRoot(t *testing.T) {
+	var targets = map[string]string{
+		"/root/inside":  "/root/data/file", // below the root
+		"/root/self":    "/root",           // the root itself
+		"/root/sibling": "/root-other/file",
+		"/root/outside": "/elsewhere/file",
+	}
+	parent := &symlinkMockFileSystem{
+		MockFileSystem: fstest.MockFileSystem{
+			MockPrefix: "mock-sibling://",
+			MockStat: func(filePath string) (*fs.FileInfo, error) {
+				return &fs.FileInfo{File: fs.File("mock-sibling://" + filePath), Name: "root", Exists: true, IsDir: true}, nil
+			},
+		},
+		readLink: func(linkPath string) (string, error) {
+			return targets[linkPath], nil
+		},
+	}
+	fs.Register(parent)
+	t.Cleanup(func() { fs.Unregister(parent) })
+
+	subFS, err := fs.NewSubFileSystem(parent, "/root", "sibling")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, subFS.Close()) })
+
+	target, err := subFS.ReadSymbolicLink("/inside")
+	require.NoError(t, err)
+	assert.Equal(t, "/data/file", target, "a target below the root is translated to the view")
+
+	target, err = subFS.ReadSymbolicLink("/self")
+	require.NoError(t, err)
+	assert.Equal(t, "/", target, "the root itself is the view root")
+
+	target, err = subFS.ReadSymbolicLink("/sibling")
+	require.NoError(t, err)
+	assert.Equal(t, "/root-other/file", target, "a sibling of the root is outside and stays untranslated")
+
+	target, err = subFS.ReadSymbolicLink("/outside")
+	require.NoError(t, err)
+	assert.Equal(t, "/elsewhere/file", target, "an unrelated target stays untranslated")
+}
+
+// symlinkMockFileSystem is a MockFileSystem that also implements
+// fs.SymbolicLinkFileSystem, which MockFileSystem alone does not.
+type symlinkMockFileSystem struct {
+	fstest.MockFileSystem
+	readLink func(linkPath string) (targetPath string, err error)
+}
+
+func (m *symlinkMockFileSystem) IsSymbolicLink(filePath string) bool {
+	target, err := m.readLink(filePath)
+	return err == nil && target != ""
+}
+
+func (m *symlinkMockFileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
+	return errors.ErrUnsupported
+}
+
+func (m *symlinkMockFileSystem) ReadSymbolicLink(linkPath string) (string, error) {
+	return m.readLink(linkPath)
+}

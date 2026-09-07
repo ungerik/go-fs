@@ -3,8 +3,9 @@ name: CodeQL
 on:
   push:
     branches: [master]
+  # No base branch filter: release branches like v1 must be scanned too,
+  # matching the test workflow
   pull_request:
-    branches: [master]
   schedule:
     - cron: '33 23 * * 0'
 
