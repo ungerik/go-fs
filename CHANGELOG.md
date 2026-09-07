@@ -11,7 +11,7 @@ First beta of the v1 API; further beta releases iterate on it before
 v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 `docs/MIGRATION_v1.md`; the design decisions are recorded in
 `docs/V1_ROADMAP.md`. All modules (`s3fs`, `sftpfs`, `ftpfs`, `dropboxfs`,
-`tools`) are tagged in lockstep.
+`webdavfs`, `smbfs`, `azureblobfs`, `tools`) are tagged in lockstep.
 
 ### Changed
 
