@@ -27,8 +27,10 @@ type (
 // cleaned, using the [FileSystem.Separator], without the [FileSystem.Prefix],
 // and absolute for the file system (starting with the separator or a volume)
 // with the exception of file systems where the path starts with a host name.
-// Prefix()+path is the URI of a path. The package guarantees that
-// implementations are called with such clean paths and never with the prefix.
+// The URI of a path is Prefix() followed by the path with every "%" escaped
+// as "%25" (see [fsimpl.EscapeURIPath]), because [ParseRawURI] decodes URL
+// escapes after the prefix. The package guarantees that implementations
+// are called with such clean paths and never with the prefix.
 //
 // Implementations must return errors that satisfy [errors.Is] for
 // [os.ErrNotExist] when a file does not exist, [os.ErrExist] when

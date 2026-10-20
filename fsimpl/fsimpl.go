@@ -5,6 +5,7 @@ package fsimpl
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"net/url"
 	"path"
 	"strings"
 )
@@ -25,6 +26,27 @@ func RandomString() string {
 		s = "X" + s[1:]
 	}
 	return s
+}
+
+// EscapeURIPath returns filePath escaped for the path part of a URI:
+// every "%" becomes "%25" and nothing else is changed,
+// so UnescapeURIPath returns filePath for the result.
+//
+// fs.ParseRawURI decodes the URL escapes in the path part of a URI,
+// so the URI of a path is the prefix of its file system followed by
+// the escaped path. That way a file named "a%20b" keeps its name.
+func EscapeURIPath(filePath string) string {
+	return strings.ReplaceAll(filePath, "%", "%25")
+}
+
+// UnescapeURIPath decodes the URL escapes in the path part of a URI,
+// the inverse of EscapeURIPath. If uriPath contains an invalid escape,
+// like "50% off", it is returned unchanged.
+func UnescapeURIPath(uriPath string) string {
+	if filePath, err := url.PathUnescape(uriPath); err == nil {
+		return filePath
+	}
+	return uriPath
 }
 
 // Ext returns the extension of filePath including the point, or an empty string.

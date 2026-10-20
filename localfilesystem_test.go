@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -134,4 +135,20 @@ func Test_expandTilde_HonorsEnv(t *testing.T) {
 	require.Equal(t, filepath.Join(fakeHome, "foo"), expandTilde("~/foo"))
 	require.Equal(t, filepath.Join(fakeHome, "Documents/test/file.txt"),
 		expandTilde("~/Documents/test/file.txt"))
+}
+
+func TestLocalFileSystem_URL(t *testing.T) {
+	// ParseRawURI decodes the URL escapes of a file:// URI,
+	// but never those of a local path without the prefix.
+	localPath := filepath.Join(t.TempDir(), "100%25 a%20b.txt")
+	file := File(localPath)
+	assert.Equal(t, localPath, file.Path(), "a local path is not decoded")
+	assert.Equal(t, "100%25 a%20b.txt", file.Name())
+
+	uri := file.URL()
+	assert.True(t, strings.HasPrefix(uri, LocalPrefix), "URL %q has the local prefix", uri)
+	assert.True(t, strings.HasSuffix(uri, "/100%2525 a%2520b.txt"),
+		"URL %q escapes every %%", uri)
+	assert.Equal(t, localPath, File(uri).Path(), "the URL resolves to the path")
+	assert.Equal(t, "100%25 a%20b.txt", File(uri).Name())
 }

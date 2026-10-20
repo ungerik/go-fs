@@ -27,13 +27,15 @@ import (
 type Seed map[string][]byte
 
 // DefaultSeed returns the tree used by RunConformance when
-// Config.Seed is nil. It contains an empty file, a hidden file
+// Config.Seed is nil. It contains an empty file, a hidden file,
+// a file with URL escapes in its name that must not be decoded,
 // and two levels of sub directories.
 func DefaultSeed() Seed {
 	return Seed{
 		"hello.txt":          []byte("Hello, World!"),
 		"empty.txt":          nil,
 		".hidden.txt":        []byte("hidden"),
+		escapedSeedName:      []byte("escaped name"),
 		"sub/nested.txt":     []byte("nested content"),
 		"sub/deeper/leaf.md": []byte("# leaf"),
 	}
@@ -43,11 +45,16 @@ func DefaultSeed() Seed {
 // for file systems that only support a single directory level.
 func FlatSeed() Seed {
 	return Seed{
-		"hello.txt":   []byte("Hello, World!"),
-		"empty.txt":   nil,
-		".hidden.txt": []byte("hidden"),
+		"hello.txt":     []byte("Hello, World!"),
+		"empty.txt":     nil,
+		".hidden.txt":   []byte("hidden"),
+		escapedSeedName: []byte("escaped name"),
 	}
 }
+
+// escapedSeedName is a file name that looks URL escaped.
+// It must keep its name, a file named "100% a b.txt" is another file.
+const escapedSeedName = "100%25 a%20b.txt"
 
 // dirs returns the sorted set of directories implied by the seed,
 // relative to TestDir and without the root itself.
@@ -234,16 +241,17 @@ func (c *conformance) file(rel string) fs.File {
 	return fs.File(c.url(c.path(rel)))
 }
 
-// url returns the URI of a file system path.
+// url returns the URI of a file system path:
+// the prefix followed by the path with "%" escaped as "%25".
 func (c *conformance) url(cleanPath string) string {
 	if c.fs == fs.FileSystem(fs.Local) {
 		return fs.File(cleanPath).URL()
 	}
 	prefix, sep := c.fs.Prefix(), c.fs.Separator()
 	if strings.HasSuffix(prefix, sep) && strings.HasPrefix(cleanPath, sep) {
-		return prefix + cleanPath[len(sep):]
+		cleanPath = cleanPath[len(sep):]
 	}
-	return prefix + cleanPath
+	return prefix + strings.ReplaceAll(cleanPath, "%", "%25")
 }
 
 func (c *conformance) readAll(t *testing.T, path string) []byte {
@@ -328,6 +336,19 @@ func (c *conformance) testPaths(t *testing.T) {
 	assert.Equal(t, f, f.Dir().Join("y.txt"), "Dir().Join(Name()) must return the file")
 	assert.Equal(t, f, f.Dir().Join("skip", "..", "y.txt"), "Join must clean the path")
 	assert.Equal(t, ".txt", f.Ext(), "File.Ext()")
+
+	// Names that look URL escaped must not be decoded on the way
+	// from a path to a File and back, the URI escapes every "%".
+	escPath := c.fs.CleanPath(c.cfg.TestDir, "50% a%20b", "100%25.txt")
+	escURI := c.url(escPath)
+	assert.Equal(t, escPath, fs.File(escURI).Path(), "File(uri).Path() must not decode the names of the path")
+	assert.Equal(t, escURI, fs.File(escURI).URL(), "File(uri).URL() must return the URI with escaped names")
+	escFile := c.file("50% a%20b/100%25.txt")
+	assert.Equal(t, escPath, escFile.Path(), "File.Path() with escaped names")
+	assert.Equal(t, "100%25.txt", escFile.Name(), "File.Name() must not decode the name")
+	assert.Equal(t, ".txt", escFile.Ext(), "File.Ext() with an escaped name")
+	assert.Equal(t, "50% a%20b", escFile.Dir().Name(), "File.Dir().Name() must not decode the name")
+	assert.Equal(t, escFile, escFile.Dir().Join("100%25.txt"), "Dir().Join(Name()) must return the file with escaped names")
 
 	// Aliases
 	if aliasFS, ok := c.fs.(fs.PrefixAliasFileSystem); ok {

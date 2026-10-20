@@ -13,7 +13,8 @@ import (
 // A file system path is the output of CleanPath: cleaned, using
 // the separator of the file system, without the URI prefix, and
 // absolute for the file system (starting with the separator or a
-// volume) if Rooted is true. Prefix()+path is the URI of a path.
+// volume) if Rooted is true. The URI of a path is Prefix() followed
+// by the path escaped with EscapeURIPath, see URL.
 //
 // The zero value is not usable, at least URIPrefix must be set.
 type PathHelper struct {
@@ -122,14 +123,15 @@ func (h PathHelper) CleanPath(uriParts ...string) string {
 	return volume + rest
 }
 
-// URL returns the URI of a file system path: URIPrefix + cleanPath,
-// without doubling the separator if URIPrefix ends with one.
+// URL returns the URI of a file system path: URIPrefix followed by
+// cleanPath escaped with EscapeURIPath, without doubling the separator
+// if URIPrefix ends with one.
 func (h PathHelper) URL(cleanPath string) string {
 	sep := h.Separator()
 	if strings.HasSuffix(h.URIPrefix, sep) && strings.HasPrefix(cleanPath, sep) {
-		return h.URIPrefix + cleanPath[len(sep):]
+		cleanPath = cleanPath[len(sep):]
 	}
-	return h.URIPrefix + cleanPath
+	return h.URIPrefix + EscapeURIPath(cleanPath)
 }
 
 // JoinCleanURI returns the URI of the cleaned and joined uriParts.

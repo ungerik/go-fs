@@ -160,13 +160,13 @@ func (local *LocalFileSystem) RelPath(basePath, targPath string) (string, error)
 // platform separators converted to forward slashes, so a Windows path like
 // `C:\dir\file` becomes "file://C:/dir/file".
 func (local *LocalFileSystem) URL(cleanPath string) string {
-	return LocalPrefix + filepath.ToSlash(local.AbsPath(cleanPath))
+	return LocalPrefix + fsimpl.EscapeURIPath(filepath.ToSlash(local.AbsPath(cleanPath)))
 }
 
 // CleanPath strips a leading [LocalPrefix] from the first element,
-// joins the parts with [filepath.Join], URL-unescapes the result on a best-effort
-// basis (a decoding error keeps the escaped form), cleans it, and finally
-// expands a leading "~".
+// joins the parts with [filepath.Join], cleans the result, and finally
+// expands a leading "~". URL escapes are not decoded, that is done by
+// [ParseRawURI] for URIs with the [LocalPrefix].
 func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 	var cleanPath string
 	if len(uriParts) > 0 {

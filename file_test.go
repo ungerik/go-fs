@@ -137,6 +137,8 @@ func TestFile_Ext(t *testing.T) {
 		{file: "image", want: ""},
 		{file: JoinCleanFilePath("dir.with.ext", "file"), want: ""},
 		{file: JoinCleanFilePath("dir.with.ext", "file.ext"), want: ".ext"},
+		// The extension is taken from the decoded path, not from the URI
+		{file: File(LocalPrefix + "/dir/file.100%2525"), want: ".100%25"},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.file), func(t *testing.T) {

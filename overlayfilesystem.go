@@ -150,7 +150,7 @@ func (o *OverlayFileSystem) overlayPath(layer FileSystem, layerPath string) stri
 
 // overlayFile translates a File of a layer to the overlay.
 func (o *OverlayFileSystem) overlayFile(layer FileSystem, layerFile File) File {
-	return File(o.JoinCleanURI(o.overlayPath(layer, layer.CleanPath(string(layerFile)))))
+	return File(o.JoinCleanURI(o.overlayPath(layer, uriPath(layer, string(layerFile)))))
 }
 
 // overlayInfo translates a FileInfo of a layer to the overlay.

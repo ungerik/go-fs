@@ -11,7 +11,8 @@ First beta of the v1 API; further beta releases iterate on it before
 v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 `docs/MIGRATION_v1.md`; the design decisions are recorded in
 `docs/V1_ROADMAP.md`. All modules (`s3fs`, `sftpfs`, `ftpfs`, `dropboxfs`,
-`webdavfs`, `smbfs`, `azureblobfs`, `tools`) are tagged in lockstep.
+`webdavfs`, `smbfs`, `azureblobfs`) are tagged in lockstep; the `tools`
+module only pins development tools and is not tagged.
 
 ### Changed
 
@@ -35,8 +36,9 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
   (`File.MoveTo` resolves "into directory"), new `RemoveAllFileSystem` and
   `PrefixAliasFileSystem` (sftpfs/ftpfs default ports). `ReadOnlyBase` and
   `FullyFeaturedFileSystem` are gone. `FileInfo` gained `IsSymlink` and `Sys`.
-  `ParseRawURI` decodes URL escapes only for URIs with a scheme, so a local
-  file literally named `a%20b` is reachable.
+  `ParseRawURI` decodes URL escapes only for URIs with a scheme, and only in
+  the path after the prefix, so a local file literally named `a%20b` is
+  reachable. The URI of a path escapes every `%` as `%25`, see Fixed.
 - **Backends implement only the optional interfaces they do better than the
   generic emulation.** `dispatch.go` already emulates `Exists`, `ReadAll`,
   `Touch`, `Append`, `OpenAppendWriter`, `OpenReadWriter` and `Truncate` on top
@@ -183,6 +185,9 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
   prefix, separator and optional volume; every backend embeds it instead of
   duplicating the same code. sftpfs and ftpfs now also resolve URIs that carry
   the default port (`sftp://u@h:22/x`, `ftp://h:21/x`, `ftps://h:990/x`).
+- `fsimpl.EscapeURIPath` and `fsimpl.UnescapeURIPath` convert between a file
+  system path and the path part of its URI, for implementations that build
+  URIs without `PathHelper.URL`.
 - `fsimpl.NewWriteOnCloseFileBuffer` for file systems that upload whole files
   on Close; `fsimpl.FileBuffer.Truncate`.
 - **`fsimpl.RangeReader`** implements `io.ReadSeekCloser` and `io.ReaderAt`
@@ -194,6 +199,26 @@ v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
 
 ### Fixed
 
+- **File names that look URL escaped keep their name on every file system.**
+  `ParseRawURI` decodes the URL escapes of a URI with a scheme, but the URIs
+  built from paths (`File.Join`, `File.Dir`, `File.URL`, the `FileInfo.File`
+  of listings, `PathHelper.URL` and `JoinCleanURI`, `LocalFileSystem.URL`)
+  did not escape them: `memFS.RootDir().Join("a%20b.txt")` created
+  `a b.txt`, and an S3 key `100%25.txt` was read as `100%.txt`. The URI of a
+  path now escapes every `%` as `%25`, `ParseRawURI` decodes only the path
+  after the prefix (so a prefix with escapes, like an smbfs user name,
+  resolves too), `File.Ext` is taken from the decoded path, `SubFileSystem`
+  and `OverlayFileSystem` decode the files of their layers, and webdavfs no
+  longer decodes PROPFIND hrefs twice. The conformance suite seeds a file
+  named `100%25 a%20b.txt` on every backend.
+- **multipartfs files open their own upload for every file and field name.**
+  A file `..%2Fother%2Fx.txt` uploaded under the field `doc` read the upload
+  `x.txt` of the field `other`, and files named like `report%201.pdf`,
+  `100%25.txt` or `a%2Fb.txt` did not exist. File names now keep their
+  name, and the directory name of a field is escaped (`%` as `%25`, `/` as
+  `%2F`, `.` and `..` as `%2E` and `%2E%2E`) and unescaped after the path is
+  split, so field names like `a/b` or `..` work and no name can address an
+  upload of another field.
 - The generic `OpenAppendWriter` emulation (used by file systems without a
   native append writer) overwrote the beginning of the file instead of
   appending.

@@ -66,10 +66,13 @@ func TestPathHelper_URL(t *testing.T) {
 	assert.Equal(t, "s3://bucket/a/b", rooted.URL("/a/b"))
 	assert.Equal(t, "s3://bucket/a/b", rooted.JoinCleanURI("a", "b"))
 	assert.Equal(t, "/a/b", rooted.CleanPath(rooted.URL("/a/b")), "CleanPath(URL(p)) == p")
+	assert.Equal(t, "s3://bucket/100%2525%2520a.txt", rooted.URL("/100%25%20a.txt"), "the URI escapes every %")
+	assert.Equal(t, "s3://bucket/100%2525%2520a.txt", rooted.JoinCleanURI("100%25%20a.txt"), "URI parts are joined as path elements")
 
 	slashPrefix := PathHelper{URIPrefix: "sftp://", Rooted: true}
 	assert.Equal(t, "sftp://host/a", slashPrefix.URL("/host/a"), "no doubled separator after a prefix ending with a separator")
 	assert.Equal(t, "/host/a", slashPrefix.CleanPath("sftp://host/a"))
+	assert.Equal(t, "sftp://host/a%25b", slashPrefix.URL("/host/a%b"))
 
 	unrooted := PathHelper{URIPrefix: "http://"}
 	assert.Equal(t, "http://example.com/a", unrooted.URL("example.com/a"))

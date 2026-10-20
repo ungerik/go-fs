@@ -3,10 +3,11 @@ package fs
 import (
 	"cmp"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // PrefixSeparator separates the scheme of a file system URI
@@ -154,7 +155,7 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	// by iterating in reverse order of sorted registry
 	for _, fs = range slices.Backward(registrySorted) {
 		if strings.HasPrefix(uri, fs.Prefix()) {
-			return fs, fs.CleanPath(unescapeURI(uri))
+			return fs, uriPath(fs, uri)
 		}
 	}
 	// Then try the prefix aliases of the registered file systems
@@ -162,7 +163,7 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 		if aliasFS, ok := fs.(PrefixAliasFileSystem); ok {
 			for _, alias := range aliasFS.PrefixAliases() {
 				if strings.HasPrefix(uri, alias) {
-					return fs, fs.CleanPath(fs.Prefix() + strings.TrimPrefix(unescapeURI(uri), alias))
+					return fs, uriPath(fs, uri)
 				}
 			}
 		}
@@ -185,11 +186,25 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	return Local, Local.CleanPath(uri)
 }
 
-// unescapeURI decodes URL escapes in uri,
-// returning uri unchanged if it can't be decoded.
-func unescapeURI(uri string) string {
-	if unescaped, err := url.PathUnescape(uri); err == nil {
-		return unescaped
+// uriPath returns the clean path of uri within fileSystem,
+// the inverse of fsURL: the longest matching prefix of fileSystem
+// or one of its prefix aliases is trimmed and the URL escapes
+// of the rest are decoded, see [fsimpl.UnescapeURIPath].
+// A uri without such a prefix is a path that is only cleaned.
+func uriPath(fileSystem FileSystem, uri string) string {
+	prefixLen := -1
+	if prefix := fileSystem.Prefix(); strings.HasPrefix(uri, prefix) {
+		prefixLen = len(prefix)
 	}
-	return uri
+	if aliasFS, ok := fileSystem.(PrefixAliasFileSystem); ok {
+		for _, alias := range aliasFS.PrefixAliases() {
+			if len(alias) > prefixLen && strings.HasPrefix(uri, alias) {
+				prefixLen = len(alias)
+			}
+		}
+	}
+	if prefixLen < 0 {
+		return fileSystem.CleanPath(uri)
+	}
+	return fileSystem.CleanPath(fileSystem.Prefix() + fsimpl.UnescapeURIPath(uri[prefixLen:]))
 }

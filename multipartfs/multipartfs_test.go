@@ -3,18 +3,24 @@ package multipartfs
 import (
 	"bytes"
 	"context"
+	"io"
 	iofs "io/fs"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"os"
+	"path"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // upload is one uploaded file of a test multipart form.
@@ -24,14 +30,23 @@ type upload struct {
 	content string
 }
 
+// dispositionEscaper escapes a quoted Content-Disposition parameter
+// the same way mime/multipart.Writer.CreateFormFile does.
+var dispositionEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+
 // newFormBody returns the encoded multipart form body
 // with the passed uploads and non file form values.
+// The file parts get raw Content-Disposition headers,
+// so field and file names reach mime/multipart as a browser sends them.
 func newFormBody(t *testing.T, uploads []upload, values map[string]string) (body *bytes.Buffer, contentType string) {
 	t.Helper()
 	body = new(bytes.Buffer)
 	w := multipart.NewWriter(body)
 	for _, u := range uploads {
-		part, err := w.CreateFormFile(u.field, u.name)
+		header := make(textproto.MIMEHeader)
+		header.Set("Content-Disposition", `form-data; name="`+dispositionEscaper.Replace(u.field)+`"; filename="`+dispositionEscaper.Replace(u.name)+`"`)
+		header.Set("Content-Type", "application/octet-stream")
+		part, err := w.CreatePart(header)
 		require.NoError(t, err)
 		_, err = part.Write([]byte(u.content))
 		require.NoError(t, err)
@@ -303,4 +318,219 @@ func TestOpenReaderStat(t *testing.T) {
 	assert.Equal(t, iofs.FileMode(0666), info.Mode())
 	assert.True(t, info.ModTime().IsZero(), "multipart parts carry no modification time")
 	assert.Nil(t, info.Sys())
+}
+
+// fileSystemName returns the file system name of a file uploaded as name:
+// mime/multipart reduces it with filepath.Base, which on Windows also cuts
+// at backslashes, and names that are no path element become "unnamed".
+func fileSystemName(name string) string {
+	name = path.Base(filepath.Base(name))
+	switch name {
+	case ".", "..", "/":
+		return "unnamed"
+	}
+	return name
+}
+
+// checkFormFile asserts that file, as returned by FormFile or FormFiles,
+// resolves to the upload u through every fs.File method that reads it.
+// dirName is the expected directory name of the form field.
+func checkFormFile(t *testing.T, formFS *MultipartFileSystem, file fs.File, u upload, dirName string) {
+	t.Helper()
+	name := fileSystemName(u.name)
+
+	assert.Equal(t, name, file.Name(), "Name")
+	assert.Equal(t, "/"+dirName+"/"+name, file.Path(), "Path")
+	assert.Equal(t, fsimpl.Ext(name, "/"), file.Ext(), "Ext")
+	data, err := file.ReadAll(t.Context())
+	if assert.NoError(t, err, "ReadAll") {
+		assert.Equal(t, u.content, string(data), "ReadAll reads the upload")
+	}
+
+	reader, err := file.OpenReader()
+	if assert.NoError(t, err, "OpenReader") {
+		data, err = io.ReadAll(reader)
+		assert.NoError(t, err)
+		assert.Equal(t, u.content, string(data), "OpenReader reads the upload")
+		assert.NoError(t, reader.Close())
+	}
+
+	assert.True(t, file.Exists(), "Exists")
+	info, err := file.Stat()
+	if assert.NoError(t, err, "Stat") {
+		assert.Equal(t, name, info.Name(), "Stat name")
+		assert.Equal(t, int64(len(u.content)), info.Size(), "Stat size")
+	}
+
+	// The path of a file has to address the same upload
+	// when passed to the file system methods.
+	header, err := formFS.GetMultipartFileHeader(file.Path())
+	if assert.NoError(t, err, "GetMultipartFileHeader(file.Path())") {
+		assert.Equal(t, filepath.Base(u.name), header.Filename, "header of the upload")
+	}
+	data, err = formFS.ReadAll(t.Context(), file.Path())
+	if assert.NoError(t, err, "ReadAll(file.Path())") {
+		assert.Equal(t, u.content, string(data))
+	}
+	assert.Equal(t, file, formFS.File(file.Path()), "File(file.Path()) is the same file")
+
+	// The parent directory is the form field
+	dir := file.Dir()
+	assert.Equal(t, dirName, dir.Name(), "Dir().Name()")
+	assert.True(t, dir.IsDir(), "Dir() is a directory")
+	assert.Equal(t, file, dir.Join(name), "Dir().Join(Name()) is the file")
+	var listed []*fs.FileInfo
+	err = dir.ListDirInfo(t.Context(), func(info *fs.FileInfo) error {
+		if info.Name == name {
+			listed = append(listed, info)
+		}
+		return nil
+	})
+	if assert.NoError(t, err, "Dir().ListDirInfo") && assert.Len(t, listed, 1, "Dir().ListDirInfo lists the file once") {
+		assert.Equal(t, file, listed[0].File, "ListDirInfo reports the same file")
+		data, err = listed[0].File.ReadAll(t.Context())
+		if assert.NoError(t, err, "ReadAll of the listed file") {
+			assert.Equal(t, u.content, string(data))
+		}
+	}
+}
+
+func TestFormFiles_fileNames(t *testing.T) {
+	// Every name mime/multipart can yield has to address exactly its upload,
+	// especially names that look URL escaped, which must not be decoded.
+	names := []string{
+		"report 1.pdf",
+		"50% off.pdf",
+		"report%201.pdf",
+		"100%25.txt",
+		`say "hi".txt`,
+		`"`,
+		"a%2Fb.txt",
+		"..%2Fother%2Fx.txt",
+		"..%2F..",
+		"%2E%2E",
+		"%2e",
+		"%",
+		"%%",
+		"%2",
+		"%zz.txt",
+		"%00.txt",
+		`back\slash.txt`,
+		"Ünïcödé 文件 🚀.pdf",
+		"+plus+ & ?query=1#hash.txt",
+		" spaces  around .txt ",
+		".hidden",
+		"..",
+		".",
+		"/", // filepath.Base("/") is "/"
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			u := upload{field: "doc", name: name, content: "content of " + name}
+			formFS := newTestFS(t, []upload{u}, nil)
+
+			files := formFS.FormFiles("doc")
+			require.Len(t, files, 1)
+			checkFormFile(t, formFS, files[0], u, "doc")
+
+			file, err := formFS.FormFile("doc")
+			require.NoError(t, err)
+			assert.Equal(t, files[0], file, "FormFile returns the first of FormFiles")
+		})
+	}
+}
+
+func TestFormFiles_fieldNames(t *testing.T) {
+	// Form field names are not sanitized by mime/multipart,
+	// they can contain anything, including separators.
+	fields := []struct {
+		field   string
+		dirName string
+	}{
+		{field: "doc", dirName: "doc"},
+		{field: "a b", dirName: "a b"},
+		{field: "a/b", dirName: "a%2Fb"},
+		{field: "/", dirName: "%2F"},
+		{field: "a%2Fb", dirName: "a%252Fb"},
+		{field: "100%", dirName: "100%25"},
+		{field: "100%25", dirName: "100%2525"},
+		{field: `say "hi"`, dirName: `say "hi"`},
+		{field: `back\slash`, dirName: `back\slash`},
+		{field: "..", dirName: "%2E%2E"},
+		{field: ".", dirName: "%2E"},
+		{field: "%2E%2E", dirName: "%252E%252E"},
+		{field: "../other", dirName: "..%2Fother"},
+		{field: "Ünïcödé", dirName: "Ünïcödé"},
+	}
+	for _, tc := range fields {
+		t.Run(tc.field, func(t *testing.T) {
+			u := upload{field: tc.field, name: "file.txt", content: "content of " + tc.field}
+			formFS := newTestFS(t, []upload{u}, nil)
+
+			files := formFS.FormFiles(tc.field)
+			require.Len(t, files, 1)
+			checkFormFile(t, formFS, files[0], u, tc.dirName)
+
+			var dirs []string
+			err := formFS.RootDir().ListDirInfo(t.Context(), func(info *fs.FileInfo) error {
+				dirs = append(dirs, info.Name)
+				assert.Equal(t, files[0].Dir(), info.File, "root listing reports the field directory")
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, []string{tc.dirName}, dirs, "root listing has the directory name of the field")
+		})
+	}
+}
+
+func TestFormFiles_crossField(t *testing.T) {
+	// A file name of one field must not be able to address
+	// the upload of another field: "doc/../other/x.txt"
+	// cleaned would be "/other/x.txt".
+	doc := upload{field: "doc", name: "..%2Fother%2Fx.txt", content: "doc upload"}
+	other := upload{field: "other", name: "x.txt", content: "other upload"}
+	formFS := newTestFS(t, []upload{doc, other}, nil)
+
+	docFiles := formFS.FormFiles("doc")
+	require.Len(t, docFiles, 1)
+	checkFormFile(t, formFS, docFiles[0], doc, "doc")
+
+	otherFiles := formFS.FormFiles("other")
+	require.Len(t, otherFiles, 1)
+	checkFormFile(t, formFS, otherFiles[0], other, "other")
+}
+
+func TestFormFiles_similarNames(t *testing.T) {
+	// Field and file names that are the same after URL decoding
+	// or path cleaning must still address their own uploads.
+	uploads := []upload{
+		{field: "doc", name: "report 1.pdf"},
+		{field: "doc", name: "report%201.pdf"},
+		{field: "doc", name: "report%25201.pdf"},
+		{field: "doc", name: "%2E%2E"},
+		{field: "doc", name: "%2E"},
+		{field: "doc", name: "%2F"},
+		{field: "doc", name: "..%2Fother%2Fx.txt"},
+		{field: "a", name: "b%2Fc"},
+		{field: "a/b", name: "c"},
+		{field: "a%2Fb", name: "c"},
+		{field: "..", name: "x.txt"},
+		{field: "%2E%2E", name: "x.txt"},
+		{field: "other", name: "x.txt"},
+		{field: "doc/../other", name: "x.txt"},
+	}
+	byField := make(map[string][]upload)
+	for i := range uploads {
+		uploads[i].content = "upload " + uploads[i].field + " " + uploads[i].name
+		byField[uploads[i].field] = append(byField[uploads[i].field], uploads[i])
+	}
+	formFS := newTestFS(t, uploads, nil)
+
+	for field, fieldUploads := range byField {
+		files := formFS.FormFiles(field)
+		require.Len(t, files, len(fieldUploads), "field %q", field)
+		for i, u := range fieldUploads {
+			checkFormFile(t, formFS, files[i], u, fieldDir(field))
+		}
+	}
 }

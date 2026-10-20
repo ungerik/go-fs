@@ -159,7 +159,8 @@ func (file File) VolumeName() string {
 //	File("dir.with.ext/file").Ext() == ""
 //	File("dir.with.ext/file.ext").Ext() == ".ext"
 func (file File) Ext() string {
-	return fsimpl.Ext(string(file), file.FileSystem().Separator())
+	fileSystem, path := file.ParseRawURI()
+	return fsimpl.Ext(path, fileSystem.Separator())
 }
 
 // ExtLower returns the lower case extension of file name including the point, or an empty string.
