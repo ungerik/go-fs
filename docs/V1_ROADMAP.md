@@ -602,7 +602,8 @@ helpers, no change to the `File` API.
 - `./test-workspace.sh` (with `-race`) green locally; GitHub Actions green on
   ubuntu/macos/windows for every module.
 - `fstest.RunConformance` passes on Local, Mem (both separators), httpfs
-  (httptest), zipfs reader + writer, multipartfs, s3fs (MinIO), sftpfs
+  (httptest), zipfs reader + writer, multipartfs, s3fs (S3Mock, MinIO until
+  its Docker images were removed in 2026), sftpfs
   (Docker), ftpfs (in-process + Docker), dropboxfs (token).
 - `go vet`, staticcheck and gosec clean.
 - domonda-service and go-docdb compile against the v1 branch after applying

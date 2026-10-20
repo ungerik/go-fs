@@ -476,7 +476,12 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	}
 	k := key(filePath)
 	if int64(len(data)) >= MultipartUploadThreshold {
-		_, err = manager.NewUploader(client).Upload(ctx, &s3.PutObjectInput{
+		_, err = manager.NewUploader(client, func(u *manager.Uploader) {
+			// The uploader defaults to CRC32 part checksums regardless
+			// of the client, so a client configured for services that
+			// don't support them could not complete a multipart upload
+			u.RequestChecksumCalculation = client.Options().RequestChecksumCalculation
+		}).Upload(ctx, &s3.PutObjectInput{
 			Bucket: &s.bucketName,
 			Key:    &k,
 			Body:   bytes.NewReader(data),
@@ -525,7 +530,9 @@ func (s *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 
 // Touch creates an empty object for a missing path and updates the
 // modification time of an existing object by copying it onto itself.
-// Touch of a directory does nothing.
+// It returns an fs.ErrUnsupported error if the service refuses
+// to copy an object onto itself without changes, like some S3-compatible
+// services do. Touch of a directory does nothing.
 func (s *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	client, err := s.getWriteClient()
 	if err != nil {
@@ -553,6 +560,9 @@ func (s *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 		Key:               &k,
 		MetadataDirective: types.MetadataDirectiveReplace,
 	})
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok && apiErr.ErrorCode() == "InvalidRequest" {
+		return fmt.Errorf("%w: %w", fs.NewErrUnsupported(s, "Touch of an existing object"), err)
+	}
 	return err
 }
 

@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## v1.0.0-beta.1 - 2026-09-06
+## v1.0.0-beta.1 - 2026-10-20
 
 First beta of the v1 API; further beta releases iterate on it before
 v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
@@ -122,6 +122,8 @@ module only pins development tools and is not tagged.
 - `zipfs.Reader.ID()` returns the prefix of the archive (`zip://<id>`) like
   `zipfs.Writer`, `tarfs` and `multipartfs`, instead of the prefix without
   the scheme that it inherited from the embedded `fs.StdFileSystem`.
+- The s3fs tests run against Adobe's S3Mock (`adobe/s3mock:5.2.3`) instead
+  of MinIO, whose Docker images were removed.
 
 ### Added
 
@@ -211,6 +213,12 @@ module only pins development tools and is not tagged.
   and `OverlayFileSystem` decode the files of their layers, and webdavfs no
   longer decodes PROPFIND hrefs twice. The conformance suite seeds a file
   named `100%25 a%20b.txt` on every backend.
+- s3fs multipart uploads (`WriteAll` from `MultipartUploadThreshold` on)
+  use the `RequestChecksumCalculation` of the client: the SDK uploader always
+  sent CRC32 part checksums, so a client configured with `WhenRequired` for
+  a service without checksum support could not complete them. `Touch` of an
+  existing object returns an `fs.ErrUnsupported` error when the service
+  refuses to copy the object onto itself.
 - **multipartfs files open their own upload for every file and field name.**
   A file `..%2Fother%2Fx.txt` uploaded under the field `doc` read the upload
   `x.txt` of the field `other`, and files named like `report%201.pdf`,

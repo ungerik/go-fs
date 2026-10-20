@@ -1,8 +1,8 @@
 # S3 File System
 
 A [go-fs](https://github.com/ungerik/go-fs) file system for Amazon S3 and
-S3-compatible object stores (MinIO, DigitalOcean Spaces, Wasabi, Backblaze
-B2, ...).
+S3-compatible object stores (DigitalOcean Spaces, Wasabi, Backblaze B2,
+...).
 
 ## Installation
 
@@ -70,14 +70,19 @@ See the [AWS SDK for Go v2 configuration guide](https://aws.github.io/aws-sdk-go
 
 ### S3-compatible services
 
-Point the client at the service endpoint. MinIO needs path-style URLs:
+Point the client at the service endpoint. Most self-hosted services need
+path-style URLs, and services that don't support the checksums the SDK sends
+by default need `RequestChecksumCalculation` set to `WhenRequired`, which
+s3fs also applies to multipart uploads:
 
 ```go
 client := s3.New(s3.Options{
     Region:       "us-east-1",
-    Credentials:  credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", ""),
+    Credentials:  credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
     BaseEndpoint: aws.String("http://localhost:9000"),
     UsePathStyle: true,
+    // Only for services without support for the default checksums
+    RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 })
 ```
 
@@ -99,7 +104,8 @@ client := s3.New(s3.Options{
   buffer in memory and upload on `Close`.
 - **Copy and touch.** `CopyFile` is a server-side `CopyObject`. `Touch` of
   an existing object copies it onto itself, because S3 can't update
-  `LastModified` in place.
+  `LastModified` in place; services that refuse such a copy make it return
+  an `fs.ErrUnsupported` error.
 - **Permissions and links.** S3 access is governed by IAM policies, the
   reported permissions are `s3fs.DefaultPermissions` /
   `s3fs.DefaultDirPermissions`. There are no symbolic links and no append;
@@ -109,11 +115,13 @@ client := s3.New(s3.Options{
 
 ## Testing
 
-The tests run the go-fs conformance suite against a MinIO container
-started with Docker (`minio/minio:latest` on ports 9000 and 9001) and a
-multipart transfer test with an 11 MB object. Docker is required; if it is
-not installed the tests are skipped, if it is installed but the container
-can't be started the tests fail.
+The tests run the go-fs conformance suite against an
+[S3Mock](https://github.com/adobe/S3Mock) container started with Docker
+(`adobe/s3mock:5.2.3` on a free local port) and a multipart transfer test
+with an 11 MB object. MinIO is no longer used because its Docker images were
+removed. S3Mock accepts any credentials, so authentication is not tested.
+Docker is required; if it is not installed the tests are skipped, if it is
+installed but the container can't be started the tests fail.
 
 ```bash
 go test ./...

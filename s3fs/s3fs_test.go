@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,24 +22,30 @@ import (
 )
 
 const (
-	minioContainerName = "s3fs-test-minio"
-	testS3Port         = "9000"
-	testS3ConsolePort  = "9001"
-	testAccessKey      = "minioadmin"
-	testSecretKey      = "minioadmin"
-	testBucketName     = "testbucket"
-	testDataDir        = "testdata"
+	// S3Mock instead of MinIO: MinIO deleted its minio/minio Docker Hub
+	// repository (and the quay.io one), so the image can no longer be
+	// pulled. S3Mock is Adobe's Apache-2.0 S3 test double; it keeps its
+	// objects in a temporary directory inside the container and accepts
+	// any credentials. Pinned like in github.com/domonda/go-docdb.
+	s3MockImage         = "adobe/s3mock:5.2.3"
+	s3MockContainerName = "s3fs-test-s3mock"
+	s3MockPort          = "9090/tcp"
+	testRegion          = "us-east-1"
+	testAccessKey       = "test"
+	testSecretKey       = "test"
+	testBucketName      = "testbucket"
+	testDataDir         = "testdata"
 )
 
 var (
-	dockerMinioAvailable bool
-	testS3Endpoint       string
+	dockerS3Available bool
+	testS3Endpoint    string
 )
 
 func TestMain(m *testing.M) {
 	// Check if Docker is available
 	if !fstest.DockerAvailable() {
-		log.Println("Docker not available, skipping Docker-based MinIO S3 tests")
+		log.Println("Docker not available, skipping Docker-based S3Mock tests")
 		m.Run()
 		return
 	}
@@ -47,73 +54,77 @@ func TestMain(m *testing.M) {
 	// available — context.Background() is the right choice here.
 	ctx := context.Background()
 
-	// Setup MinIO server
-	dockerMinioAvailable = setupMinioServer(ctx)
-	if !dockerMinioAvailable {
-		fstest.DockerSetupFailed("MinIO")
+	dockerS3Available = setupS3MockServer(ctx)
+	if !dockerS3Available {
+		fstest.DockerSetupFailed("S3Mock")
 	}
-	testS3Endpoint = fmt.Sprintf("http://127.0.0.1:%s", testS3Port)
 
 	// Run tests
 	exitCode := m.Run()
 
-	// Cleanup. `docker rm -v` is required so the anonymous /data volume
-	// MinIO declares is removed too — otherwise every test run leaks a
-	// multi-GB volume and eventually fills Docker Desktop's VM disk,
-	// surfacing as XMinioStorageFull on later runs.
-	if dockerMinioAvailable {
-		log.Println("Stopping and removing Docker MinIO test server...")
-		exec.Command("docker", "stop", minioContainerName).Run()
-		exec.Command("docker", "rm", "-v", minioContainerName).Run()
+	if dockerS3Available {
+		log.Println("Stopping and removing Docker S3Mock test server...")
+		removeContainer(s3MockContainerName)
 		log.Println("Docker container cleanup complete")
 	}
 
 	os.Exit(exitCode)
 }
 
-func setupMinioServer(ctx context.Context) bool {
-	containerName := minioContainerName
+// removeContainer stops and removes a container together with its
+// anonymous volumes, ignoring errors for a container that doesn't exist.
+func removeContainer(name string) {
+	_ = exec.Command("docker", "stop", name).Run()
+	_ = exec.Command("docker", "rm", "-v", name).Run()
+}
 
-	// Stop and remove any existing container with the same name (and its
-	// anonymous /data volume — see the matching note in TestMain).
-	exec.Command("docker", "stop", containerName).Run()
-	exec.Command("docker", "rm", "-v", containerName).Run()
+func setupS3MockServer(ctx context.Context) bool {
+	containerName := s3MockContainerName
 
-	// Start MinIO container
-	log.Println("Starting Docker MinIO container...")
+	// Stop and remove any existing container with the same name
+	removeContainer(containerName)
+
+	// Docker picks a free host port, the default port 9090 is often
+	// taken by the S3Mock of another project on a development machine
+	log.Println("Starting Docker S3Mock container...")
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", containerName,
-		"-p", fmt.Sprintf("127.0.0.1:%s:9000", testS3Port),
-		"-p", fmt.Sprintf("127.0.0.1:%s:9001", testS3ConsolePort),
-		"-e", fmt.Sprintf("MINIO_ROOT_USER=%s", testAccessKey),
-		"-e", fmt.Sprintf("MINIO_ROOT_PASSWORD=%s", testSecretKey),
-		"minio/minio:latest",
-		"server", "/data", "--console-address", ":9001",
+		"-p", "127.0.0.1::"+s3MockPort,
+		"-e", "COM_ADOBE_TESTING_S3MOCK_STORE_REGION="+testRegion,
+		s3MockImage,
 	)
 	output, err := runCmd.CombinedOutput()
 	if err != nil {
-		log.Printf("Failed to start Docker MinIO container: %v\nOutput: %s", err, output)
+		log.Printf("Failed to start Docker S3Mock container: %v\nOutput: %s", err, output)
+		removeContainer(containerName)
 		return false
 	}
 	log.Printf("Started Docker container: %s", containerName)
 
-	// Wait for MinIO to be ready
-	log.Println("Waiting for MinIO server to be ready...")
-	time.Sleep(3 * time.Second)
+	output, err = exec.CommandContext(ctx, "docker", "port", containerName, s3MockPort).Output()
+	if err != nil {
+		log.Printf("Failed to get the host port of the S3Mock container: %v", err)
+		removeContainer(containerName)
+		return false
+	}
+	// The first line is the host address, like "127.0.0.1:55001"
+	hostAddr, _, _ := strings.Cut(strings.TrimSpace(string(output)), "\n")
+	testS3Endpoint = "http://" + hostAddr
 
-	// Test connection and create bucket
-	maxRetries := 10
+	// S3Mock is a Spring Boot application that needs several seconds
+	// to boot, creating the test bucket doubles as readiness check.
+	log.Println("Waiting for S3Mock server to be ready...")
+	const maxRetries = 60
 	var testErr error
 	for i := range maxRetries {
 		client := createS3Client(ctx)
 
-		// Try to create bucket
 		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
 			Bucket: aws.String(testBucketName),
 		})
 		if err == nil {
-			log.Printf("MinIO server is ready and bucket '%s' created", testBucketName)
+			log.Printf("S3Mock server is ready and bucket '%s' created", testBucketName)
 			return true
 		}
 
@@ -122,44 +133,43 @@ func setupMinioServer(ctx context.Context) bool {
 			Bucket: aws.String(testBucketName),
 		})
 		if headErr == nil {
-			log.Printf("MinIO server is ready (bucket already exists)")
+			log.Printf("S3Mock server is ready (bucket already exists)")
 			return true
 		}
 
 		testErr = err
 		if i < maxRetries-1 {
-			log.Printf("Retry %d/%d: waiting for MinIO server...", i+1, maxRetries)
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Second)
 		}
 	}
 
-	log.Printf("Failed to connect to MinIO server after retries: %v", testErr)
-	exec.Command("docker", "stop", containerName).Run()
-	exec.Command("docker", "rm", "-v", containerName).Run()
+	log.Printf("Failed to connect to S3Mock server after %d retries: %v", maxRetries, testErr)
+	removeContainer(containerName)
 	return false
 }
 
 func createS3Client(ctx context.Context) *s3.Client {
-	endpoint := testS3Endpoint
-	if endpoint == "" {
-		endpoint = fmt.Sprintf("http://127.0.0.1:%s", testS3Port)
-	}
 	return s3.New(s3.Options{
-		Region: "us-east-1",
+		Region: testRegion,
+		// S3Mock accepts any credentials,
+		// the SDK needs some to sign the requests
 		Credentials: credentials.NewStaticCredentialsProvider(
 			testAccessKey,
 			testSecretKey,
 			"",
 		),
-		BaseEndpoint: aws.String(endpoint),
-		UsePathStyle: true, // MinIO requires path-style URLs
+		BaseEndpoint: aws.String(testS3Endpoint),
+		UsePathStyle: true, // S3Mock serves buckets as path elements
+		// S3Mock doesn't return the part checksums of a multipart upload
+		// that the default CRC32 checksums require for completing it
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 	})
 }
 
-// Test_fileSystem tests the S3 filesystem implementation using MinIO
+// Test_fileSystem tests the S3 filesystem implementation using S3Mock
 func Test_fileSystem(t *testing.T) {
-	if !dockerMinioAvailable {
-		t.Skip("Docker MinIO server not available")
+	if !dockerS3Available {
+		t.Skip("Docker S3Mock server not available")
 	}
 	ctx := t.Context()
 
@@ -219,8 +229,8 @@ func cleanupTestDir(ctx context.Context, t *testing.T, client *s3.Client, dirPat
 
 // Test_fileSystem_MultipartUploadDownload tests multipart upload/download for large files
 func Test_fileSystem_MultipartUploadDownload(t *testing.T) {
-	if !dockerMinioAvailable {
-		t.Skip("Docker MinIO server not available")
+	if !dockerS3Available {
+		t.Skip("Docker S3Mock server not available")
 	}
 
 	ctx := t.Context()
