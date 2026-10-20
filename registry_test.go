@@ -78,3 +78,29 @@ func TestParseRawURI_SchemeNotLocal(t *testing.T) {
 		assert.Equal(t, filepath.FromSlash(uri), fsPath)
 	}
 }
+
+func TestParseRawURI_escapes(t *testing.T) {
+	// The prefix can contain escapes itself, like the user name of an
+	// smbfs prefix, so only the path after the prefix is decoded.
+	escapedFS := InvalidFileSystem("user%40example.com")
+	Register(escapedFS)
+	t.Cleanup(func() { Unregister(escapedFS) })
+
+	fs, fsPath := ParseRawURI(escapedFS.Prefix() + "a%20b/100%2525.txt")
+	assert.Equal(t, escapedFS, fs)
+	assert.Equal(t, "a b/100%25.txt", fsPath, "URL escapes after the prefix are decoded once")
+
+	fs, fsPath = ParseRawURI(escapedFS.Prefix() + "50% off.txt")
+	assert.Equal(t, escapedFS, fs)
+	assert.Equal(t, "50% off.txt", fsPath, "a path with an invalid escape is used as it is")
+
+	// The URI of a path is its inverse, so a name that looks
+	// URL escaped keeps its name through File methods.
+	file := fsFile(escapedFS, "a b/100%25.txt")
+	assert.Equal(t, escapedFS.Prefix()+"a b/100%2525.txt", string(file))
+	fs, fsPath = file.ParseRawURI()
+	assert.Equal(t, escapedFS, fs)
+	assert.Equal(t, "a b/100%25.txt", fsPath)
+	assert.Equal(t, "100%25.txt", file.Name())
+	assert.Equal(t, fsFile(escapedFS, "a b"), file.Dir())
+}

@@ -15,6 +15,7 @@ import (
 	"maps"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path"
 	"slices"
 	"strconv"
@@ -49,13 +50,22 @@ var (
 //
 // The form fields with uploaded files are the directories of the file system
 // and the files uploaded under a field name are the files in that directory,
-// so the file system has exactly two levels.
+// so the file system has exactly two levels and a path has the form
+// "/<form field>/<file name>".
 //
 // Because a file system path has to identify exactly one file, the names of
 // the uploaded files are made unique per directory: the second file with an
 // already used name gets a " (2)" suffix before its extension, the third a
 // " (3)" and so on. Uploaded names that are not usable as a path element
-// (like "." and "..") are replaced by "unnamed".
+// (like "." and "..") are replaced by "unnamed". All other file names are
+// used as they are, including names that look URL escaped like "a%20b.pdf".
+//
+// Form field names are not restricted by mime/multipart, so the directory
+// name of a field is escaped: "%" becomes "%25", "/" becomes "%2F", and the
+// names "." and ".." become "%2E" and "%2E%2E". Other field names, like
+// "files" or "my files", are used as they are. A path is split into its
+// elements before the field name is unescaped, so neither a field nor a file
+// name can address an upload of another field.
 type MultipartFileSystem struct {
 	fsimpl.PathHelper
 
@@ -121,9 +131,9 @@ func (f *MultipartFileSystem) FormFile(name string) (fs.File, error) {
 	}
 	formFiles := f.Form.File[name]
 	if len(formFiles) == 0 {
-		return fs.InvalidFile, fs.NewErrDoesNotExist(f.File(name))
+		return fs.InvalidFile, fs.NewErrDoesNotExist(f.fieldFile(name))
 	}
-	return f.JoinCleanFile(name, fileNames(formFiles)[0]), nil
+	return f.uploadFile(name, fileNames(formFiles)[0]), nil
 }
 
 // FormFiles returns the files uploaded under name,
@@ -138,7 +148,7 @@ func (f *MultipartFileSystem) FormFiles(name string) (files []fs.File) {
 	}
 	files = make([]fs.File, len(names))
 	for i, fileName := range names {
-		files[i] = f.JoinCleanFile(name, fileName)
+		files[i] = f.uploadFile(name, fileName)
 	}
 	return files
 }
@@ -155,11 +165,57 @@ func (f *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multipar
 	if len(parts) != 2 {
 		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
-	formFile := f.formFile(parts[0], parts[1])
+	formFile := f.formFile(unescapeField(parts[0]), parts[1])
 	if formFile == nil {
 		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
 	return formFile, nil
+}
+
+// fieldDir returns the directory name of a form field,
+// see MultipartFileSystem for the escaping.
+func fieldDir(field string) string {
+	switch field {
+	case ".":
+		return "%2E"
+	case "..":
+		return "%2E%2E"
+	}
+	return fieldEscaper.Replace(field)
+}
+
+// fieldEscaper escapes the escape character and the separator of a field name.
+var fieldEscaper = strings.NewReplacer("%", "%25", Separator, "%2F")
+
+// unescapeField returns the form field name of a directory name,
+// or the directory name itself if it is not validly escaped.
+func unescapeField(dir string) string {
+	if field, err := url.PathUnescape(dir); err == nil {
+		return field
+	}
+	return dir
+}
+
+// fieldPath returns the path of the directory of a form field.
+func fieldPath(field string) string {
+	return Separator + fieldDir(field)
+}
+
+// uploadPath returns the path of the uploaded file
+// with the file system name fileName under the form field.
+func uploadPath(field, fileName string) string {
+	return fieldPath(field) + Separator + fileName
+}
+
+// fieldFile returns the directory of a form field.
+func (f *MultipartFileSystem) fieldFile(field string) fs.File {
+	return fs.File(f.URL(fieldPath(field)))
+}
+
+// uploadFile returns the uploaded file with the
+// file system name fileName under the form field.
+func (f *MultipartFileSystem) uploadFile(field, fileName string) fs.File {
+	return fs.File(f.URL(uploadPath(field, fileName)))
 }
 
 // fileNames returns the file system names of the passed uploaded files
@@ -259,15 +315,17 @@ func (f *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 		info.Exists = true
 		info.IsDir = true
 	case 1:
-		dir := parts[0]
-		if len(f.Form.File[dir]) > 0 {
-			info.Name = dir
+		field := unescapeField(parts[0])
+		if len(f.Form.File[field]) > 0 {
+			info.File = f.fieldFile(field)
+			info.Name = fieldDir(field)
 			info.Exists = true
 			info.IsDir = true
 		}
 	case 2:
-		dir, name := parts[0], parts[1]
-		if formFile := f.formFile(dir, name); formFile != nil {
+		field, name := unescapeField(parts[0]), parts[1]
+		if formFile := f.formFile(field, name); formFile != nil {
+			info.File = f.uploadFile(field, name)
 			info.Name = name
 			info.Exists = true
 			info.IsRegular = true
@@ -275,7 +333,9 @@ func (f *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 		}
 	}
 	if info.Exists {
-		info.File = f.JoinCleanFile(filePath)
+		if info.File == "" {
+			info.File = f.RootDir()
+		}
 		info.IsHidden = strings.HasPrefix(info.Name, ".")
 		// Multipart form files carry no modification time
 		info.Permissions = fs.AllRead
@@ -321,25 +381,25 @@ func (f *MultipartFileSystem) ListDir(ctx context.Context, dirPath string, patte
 	case 0:
 		// Sorted for a deterministic listing,
 		// the form fields are stored in a map
-		for _, dir := range slices.Sorted(maps.Keys(f.Form.File)) {
-			if len(f.Form.File[dir]) == 0 {
+		for _, field := range slices.Sorted(maps.Keys(f.Form.File)) {
+			if len(f.Form.File[field]) == 0 {
 				continue
 			}
-			matched, err := fsimpl.MatchAnyPattern(dir, patterns)
+			matched, err := fsimpl.MatchAnyPattern(fieldDir(field), patterns)
 			if err != nil {
 				return err
 			}
 			if !matched {
 				continue
 			}
-			err = callback(f.info(dir))
+			err = callback(f.info(fieldPath(field)))
 			if err != nil {
 				return err
 			}
 		}
 	case 1:
-		dir := parts[0]
-		formFiles := f.Form.File[dir]
+		field := unescapeField(parts[0])
+		formFiles := f.Form.File[field]
 		if len(formFiles) == 0 {
 			return fs.NewErrDoesNotExist(f.File(dirPath))
 		}
@@ -351,7 +411,7 @@ func (f *MultipartFileSystem) ListDir(ctx context.Context, dirPath string, patte
 			if !matched {
 				continue
 			}
-			err = callback(f.info(path.Join(dir, name)))
+			err = callback(f.info(uploadPath(field, name)))
 			if err != nil {
 				return err
 			}

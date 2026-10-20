@@ -31,9 +31,9 @@ func fsURL(fileSystem FileSystem, cleanPath string) string {
 	}
 	prefix, sep := fileSystem.Prefix(), fileSystem.Separator()
 	if strings.HasSuffix(prefix, sep) && strings.HasPrefix(cleanPath, sep) {
-		return prefix + cleanPath[len(sep):]
+		cleanPath = cleanPath[len(sep):]
 	}
-	return prefix + cleanPath
+	return prefix + fsimpl.EscapeURIPath(cleanPath)
 }
 
 // fsFile returns the File for a clean path within fileSystem.

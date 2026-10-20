@@ -194,7 +194,7 @@ func (s *SubFileSystem) Stat(filePath string) (*FileInfo, error) {
 
 // subFile translates a File of the parent below the root directory.
 func (s *SubFileSystem) subFile(parentFile File) File {
-	return File(s.JoinCleanURI(s.subPath(s.parent.CleanPath(string(parentFile)))))
+	return File(s.JoinCleanURI(s.subPath(uriPath(s.parent, string(parentFile)))))
 }
 
 // subErr translates the file of typed parent errors to this file system.

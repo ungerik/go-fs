@@ -75,7 +75,9 @@ took a context.
 - `multipartfs`: `EscapePath` is removed (it was never applied
   consistently); files uploaded under an already used name now get a unique
   name (`a.txt`, `a (2).txt`, ...) instead of shadowing each other, and
-  names that are not path elements (`.`, `..`) become `unnamed`. Every
+  names that are not path elements (`.`, `..`) become `unnamed`. The
+  directory name of a form field is escaped (`%` as `%25`, `/` as `%2F`,
+  `.` and `..` as `%2E` and `%2E%2E`), file names are used as they are. Every
   method returns `fs.ErrFileSystemClosed` after `Close`; parts small enough
   to stay in memory used to be served afterwards. The new `multipartfs.New`
   wraps a `*multipart.Form` the caller parsed.
@@ -106,6 +108,10 @@ took a context.
   support instead of calling the backend.
 - A `File` with a scheme is URL-decoded once when parsed; a scheme-less local
   path is used verbatim, so a local file literally named `a%20b` is reachable.
+  The URIs the package builds escape every `%` of the path as `%25`, so
+  `dir.Join("a%20b")` addresses a file named `a%20b` on every file system.
+  Code that builds a URI by concatenation (`fs.File(prefix + path)`) has to
+  escape the path with `fsimpl.EscapeURIPath`, or use `File.Join`.
 - `fs.MakeTempDir` uses `os.MkdirTemp`; the new `fs.CreateTempFile` creates a
   temporary file atomically, `fs.TempFile` still only returns a path.
 - Error strings and types are unchanged, but every file system now satisfies

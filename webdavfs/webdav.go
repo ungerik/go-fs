@@ -324,12 +324,11 @@ func (f *fileSystem) propfind(ctx context.Context, filePath string, depth string
 // file system path, or returns false if the response carries no
 // successful properties.
 func (f *fileSystem) responseInfo(r propfindResponse) (*fs.FileInfo, string, bool) {
+	// The href is URL escaped, url.Parse decodes its path exactly once,
+	// so a file named "100%25" is not mistaken for "100%"
 	href := r.Href
 	if u, err := url.Parse(href); err == nil {
 		href = u.Path
-	}
-	if unescaped, err := url.PathUnescape(href); err == nil {
-		href = unescaped
 	}
 	filePath := path.Clean("/" + strings.TrimPrefix(href, f.baseURL.Path))
 	for _, ps := range r.Propstats {

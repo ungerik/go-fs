@@ -153,7 +153,12 @@ to return `ErrUnsupported` (the s3fs `Watch` stub goes away).
   where the path starts with the host). The `fs` package guarantees that
   backends never see the prefix (`ParseRawURI` calls `CleanPath`). URL
   unescaping happens only in `ParseRawURI` for inputs that carried a scheme,
-  never in `CleanPath`, so a local file literally named `a%20b` is reachable.
+  and only in the path after the prefix, never in `CleanPath`, so a local
+  file literally named `a%20b` is reachable. In the other direction the URI
+  of a path escapes every `%` as `%25` (`fsimpl.EscapeURIPath`, used by
+  `PathHelper.URL`, `LocalFileSystem.URL` and the `fs` package), so every
+  path survives the round trip; the conformance seed contains a file named
+  `100%25 a%20b.txt`.
   Default-port aliases (`sftp://u@h:22`, `ftp://h:21`, `ftps://h:990`) resolve
   via `PathHelper.AltPrefixes` and registry matching on all prefixes.
 - **Errors.** `errors.Is` must hold for `os.ErrNotExist`
@@ -535,9 +540,9 @@ One PR per phase unless noted.
       (`v1.0.0-beta.1`, `s3fs/v1.0.0-beta.1`, `sftpfs/v1.0.0-beta.1`,
       `ftpfs/v1.0.0-beta.1`, `dropboxfs/v1.0.0-beta.1`,
       `webdavfs/v1.0.0-beta.1`, `smbfs/v1.0.0-beta.1`,
-      `azureblobfs/v1.0.0-beta.1`, `tools/v1.0.0-beta.1`). The intermediate
-      tags `v0.2.0`/`v0.3.0` were not created because everything lands in
-      one PR.
+      `azureblobfs/v1.0.0-beta.1`; not the `tools` module, which only pins
+      development tools). The intermediate tags `v0.2.0`/`v0.3.0` were not
+      created because everything lands in one PR.
 - [ ] v1.0.0: after the beta iterations in follow-up PRs.
 
 ### Beta iterations (after Phase 6)
@@ -583,13 +588,22 @@ helpers, no change to the `File` API.
       `multipartfs` and `uuiddir` plus compile-only examples for the seven
       backend modules, a README for every module and every `FileSystem`
       sub package, and the CI dependency cache covers all modules.
+- [x] URI escaping (2026-10-20): the URI of a path escapes every `%` as
+      `%25` and `ParseRawURI` decodes only the path after the prefix, so
+      names that look URL escaped keep their name on every file system
+      (`File.Join("a%20b.txt")` created `a b.txt` before); new
+      `fsimpl.EscapeURIPath`/`UnescapeURIPath`; webdavfs decodes PROPFIND
+      hrefs once; multipartfs escapes field names as directory names, so no
+      field or file name can address an upload of another field (the
+      `..%2Fother%2Fx.txt` upload read the `other` field's file).
 
 ## Verification (overall)
 
 - `./test-workspace.sh` (with `-race`) green locally; GitHub Actions green on
   ubuntu/macos/windows for every module.
 - `fstest.RunConformance` passes on Local, Mem (both separators), httpfs
-  (httptest), zipfs reader + writer, multipartfs, s3fs (MinIO), sftpfs
+  (httptest), zipfs reader + writer, multipartfs, s3fs (S3Mock, MinIO until
+  its Docker images were removed in 2026), sftpfs
   (Docker), ftpfs (in-process + Docker), dropboxfs (token).
 - `go vet`, staticcheck and gosec clean.
 - domonda-service and go-docdb compile against the v1 branch after applying

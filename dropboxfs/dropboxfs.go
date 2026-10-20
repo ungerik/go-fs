@@ -319,7 +319,7 @@ func (dbfs *fileSystem) listDir(ctx context.Context, dirPath string, patterns []
 			if info == nil || (recursive && info.IsDir) {
 				continue
 			}
-			dbfs.cache.Put(apiPath(dbfs.CleanPath(string(info.File))), info)
+			dbfs.cache.Put(apiPath(info.File.Path()), info)
 			match, err := fsimpl.MatchAnyPattern(info.Name, patterns)
 			if err != nil {
 				return err
