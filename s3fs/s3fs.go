@@ -6,14 +6,22 @@
 // marker object with a trailing slash ("docs/") so that empty directories
 // exist too. Stat, ListDir and Remove treat both the marker and the
 // implicit prefix as a directory.
+//
+// Object keys map to rooted paths without the leading slash: the path
+// "/docs/readme.txt" is the key "docs/readme.txt". Keys that no path maps
+// to, because they start with a slash or contain an empty element like
+// "docs//readme.txt", are skipped by the listings.
 package s3fs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -23,7 +31,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	tmtypes "github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -39,27 +48,42 @@ const (
 	// Separator used in S3 file system paths
 	Separator = "/"
 
-	// deleteBatchSize is the maximum number of keys
-	// a single DeleteObjects request accepts.
-	deleteBatchSize = 1000
-)
-
-var (
-	// MultipartUploadThreshold is the minimum size in bytes from which
-	// WriteAll uses a multipart upload instead of a single PutObject.
-	MultipartUploadThreshold int64 = 5 * 1024 * 1024
-
-	// MultipartDownloadThreshold is the minimum size in bytes from which
-	// ReadAll downloads the object in concurrent parts.
-	MultipartDownloadThreshold int64 = 10 * 1024 * 1024
-
 	// DefaultPermissions reported for S3 objects
 	DefaultPermissions = fs.UserAndGroupReadWrite
 
 	// DefaultDirPermissions reported for S3 directories
-	DefaultDirPermissions = fs.UserAndGroupReadWrite
+	DefaultDirPermissions = fs.UserAndGroupReadWrite | fs.AllExecute
 
-	// Compile-time interface checks
+	// deleteBatchSize is the maximum number of keys
+	// a single DeleteObjects request accepts.
+	deleteBatchSize = 1000
+
+	// Defaults of the Options fields
+	defaultMultipartUploadThreshold   = 16 << 20
+	defaultMultipartDownloadThreshold = 16 << 20
+	defaultPartSize                   = 8 << 20
+	defaultConcurrency                = 5
+
+	// maxCopyObjectSize is the size limit of a single CopyObject request,
+	// larger objects are copied in parts with UploadPartCopy.
+	maxCopyObjectSize = 5 << 30
+
+	// copyPartSize is the minimum part size of multipart copies.
+	// Parts are copied server-side, so they can be much larger
+	// than the parts of uploads.
+	copyPartSize = 512 << 20
+
+	// maxUploadParts is the maximum number of parts of a multipart upload.
+	maxUploadParts = 10000
+
+	// failTimeout limits the requests that abort a failed or canceled
+	// multipart upload, they run with a fresh context because the
+	// context of the upload may be canceled.
+	failTimeout = time.Minute
+)
+
+// Compile-time interface checks
+var (
 	_ fs.FileSystem                 = new(fileSystem)
 	_ fs.WriteFileSystem            = new(fileSystem)
 	_ fs.ReadAllFileSystem          = new(fileSystem)
@@ -71,42 +95,149 @@ var (
 	_ fs.ListDirRecursiveFileSystem = new(fileSystem)
 )
 
+// Options of New, NewAndRegister and NewLoadDefaultConfig.
+// A nil Options or zero fields use the defaults.
+type Options struct {
+	// ReadOnly makes every write operation return fs.ErrReadOnlyFileSystem.
+	ReadOnly bool
+
+	// MultipartUploadThreshold is the size in bytes from which uploads
+	// use a multipart upload instead of a single PutObject request.
+	// Zero means 16 MiB.
+	MultipartUploadThreshold int64
+
+	// MultipartDownloadThreshold is the size in bytes from which ReadAll
+	// downloads an object with concurrent range requests of PartSize bytes.
+	// Zero means 16 MiB.
+	MultipartDownloadThreshold int64
+
+	// PartSize is the size in bytes of the parts of multipart uploads and
+	// of the ranges of multipart downloads. Zero means 8 MiB.
+	// S3 requires at least 5 MiB for every part but the last.
+	// WriteAll increases it for large data to stay within the 10000 parts
+	// of a multipart upload, OpenWriter streams data of unknown size,
+	// so its writers accept at most 10000 * PartSize bytes.
+	PartSize int64
+
+	// Concurrency is the number of parts that a multipart upload,
+	// download or copy transfers in parallel. Zero means 5.
+	Concurrency int
+
+	// Prefix is the URI prefix of the file system, Prefix + bucket if empty.
+	// Use another prefix to register file systems for buckets with the
+	// same name at different endpoints, like "s3://minio.example.com/backup".
+	// It must contain "://" and must not end with a slash.
+	Prefix string
+}
+
 type fileSystem struct {
 	fsimpl.PathHelper
 
 	mtx        sync.RWMutex
-	client     *s3.Client // nil after Close
+	client     *s3.Client              // nil after Close
+	transfer   *transfermanager.Client // nil after Close
 	bucketName string
+	id         string
 	readOnly   bool
+
+	uploadThreshold   int64
+	downloadThreshold int64
+	concurrency       int
+
+	// maxCopyObjectSize and copyPartSize are fields
+	// so that tests can copy small objects in parts.
+	maxCopyObjectSize int64
+	copyPartSize      int64
 }
 
-// NewAndRegister creates a file system for an S3 bucket and registers it.
+// New returns a file system for an S3 bucket without registering it,
+// use fs.Register or NewAndRegister for that.
+// Files of the file system are only usable via the File type
+// while it is registered, because URIs are resolved with the registry.
 //
 // The client must be a configured S3 client of the AWS SDK v2.
-// With readOnly true every write operation returns fs.ErrReadOnlyFileSystem.
+// New doesn't send any request, a missing bucket or missing
+// credentials are reported by the first operation.
 //
-// The file system uses the URI prefix "s3://bucket-name", so file URIs
-// look like "s3://bucket-name/path/to/object" like in the AWS CLI.
-func NewAndRegister(client *s3.Client, bucketName string, readOnly bool) fs.FileSystem {
-	s3fs := &fileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + bucketName, Rooted: true},
-		client:     client,
-		bucketName: bucketName,
-		readOnly:   readOnly,
+// The file system uses the URI prefix "s3://bucket-name" unless
+// Options.Prefix is set, so file URIs look like
+// "s3://bucket-name/path/to/object" like in the AWS CLI.
+func New(client *s3.Client, bucketName string, opts *Options) (fs.FileSystem, error) {
+	if client == nil {
+		return nil, errors.New("s3fs: nil client")
 	}
-	_ = fs.Register(s3fs) // replaced by the Options rework of the constructors
-	return s3fs
+	if bucketName == "" || strings.Contains(bucketName, Separator) {
+		return nil, fmt.Errorf("s3fs: invalid bucket name %q", bucketName)
+	}
+	if opts == nil {
+		opts = &Options{}
+	}
+	if opts.MultipartUploadThreshold < 0 || opts.MultipartDownloadThreshold < 0 || opts.PartSize < 0 || opts.Concurrency < 0 {
+		return nil, errors.New("s3fs: negative Options value")
+	}
+	prefix, id := Prefix+bucketName, bucketName
+	if opts.Prefix != "" {
+		if !strings.Contains(opts.Prefix, fs.PrefixSeparator) || strings.HasSuffix(opts.Prefix, Separator) {
+			return nil, fmt.Errorf("s3fs: Options.Prefix %q must contain %q and must not end with %q", opts.Prefix, fs.PrefixSeparator, Separator)
+		}
+		// The prefix is unique among the registered file systems,
+		// the bucket name is not if Prefix distinguishes endpoints
+		prefix, id = opts.Prefix, opts.Prefix
+	}
+	partSize := cmp.Or(opts.PartSize, defaultPartSize)
+	concurrency := cmp.Or(opts.Concurrency, defaultConcurrency)
+	uploadThreshold := cmp.Or(opts.MultipartUploadThreshold, defaultMultipartUploadThreshold)
+	clientOpts := client.Options()
+	transfer := transfermanager.New(client, func(o *transfermanager.Options) {
+		o.PartSizeBytes = partSize
+		o.MultipartUploadThreshold = uploadThreshold
+		o.Concurrency = concurrency
+		o.FailTimeout = failTimeout
+		o.GetObjectType = tmtypes.GetObjectRanges
+		// The transfer manager defaults to CRC32 checksums regardless
+		// of the client, so a client configured for services that
+		// don't support them could not complete a multipart upload
+		o.RequestChecksumCalculation = clientOpts.RequestChecksumCalculation
+		o.DisableChecksumValidation = clientOpts.ResponseChecksumValidation == aws.ResponseChecksumValidationWhenRequired
+	})
+	return &fileSystem{
+		PathHelper:        fsimpl.PathHelper{URIPrefix: prefix, Rooted: true},
+		client:            client,
+		transfer:          transfer,
+		bucketName:        bucketName,
+		id:                id,
+		readOnly:          opts.ReadOnly,
+		uploadThreshold:   uploadThreshold,
+		downloadThreshold: cmp.Or(opts.MultipartDownloadThreshold, defaultMultipartDownloadThreshold),
+		concurrency:       concurrency,
+		maxCopyObjectSize: maxCopyObjectSize,
+		copyPartSize:      copyPartSize,
+	}, nil
 }
 
-// NewLoadDefaultConfig creates and registers a file system for an S3 bucket
+// NewAndRegister creates a file system for an S3 bucket with New
+// and registers it. It returns an error wrapping fs.ErrAlreadyRegistered
+// if another file system is registered with the same prefix,
+// for example for a bucket with the same name, see Options.Prefix.
+// Close the file system to unregister it.
+func NewAndRegister(client *s3.Client, bucketName string, opts *Options) error {
+	f, err := New(client, bucketName, opts)
+	if err != nil {
+		return err
+	}
+	return fs.Register(f)
+}
+
+// NewLoadDefaultConfig creates a file system for an S3 bucket like New
 // using the default AWS credential chain (environment variables,
 // ~/.aws/credentials, IAM roles). ctx is used for loading the configuration.
-func NewLoadDefaultConfig(ctx context.Context, bucketName string, readOnly bool) (fs.FileSystem, error) {
+// The file system is not registered, see fs.Register.
+func NewLoadDefaultConfig(ctx context.Context, bucketName string, opts *Options) (fs.FileSystem, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return NewAndRegister(s3.NewFromConfig(cfg), bucketName, readOnly), nil
+	return New(s3.NewFromConfig(cfg), bucketName, opts)
 }
 
 // getClient returns the S3 client or fs.ErrFileSystemClosed after Close.
@@ -131,7 +262,18 @@ func (s *fileSystem) getWriteClient() (*s3.Client, error) {
 	return client, nil
 }
 
-// ReadableWritable returns true and the negated readOnly flag.
+// getTransfer returns the transfer manager client
+// or fs.ErrFileSystemClosed after Close.
+func (s *fileSystem) getTransfer() (*transfermanager.Client, error) {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	if s.transfer == nil {
+		return nil, fs.ErrFileSystemClosed
+	}
+	return s.transfer, nil
+}
+
+// ReadableWritable returns true and the negated Options.ReadOnly.
 func (s *fileSystem) ReadableWritable() (readable, writable bool) {
 	return true, !s.readOnly
 }
@@ -141,19 +283,33 @@ func (s *fileSystem) RootDir() fs.File {
 	return fs.File(s.URIPrefix + Separator)
 }
 
-// ID returns the bucket name.
+// ID returns the bucket name, or Options.Prefix if it was set.
 func (s *fileSystem) ID() string {
-	return s.bucketName
+	return s.id
 }
 
-// Name returns a human-readable name for the file system.
+// Name returns "S3".
 func (s *fileSystem) Name() string {
-	return "S3 file system for bucket: " + s.bucketName
+	return "S3"
 }
 
-// String returns the name and prefix of the file system.
+// String returns the name and the prefix of the file system
+// with a redacted password, if Options.Prefix had one.
 func (s *fileSystem) String() string {
-	return s.Name() + " with prefix " + s.URIPrefix
+	return s.Name() + " " + redactURI(s.URIPrefix)
+}
+
+// redactURI returns uri with the password
+// of its user info replaced by "xxxxx".
+func redactURI(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil || u.User == nil {
+		return uri
+	}
+	if _, hasPassword := u.User.Password(); !hasPassword {
+		return uri
+	}
+	return u.Redacted()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -176,11 +332,27 @@ func dirKey(dirPath string) string {
 	return k + Separator
 }
 
+// isPathKey reports if a key relative to a listed directory
+// is the key of a path: not empty and without empty elements,
+// so it doesn't start or end with a slash or contain "//".
+// The paths of the other keys would be cleaned to different keys,
+// a key "d//x.txt" for example would list d as its own child.
+func isPathKey(relKey string) bool {
+	return relKey != "" &&
+		!strings.HasPrefix(relKey, Separator) &&
+		!strings.HasSuffix(relKey, Separator) &&
+		!strings.Contains(relKey, Separator+Separator)
+}
+
+// copySourceEscaper escapes the "+" that url.PathEscape keeps,
+// because S3 decodes a "+" in the CopySource as space.
+var copySourceEscaper = strings.NewReplacer("+", "%2B")
+
 // copySource returns the URL-encoded CopySource value for an object key.
 func (s *fileSystem) copySource(k string) string {
 	segments := strings.Split(k, Separator)
 	for i, segment := range segments {
-		segments[i] = url.PathEscape(segment)
+		segments[i] = copySourceEscaper.Replace(url.PathEscape(segment))
 	}
 	return s.bucketName + Separator + strings.Join(segments, Separator)
 }
@@ -194,13 +366,24 @@ func isNotFound(err error) bool {
 	if _, ok := errors.AsType[*types.NoSuchKey](err); ok {
 		return true
 	}
+	return hasErrorCode(err, "NotFound", "NoSuchKey")
+}
+
+// hasErrorCode reports whether err is an S3 API error with one of codes.
+func hasErrorCode(err error, codes ...string) bool {
 	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
-		switch apiErr.ErrorCode() {
-		case "NotFound", "NoSuchKey":
-			return true
+		for _, code := range codes {
+			if apiErr.ErrorCode() == code {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// file returns the File of an object key or path.
+func (s *fileSystem) file(keyOrPath string) fs.File {
+	return fs.File(s.JoinCleanURI(keyOrPath))
 }
 
 // notExistError returns an error wrapping os.ErrNotExist for a file path,
@@ -210,13 +393,13 @@ func (s *fileSystem) notExistError(filePath string) error {
 	if err == nil && info.IsDir {
 		return fs.NewErrIsDirectory(info.File)
 	}
-	return fs.NewErrDoesNotExist(fs.File(s.JoinCleanURI(filePath)))
+	return fs.NewErrDoesNotExist(s.file(filePath))
 }
 
 func (s *fileSystem) fileInfo(k string, size int64, modified time.Time) *fs.FileInfo {
 	name := path.Base(k)
 	return &fs.FileInfo{
-		File:        fs.File(s.JoinCleanURI(k)),
+		File:        s.file(k),
 		Name:        name,
 		Exists:      true,
 		IsRegular:   true,
@@ -239,7 +422,7 @@ func (s *fileSystem) dirInfo(k string, modified time.Time) *fs.FileInfo {
 	}
 	name := path.Base(k)
 	return &fs.FileInfo{
-		File:        fs.File(s.JoinCleanURI(k)),
+		File:        s.file(k),
 		Name:        name,
 		Exists:      true,
 		IsDir:       true,
@@ -247,6 +430,45 @@ func (s *fileSystem) dirInfo(k string, modified time.Time) *fs.FileInfo {
 		Modified:    modified,
 		Permissions: DefaultDirPermissions,
 	}
+}
+
+// dirExists reports if k is a directory: a marker object "k/" exists
+// or an object below it (implicit directory), checked with a single
+// ListObjectsV2 request limited to one key. modified is the
+// LastModified time of the marker or zero for an implicit directory.
+// The root directory with the empty key always exists.
+func (s *fileSystem) dirExists(ctx context.Context, client *s3.Client, k string) (exists bool, modified time.Time, err error) {
+	if k == "" {
+		return true, time.Time{}, nil
+	}
+	out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  &s.bucketName,
+		Prefix:  aws.String(k + Separator),
+		MaxKeys: aws.Int32(1),
+	})
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	if len(out.Contents) == 0 {
+		return false, time.Time{}, nil
+	}
+	if obj := out.Contents[0]; aws.ToString(obj.Key) == k+Separator {
+		modified = aws.ToTime(obj.LastModified)
+	}
+	return true, modified, nil
+}
+
+// checkNotDir returns an fs.ErrIsDirectory error if k is a directory,
+// so that writing an object k doesn't turn a directory into a file.
+func (s *fileSystem) checkNotDir(ctx context.Context, client *s3.Client, k string) error {
+	isDir, _, err := s.dirExists(ctx, client, k)
+	if err != nil {
+		return err
+	}
+	if isDir {
+		return fs.NewErrIsDirectory(s.dirInfo(k, time.Time{}).File)
+	}
+	return nil
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -281,28 +503,20 @@ func (s *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	if !isNotFound(err) {
 		return nil, err
 	}
-	// Marker object or implicit directory
-	out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:  &s.bucketName,
-		Prefix:  aws.String(k + Separator),
-		MaxKeys: aws.Int32(1),
-	})
+	isDir, modified, err := s.dirExists(ctx, client, k)
 	if err != nil {
 		return nil, err
 	}
-	if len(out.Contents) == 0 {
-		return nil, fs.NewErrDoesNotExist(fs.File(s.JoinCleanURI(k)))
-	}
-	var modified time.Time
-	if obj := out.Contents[0]; aws.ToString(obj.Key) == k+Separator {
-		modified = aws.ToTime(obj.LastModified)
+	if !isDir {
+		return nil, fs.NewErrDoesNotExist(s.file(k))
 	}
 	return s.dirInfo(k, modified), nil
 }
 
 // ListDir lists the objects and (marker or implicit) directories
 // directly below dirPath using ListObjectsV2 with the "/" delimiter.
-// A missing directory lists nothing.
+// It returns an error wrapping os.ErrNotExist for a missing directory
+// and an fs.ErrIsNotDirectory for an object.
 func (s *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	return s.listDir(ctx, dirPath, patterns, callback, false)
 }
@@ -310,6 +524,8 @@ func (s *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 // ListDirRecursive lists all objects below dirPath with a single
 // paginated ListObjectsV2 request without delimiter.
 // Directory markers are skipped, patterns match object names.
+// It returns an error wrapping os.ErrNotExist for a missing directory
+// and an fs.ErrIsNotDirectory for an object.
 func (s *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	return s.listDir(ctx, dirPath, patterns, callback, true)
 }
@@ -333,28 +549,31 @@ func (s *fileSystem) listDir(ctx context.Context, dirPath string, patterns []str
 	if !recursive {
 		input.Delimiter = aws.String(Separator)
 	}
+	// Any key below the prefix, the marker included, makes it a directory
+	found := prefix == ""
 	paginator := s3.NewListObjectsV2Paginator(client, input)
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			return err
 		}
+		found = found || len(page.CommonPrefixes) > 0 || len(page.Contents) > 0
 		for _, commonPrefix := range page.CommonPrefixes {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			k := strings.TrimSuffix(aws.ToString(commonPrefix.Prefix), Separator)
-			if k == "" {
+			name := strings.TrimSuffix(strings.TrimPrefix(aws.ToString(commonPrefix.Prefix), prefix), Separator)
+			if !isPathKey(name) {
 				continue
 			}
-			match, err := fsimpl.MatchAnyPattern(path.Base(k), patterns)
+			match, err := fsimpl.MatchAnyPattern(name, patterns)
 			if err != nil {
 				return err
 			}
 			if !match {
 				continue
 			}
-			err = callback(s.dirInfo(k, time.Time{}))
+			err = callback(s.dirInfo(prefix+name, time.Time{}))
 			if err != nil {
 				return err
 			}
@@ -364,8 +583,9 @@ func (s *fileSystem) listDir(ctx context.Context, dirPath string, patterns []str
 				return err
 			}
 			k := aws.ToString(obj.Key)
-			if k == "" || strings.HasSuffix(k, Separator) {
-				continue // directory marker
+			// Directory markers end with a slash and are skipped
+			if !isPathKey(strings.TrimPrefix(k, prefix)) {
+				continue
 			}
 			match, err := fsimpl.MatchAnyPattern(path.Base(k), patterns)
 			if err != nil {
@@ -378,6 +598,15 @@ func (s *fileSystem) listDir(ctx context.Context, dirPath string, patterns []str
 			if err != nil {
 				return err
 			}
+		}
+	}
+	if !found {
+		info, err := s.Stat(dirPath)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir {
+			return fs.NewErrIsNotDirectory(info.File)
 		}
 	}
 	return nil
@@ -393,6 +622,9 @@ func (s *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 		return nil, fs.ErrEmptyPath
 	}
 	k := key(filePath)
+	if k == "" {
+		return nil, fs.NewErrIsDirectory(s.RootDir())
+	}
 	out, err := client.GetObject(context.Background(), &s3.GetObjectInput{
 		Bucket: &s.bucketName,
 		Key:    &k,
@@ -407,10 +639,14 @@ func (s *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 }
 
 // ReadAll returns the content of an object.
-// Objects of at least MultipartDownloadThreshold bytes
-// are downloaded in concurrent parts.
+// Objects of at least Options.MultipartDownloadThreshold bytes
+// are downloaded with concurrent range requests.
 func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	client, err := s.getClient()
+	if err != nil {
+		return nil, err
+	}
+	transfer, err := s.getTransfer()
 	if err != nil {
 		return nil, err
 	}
@@ -421,6 +657,9 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, err
 	}
 	k := key(filePath)
+	if k == "" {
+		return nil, fs.NewErrIsDirectory(s.RootDir())
+	}
 	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.bucketName,
 		Key:    &k,
@@ -432,16 +671,25 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, err
 	}
 	size := aws.ToInt64(head.ContentLength)
-	if size >= MultipartDownloadThreshold {
-		buf := manager.NewWriteAtBuffer(make([]byte, 0, size))
-		_, err = manager.NewDownloader(client).Download(ctx, buf, &s3.GetObjectInput{
-			Bucket: &s.bucketName,
-			Key:    &k,
+	if size >= s.downloadThreshold {
+		if size > math.MaxInt {
+			return nil, fmt.Errorf("s3fs: %s is too large to read into memory", s.file(k))
+		}
+		buf := make(writeAtBuffer, size)
+		_, err = transfer.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
+			Bucket:   &s.bucketName,
+			Key:      &k,
+			WriterAt: buf,
+			// Every range request must read the same version of the object
+			IfMatch: head.ETag,
 		})
 		if err != nil {
+			if isNotFound(err) {
+				return nil, s.notExistError(filePath)
+			}
 			return nil, err
 		}
-		return buf.Bytes(), nil
+		return buf, nil
 	}
 	out, err := client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &s.bucketName,
@@ -454,17 +702,34 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, err
 	}
 	defer out.Body.Close()
-	return io.ReadAll(out.Body)
+	return fs.ReadAll(ctx, out.Body)
+}
+
+// writeAtBuffer is the io.WriterAt for the concurrent
+// range downloads of an object with a known size.
+// The ranges don't overlap, so no lock is needed.
+type writeAtBuffer []byte
+
+func (b writeAtBuffer) WriteAt(p []byte, off int64) (int, error) {
+	if off < 0 || off > int64(len(b)-len(p)) {
+		return 0, errors.New("s3fs: downloaded range outside of the object size")
+	}
+	return copy(b[off:], p), nil
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // Write operations
 
 // WriteAll creates or overwrites an object.
-// Data of at least MultipartUploadThreshold bytes is uploaded in parts.
-// perm is ignored, S3 access is controlled by IAM policies.
+// Data of at least Options.MultipartUploadThreshold bytes
+// is uploaded in parts. It returns an fs.ErrIsDirectory error
+// for a directory. perm is ignored, S3 access is controlled by IAM policies.
 func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
 	client, err := s.getWriteClient()
+	if err != nil {
+		return err
+	}
+	transfer, err := s.getTransfer()
 	if err != nil {
 		return err
 	}
@@ -475,18 +740,11 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 		return err
 	}
 	k := key(filePath)
-	if int64(len(data)) >= MultipartUploadThreshold {
-		_, err = manager.NewUploader(client, func(u *manager.Uploader) {
-			// The uploader defaults to CRC32 part checksums regardless
-			// of the client, so a client configured for services that
-			// don't support them could not complete a multipart upload
-			u.RequestChecksumCalculation = client.Options().RequestChecksumCalculation
-		}).Upload(ctx, &s3.PutObjectInput{
-			Bucket: &s.bucketName,
-			Key:    &k,
-			Body:   bytes.NewReader(data),
-		})
+	if err := s.checkNotDir(ctx, client, k); err != nil {
 		return err
+	}
+	if int64(len(data)) >= s.uploadThreshold {
+		return s.upload(ctx, transfer, k, bytes.NewReader(data))
 	}
 	_, err = client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &s.bucketName,
@@ -496,22 +754,54 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	return err
 }
 
-// OpenWriter returns a writer that buffers the data in memory
-// and uploads it as object on Close.
+// upload uploads the data of body to the object k, in parts if
+// it has at least Options.MultipartUploadThreshold bytes.
+func (s *fileSystem) upload(ctx context.Context, transfer *transfermanager.Client, k string, body io.Reader) error {
+	_, err := transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{
+		Bucket: &s.bucketName,
+		Key:    &k,
+		Body:   body,
+	})
+	return err
+}
+
+// OpenWriter returns a writer that streams the written data to an upload
+// started by the first Write: data up to Options.MultipartUploadThreshold
+// is buffered and uploaded with a single request on Close, larger data is
+// uploaded in parts of Options.PartSize while it is written. The object
+// only appears (or changes) when Close completes the upload.
+// The writer implements fs.WriteAborter, Abort cancels the upload.
+// It returns an fs.ErrIsDirectory error for a directory.
 func (s *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
-	if _, err := s.getWriteClient(); err != nil {
+	client, err := s.getWriteClient()
+	if err != nil {
+		return nil, err
+	}
+	transfer, err := s.getTransfer()
+	if err != nil {
 		return nil, err
 	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
-		return s.WriteAll(context.Background(), filePath, data, perm)
-	}), nil
+	k := key(filePath)
+	if err := s.checkNotDir(context.Background(), client, k); err != nil {
+		return nil, err
+	}
+	return newUploadWriter(
+		func(ctx context.Context, body io.Reader) error {
+			return s.upload(ctx, transfer, k, body)
+		},
+		func() error {
+			_, err := s.getWriteClient()
+			return err
+		},
+	), nil
 }
 
 // OpenReadWriter downloads the object (or starts empty for a missing one)
 // into a memory buffer that is uploaded on Close.
+// The returned value implements fs.WriteAborter.
 func (s *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error) {
 	if _, err := s.getWriteClient(); err != nil {
 		return nil, err
@@ -529,10 +819,16 @@ func (s *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 }
 
 // Touch creates an empty object for a missing path and updates the
-// modification time of an existing object by copying it onto itself.
-// It returns an fs.ErrUnsupported error if the service refuses
-// to copy an object onto itself without changes, like some S3-compatible
-// services do. Touch of a directory does nothing.
+// modification time of an existing object by copying it onto itself,
+// because S3 can't update LastModified in place. The copy keeps the
+// Content-Type and the other content headers, the user metadata, the
+// storage class and the server-side encryption of the object, objects
+// above 5 GiB are copied in parts. It doesn't keep ACLs, and for objects
+// above 5 GiB it doesn't keep the tags.
+//
+// It returns an fs.ErrUnsupported error if the service refuses to copy an
+// object onto itself, like some S3-compatible services do.
+// Touch of a directory does nothing.
 func (s *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	client, err := s.getWriteClient()
 	if err != nil {
@@ -541,26 +837,37 @@ func (s *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	ctx := context.Background()
 	k := key(filePath)
-	info, err := s.Stat(filePath)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return s.WriteAll(ctx, filePath, nil, perm)
-	case err != nil:
-		return err
-	case info.IsDir:
-		return nil
+	if k == "" {
+		return nil // Root directory
 	}
-	// S3 can't update LastModified in place, copying the
-	// object onto itself with replaced metadata rewrites it.
-	_, err = client.CopyObject(ctx, &s3.CopyObjectInput{
-		Bucket:            &s.bucketName,
-		CopySource:        aws.String(s.copySource(k)),
-		Key:               &k,
-		MetadataDirective: types.MetadataDirectiveReplace,
+	ctx := context.Background()
+	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &s.bucketName,
+		Key:    &k,
 	})
-	if apiErr, ok := errors.AsType[smithy.APIError](err); ok && apiErr.ErrorCode() == "InvalidRequest" {
+	if err != nil {
+		if !isNotFound(err) {
+			return err
+		}
+		isDir, _, err := s.dirExists(ctx, client, k)
+		if err != nil || isDir {
+			return err
+		}
+		_, err = client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: &s.bucketName,
+			Key:    &k,
+			Body:   bytes.NewReader(nil),
+		})
+		return err
+	}
+	err = s.copyObject(ctx, client, k, k, head, true)
+	switch {
+	case hasErrorCode(err, "PreconditionFailed"):
+		// The object was replaced after HeadObject,
+		// so it has a new modification time anyway
+		return nil
+	case hasErrorCode(err, "InvalidRequest"):
 		return fmt.Errorf("%w: %w", fs.NewErrUnsupported(s, "Touch of an existing object"), err)
 	}
 	return err
@@ -595,7 +902,7 @@ func (s *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 
 // Remove deletes an object or an empty directory marker.
 // It returns an error wrapping os.ErrNotExist for a missing path
-// and refuses to remove a directory with content.
+// and an fs.ErrDirectoryNotEmpty for a directory with content.
 func (s *fileSystem) Remove(filePath string) error {
 	client, err := s.getWriteClient()
 	if err != nil {
@@ -631,7 +938,7 @@ func (s *fileSystem) Remove(filePath string) error {
 	}
 	for _, obj := range out.Contents {
 		if aws.ToString(obj.Key) != marker {
-			return fmt.Errorf("directory not empty: %s", info.File)
+			return fs.NewErrDirectoryNotEmpty(info.File)
 		}
 	}
 	_, err = client.DeleteObject(ctx, &s3.DeleteObjectInput{
@@ -669,7 +976,7 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		}
 		for _, e := range out.Errors {
 			if code := aws.ToString(e.Code); code != "NoSuchKey" && code != "NotFound" {
-				return fmt.Errorf("deleting %s: %s: %s", s.JoinCleanURI(aws.ToString(e.Key)), code, aws.ToString(e.Message))
+				return fmt.Errorf("deleting %s: %s: %s", s.file(aws.ToString(e.Key)), code, aws.ToString(e.Message))
 			}
 		}
 		batch = batch[:0]
@@ -699,8 +1006,9 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return deleteBatch()
 }
 
-// CopyFile copies an object within the bucket server-side with CopyObject.
-// Copying an object onto itself is a no-op.
+// CopyFile copies an object within the bucket server-side,
+// objects above 5 GiB in parts. Copying an object onto itself is a no-op.
+// It returns an fs.ErrIsDirectory error if srcFile or destFile is a directory.
 func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	client, err := s.getWriteClient()
 	if err != nil {
@@ -709,23 +1017,204 @@ func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 	if srcFile == "" || destFile == "" {
 		return fs.ErrEmptyPath
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	srcKey, destKey := key(srcFile), key(destFile)
 	if srcKey == destKey {
 		return nil
 	}
-	_, err = client.CopyObject(ctx, &s3.CopyObjectInput{
-		Bucket:     &s.bucketName,
-		CopySource: aws.String(s.copySource(srcKey)),
-		Key:        &destKey,
+	if srcKey == "" || destKey == "" {
+		return fs.NewErrIsDirectory(s.RootDir())
+	}
+	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &s.bucketName,
+		Key:    &srcKey,
 	})
-	if err != nil && isNotFound(err) {
+	if err != nil {
+		if isNotFound(err) {
+			return s.notExistError(srcFile)
+		}
+		return err
+	}
+	if err := s.checkNotDir(ctx, client, destKey); err != nil {
+		return err
+	}
+	err = s.copyObject(ctx, client, srcKey, destKey, head, false)
+	if isNotFound(err) {
 		return s.notExistError(srcFile)
 	}
 	return err
 }
 
+// copyObject copies the object srcKey described by head to destKey,
+// with a single CopyObject request up to maxCopyObjectSize
+// and in parts with UploadPartCopy above.
+//
+// With touch true the copy replaces the metadata, which a copy of an
+// object onto itself needs, with the metadata of head, and fails with a
+// "PreconditionFailed" error if the object changed after HeadObject.
+func (s *fileSystem) copyObject(ctx context.Context, client *s3.Client, srcKey, destKey string, head *s3.HeadObjectOutput, touch bool) error {
+	if aws.ToInt64(head.ContentLength) > s.maxCopyObjectSize {
+		return s.copyObjectInParts(ctx, client, srcKey, destKey, head)
+	}
+	input := &s3.CopyObjectInput{
+		Bucket:     &s.bucketName,
+		CopySource: aws.String(s.copySource(srcKey)),
+		Key:        &destKey,
+		// Without them the copy would get the defaults of the bucket
+		StorageClass:         head.StorageClass,
+		ServerSideEncryption: head.ServerSideEncryption,
+		SSEKMSKeyId:          head.SSEKMSKeyId,
+		BucketKeyEnabled:     head.BucketKeyEnabled,
+	}
+	if touch {
+		input.CopySourceIfMatch = head.ETag
+		input.MetadataDirective = types.MetadataDirectiveReplace
+		input.Metadata = head.Metadata
+		input.ContentType = head.ContentType
+		input.ContentEncoding = head.ContentEncoding
+		input.ContentDisposition = head.ContentDisposition
+		input.ContentLanguage = head.ContentLanguage
+		input.CacheControl = head.CacheControl
+		input.Expires = expires(head)
+		input.WebsiteRedirectLocation = head.WebsiteRedirectLocation
+	}
+	_, err := client.CopyObject(ctx, input)
+	return err
+}
+
+// expires returns the parsed Expires header of head or nil.
+func expires(head *s3.HeadObjectOutput) *time.Time {
+	if head.ExpiresString == nil {
+		return nil
+	}
+	t, err := http.ParseTime(*head.ExpiresString)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
+// copyObjectInParts copies the object srcKey described by head to destKey
+// with a multipart upload of UploadPartCopy requests, which is needed
+// for objects above the 5 GiB of CopyObject. A multipart upload doesn't
+// copy the metadata, so the metadata of head is set explicitly.
+// The parts are copied with Options.Concurrency requests in parallel.
+// A failed copy is aborted, so it leaves no parts behind.
+func (s *fileSystem) copyObjectInParts(ctx context.Context, client *s3.Client, srcKey, destKey string, head *s3.HeadObjectOutput) (err error) {
+	size := aws.ToInt64(head.ContentLength)
+	partSize := max(s.copyPartSize, (size+maxUploadParts-1)/maxUploadParts)
+	created, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket:                  &s.bucketName,
+		Key:                     &destKey,
+		Metadata:                head.Metadata,
+		ContentType:             head.ContentType,
+		ContentEncoding:         head.ContentEncoding,
+		ContentDisposition:      head.ContentDisposition,
+		ContentLanguage:         head.ContentLanguage,
+		CacheControl:            head.CacheControl,
+		Expires:                 expires(head),
+		WebsiteRedirectLocation: head.WebsiteRedirectLocation,
+		StorageClass:            head.StorageClass,
+		ServerSideEncryption:    head.ServerSideEncryption,
+		SSEKMSKeyId:             head.SSEKMSKeyId,
+		BucketKeyEnabled:        head.BucketKeyEnabled,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failTimeout)
+		defer cancel()
+		_, abortErr := client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
+			Bucket:   &s.bucketName,
+			Key:      &destKey,
+			UploadId: created.UploadId,
+		})
+		err = errors.Join(err, abortErr)
+	}()
+
+	numParts := (size + partSize - 1) / partSize
+	parts := make([]types.CompletedPart, numParts)
+	partCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	partNums := make(chan int64)
+	var wg sync.WaitGroup
+	for range s.concurrency {
+		wg.Go(func() {
+			for i := range partNums {
+				start := i * partSize
+				end := min(start+partSize, size) - 1
+				partNum := aws.Int32(int32(i + 1)) // #nosec G115 -- at most maxUploadParts
+				out, err := client.UploadPartCopy(partCtx, &s3.UploadPartCopyInput{
+					Bucket:            &s.bucketName,
+					Key:               &destKey,
+					UploadId:          created.UploadId,
+					PartNumber:        partNum,
+					CopySource:        aws.String(s.copySource(srcKey)),
+					CopySourceRange:   aws.String(fmt.Sprintf("bytes=%d-%d", start, end)),
+					CopySourceIfMatch: head.ETag,
+				})
+				if err != nil {
+					cancel(err)
+					continue
+				}
+				parts[i] = completedPart(partNum, out.CopyPartResult)
+			}
+		})
+	}
+feed:
+	for i := range numParts {
+		select {
+		case partNums <- i:
+		case <-partCtx.Done():
+			break feed
+		}
+	}
+	close(partNums)
+	wg.Wait()
+	if err := context.Cause(partCtx); err != nil {
+		return err
+	}
+	_, err = client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:          &s.bucketName,
+		Key:             &destKey,
+		UploadId:        created.UploadId,
+		MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+	})
+	return err
+}
+
+// completedPart returns the CompletedPart of a copied part
+// with the checksums that CompleteMultipartUpload needs
+// if the client calculated them.
+func completedPart(partNum *int32, result *types.CopyPartResult) types.CompletedPart {
+	if result == nil {
+		return types.CompletedPart{PartNumber: partNum}
+	}
+	return types.CompletedPart{
+		PartNumber:        partNum,
+		ETag:              result.ETag,
+		ChecksumCRC32:     result.ChecksumCRC32,
+		ChecksumCRC32C:    result.ChecksumCRC32C,
+		ChecksumCRC64NVME: result.ChecksumCRC64NVME,
+		ChecksumMD5:       result.ChecksumMD5,
+		ChecksumSHA1:      result.ChecksumSHA1,
+		ChecksumSHA256:    result.ChecksumSHA256,
+		ChecksumSHA512:    result.ChecksumSHA512,
+		ChecksumXXHASH128: result.ChecksumXXHASH128,
+		ChecksumXXHASH3:   result.ChecksumXXHASH3,
+		ChecksumXXHASH64:  result.ChecksumXXHASH64,
+	}
+}
+
 // Close unregisters the file system. Every method returns
-// fs.ErrFileSystemClosed afterwards. Close is idempotent.
+// fs.ErrFileSystemClosed afterwards, also the Close of writers
+// that were opened before. Close is idempotent.
 func (s *fileSystem) Close() error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
@@ -734,5 +1223,6 @@ func (s *fileSystem) Close() error {
 	}
 	fs.Unregister(s)
 	s.client = nil
+	s.transfer = nil
 	return nil
 }
