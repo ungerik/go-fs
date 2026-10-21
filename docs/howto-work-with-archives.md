@@ -23,11 +23,15 @@ mistake:
 ```go
 import "github.com/ungerik/go-fs/zipfs"
 
-zipFS, err := zipfs.NewReader(fs.File("archive.zip"))
+zipFS, err := zipfs.NewReader(fs.File("archive.zip"), "") // "" = random id
 if err != nil {
     return err
 }
-defer zipFS.Close()
+// The File values of the archive resolve through the registry
+if err := fs.Register(zipFS); err != nil {
+    return err
+}
+defer zipFS.Close() // unregisters the file system
 
 err = zipFS.RootDir().ListDirRecursive(ctx, func(f fs.File) error {
     fmt.Println(f.Path(), f.Size())
@@ -40,22 +44,35 @@ if err != nil {
 data, err := zipFS.RootDir().Join("docs", "readme.md").ReadAll(ctx)
 ```
 
+`NewReader` and `NewWriter` don't register the file system. Register it before
+you use the `fs.File` values of the archive, and `Close` it afterwards.
+
 `NewReader` takes a `fs.FileReader`, so the archive itself can live on any
-backend — read a ZIP straight out of S3 without downloading it to disk first:
+backend:
 
 ```go
-zipFS, err := zipfs.NewReader(fs.File("s3://bucket/archive.zip"))
+zipFS, err := zipfs.NewReader(fs.File("s3://bucket/archive.zip"), "")
 ```
 
-`zipfs.Reader` is a `fs.StdFileSystem` over the `io/fs.FS` of
-`archive/zip.Reader`, which synthesizes the directories implied by entry names.
-It provides `ReadAll` and `ListDirRecursive` natively.
+A ZIP archive is read at the offsets of its entries, so `NewReader` opens it
+with `OpenReadSeeker`. On file systems whose readers can seek — local files,
+`MemFileSystem`, SFTP, SMB, WebDAV and Azure Blob Storage — the archive is read
+in place. **The readers of S3, FTP, HTTP and Dropbox can't seek, so the whole
+archive is read into memory first**: a 2 GB ZIP on S3 needs 2 GB of RAM. Copy
+it to a local temp file first if that is too much.
+
+`zipfs.Reader` provides `Exists`, `ReadAll` and `ListDirRecursive` natively
+and synthesizes the directories implied by the entry names. Entries are
+decompressed on demand.
 
 ## Write a ZIP archive
 
 ```go
-out, err := zipfs.NewWriter(fs.File("out.zip"))
+out, err := zipfs.NewWriter(fs.File("out.zip"), "")
 if err != nil {
+    return err
+}
+if err := fs.Register(out); err != nil {
     return err
 }
 defer out.Close()
@@ -68,29 +85,40 @@ err = out.Close() // finishes the archive
 ```
 
 A writer file system is **write-only**: reading from it returns
-`fs.ErrWriteOnlyFileSystem`. Because `archive/zip` writes entries sequentially,
-only one file can be open for writing at a time.
+`fs.ErrWriteOnlyFileSystem`. Each file is buffered in memory until its writer
+is closed and then compressed into the archive, so several files can be open
+for writing at the same time. A writer from `OpenWriter` implements
+`fs.WriteAborter`: `Abort` discards the file without writing an entry, which
+`fs.CopyFile` does when a copy fails.
 
 Call `Close` explicitly and check its error. The `defer` is a safety net, but
 the archive's central directory is written by `Close`, so swallowing that error
-gives you a truncated file. Calling `Close` twice is safe.
+gives you a truncated file. Calling `Close` twice is safe. Files whose writers
+are still open when the archive is closed are not written.
 
 ## Read and write tar archives
 
-`tarfs` mirrors `zipfs`. Compression is chosen by the file name: a `.gz` or
-`.tgz` suffix means gzip, anything else is an uncompressed tar.
+`tarfs` mirrors `zipfs`. A gzip compressed archive is recognized by its
+content when it is read, whatever its name. When writing, the file name decides:
+a `.gz` or `.tgz` suffix means gzip, anything else is an uncompressed tar.
 
 ```go
 import "github.com/ungerik/go-fs/tarfs"
 
-tarFS, err := tarfs.NewReader(fs.File("backup.tar.gz"))
+tarFS, err := tarfs.NewReader(fs.File("backup.tar.gz"), "")
 if err != nil {
+    return err
+}
+if err := fs.Register(tarFS); err != nil {
     return err
 }
 defer tarFS.Close()
 
-out, err := tarfs.NewWriter(fs.File("out.tgz"))
+out, err := tarfs.NewWriter(fs.File("out.tgz"), "")
 if err != nil {
+    return err
+}
+if err := fs.Register(out); err != nil {
     return err
 }
 err = out.RootDir().Join("notes.txt").WriteAllString(ctx, "...")
@@ -100,15 +128,47 @@ if err != nil {
 err = out.Close() // finishes the archive
 ```
 
-Two behaviours to plan for:
+Behaviours to plan for:
 
 - A **gzip compressed archive is decompressed into memory** when opened, so
   reading a 10 GB `.tar.gz` needs 10 GB. An uncompressed `.tar` is indexed
-  once and its content is read on demand.
+  once and its content is read on demand, in place on file systems with
+  seekable readers (see the ZIP section above).
 - The **writer buffers each file until its writer is closed**, because tar
   needs to know the size before the content.
+- **Only regular files and directories are exposed.** A hard link is read as a
+  regular file with the content of the earlier entry it links to. Symbolic
+  links, devices and FIFOs are skipped, so they are missing when you extract
+  the archive with `fs.CopyRecursive`. Use `archive/tar` directly if you need
+  them.
 
-`tarfs.Reader` provides `Exists` and `ListDirRecursive` natively.
+`tarfs.Reader` provides `Exists`, `ReadAll` and `ListDirRecursive` natively.
+
+## Rules shared by zipfs and tarfs
+
+Both packages read and write entries with the same rules:
+
+- **Entry names are made safe when reading.** Backslashes become slashes and
+  `..` elements that would leave the archive are removed, the way
+  `archive/zip` does for its `io/fs` view, so an entry `..\..\evil.txt` is
+  read as `evil.txt` and `fs.CopyRecursive` can't write outside of the
+  destination. One unusual entry never makes the whole archive unreadable.
+- **A later entry replaces an earlier one** with the same path, like
+  extracting the archive would, also when one is a file and the other a
+  directory.
+- **A path is written only once.** Writing a file or directory that the
+  archive already has, explicitly or as directory implied by another entry,
+  returns an error wrapping `os.ErrExist`. A file below a file is
+  `fs.ErrIsNotDirectory`, a file over a directory `fs.ErrIsDirectory`, and a
+  path with a backslash `os.ErrInvalid`. So a written archive never has
+  duplicate or conflicting entries. `MakeAllDirs` doesn't complain about
+  existing directories.
+- **Permissions and times.** Written entries get the current time and the
+  passed permissions, or `DefaultPermissions` / `DefaultDirPermissions` of the
+  package. Read entries report the permissions and modification time stored in
+  the archive; entries without permission bits get the defaults.
+  `FileInfo.Sys` is the `*tar.Header` or `*zip.FileHeader` of the entry.
+- `MakeDir` writes a directory entry, so empty directories are kept.
 
 ## Zip in memory
 
@@ -176,8 +236,11 @@ This reads every entry into memory at once. For a large archive use
 ## Extract an archive to disk
 
 ```go
-zipFS, err := zipfs.NewReader(fs.File("archive.zip"))
+zipFS, err := zipfs.NewReader(fs.File("archive.zip"), "")
 if err != nil {
+    return err
+}
+if err := fs.Register(zipFS); err != nil {
     return err
 }
 defer zipFS.Close()
@@ -191,8 +254,11 @@ systems, so this also extracts straight into S3, SFTP or a `MemFileSystem`.
 ## Verification
 
 ```go
-zipFS, err := zipfs.NewReader(fs.File("out.zip"))
+zipFS, err := zipfs.NewReader(fs.File("out.zip"), "")
 if err != nil {
+    return err
+}
+if err := fs.Register(zipFS); err != nil {
     return err
 }
 defer zipFS.Close()
@@ -219,12 +285,20 @@ system. Close it and open it with `NewReader`.
 error was ignored. `Close` writes the central directory for ZIP and the end
 blocks for tar.
 
-**`previous zip entry writer must be closed before opening another`** —
-`archive/zip` only allows writing to the most recently created entry, so close
-the first writer before opening the second.
+**`file already exists` when writing** — the path was already written, or a
+file was written below it so it exists as a directory. Archives are written
+sequentially, an entry can't be replaced.
 
-**Out of memory on a `.tar.gz`** — gzip archives are decompressed into memory
-when opened. Use an uncompressed `.tar`, or stream with `archive/tar` directly.
+**The archive's files are "invalid"** — the file system was not registered.
+Call `fs.Register` after `NewReader` or `NewWriter`.
+
+**Out of memory on a `.tar.gz` or on an archive in S3** — gzip archives are
+decompressed into memory when opened, and archives on backends without seekable
+readers are read into memory. Use an uncompressed `.tar`, copy the archive to a
+local file first, or stream with `archive/tar` directly.
+
+**Symbolic links are missing after extracting a tar** — `tarfs` doesn't expose
+them, see above.
 
 **Entries collide in `fs.Zip`** — entries are named by `Name()`, the base name.
 Use `fs.FileReaderWithName` to give them distinct names.

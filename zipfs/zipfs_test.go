@@ -1,10 +1,15 @@
 package zipfs
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -158,50 +163,233 @@ func TestZipFileSystem(t *testing.T) {
 	})
 }
 
-func TestZipWriter_SequentialEnforcement(t *testing.T) {
-	tempDir := fs.MustMakeTempDir()
-	t.Cleanup(func() {
-		assert.NoError(t, tempDir.RemoveRecursive(context.Background()))
-	})
-
-	zipWriter, err := NewWriter(tempDir.Join("seq.zip"), "")
+// TestZipWriter_ConcurrentWriters verifies that several entry writers can
+// be open at the same time, because each file is buffered until its
+// writer is closed, and that writes after Close fail instead of being
+// dropped or corrupting the archive.
+func TestZipWriter_ConcurrentWriters(t *testing.T) {
+	ctx := t.Context()
+	zipFile := newMemFS(t).RootDir().Join("concurrent.zip")
+	zipWriter, err := NewWriter(zipFile, "")
 	require.NoError(t, err)
-	require.NoError(t, fs.Register(zipWriter))
-	t.Cleanup(func() { assert.NoError(t, zipWriter.Close()) })
-
 	assert.Contains(t, zipWriter.Name(), "Zip writer filesystem", "writer mode Name()")
 
-	// Opening a second writer while the first is still open must fail, because
-	// archive/zip can only write to the most recently created entry.
 	w1, err := zipWriter.OpenWriter("a.txt", 0)
 	require.NoError(t, err)
-	_, err = zipWriter.OpenWriter("b.txt", 0)
-	require.Error(t, err, "opening a second writer before closing the first must fail")
-
-	// A write to the first (still active) writer succeeds; after closing it a
-	// further write must fail rather than silently corrupt the archive.
-	_, err = w1.Write([]byte("hello"))
-	require.NoError(t, err)
-	require.NoError(t, w1.Close())
-	_, err = w1.Write([]byte("more"))
-	require.Error(t, err, "write to a closed entry writer must fail")
-
-	// After closing the first, a second writer can be opened sequentially.
 	w2, err := zipWriter.OpenWriter("b.txt", 0)
+	require.NoError(t, err)
+	_, err = w1.Write([]byte("hello"))
 	require.NoError(t, err)
 	_, err = w2.Write([]byte("world"))
 	require.NoError(t, err)
 	require.NoError(t, w2.Close())
+	_, err = w1.Write([]byte(" again"))
+	require.NoError(t, err, "the first writer is not superseded by the second")
+	require.NoError(t, w1.Close())
 
-	// Writing to a writer that was superseded by a newer one must fail.
-	w3, err := zipWriter.OpenWriter("c.txt", 0)
+	_, err = w1.Write([]byte("more"))
+	assert.ErrorIs(t, err, os.ErrClosed, "write to a closed entry writer")
+	require.NoError(t, w1.Close(), "Close is idempotent")
+	require.NoError(t, zipWriter.Close())
+
+	reader := openReader(t, zipFile)
+	for name, want := range map[string]string{"a.txt": "hello again", "b.txt": "world"} {
+		data, err := reader.RootDir().Join(name).ReadAllString(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, want, data, name)
+	}
+}
+
+// newMemFS returns a registered MemFileSystem that is closed with the test.
+func newMemFS(t *testing.T) *fs.MemFileSystem {
+	t.Helper()
+	memFS, err := fs.NewMemFileSystem(nil)
 	require.NoError(t, err)
-	require.NoError(t, w3.Close())
-	w4, err := zipWriter.OpenWriter("d.txt", 0)
+	require.NoError(t, fs.Register(memFS))
+	t.Cleanup(func() { _ = memFS.Close() })
+	return memFS
+}
+
+// openReader returns a registered Reader for the archive
+// that is closed with the test.
+func openReader(t *testing.T, archive fs.FileReader) *Reader {
+	t.Helper()
+	reader, err := NewReader(archive, "")
 	require.NoError(t, err)
-	_, err = w3.Write([]byte("stale")) // w3 already closed -> closed error
-	require.Error(t, err)
-	require.NoError(t, w4.Close())
+	require.NoError(t, fs.Register(reader))
+	t.Cleanup(func() { _ = reader.Close() })
+	return reader
+}
+
+// makeZip returns a ZIP archive with the entries in the passed
+// order, written directly with archive/zip like a foreign tool would.
+func makeZip(t *testing.T, entries ...[2]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, e := range entries {
+		w, err := zw.Create(e[0])
+		require.NoError(t, err)
+		_, err = io.WriteString(w, e[1])
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
+// zipEntryNames returns the entry names of a ZIP archive in their order.
+func zipEntryNames(t *testing.T, zipFile fs.File) []string {
+	t.Helper()
+	data, err := zipFile.ReadAll(t.Context())
+	require.NoError(t, err)
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	names := make([]string, len(zr.File))
+	for i, f := range zr.File {
+		names[i] = f.Name
+	}
+	return names
+}
+
+// TestZipWriter_WriteOnce verifies that a path can be written only once.
+// A second write of the same path used to create a duplicate entry,
+// so the stale first content was read back and ListDir failed with
+// "duplicate entries".
+func TestZipWriter_WriteOnce(t *testing.T) {
+	ctx := t.Context()
+	zipFile := newMemFS(t).RootDir().Join("once.zip")
+	zipWriter, err := NewWriter(zipFile, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(zipWriter))
+	f := zipWriter.RootDir().Join("a.txt")
+
+	require.NoError(t, f.WriteAll(ctx, []byte("first")))
+	assert.ErrorIs(t, f.WriteAll(ctx, []byte("second")), os.ErrExist, "WriteAll of a written file")
+	assert.ErrorIs(t, zipWriter.Touch("/a.txt", 0), os.ErrExist, "Touch of a written file")
+
+	require.NoError(t, zipWriter.MakeDir("/dir", 0))
+	assert.ErrorIs(t, zipWriter.MakeDir("/dir", 0), os.ErrExist, "MakeDir of a written directory")
+	assert.ErrorIs(t, zipWriter.MakeDir("/", 0), os.ErrExist, "MakeDir of the root")
+	assert.ErrorIs(t, zipWriter.Touch("/dir", 0), fs.ErrIsDirectory{}, "a file over a directory")
+	assert.ErrorIs(t, zipWriter.Touch("/a.txt/below", 0), fs.ErrIsNotDirectory{}, "a file below a file")
+	assert.ErrorIs(t, zipWriter.Touch(`/back\slash.txt`, 0), os.ErrInvalid, "a backslash would be a separator when read")
+	require.NoError(t, zipWriter.RootDir().Join("emptydir").MakeDir())
+	require.NoError(t, zipWriter.Close())
+
+	assert.Equal(t, []string{"a.txt", "dir/", "emptydir/"}, zipEntryNames(t, zipFile))
+	reader := openReader(t, zipFile)
+	data, err := reader.RootDir().Join("a.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "first", data)
+	assert.True(t, reader.RootDir().Join("emptydir").IsDir(), "an empty directory is kept")
+	names, err := reader.RootDir().ListDirMax(ctx, -1)
+	require.NoError(t, err)
+	assert.Len(t, names, 3)
+}
+
+// TestZipWriter_Abort verifies that an aborted entry writer writes no entry.
+func TestZipWriter_Abort(t *testing.T) {
+	zipFile := newMemFS(t).RootDir().Join("abort.zip")
+	zipWriter, err := NewWriter(zipFile, "")
+	require.NoError(t, err)
+
+	w, err := zipWriter.OpenWriter("/aborted.txt", 0)
+	require.NoError(t, err)
+	aborter, ok := w.(fs.WriteAborter)
+	require.True(t, ok, "entry writers implement fs.WriteAborter")
+	_, err = w.Write([]byte("partial"))
+	require.NoError(t, err)
+	require.NoError(t, aborter.Abort())
+	require.NoError(t, w.Close(), "Close after Abort is a no-op")
+
+	require.NoError(t, zipWriter.Touch("/kept.txt", 0))
+	require.NoError(t, zipWriter.Close())
+	assert.Equal(t, []string{"kept.txt"}, zipEntryNames(t, zipFile))
+}
+
+// TestZipWriter_EntryMetadata verifies that written entries get the
+// current time and the passed permissions. They used to get the
+// MS-DOS zero time 1979-11-30 and ignore the permissions.
+func TestZipWriter_EntryMetadata(t *testing.T) {
+	zipFile := newMemFS(t).RootDir().Join("meta.zip")
+	zipWriter, err := NewWriter(zipFile, "")
+	require.NoError(t, err)
+	before := time.Now().Add(-2 * time.Second)
+	w, err := zipWriter.OpenWriter("/exec.sh", 0o750)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.NoError(t, zipWriter.Touch("/default.txt", 0))
+	require.NoError(t, zipWriter.MakeDir("/private", 0o700))
+	require.NoError(t, zipWriter.MakeAllDirs("/implied/deeper", 0))
+	require.NoError(t, zipWriter.Close())
+
+	reader := openReader(t, zipFile)
+	for path, perm := range map[string]fs.Permissions{
+		"/exec.sh":        0o750,
+		"/default.txt":    DefaultPermissions,
+		"/private":        0o700,
+		"/implied/deeper": DefaultDirPermissions,
+		"/implied":        DefaultDirPermissions,
+	} {
+		info, err := reader.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, perm, info.Permissions, "permissions of %s", path)
+		assert.True(t, info.Modified.After(before), "modification time of %s is the time of writing: %s", path, info.Modified)
+	}
+	info, err := reader.Stat("/exec.sh")
+	require.NoError(t, err)
+	_, ok := info.Sys.(*zip.FileHeader)
+	assert.True(t, ok, "Sys is the zip.FileHeader")
+}
+
+// TestZipReader_Concurrent verifies that the files of a Reader can be
+// listed and read concurrently, run it with -race.
+func TestZipReader_Concurrent(t *testing.T) {
+	reader := openReader(t, fs.NewMemFile("concurrent.zip", makeZip(t,
+		[2]string{"a.txt", "a"},
+		[2]string{"dir/b.txt", "bb"},
+	)))
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			names, err := reader.RootDir().ListDirRecursiveMax(t.Context(), -1)
+			assert.NoError(t, err)
+			assert.Len(t, names, 2)
+			data, err := reader.RootDir().Join("dir", "b.txt").ReadAllString(t.Context())
+			assert.NoError(t, err)
+			assert.Equal(t, "bb", data)
+		})
+	}
+	wg.Wait()
+}
+
+// TestZipReader_SameRulesAsTarfs verifies that the reader cleans unsafe
+// names and lets a later entry replace an earlier one, like tarfs.
+func TestZipReader_SameRulesAsTarfs(t *testing.T) {
+	ctx := t.Context()
+	reader := openReader(t, fs.NewMemFile("foreign.zip", makeZip(t,
+		[2]string{"a.txt", "stale"},
+		[2]string{"a.txt", "replaced"},
+		[2]string{`..\..\evil.txt`, "pwned"},
+		[2]string{"f", "file"},
+		[2]string{"f/below.txt", "below"},
+	)))
+	root := reader.RootDir()
+	data, err := root.Join("a.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "replaced", data, "the later entry wins")
+	assert.Equal(t, int64(len("replaced")), root.Join("a.txt").Size())
+	assert.True(t, root.Join("evil.txt").Exists(), "the unsafe name is cleaned")
+	assert.True(t, root.Join("f").IsDir(), "the later entry f/below.txt replaces the file f")
+
+	names, err := root.ListDirMax(ctx, -1)
+	require.NoError(t, err, "no duplicate entries error")
+	assert.Equal(t, []fs.File{root.Join("f"), root.Join("a.txt"), root.Join("evil.txt")}, names)
+
+	_, err = root.Join("f").OpenReader()
+	assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenReader of a directory")
+	_, err = root.Join("missing").OpenReader()
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {

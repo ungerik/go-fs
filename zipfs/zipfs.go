@@ -1,12 +1,37 @@
 // Package zipfs implements read-only and write-only file systems
 // for ZIP archives.
 //
-// NewReader opens an existing archive for reading; it is a
-// fs.StdFileSystem over the io/fs.FS of archive/zip.Reader.
+// NewReader opens an existing archive for reading,
 // NewWriter creates a new archive that receives files
-// until it is closed. Because archive/zip writes entries
-// sequentially, only one file of a writer file system can be
-// open for writing at a time.
+// until it is closed. The package mirrors tarfs: both use
+// the same rules for entry names, duplicates and permissions.
+//
+// Reading:
+//   - Entry names are made valid paths inside the archive like
+//     archive/zip does for its io/fs view: backslashes become slashes
+//     and ".." elements that would leave the root are removed, so
+//     `..\..\evil.txt` is read as "evil.txt". No entry can address
+//     a path outside of the archive when it is extracted.
+//   - A later entry replaces an earlier one with the same path, like
+//     extracting the archive would, also when one of them is a file and
+//     the other a directory. Directories that are only implied by the
+//     paths of other entries exist without an entry of their own.
+//   - The permissions of an entry are read from its header, entries
+//     without permission bits get DefaultPermissions or DefaultDirPermissions.
+//
+// Writing:
+//   - A path can be written only once: writing a file or directory that
+//     already exists in the archive, explicitly or as directory implied by
+//     another entry, returns an error wrapping os.ErrExist. Writing below a
+//     file returns fs.ErrIsNotDirectory, writing a file over a directory
+//     fs.ErrIsDirectory. That way a written archive never has duplicate or
+//     conflicting entries.
+//   - Paths with a backslash are rejected, so archives stay portable.
+//   - Entries get the current time and the passed permissions,
+//     or DefaultPermissions and DefaultDirPermissions if none are passed.
+//   - A file is buffered in memory until its writer is closed, then it is
+//     compressed into the archive. So several files can be written at the
+//     same time, and Abort of the writer discards a file without an entry.
 package zipfs
 
 import (
@@ -16,12 +41,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
+	"github.com/ungerik/go-fs/internal/dirtree"
 )
 
 const (
@@ -30,37 +58,59 @@ const (
 
 	// Separator used in zipfs paths
 	Separator = "/"
+
+	// DefaultPermissions of files written to an archive
+	// and of read entries without permission bits.
+	DefaultPermissions = fs.UserAndGroupReadWrite | fs.AllRead
+
+	// DefaultDirPermissions of directories written to an archive
+	// and of read directories without permission bits.
+	DefaultDirPermissions = fs.UserAndGroupReadWrite | fs.AllRead | fs.AllExecute
 )
 
 var (
-	_ fs.FileSystem      = new(Reader)
-	_ fs.FileSystem      = new(Writer)
-	_ fs.WriteFileSystem = new(Writer)
-	_ fs.TouchFileSystem = new(Writer)
+	_ fs.FileSystem                 = new(Reader)
+	_ fs.ExistsFileSystem           = new(Reader)
+	_ fs.ReadAllFileSystem          = new(Reader)
+	_ fs.ListDirRecursiveFileSystem = new(Reader)
+	_ fs.FileSystem                 = new(Writer)
+	_ fs.WriteFileSystem            = new(Writer)
+	_ fs.TouchFileSystem            = new(Writer)
+	_ fs.MakeAllDirsFileSystem      = new(Writer)
 )
 
 ///////////////////////////////////////////////////////////////////////////////
 // Reader
 
 // Reader is a read-only file system for a ZIP archive.
-// It is a fs.StdFileSystem over the io/fs.FS of archive/zip.Reader,
-// which synthesizes the directories implied by the entry names.
+// See the package documentation for how entries are read.
 type Reader struct {
-	*fs.StdFileSystem
+	paths fsimpl.PathHelper
 
+	mtx    sync.Mutex
+	closed bool
 	closer io.Closer
+	tree   *dirtree.Tree // the dirtree.Node.Sys of an entry is its *zip.File
 }
 
 // NewReader opens a ZIP archive for reading with the URI prefix
 // "zip://" + id, a random id is used if id is empty.
 // The file system is not registered, pass it to fs.Register
 // to access its files via their URIs and Close it after use.
+//
+// The archive is opened with FileReader.OpenReadSeeker, so it is
+// read in place if the file system of the archive supports random
+// access, else it is read into memory. Entries are decompressed on demand.
 func NewReader(file fs.FileReader, id string) (*Reader, error) {
 	fileReader, err := file.OpenReadSeeker()
 	if err != nil {
 		return nil, err
 	}
-	zipReader, err := zip.NewReader(fileReader, file.Size())
+	size, err := fileReader.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, errors.Join(err, fileReader.Close())
+	}
+	zipReader, err := zip.NewReader(fileReader, size)
 	if err != nil {
 		return nil, errors.Join(err, fileReader.Close())
 	}
@@ -68,48 +118,248 @@ func NewReader(file fs.FileReader, id string) (*Reader, error) {
 		id = fsimpl.RandomString()
 	}
 	zipfs := &Reader{
-		StdFileSystem: fs.NewStdFileSystemWithPrefix(zipReader, Prefix+id, "Zip reader filesystem "+id),
-		closer:        fileReader,
+		paths:  fsimpl.PathHelper{URIPrefix: Prefix + id, Rooted: true},
+		tree:   dirtree.New(),
+		closer: fileReader,
+	}
+	for _, zipFile := range zipReader.File {
+		// Add only fails for unusable entries, like a file named after
+		// the root, which are skipped, so that one bad entry doesn't
+		// make the whole archive unreadable.
+		isDir := strings.HasSuffix(zipFile.Name, "/")
+		size := int64(zipFile.UncompressedSize64) //#nosec G115 -- sizes beyond int64 can't be read anyway
+		if isDir {
+			size = 0
+		}
+		_, _ = zipfs.tree.Add(dirtree.CleanName(zipFile.Name), isDir, size, zipFile.Modified, zipFile)
 	}
 	return zipfs, nil
 }
 
+// Prefix returns the URI prefix of the file system.
+func (f *Reader) Prefix() string {
+	return f.paths.URIPrefix
+}
+
+// Separator returns the path separator of the file system.
+func (f *Reader) Separator() string {
+	return f.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (f *Reader) CleanPath(uriParts ...string) string {
+	return f.paths.CleanPath(uriParts...)
+}
+
+// ReadableWritable returns true for readable and false for writable,
+// because an archive that is being read can't be written to.
+func (f *Reader) ReadableWritable() (readable, writable bool) {
+	return true, false
+}
+
+// RootDir returns the root directory of the archive.
+func (f *Reader) RootDir() fs.File {
+	return fs.File(f.paths.URIPrefix + Separator)
+}
+
 // ID returns the URI prefix of the file system,
 // which is unique per opened archive.
-//
-// It overrides the embedded fs.StdFileSystem, whose id is the prefix
-// without the scheme, so that a Reader and a Writer of an archive
-// report their id in the same form.
 func (f *Reader) ID() string {
-	return f.Prefix()
+	return f.paths.URIPrefix
+}
+
+// Name returns "Zip reader filesystem" and the id of the archive.
+func (f *Reader) Name() string {
+	return "Zip reader filesystem " + path.Base(f.paths.URIPrefix)
+}
+
+// String returns the name of the file system and its prefix.
+func (f *Reader) String() string {
+	return f.Name() + " with prefix " + f.Prefix()
+}
+
+func (f *Reader) file(filePath string) fs.File {
+	return fs.File(f.paths.JoinCleanURI(filePath))
+}
+
+func (f *Reader) checkClosed() error {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
+		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+	}
+	return nil
+}
+
+// nodeInfo returns the FileInfo of a tree node.
+// Its Sys is the *zip.FileHeader of the entry, or nil for implied directories.
+func (f *Reader) nodeInfo(node *dirtree.Node) *fs.FileInfo {
+	var perm fs.Permissions
+	zipFile, _ := node.Sys.(*zip.File)
+	if zipFile != nil {
+		perm = fs.PermissionsFromFileMode(zipFile.Mode())
+	}
+	if node.IsDir {
+		perm = perm.OrDefault(DefaultDirPermissions)
+	} else {
+		perm = perm.OrDefault(DefaultPermissions)
+	}
+	if node.Path == "" {
+		return &fs.FileInfo{
+			File:        f.RootDir(),
+			Name:        Separator,
+			Exists:      true,
+			IsDir:       true,
+			Modified:    node.Modified,
+			Permissions: perm,
+		}
+	}
+	info := &fs.FileInfo{
+		File:        f.file(node.Path),
+		Name:        node.Name,
+		Exists:      true,
+		IsDir:       node.IsDir,
+		IsRegular:   !node.IsDir,
+		IsHidden:    strings.HasPrefix(node.Name, "."),
+		Size:        node.Size,
+		Modified:    node.Modified,
+		Permissions: perm,
+	}
+	if zipFile != nil {
+		info.Sys = &zipFile.FileHeader
+	}
+	return info
+}
+
+// lookup returns the tree node of a path or an error wrapping os.ErrNotExist.
+func (f *Reader) lookup(filePath string) (*dirtree.Node, error) {
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
+	}
+	if err := f.checkClosed(); err != nil {
+		return nil, err
+	}
+	node := f.tree.Lookup(filePath)
+	if node == nil {
+		return nil, fs.NewErrDoesNotExist(f.file(filePath))
+	}
+	return node, nil
+}
+
+// Stat returns the FileInfo of an entry of the archive.
+func (f *Reader) Stat(filePath string) (*fs.FileInfo, error) {
+	node, err := f.lookup(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return f.nodeInfo(node), nil
+}
+
+// Exists reports if the archive contains the path.
+func (f *Reader) Exists(filePath string) (bool, error) {
+	if err := f.checkClosed(); err != nil {
+		return false, err
+	}
+	if filePath == "" {
+		return false, nil
+	}
+	return f.tree.Lookup(filePath) != nil, nil
+}
+
+// ListDir calls the callback for every entry in the directory that
+// matches any of the patterns, or for all entries if no patterns are passed.
+func (f *Reader) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	return f.listDir(ctx, dirPath, patterns, callback, false)
+}
+
+// ListDirRecursive lists all files (not directories) below dirPath.
+func (f *Reader) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	return f.listDir(ctx, dirPath, patterns, callback, true)
+}
+
+func (f *Reader) listDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error, recursive bool) error {
+	dir, err := f.lookup(dirPath)
+	if err != nil {
+		return err
+	}
+	if !dir.IsDir {
+		return fs.NewErrIsNotDirectory(f.file(dirPath))
+	}
+	return dirtree.List(ctx, dir, patterns, recursive, func(node *dirtree.Node) error {
+		return callback(f.nodeInfo(node))
+	})
+}
+
+// OpenReader returns a reader that decompresses the content
+// of a file entry on demand. The reader implements io/fs.File.
+func (f *Reader) OpenReader(filePath string) (io.ReadCloser, error) {
+	node, err := f.lookup(filePath)
+	if err != nil {
+		return nil, err
+	}
+	zipFile, _ := node.Sys.(*zip.File)
+	if node.IsDir || zipFile == nil {
+		return nil, fs.NewErrIsDirectory(f.file(filePath))
+	}
+	r, err := zipFile.Open()
+	if err != nil {
+		return nil, fmt.Errorf("zipfs: opening %s: %w", f.file(filePath), err)
+	}
+	return &entryReader{ReadCloser: r, info: f.nodeInfo(node).StdFileInfo()}, nil
+}
+
+// ReadAll decompresses the content of a file entry.
+func (f *Reader) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r, err := f.OpenReader(filePath)
+	if err != nil {
+		return nil, err
+	}
+	data, err := fs.ReadAll(ctx, r)
+	return data, errors.Join(err, r.Close())
 }
 
 // Close unregisters the file system and closes the archive file.
+// Close is idempotent.
 func (f *Reader) Close() error {
-	if f.closer == nil {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
 		return nil
 	}
-	closer := f.closer
-	f.closer = nil
-	// The registry holds the Reader, not the embedded StdFileSystem
+	f.closed = true
 	fs.Unregister(f)
-	return errors.Join(f.StdFileSystem.Close(), closer.Close())
+	return f.closer.Close()
+}
+
+// entryReader decompresses the content of an entry.
+type entryReader struct {
+	io.ReadCloser
+	info iofs.FileInfo
+}
+
+// Stat returns the FileInfo of the entry, implementing io/fs.File.
+func (r *entryReader) Stat() (iofs.FileInfo, error) {
+	return r.info, nil
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // Writer
 
 // Writer is a write-only file system that writes a ZIP archive.
+// See the package documentation for the rules of written entries.
 type Writer struct {
 	paths fsimpl.PathHelper
 
-	// mtx guards the fields below. archive/zip.Writer is not safe for
-	// concurrent use and only allows writing to the most recently
-	// created entry.
-	mtx          sync.Mutex
-	zipWriter    *zip.Writer
-	fileWriter   io.WriteCloser // nil after Close
-	activeWriter *zipEntryWriter
+	// mtx guards the fields below,
+	// archive/zip.Writer is not safe for concurrent use.
+	mtx        sync.Mutex
+	tree       *dirtree.Tree // the entries written so far
+	zipWriter  *zip.Writer
+	fileWriter io.WriteCloser // nil after Close
 }
 
 // Prefix returns the URI prefix of the file system.
@@ -146,6 +396,7 @@ func NewWriter(file fs.File, id string) (*Writer, error) {
 	})
 	zipfs := &Writer{
 		paths:      fsimpl.PathHelper{URIPrefix: Prefix + id, Rooted: true},
+		tree:       dirtree.New(),
 		zipWriter:  zipWriter,
 		fileWriter: fileWriter,
 	}
@@ -169,7 +420,7 @@ func (f *Writer) ID() string {
 	return f.paths.URIPrefix
 }
 
-// Name returns "Zip writer filesystem" and the archive name.
+// Name returns "Zip writer filesystem" and the id of the archive.
 func (f *Writer) Name() string {
 	return "Zip writer filesystem " + path.Base(f.paths.URIPrefix)
 }
@@ -177,6 +428,10 @@ func (f *Writer) Name() string {
 // String returns the name of the file system and its prefix.
 func (f *Writer) String() string {
 	return f.Name() + " with prefix " + f.Prefix()
+}
+
+func (f *Writer) file(filePath string) fs.File {
+	return fs.File(f.paths.JoinCleanURI(filePath))
 }
 
 // checkClosed returns fs.ErrFileSystemClosed if the archive was closed.
@@ -193,15 +448,33 @@ func (f *Writer) checkClosedLocked() error {
 	return nil
 }
 
-// checkNoOpenWriterLocked returns an error if a previous OpenWriter entry is
-// still open. archive/zip only allows writing to the most recently created
-// entry, so a new entry must not be created until the previous writer is
-// closed. f.mtx must be held.
-func (f *Writer) checkNoOpenWriterLocked() error {
-	if f.activeWriter != nil && !f.activeWriter.closed {
-		return fmt.Errorf("%s: previous zip entry writer must be closed before opening another (zip entries are written sequentially)", f.Name())
+// checkNewLocked returns an error if an entry at filePath can't
+// be added to the archive, see the package documentation.
+// f.mtx must be held.
+func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
+	if err := f.checkClosedLocked(); err != nil {
+		return err
 	}
-	return nil
+	node, isAncestor, err := f.tree.Conflict(filePath)
+	switch {
+	case err != nil:
+		return fmt.Errorf("zipfs: %w", err)
+	case node == nil:
+		return nil
+	case isAncestor:
+		return fs.NewErrIsNotDirectory(f.file(node.Path))
+	case node.IsDir && !isDir:
+		return fs.NewErrIsDirectory(f.file(filePath))
+	default:
+		return fs.NewErrAlreadyExists(f.file(filePath))
+	}
+}
+
+// entryName returns the archive entry name of a file system path
+// that was validated with checkNewLocked or dirtree.Elements.
+func entryName(filePath string) string {
+	elements, _ := dirtree.Elements(filePath)
+	return strings.Join(elements, Separator)
 }
 
 // Stat is not possible for an archive that is being written.
@@ -228,46 +501,118 @@ func (f *Writer) OpenReader(filePath string) (io.ReadCloser, error) {
 	return nil, fs.ErrWriteOnlyFileSystem
 }
 
-// Touch writes an empty entry.
-func (f *Writer) Touch(filePath string, perm fs.Permissions) error {
+// writeFile writes a complete file entry.
+func (f *Writer) writeFile(filePath string, data []byte, perm fs.Permissions) error {
+	if filePath == "" {
+		return fs.ErrEmptyPath
+	}
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
-	if err := f.checkClosedLocked(); err != nil {
+	if err := f.checkNewLocked(filePath, false); err != nil {
 		return err
 	}
-	if err := f.checkNoOpenWriterLocked(); err != nil {
+	header := &zip.FileHeader{
+		Name:     entryName(filePath),
+		Method:   zip.Deflate,
+		Modified: time.Now(),
+	}
+	header.SetMode(perm.OrDefault(DefaultPermissions).FileMode(false))
+	w, err := f.zipWriter.CreateHeader(header)
+	if err != nil {
 		return err
 	}
-	// Create writes the (empty) entry header; it is finalized when the next
-	// entry is created or the archive is closed. No writer is handed out.
-	_, err := f.zipWriter.Create(strings.TrimPrefix(filePath, Separator))
+	_, err = w.Write(data)
+	if err != nil {
+		return err
+	}
+	_, err = f.tree.Add(filePath, false, int64(len(data)), header.Modified, nil)
 	return err
 }
 
-// MakeDir is a no-op: ZIP directories are implicit and created
-// from the path of any file written below them.
-func (f *Writer) MakeDir(dirPath string, perm fs.Permissions) error {
-	return f.checkClosed()
+// writeDirLocked writes a directory entry. f.mtx must be held.
+func (f *Writer) writeDirLocked(dirPath string, perm fs.Permissions) error {
+	header := &zip.FileHeader{
+		Name:     entryName(dirPath) + Separator,
+		Modified: time.Now(),
+	}
+	header.SetMode(perm.OrDefault(DefaultDirPermissions).FileMode(true))
+	_, err := f.zipWriter.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	_, err = f.tree.Add(dirPath, true, 0, header.Modified, nil)
+	return err
 }
 
-// OpenWriter creates an entry and returns its writer,
-// which must be closed before the next entry is created.
-func (f *Writer) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+// Touch writes an empty file entry.
+// It returns an error wrapping os.ErrExist if the file was already written.
+func (f *Writer) Touch(filePath string, perm fs.Permissions) error {
+	return f.writeFile(filePath, nil, perm)
+}
+
+// MakeDir writes a directory entry.
+// It returns an error wrapping os.ErrExist if the directory
+// was already written or is implied by a written entry.
+func (f *Writer) MakeDir(dirPath string, perm fs.Permissions) error {
+	if dirPath == "" {
+		return fs.ErrEmptyPath
+	}
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if err := f.checkNewLocked(dirPath, true); err != nil {
+		return err
+	}
+	return f.writeDirLocked(dirPath, perm)
+}
+
+// MakeAllDirs writes a directory entry for dirPath and each of its
+// parent directories that doesn't exist yet in the archive.
+// Existing directories are no error.
+func (f *Writer) MakeAllDirs(dirPath string, perm fs.Permissions) error {
+	if dirPath == "" {
+		return fs.ErrEmptyPath
+	}
+	elements, err := dirtree.Elements(dirPath)
+	if err != nil {
+		return fmt.Errorf("zipfs: %w", err)
+	}
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if err := f.checkClosedLocked(); err != nil {
-		return nil, err
+		return err
 	}
-	if err := f.checkNoOpenWriterLocked(); err != nil {
-		return nil, err
+	for i := range elements {
+		dir := strings.Join(elements[:i+1], Separator)
+		node := f.tree.Lookup(dir)
+		switch {
+		case node == nil:
+			if err := f.writeDirLocked(dir, perm); err != nil {
+				return err
+			}
+		case !node.IsDir:
+			return fs.NewErrIsNotDirectory(f.file(dir))
+		}
 	}
-	writer, err := f.zipWriter.Create(strings.TrimPrefix(filePath, Separator))
+	return nil
+}
+
+// OpenWriter returns a writer that buffers the file in memory
+// and writes it as archive entry on Close.
+// The writer implements fs.WriteAborter, Abort discards
+// the buffered file without writing an entry.
+func (f *Writer) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
+	}
+	f.mtx.Lock()
+	err := f.checkNewLocked(filePath, false)
+	f.mtx.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	w := &zipEntryWriter{zipfs: f, w: writer}
-	f.activeWriter = w
-	return w, nil
+	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+		return f.writeFile(filePath, data, perm)
+	}), nil
 }
 
 // Remove is not possible: entries can't be removed from an archive that is being written.
@@ -280,57 +625,19 @@ func (f *Writer) Remove(filePath string) error {
 
 // Close finalizes the archive, closes the underlying file
 // and unregisters the file system. Close is idempotent.
+// Files whose writers are still open are not written.
 func (f *Writer) Close() error {
 	f.mtx.Lock()
+	defer f.mtx.Unlock()
 	if f.fileWriter == nil {
-		f.mtx.Unlock()
 		return nil // already closed
 	}
 	fileWriter := f.fileWriter
 	f.fileWriter = nil
-	f.activeWriter = nil
-	f.mtx.Unlock()
 
 	fs.Unregister(f)
-	// Close of the zip.Writer finalizes the central directory and flushes
-	// any pending entry; closing the file releases the handle (required
+	// Close of the zip.Writer writes the central directory;
+	// closing the file releases the handle (required
 	// to remove the file on Windows).
 	return errors.Join(f.zipWriter.Close(), fileWriter.Close())
-}
-
-// zipEntryWriter is the io.WriteCloser returned by OpenWriter. An
-// archive/zip.Writer only allows writing to the most recently created entry,
-// and that entry is finalized when the next entry is created or the archive is
-// closed. This wrapper enforces the contract: writes fail once the entry has
-// been closed or superseded by a newer OpenWriter or Touch call, turning
-// what used to be silent archive corruption into a clear error.
-type zipEntryWriter struct {
-	zipfs  *Writer
-	w      io.Writer
-	closed bool
-}
-
-func (e *zipEntryWriter) Write(p []byte) (int, error) {
-	e.zipfs.mtx.Lock()
-	defer e.zipfs.mtx.Unlock()
-	if e.closed {
-		return 0, fmt.Errorf("%s: write to closed zip entry writer", e.zipfs.Name())
-	}
-	if e.zipfs.activeWriter != e {
-		return 0, fmt.Errorf("%s: write to superseded zip entry writer (zip entries must be written and closed sequentially)", e.zipfs.Name())
-	}
-	return e.w.Write(p)
-}
-
-func (e *zipEntryWriter) Close() error {
-	e.zipfs.mtx.Lock()
-	defer e.zipfs.mtx.Unlock()
-	if e.closed {
-		return nil
-	}
-	e.closed = true
-	if e.zipfs.activeWriter == e {
-		e.zipfs.activeWriter = nil
-	}
-	return nil
 }
