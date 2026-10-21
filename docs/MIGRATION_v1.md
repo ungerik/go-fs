@@ -5,6 +5,137 @@ mechanical way, and redesigns the implementer-facing `FileSystem` interface.
 Nobody outside this repository implements `FileSystem`, so this guide covers
 the consumer side; implementers read `docs/V1_ROADMAP.md`.
 
+Code that already uses v1.0.0-beta.1 reads
+[Upgrading from v1.0.0-beta.1](#upgrading-from-v100-beta1); the rest of the
+guide describes the way from v0.1 to the final v1 API.
+
+## Upgrading from v1.0.0-beta.1
+
+Almost every change below breaks compilation, so the compiler lists the call
+sites. The exceptions are marked as behaviour changes.
+
+### Constructors and registration
+
+`New…`/`Dial…` return the file system and never register it, `…AndRegister`
+registers and returns only an `error`. Temporary file systems are created,
+registered and closed explicitly:
+
+```go
+memFS, err := fs.NewMemFileSystem(nil)
+if err != nil {
+	return err
+}
+if err := fs.Register(memFS); err != nil {
+	return err
+}
+defer memFS.Close() // unregisters
+```
+
+| beta.1 | beta.2 |
+| ------ | ------ |
+| `fs.NewMemFileSystem(sep, files...)` (registered) | `fs.NewMemFileSystem(&fs.MemFileSystemOptions{Separator: sep}, files...)` + `fs.Register`; nil options = `/` and a random ID |
+| `memFS.WithID(id)`, `memFS.WithVolume(v)` | `MemFileSystemOptions.ID`, `.Volume`; `fs.NewMemFileSystemAndRegister(opts, files...) error` needs an ID |
+| `fs.NewSingleMemFileSystem(file)` | `fs.NewMemFileSystem(nil, file)` + `fs.Register` + `memFS.RootDir().Join(file.FileName)` |
+| `fs.NewStdFileSystemAndRegister(fsys, id) *StdFileSystem` | `… error`, needs an id; or `NewStdFileSystem` + `fs.Register` |
+| `fs.NewSubFileSystemAndRegister`, `fs.NewOverlayFileSystemAndRegister` returning the file system | return only `error` and need an id |
+| `zipfs.NewReader(file)`, `zipfs.NewWriter(file)`, same for `tarfs` (registered) | `NewReader(file, id)`, `NewWriter(file, id)` (`""` = random id) + `fs.Register` |
+| `multipartfs.FromRequestForm(r, maxMemory)`, `multipartfs.New(form)` (registered) | `multipartfs.NewFromRequest(r, maxMemory, id)`, `multipartfs.New(form, id) (…, error)` + `fs.Register` |
+| `httpfs.FileSystem`, `httpfs.FileSystemTLS`, `httpfs.Client` | `httpfs.Default`, `httpfs.DefaultTLS`; `httpfs.New(prefix, &httpfs.Options{Client: c})` / `NewAndRegister` for a prefix like `https://api.example.com/` |
+| `s3fs.NewAndRegister(client, bucket, readOnly) fs.FileSystem` | `s3fs.New(client, bucket, &s3fs.Options{ReadOnly: readOnly})` + `fs.Register`, or `NewAndRegister(…) error` |
+| `s3fs.NewLoadDefaultConfig(ctx, bucket, readOnly)` (registered) | `s3fs.NewLoadDefaultConfig(ctx, bucket, opts)` + `fs.Register` |
+| `s3fs.MultipartUploadThreshold`, `MultipartDownloadThreshold` | `s3fs.Options` fields (default 16 MiB) |
+| `azureblobfs.New/NewAndRegister(ctx, client, readOnly)`, `NewFromConnectionString(…, readOnly)` (registered) | `(ctx, client, &azureblobfs.Options{ReadOnly: …})`; `NewFromConnectionString` doesn't register |
+| `dropboxfs.NewAndRegister(ctx, token, cacheTimeout, mute) (fs.FileSystem, error)` | `dropboxfs.New(ctx, token, &dropboxfs.Options{CacheTimeout: …, Mute: …})` + `fs.Register`, or `NewAndRegister(…) error` |
+| `webdavfs.NewAndRegister` returning the file system | returns only `error` |
+| `sftpfs.Dial(ctx, addr, creds, hostKeyCallback, logger)` | `sftpfs.Dial(ctx, addr, &sftpfs.Options{Credentials: creds, HostKeyCallback: hk, Logger: logger})`; also `Username`, `Password`, `Auth`, `Timeout`, `KeepAlive`, `ConnectRetries`, `RetryBackoff`, `DialContext` |
+| `sftpfs.MaxConnectRetries`, `InitialRetryBackoff`, `URLHostKeyCallback` | `Options.ConnectRetries`, `RetryBackoff` (0 = default, negative = off), `HostKeyCallback` |
+| `ftpfs.Dial(ctx, addr, creds, opts)` | `ftpfs.Dial(ctx, addr, &ftpfs.Options{Credentials: creds, …})` |
+| `sftpfs`/`ftpfs`/`smbfs` `DialAndRegister` returning the file system | returns only `error`; `EnsureRegistered(ctx, addr, opts)` returns `free` |
+
+Behaviour changes:
+
+- `fs.Register` returns an error (`fs.ErrAlreadyRegistered`) when another file
+  system has the prefix, and is not reference counted any more: registering
+  the same file system twice is a no-op and one `Unregister` removes it.
+  Shared, reference counted file systems use `fs.EnsureRegistered` or the
+  `EnsureRegistered` of the backends.
+- A URI matches a prefix only at a boundary: `s3://logs` no longer serves
+  `s3://logs-archive/...`.
+- `fs.File("sftp://user:password@host/path")` and the same for `ftp://` no
+  longer dial a connection on first use (that made every imported backend an
+  SSRF risk). Call `sftpfs.EnsureRegistered(ctx, "sftp://user:password@host",
+  opts)` once and use `sftp://user@host/path`.
+- With a username, the webdavfs prefix is `webdav://user@host/base`, so
+  stored URIs change. An `Authorization` header in `webdavfs.Options.Header`
+  disables basic auth.
+
+### Errors
+
+- The typed errors are created for a `FileReader`: `fs.NewErrDoesNotExist(file)`
+  accepts a `File` or a `MemFile`. `File()` returns `(fs.File, bool)`,
+  `FileReader()` the passed reader. `NewErrIsDirectory`/`NewErrIsNotDirectory`
+  take a `FileReader` instead of `any`.
+- Match typed errors with `errors.Is(err, fs.ErrIsDirectory{})` (any value of
+  the type matches); `os.ErrNotExist`, `os.ErrExist` and `os.ErrPermission`
+  still work for the types that wrap them.
+- Behaviour: `fs.ErrEmptyPath` no longer wraps `os.ErrNotExist`, so
+  `fs.RemoveErrDoesNotExist(fs.File("").Remove())` is an error now.
+- Behaviour: a File with an unregistered prefix returns an error wrapping
+  `fs.ErrInvalidFileSystem` (it said "write-only" before) that does not wrap
+  `os.ErrNotExist`.
+- Behaviour: removing a non-empty directory returns `fs.ErrDirectoryNotEmpty`
+  on every file system.
+
+### File, FileReader, MemFile and package functions
+
+| beta.1 | beta.2 |
+| ------ | ------ |
+| `f.Rename(name)`, `f.Renamef(format, …)` | `f.Rename(ctx, name)`, `f.Renamef(ctx, format, …)` |
+| `f.ReadSymbolicLink() (fs.File, error)` | `(string, error)`, the raw target |
+| `f.Glob(ctx, p) (iter.Seq2[File, []string], error)`, `fs.Glob`, `MustGlob` | `iter.Seq2[fs.File, error]`; `MustGlob` removed |
+| `f.WriteJSON(ctx, v, "  ")`, `WriteXML`, `MemFile.WriteJSON`, `NewMemFileWriteJSON(name, v, "  ")` | `WriteJSONIndent(ctx, v, "  ")`, `WriteXMLIndent`, `NewMemFileWriteJSONIndent`; `WriteJSON(ctx, v, perm...)` |
+| `fs.ServeFileHTTP(w, r, file)`, `ServeFileHTTPHandler(file)` | `(w, r, file, "")` and `(file, "")`, `""` detects the content type |
+| `fs.TempFile()`, `fs.CreateTempFile()` | `fs.TempFile("")`, `fs.CreateTempFile("")` |
+| `fs.ContentHashFuncFrom(sha256.New())` | `fs.ContentHashFuncFrom(sha256.New)` |
+| `fs.CopyFileBuf(ctx, src, dest, &buf)` | `fs.CopyFileBuf(ctx, src, dest, buf)` with a `[]byte` (nil allocates) |
+| `fs.ReadAllContext(ctx, r)`, `fs.WriteAllContext(ctx, w, data)` | `fs.ReadAll(ctx, r)`, `fs.WriteAll(ctx, w, data)` |
+| `fs.Remove(uris...)`, `fs.RemoveFile(f)` | `fs.RemoveFiles(files...)`, `fs.File.Remove` as callback |
+| `fs.ReadSeekCloser` | `fs.ReadAtSeekCloser` |
+| `f.SetXAttr(name, data, xattr.XATTR_CREATE)` | `f.SetXAttr(name, data, fs.XAttrCreate)` |
+| `perm.CanUserRead()` and the other `Can…` methods | `perm.Can(fs.UserRead)` |
+| `fs.Event` values from fsnotify | `fs.EventCreate`, `EventWrite`, `EventRemove`, `EventRename`, `EventChmod` |
+
+Behaviour changes:
+
+- `Move`, `MoveTo`, `Rename` and `CopyFile` onto an existing directory fail
+  (`os.ErrExist`, `fs.ErrIsDirectory` for `CopyFile`) on every file system
+  instead of merging, replacing or deleting it; an existing file is replaced.
+  Moving a directory into itself fails with an error wrapping `os.ErrInvalid`.
+- A failed or canceled copy aborts uploads that commit on `Close` and never
+  deletes the source of a move.
+- `MemFile.Stat()` has a zero `ModTime`; `MemFile.Dir()` of `"a/b/"` is `"a/"`.
+- `File.Size()` is 0 for directories; `ServeFileHTTP` answers a directory
+  with 404.
+- `fs.CopyRecursive` patterns filter only files, sub-directories are always
+  copied.
+- `File.Ext()` of an HTTP URL ignores the query: `report.pdf?x=1` is `.pdf`.
+- Local `OpenReader` of a directory fails with `fs.ErrIsDirectory`; a leading
+  `~name` is not expanded any more (only `~` and `~/…`).
+- MemFileSystem copies data in `ReadAll`/`WriteAll` and gives readers a
+  snapshot; `ListDir` lists sorted by name.
+- s3fs: objects written by v0 with a leading `/` in the key are not visible,
+  see "Migrating from v0" in `s3fs/README.md`.
+
+### FileSystem implementations
+
+`MoveFileSystem.Move` and `TruncateFileSystem.Truncate` take a ctx,
+`SymbolicLinkFileSystem.Lstat` replaces `IsSymbolicLink`, `SetXAttr` takes
+`fs.XAttrFlags`, `RenameFileSystem` and `ListDirMaxFileSystem` are removed,
+`fsimpl.PathHelper` has no `IsAbsPath`/`AbsPath`/`IsHidden`, and
+`fstest.DockerAvailable`/`DockerSetupFailed` are internal. Writers that commit
+on `Close` should implement `fs.WriteAborter`. Run `fstest.RunConformance`,
+which checks the new contracts.
+
 ## The context rule
 
 A method takes `ctx context.Context` as its first parameter only if it is a
@@ -28,9 +159,10 @@ survives under the short name.
 | `f.ListDirInfoRecursive(cb)`            | `f.ListDirInfoRecursive(ctx, cb)`            |
 | `f.ListDirMax(n)` / `...Context(ctx, n)` | `f.ListDirMax(ctx, n)`                      |
 | `f.ListDirRecursiveMax(n)`              | `f.ListDirRecursiveMax(ctx, n)`              |
-| `f.Glob(p)`, `f.MustGlob(p)`, `fs.Glob(p)`, `fs.MustGlob(p)` | same with `ctx` first |
+| `f.Glob(p)`, `fs.Glob(p)` | `f.Glob(ctx, p)`, `fs.Glob(ctx, p)` yield `(File, error)`; `MustGlob` is removed |
 | `f.Truncate(size)`                      | `f.Truncate(ctx, size)`                      |
 | `f.MoveTo(dest)`                        | `f.MoveTo(ctx, dest)`                        |
+| `f.Rename(name)`, `f.Renamef(...)`      | `f.Rename(ctx, name)`, `f.Renamef(ctx, ...)` |
 | `f.RemoveRecursive()` / `...Context`    | `f.RemoveRecursive(ctx)`                     |
 | `f.RemoveDirContentsRecursive()`        | `f.RemoveDirContentsRecursive(ctx)`          |
 | `f.RemoveDirContents(patterns...)`      | `f.RemoveDirContents(ctx, patterns...)`      |
@@ -40,7 +172,7 @@ survives under the short name.
 
 Unchanged (no ctx): `Stat`, `Info`, `Exists`, `CheckExists`, `IsDir`,
 `CheckIsDir`, `Size`, `Modified`, `Permissions`, `Open*`, `Touch`, `MakeDir`,
-`MakeAllDirs`, `Remove`, `Rename`, `Renamef`, `User`/`Group`, `*XAttr`,
+`MakeAllDirs`, `Remove`, `User`/`Group`, `*XAttr`,
 symbolic links, `Watch`, `IsEmptyDir`, `IsReadable`, `IsWritable`,
 `IsHidden`, all path methods. `Append`, `AppendString`, `ReadJSON`, `WriteJSON`,
 `ReadXML`, `WriteXML`, `ReadAllContentHash`, `fs.Move`, `fs.CopyFile`,
@@ -52,35 +184,41 @@ took a context.
 
 ## Backends
 
-- `sftpfs`: `fs.File("sftp://user:password@host/path")` (credentials in the
-  URI) needs `sftpfs.URLHostKeyCallback` to be set, for example to
-  `sftpfs.AcceptAnyHostKey` for the previous unverified behaviour. `Dial`,
-  `DialAndRegister` and `EnsureRegistered` are unchanged.
-- `ftpfs`: the last parameter of `Dial`, `DialAndRegister` and
-  `EnsureRegistered` is `*ftpfs.Options` instead of `debugOut io.Writer`;
-  `nil` keeps compiling and means defaults. FTPS servers with self-signed
-  certificates need `&ftpfs.Options{InsecureSkipVerify: true}` (the old code
-  never verified certificates). `ftps://host` connects with explicit TLS on
-  port 21; use `ftps://host:990` for implicit TLS.
-- `dropboxfs`: `NewAndRegister(ctx, token, cacheTimeout, mute)` takes a
-  context and returns `(fs.FileSystem, error)`; the prefix is
+Every backend constructor follows one rule: `New`/`Dial` return the file
+system and an error without registering it, `NewAndRegister`/`DialAndRegister`
+register and return only an error, and the configuration is a per-instance
+`*Options` value (nil for defaults). The tables in
+[Upgrading from v1.0.0-beta.1](#upgrading-from-v100-beta1) list the exact
+signatures. Changes compared to v0.1:
+
+- `sftpfs`: `Dial(ctx, address, &sftpfs.Options{...})`. Host keys are verified
+  by `Options.HostKeyCallback`, a nil callback fails the dial instead of
+  accepting any key. URIs with credentials are no longer dialed on first
+  use; call `EnsureRegistered(ctx, "sftp://user:password@host", opts)` once.
+- `ftpfs`: `Dial(ctx, address, &ftpfs.Options{...})` with the credentials in
+  the options. FTPS verifies certificates unless
+  `Options.InsecureSkipVerify` is set. `ftps://host` connects with explicit
+  TLS on port 21; use `ftps://host:990` for implicit TLS.
+- `dropboxfs`: `New(ctx, token, opts)` fetches the account; the prefix is
   `dropbox://<account id>` instead of a random string, so URIs can be
   persisted.
+- `s3fs`, `azureblobfs`: `New(...)` with `Options.ReadOnly`; s3fs objects
+  written by v0 have keys with a leading `/`, see "Migrating from v0" in
+  `s3fs/README.md`.
 - `zipfs`: the mode-switching `ZipFileSystem` is split into `zipfs.Reader`
-  and `zipfs.Writer`; `NewReaderFileSystem` is `zipfs.NewReader` and
-  `NewWriterFileSystem` is `zipfs.NewWriter`. A `Reader` has no write
-  methods and a `Writer` no read methods, so the wrong direction reports
-  `fs.ErrReadOnlyFileSystem` / `fs.ErrWriteOnlyFileSystem` instead of
-  "does not exist".
-- `multipartfs`: `EscapePath` is removed (it was never applied
-  consistently); files uploaded under an already used name now get a unique
-  name (`a.txt`, `a (2).txt`, ...) instead of shadowing each other, and
-  names that are not path elements (`.`, `..`) become `unnamed`. The
-  directory name of a form field is escaped (`%` as `%25`, `/` as `%2F`,
-  `.` and `..` as `%2E` and `%2E%2E`), file names are used as they are. Every
-  method returns `fs.ErrFileSystemClosed` after `Close`; parts small enough
-  to stay in memory used to be served afterwards. The new `multipartfs.New`
-  wraps a `*multipart.Form` the caller parsed.
+  and `zipfs.Writer` (`NewReader(file, id)`, `NewWriter(file, id)`). A
+  `Reader` has no write methods and a `Writer` no read methods, so the wrong
+  direction reports `fs.ErrReadOnlyFileSystem` / `fs.ErrWriteOnlyFileSystem`
+  instead of "does not exist".
+- `multipartfs`: `NewFromRequest(r, maxMemory, id)` replaces
+  `FromRequestForm`, `New(form, id)` wraps a `*multipart.Form` the caller
+  parsed; both need `fs.Register`. `EscapePath` is removed (it was never
+  applied consistently); files uploaded under an already used name get a
+  unique name (`a.txt`, `a (2).txt`, ...) instead of shadowing each other,
+  and names that are not path elements (`.`, `..`) become `unnamed`. The
+  directory name of a form field is escaped (`%` as `%25`, `/` as `%2F`, `.`
+  and `..` as `%2E` and `%2E%2E`), file names are used as they are. Every
+  file method returns `fs.ErrFileSystemClosed` after `Close`.
 
 ## Removed
 
@@ -103,7 +241,9 @@ took a context.
 - `File.RemoveRecursive` does not fail for a missing path.
 - `File.IsWritable` is also true for an existing writable directory.
 - `File.MoveTo` with an existing destination directory moves into it (as
-  before); backends now receive the final path.
+  before); backends now receive the final path. `Move`, `Rename` and
+  `CopyFile` onto an existing directory at the final path fail instead of
+  merging into it.
 - `File.IsSymbolicLink` is `false` on file systems without symbolic link
   support instead of calling the backend.
 - A `File` with a scheme is URL-decoded once when parsed; a scheme-less local
@@ -114,13 +254,15 @@ took a context.
   escape the path with `fsimpl.EscapeURIPath`, or use `File.Join`.
 - `fs.MakeTempDir` uses `os.MkdirTemp`; the new `fs.CreateTempFile` creates a
   temporary file atomically, `fs.TempFile` still only returns a path.
-- Error strings and types are unchanged, but every file system now satisfies
-  `errors.Is(err, os.ErrNotExist)` / `os.ErrExist` / `fs.ErrReadOnlyFileSystem`
-  / `fs.ErrWriteOnlyFileSystem` / `fs.ErrFileSystemClosed` consistently.
+- Every file system satisfies `errors.Is(err, os.ErrNotExist)` /
+  `os.ErrExist` / `fs.ErrReadOnlyFileSystem` / `fs.ErrWriteOnlyFileSystem` /
+  `fs.ErrFileSystemClosed` / `fs.ErrIsDirectory{}` / `fs.ErrDirectoryNotEmpty{}`
+  consistently; `fs.ErrEmptyPath` does not wrap `os.ErrNotExist`.
 
 ## Mechanical migration
 
-Most call sites can be rewritten with `gofmt -r` or sed. The rewrites below
+Most call sites can be rewritten with `gofmt -r` or the `perl -pi` commands
+below (they work with the BSD and GNU tools alike). The rewrites below
 assume a `ctx` variable is in scope; in tests use `t.Context()` (but
 `context.Background()` inside `t.Cleanup`, where the test context is already
 cancelled):
@@ -131,24 +273,24 @@ for m in ReadAll ReadAllString ContentHash WriteAll WriteAllString \
          ListDir ListDirIter ListDirInfo ListDirRecursive ListDirRecursiveIter \
          ListDirInfoRecursive ListDirMax ListDirRecursiveMax RemoveRecursive \
          RemoveDirContentsRecursive RemoveDirContents; do
-  find . -name '*.go' -exec sed -i '' "s/\.${m}Context(/.${m}(/g" {} +
+  find . -name '*.go' -exec perl -pi -e "s/\\.${m}Context\\(/.${m}(/g" {} +
 done
 
 # context-less variants that gained a ctx parameter
-find . -name '*.go' -exec sed -i '' \
-  -e 's/\.ReadAll()/.ReadAll(ctx)/g' \
-  -e 's/\.ReadAllString()/.ReadAllString(ctx)/g' \
-  -e 's/\.ContentHash()/.ContentHash(ctx)/g' \
-  -e 's/\.RemoveRecursive()/.RemoveRecursive(ctx)/g' \
-  -e 's/\.RemoveDirContentsRecursive()/.RemoveDirContentsRecursive(ctx)/g' \
-  -e 's/\.ListDir(func/.ListDir(ctx, func/g' \
-  -e 's/\.ListDirInfo(func/.ListDirInfo(ctx, func/g' \
-  -e 's/\.ListDirRecursive(func/.ListDirRecursive(ctx, func/g' \
+find . -name '*.go' -exec perl -pi \
+  -e 's/\.ReadAll\(\)/.ReadAll(ctx)/g;' \
+  -e 's/\.ReadAllString\(\)/.ReadAllString(ctx)/g;' \
+  -e 's/\.ContentHash\(\)/.ContentHash(ctx)/g;' \
+  -e 's/\.RemoveRecursive\(\)/.RemoveRecursive(ctx)/g;' \
+  -e 's/\.RemoveDirContentsRecursive\(\)/.RemoveDirContentsRecursive(ctx)/g;' \
+  -e 's/\.ListDir\(func/.ListDir(ctx, func/g;' \
+  -e 's/\.ListDirInfo\(func/.ListDirInfo(ctx, func/g;' \
+  -e 's/\.ListDirRecursive\(func/.ListDirRecursive(ctx, func/g;' \
   {} +
 ```
 
 `WriteAll`, `WriteAllString`, `ListDirMax`, `ListDirIter`, `Glob`, `Truncate`,
-`MoveTo` and `RemoveDirContents` take other arguments before, so their
+`MoveTo`, `Rename` and `RemoveDirContents` take other arguments before, so their
 call sites are easiest to fix from the compiler errors: insert `ctx, ` as the
 first argument. Callers of `FileSystem` implementation methods with the same
 names (`fileSystem.WriteAll(ctx, path, ...)`) already pass a context and must
