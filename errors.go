@@ -59,8 +59,18 @@ const (
 //
 // The typed file errors store the FileReader they were created for,
 // usually a File. FileReader returns it, File returns it if it is a File.
-// The FileReader is stored behind a pointer, so the errors stay comparable
-// even for FileReaders that are not, like MemFile, and errors.Is never panics.
+//
+// The FileReader is stored as *FileReader, a pointer to an interface,
+// although an interface field could hold nil as well. The reason is
+// comparability: errors.Is(err, target) compares err == target before
+// it calls the Is method, because a struct with an interface field is
+// a comparable type. Comparing two errors holding a non-comparable
+// FileReader like MemFile (which contains a byte slice) would panic
+// with "comparing uncomparable type", and no Is method can prevent that
+// because it is called after the comparison. A pointer compares by address
+// and never panics; the Is methods then match any error of the same type.
+// The price is that two separately created errors are never ==,
+// use errors.Is or errors.As to check them.
 
 // RemoveErrDoesNotExist returns nil if err wraps os.ErrNotExist,
 // else err will be returned unchanged.
@@ -81,7 +91,7 @@ func RemoveErrDoesNotExist(err error) error {
 //
 // Implements http.Handler by responding with http.NotFound.
 type ErrDoesNotExist struct {
-	file *FileReader // pointer to stay comparable for every FileReader
+	file *FileReader // pointer to stay comparable, see "Typed file errors"
 }
 
 // NewErrDoesNotExist returns a new ErrDoesNotExist for a File
@@ -147,7 +157,7 @@ func (err ErrDoesNotExist) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 // Implements http.Handler by responding with 403 Forbidden.
 type ErrPermission struct {
-	file *FileReader // pointer to stay comparable for every FileReader
+	file *FileReader // pointer to stay comparable, see "Typed file errors"
 }
 
 // NewErrPermission returns a new ErrPermission for a File
@@ -202,7 +212,7 @@ func (err ErrPermission) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 //	errors.Is(err, os.ErrExist)
 type ErrAlreadyExists struct {
-	file *FileReader // pointer to stay comparable for every FileReader
+	file *FileReader // pointer to stay comparable, see "Typed file errors"
 }
 
 // NewErrAlreadyExists returns a new ErrAlreadyExists for a File
@@ -252,7 +262,7 @@ func (err ErrAlreadyExists) File() (file File, ok bool) {
 //
 //	errors.Is(err, fs.ErrIsDirectory{})
 type ErrIsDirectory struct {
-	file *FileReader // pointer to stay comparable for every FileReader
+	file *FileReader // pointer to stay comparable, see "Typed file errors"
 }
 
 // NewErrIsDirectory returns a new ErrIsDirectory for a File
@@ -297,7 +307,7 @@ func (err ErrIsDirectory) File() (file File, ok bool) {
 //
 //	errors.Is(err, fs.ErrIsNotDirectory{})
 type ErrIsNotDirectory struct {
-	file *FileReader // pointer to stay comparable for every FileReader
+	file *FileReader // pointer to stay comparable, see "Typed file errors"
 }
 
 // NewErrIsNotDirectory returns a new ErrIsNotDirectory for a File
@@ -342,7 +352,7 @@ func (err ErrIsNotDirectory) File() (file File, ok bool) {
 //
 //	errors.Is(err, fs.ErrDirectoryNotEmpty{})
 type ErrDirectoryNotEmpty struct {
-	file *FileReader // pointer to stay comparable for every FileReader
+	file *FileReader // pointer to stay comparable, see "Typed file errors"
 }
 
 // NewErrDirectoryNotEmpty returns a new ErrDirectoryNotEmpty for a File
