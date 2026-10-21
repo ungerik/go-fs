@@ -21,11 +21,25 @@ func JoinCleanFilePath(uriParts ...string) File {
 }
 
 // Move moves and/or renames source to destination.
-// source and destination can be files or directories.
-// If source is a directory, it will be moved with all its contents.
+// source and destination can be files or directories,
+// a directory is moved with all its contents.
+//
+// If destination is an existing directory, then source is moved into it
+// keeping its name, else destination is the new path of source.
+// An existing file at that path is replaced ([ErrIsNotDirectory]
+// if source is a directory), an existing directory is an error
+// wrapping [os.ErrExist] and is neither merged nor deleted.
+// Moving a directory into itself or one of its sub-directories
+// is an error wrapping [os.ErrInvalid].
+//
 // If source and destination are using the same FileSystem,
-// then FileSystem.Move will be used, else source will be
-// copied recursively first to destination and then deleted.
+// then [MoveFileSystem.Move] is used if implemented.
+// Else source is copied to the destination and removed
+// after the copy completely succeeded, so a failed or canceled copy,
+// for example a failed upload, never deletes the source.
+// Between different file systems symbolic links are followed:
+// the destination gets a copy of what they point to,
+// but only the links are removed from the source.
 //
 // When source and destination resolve to the same location on the same
 // FileSystem, Move returns nil without touching the file. This matches
@@ -50,38 +64,17 @@ func Move(ctx context.Context, source, destination File) error {
 	if srcFS == destFS {
 		return fsMove(ctx, srcFS, srcPath, destPath)
 	}
-	err := CopyRecursive(ctx, source, destination)
-	if err != nil {
-		return err
-	}
-	return source.RemoveRecursive(ctx)
-}
-
-// Remove removes all files with fileURIs.
-// If a file does not exist, then it is skipped and not reported as error.
-func Remove(fileURIs ...string) error {
-	for _, uri := range fileURIs {
-		err := File(uri).Remove()
-		if RemoveErrDoesNotExist(err) != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// RemoveFile removes a single file.
-// It's just a wrapper for calling file.Remove(),
-// useful mostly as callback for methods that list files
-// to delete all files of a certain pattern.
-// Or as a more elegant way to remove a file passed as string literal path:
-//
-//	fs.RemoveFile("/my/hardcoded.path")
-func RemoveFile(file File) error {
-	return file.Remove()
+	return moveByCopy(ctx, srcFS, srcPath, destFS, destPath)
 }
 
 // RemoveFiles removes all files.
 // If a file does not exist, then it is skipped and not reported as error.
+//
+// To remove a single file, use [File.Remove].
+// As method expression it can be passed as callback
+// to the listing methods to remove the listed files:
+//
+//	err := dir.ListDir(ctx, fs.File.Remove, "*.tmp")
 func RemoveFiles(files ...File) error {
 	for _, file := range files {
 		err := file.Remove()

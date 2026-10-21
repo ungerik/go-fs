@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -99,6 +102,27 @@ func writeRandomDirFiles(dir File, subDirDepth int) (err error) {
 	}
 
 	return nil
+}
+
+// Test_IdenticalDirContents_DirectorySizes compares identical trees of
+// a MemFileSystem and the local file system, which report different
+// sizes for directories.
+func Test_IdenticalDirContents_DirectorySizes(t *testing.T) {
+	mem := newTestMemFS(t, NewMemFile("/d/sub/a.txt", []byte("1")))
+	local := File(t.TempDir())
+	require.NoError(t, local.Join("sub").MakeDir())
+	require.NoError(t, local.Join("sub", "a.txt").WriteAllString(t.Context(), "1"))
+
+	identical, err := IdenticalDirContents(t.Context(), mem.RootDir().Join("d"), local, true)
+	require.NoError(t, err)
+	require.True(t, identical, "directory sizes must not be compared")
+}
+
+func Test_IdenticalDirContents_ListingErrorOfDirB(t *testing.T) {
+	mem := newTestMemFS(t, NewMemFile("/a/file.txt", []byte("1")))
+
+	_, err := IdenticalDirContents(t.Context(), mem.RootDir().Join("a"), mem.RootDir().Join("missing"), false)
+	require.ErrorIs(t, err, os.ErrNotExist, "the listing error of dirB must be returned")
 }
 
 func Test_IdenticalDirContents(t *testing.T) {

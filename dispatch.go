@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -321,7 +322,26 @@ func fsWriteAll(ctx context.Context, fileSystem FileSystem, filePath string, dat
 	if err != nil {
 		return err
 	}
-	err = WriteAll(ctx, writer, data)
+	return commitOrAbort(ctx, writer, WriteAll(ctx, writer, data))
+}
+
+// commitOrAbort finishes writing to writer after the write returned err.
+//
+// If err is not nil or ctx is canceled, the written data must not be committed:
+// writer is aborted if it implements [WriteAborter], else it is closed,
+// and err is returned joined with the error of Abort or Close.
+// Else writer is closed, committing the data, and the error of Close
+// is returned, which reports for example a failed upload.
+func commitOrAbort(ctx context.Context, writer io.WriteCloser, err error) error {
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil {
+		return writer.Close()
+	}
+	if aborter, ok := writer.(WriteAborter); ok {
+		return errors.Join(err, aborter.Abort())
+	}
 	return errors.Join(err, writer.Close())
 }
 
@@ -372,8 +392,7 @@ func fsAppend(ctx context.Context, fileSystem FileSystem, filePath string, data 
 		if err != nil {
 			return err
 		}
-		err = WriteAll(ctx, writer, data)
-		return errors.Join(err, writer.Close())
+		return commitOrAbort(ctx, writer, WriteAll(ctx, writer, data))
 	}
 	// Emulate append by reading the whole file
 	// and writing it back with the appended data.
@@ -531,30 +550,35 @@ func fsRemoveAll(ctx context.Context, fileSystem FileSystem, filePath string) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	info, err := w.Stat(filePath)
+	// Lstat, so that a symbolic link is removed
+	// and not the files it points to
+	info, err := fsLstat(w, filePath)
 	if err != nil {
 		return RemoveErrDoesNotExist(err)
 	}
-	if info.IsDir {
-		err = fsRemoveDirContents(ctx, w, filePath)
-		if err != nil {
+	return removeAll(ctx, w, filePath, info)
+}
+
+// removeAll removes filePath, described by info, and if it is
+// a directory everything in it. Symbolic links are removed,
+// never followed: ListDir describes a link itself with IsSymlink,
+// even if IsDir is set for a link to a directory.
+func removeAll(ctx context.Context, w WriteFileSystem, filePath string, info *FileInfo) error {
+	if info.IsDir && !info.IsSymlink {
+		err := fsListDir(ctx, w, filePath, nil, func(entry *FileInfo) error {
+			// Ignore entries that have been deleted concurrently,
+			// after all we wanted to get rid of them in the first place
+			return RemoveErrDoesNotExist(removeAll(ctx, w, entry.File.Path(), entry))
+		})
+		if RemoveErrDoesNotExist(err) != nil {
 			return err
 		}
 	}
 	return RemoveErrDoesNotExist(w.Remove(filePath))
 }
 
-// fsRemoveDirContents removes all entries of dirPath recursively.
-func fsRemoveDirContents(ctx context.Context, w WriteFileSystem, dirPath string) error {
-	return fsListDir(ctx, w, dirPath, nil, func(info *FileInfo) error {
-		// Ignore entries that have been deleted concurrently,
-		// after all we wanted to get rid of them in the first place
-		return RemoveErrDoesNotExist(fsRemoveAll(ctx, w, info.File.Path()))
-	})
-}
-
 // fsMove moves srcPath to destPath within one file system,
-// destPath being the final path.
+// destPath being the final path, see [MoveFileSystem.Move].
 func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string) error {
 	if srcPath == "" || destPath == "" {
 		return ErrEmptyPath
@@ -566,27 +590,131 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 	if srcPath == destPath {
 		return nil
 	}
+	// Checked for native implementations too, a copying
+	// implementation would recurse into the copy.
+	if isSubPath(fileSystem, srcPath, destPath) {
+		return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, fsFile(fileSystem, srcPath), fsFile(fileSystem, destPath))
+	}
 	if m, ok := w.(MoveFileSystem); ok {
 		return m.Move(ctx, srcPath, destPath)
 	}
 	// Emulate by copying and removing
-	src, dest := fsFile(fileSystem, srcPath), fsFile(fileSystem, destPath)
-	err = CopyRecursive(ctx, src, dest)
+	return moveByCopy(ctx, fileSystem, srcPath, fileSystem, destPath)
+}
+
+// moveByCopy moves srcPath of srcFS to destPath of destFS by copying it
+// and removing the source after the copy completely succeeded,
+// so a failed or canceled copy never deletes the source.
+// The partial copy of a failed directory copy is left at destPath.
+//
+// destPath is the final path with the overwrite semantics of
+// [MoveFileSystem.Move]: an existing file is replaced
+// ([ErrIsNotDirectory] if the source is a directory),
+// an existing directory is an [ErrAlreadyExists] and neither merged nor deleted.
+// A directory moved into itself within one file system must have been
+// rejected by the caller, see fsMove.
+//
+// Within a file system that implements [SymbolicLinkFileSystem],
+// symbolic links are copied as links with their target stored verbatim,
+// like [os.Rename] keeps them. Between file systems the target of a link
+// would be a path of the wrong file system, so what the link points to is copied.
+// Removing the source never follows symbolic links, see fsRemoveAll.
+func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The source must be removable after the copy
+	if _, err := fsWritable(srcFS); err != nil {
+		return err
+	}
+	if _, err := fsWritable(destFS); err != nil {
+		return err
+	}
+	srcInfo, err := fsLstat(srcFS, srcPath)
 	if err != nil {
 		return err
 	}
-	return fsRemoveAll(ctx, fileSystem, srcPath)
+	c := treeCopier{ctx: ctx}
+	if srcFS == destFS {
+		c.links, _ = srcFS.(SymbolicLinkFileSystem)
+	}
+	copyLink := srcInfo.IsSymlink && c.links != nil
+	if srcInfo.IsSymlink && !copyLink {
+		// Copy what the link points to
+		srcInfo, err = fsStat(srcFS, srcPath)
+		if err != nil {
+			return err
+		}
+	}
+	srcIsDir := srcInfo.IsDir && !copyLink
+	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
+
+	destInfo, err := fsLstat(destFS, destPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, ErrWriteOnlyFileSystem):
+		// Nothing to replace, or a write-only file system that can't tell
+	case err != nil:
+		return err
+	case destInfo.IsDir && !destInfo.IsSymlink:
+		return NewErrAlreadyExists(dest)
+	case srcIsDir:
+		return NewErrIsNotDirectory(dest)
+	case destInfo.IsSymlink:
+		// Replace the link, not the file it points to
+		if err := fsRemove(destFS, destPath); err != nil {
+			return err
+		}
+	}
+
+	switch {
+	case copyLink:
+		err = c.copyLink(src, dest)
+	case srcIsDir:
+		err = c.copyDir(src, dest)
+	default:
+		err = copyFileTo(ctx, src, srcInfo.Permissions, dest, &c.buf, nil, true)
+	}
+	if err != nil {
+		return err
+	}
+	return fsRemoveAll(ctx, srcFS, srcPath)
+}
+
+// isSubPath reports if filePath is inside the directory dirPath
+// of fileSystem, not counting dirPath itself.
+// A path without a volume name is on the same volume
+// as a path with one.
+func isSubPath(fileSystem FileSystem, dirPath, filePath string) bool {
+	dirVolume := dirPath[:fsVolumeLen(fileSystem, dirPath)]
+	fileVolume := filePath[:fsVolumeLen(fileSystem, filePath)]
+	if dirVolume != "" && fileVolume != "" && dirVolume != fileVolume {
+		return false
+	}
+	dir := fsSplitPath(fileSystem, dirPath)
+	file := fsSplitPath(fileSystem, filePath)
+	return len(file) > len(dir) && slices.Equal(dir, file[:len(dir)])
+}
+
+// isValidName reports if name can be the name of a directory entry
+// of fileSystem: not empty, not "." or ".." and without a separator.
+// A slash is a separator for every file system,
+// because CleanPath treats it as one.
+func isValidName(fileSystem FileSystem, name string) bool {
+	switch {
+	case name == "", name == ".", name == "..":
+		return false
+	case strings.Contains(name, "/"), strings.Contains(name, fileSystem.Separator()):
+		return false
+	}
+	return true
 }
 
 func fsRename(ctx context.Context, fileSystem FileSystem, filePath, newName string) (newPath string, err error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
 	}
-	switch {
-	case newName == "", newName == ".", newName == "..":
+	if !isValidName(fileSystem, newName) {
 		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
-	case strings.Contains(newName, fileSystem.Separator()) || strings.Contains(newName, "/"):
-		return "", fmt.Errorf("%w: new name %q for Rename contains a path separator", os.ErrInvalid, newName)
 	}
 	dir, _ := fsSplitDirAndName(fileSystem, filePath)
 	newPath = fileSystem.CleanPath(dir, newName)
@@ -620,11 +748,39 @@ func fsListDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath stri
 			return callback(completeFileInfo(fileSystem, dirPath, info))
 		})
 	}
+	err := listDirRecursive(ctx, fileSystem, dirPath, patterns, func(info *FileInfo) error {
+		if err := callback(info); err != nil {
+			return callbackError{err}
+		}
+		return nil
+	})
+	var cbErr callbackError
+	if errors.As(err, &cbErr) {
+		return cbErr.err
+	}
+	return err
+}
+
+// callbackError marks an error returned by the callback of a listing,
+// so that it can be told apart from the errors of the listing itself.
+type callbackError struct{ err error }
+
+func (e callbackError) Error() string { return e.err.Error() }
+func (e callbackError) Unwrap() error { return e.err }
+
+// listDirRecursive emulates ListDirRecursive with ListDir.
+// The callback must return its errors as callbackError.
+func listDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	return fsListDir(ctx, fileSystem, dirPath, nil, func(info *FileInfo) error {
 		if info.IsDir {
 			// Not returning directories, but recursing into them.
-			// Don't mind directories that have been deleted while iterating.
-			return RemoveErrDoesNotExist(fsListDirRecursive(ctx, fileSystem, info.File.Path(), patterns, callback))
+			err := listDirRecursive(ctx, fileSystem, info.File.Path(), patterns, callback)
+			if errors.As(err, new(callbackError)) {
+				return err
+			}
+			// Don't mind directories that have been deleted while iterating,
+			// but never ignore an error of the callback.
+			return RemoveErrDoesNotExist(err)
 		}
 		match, err := fsimpl.MatchAnyPattern(info.Name, patterns)
 		if !match || err != nil {
