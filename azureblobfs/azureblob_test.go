@@ -327,8 +327,8 @@ func TestRedactErr(t *testing.T) {
 	for msg, want := range map[string]string{
 		`Get "https://a.blob.core.windows.net/c/x.txt?sv=1&sig=abc%2F": dial tcp: refused`: `Get "https://a.blob.core.windows.net/c/x.txt": dial tcp: refused`,
 		`PUT http://127.0.0.1:1/acc/c?comp=list&sig=abc and more`:                          `PUT http://127.0.0.1:1/acc/c and more`,
-		`signature sig=abc&se=2026 rejected`:                                                `signature sig=REDACTED&se=2026 rejected`,
-		`two https://h/a?x=1 and https://h/b?sig=2#frag`:                                    `two https://h/a and https://h/b#frag`,
+		`signature sig=abc&se=2026 rejected`:                                               `signature sig=REDACTED&se=2026 rejected`,
+		`two https://h/a?x=1 and https://h/b?sig=2#frag`:                                   `two https://h/a and https://h/b#frag`,
 	} {
 		err := redactErr(fmt.Errorf("wrapped: %w", errors.New(msg)))
 		assert.Equal(t, "wrapped: "+want, err.Error(), "redactErr(%q)", msg)
