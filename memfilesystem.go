@@ -131,8 +131,8 @@ func (n *memFileNode) size() int64 {
 // The file system supports configurable path separators ("/" or "\") and optional
 // volume names (e.g., "C:") for Windows-style paths, see MemFileSystemOptions.
 // After registering it with Register, its files can be accessed via
-// URIs like "mem://<id>/path/to/file", or "mem://<id>/C:/path/to/file"
-// for a file system with the volume "C:".
+// URIs like "mem://<id>/path/to/file", or `mem://<id>/C:\path\to\file`
+// for a file system with the volume "C:" and the separator "\".
 //
 // # Use Cases
 //
@@ -148,7 +148,7 @@ type MemFileSystem struct {
 	root     memFileNode  // Root directory node
 	mtx      sync.RWMutex // Protects all fields except paths, id and volume, and all nodes
 
-	watches     map[string]map[uint64]*memWatch // keyed by the clean watch path without volume
+	watches     map[string]map[uint64]*memWatch // keyed by the clean watch path
 	lastWatchID uint64
 }
 
@@ -156,8 +156,8 @@ type MemFileSystem struct {
 // The zero value (or a nil pointer) creates a file system
 // with a random ID and "/" as separator.
 type MemFileSystemOptions struct {
-	// ID of the file system that is part of its URI prefix "mem://<ID>".
-	// A random ID is generated if empty.
+	// ID of the file system that is part of its URI prefix "mem://<ID>",
+	// or "mem://<ID>/" with a Volume. A random ID is generated if empty.
 	ID string
 
 	// Separator of the file system paths, "/" or "\".
@@ -165,9 +165,10 @@ type MemFileSystemOptions struct {
 	Separator string
 
 	// Volume is an optional volume name like "C:" to emulate
-	// a Windows drive letter. It is part of the URI prefix
-	// "mem://<ID>/<Volume>", and the paths of the file system
-	// may start with it: "C:\dir" and "\dir" are the same directory.
+	// a Windows drive letter. Like on Windows the clean paths
+	// of the file system start with it, so the URI of `C:\dir`
+	// is `mem://<ID>/C:\dir`. The methods also accept paths
+	// without it: `C:\dir` and `\dir` are the same directory.
 	Volume string
 
 	// ReadOnly makes the file system reject every write operation
@@ -364,9 +365,10 @@ func (fs *MemFileSystem) elems(filePath string) []string {
 	return fs.paths.SplitPath(fs.CleanPath(filePath))
 }
 
-// elemsPath returns the clean path without volume of path elements.
+// elemsPath returns the clean path of path elements,
+// starting with the volume if the file system has one.
 func (fs *MemFileSystem) elemsPath(elems []string) string {
-	return fs.Separator() + strings.Join(elems, fs.Separator())
+	return fs.volume + fs.Separator() + strings.Join(elems, fs.Separator())
 }
 
 // elemsFile returns the File of path elements, built from the prefix of the
@@ -626,7 +628,7 @@ func (fs *MemFileSystem) ID() string {
 }
 
 // Prefix returns the URI prefix "mem://<ID>" of the file system,
-// or "mem://<ID>/<Volume>" if it has a volume.
+// or "mem://<ID>/" if it has a volume, because its paths start with the volume.
 func (fs *MemFileSystem) Prefix() string {
 	return fs.paths.URIPrefix
 }
@@ -638,9 +640,14 @@ func (fs *MemFileSystem) Separator() string {
 
 // CleanPath joins the uriParts with the separator and returns
 // the cleaned absolute path of the file system without the prefix.
-// A volume at the beginning of the path is kept.
+// If the file system has a volume, the path starts with it,
+// also if the uriParts don't: `\dir` becomes `C:\dir`.
 func (fs *MemFileSystem) CleanPath(uriParts ...string) string {
-	return fs.paths.CleanPath(uriParts...)
+	cleanPath := fs.paths.CleanPath(uriParts...)
+	if fs.volume != "" && fs.VolumeName(cleanPath) == "" {
+		cleanPath = fs.volume + cleanPath
+	}
+	return cleanPath
 }
 
 // isAbsPath reports if filePath starts with a slash, the separator or the volume.
@@ -653,7 +660,10 @@ func (fs *MemFileSystem) isAbsPath(filePath string) bool {
 func (fs *MemFileSystem) updatePrefix() {
 	prefix := "mem://" + fs.id
 	if fs.volume != "" {
-		prefix += "/" + fs.volume
+		// The paths start with the volume, so a slash has to
+		// separate it from the ID, see the prefix boundary rule
+		// of FileSystem: mem://<ID>/C:\dir
+		prefix += "/"
 	}
 	fs.paths = fsimpl.PathHelper{
 		URIPrefix: prefix,
@@ -677,7 +687,7 @@ func (fs *MemFileSystem) String() string {
 
 // JoinCleanFile joins the URI parts and returns a File
 // with the cleaned path and the prefix of this file system.
-// A volume at the beginning of the path is part of the prefix of the File.
+// The path of the File starts with the volume if the file system has one.
 func (fs *MemFileSystem) JoinCleanFile(uri ...string) File {
 	return fs.fileOf(fs.CleanPath(uri...))
 }

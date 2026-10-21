@@ -2074,13 +2074,50 @@ func TestMemFileSystem_VolumePaths(t *testing.T) {
 			require.Equal(t, "", memFS.VolumeName(path("ab", "c")))
 			require.Equal(t, "C:", memFS.VolumeName("C:"+path("dir")))
 
-			// URIs: the separator follows the prefix and the path round trips
-			file := memFS.RootDir().Join("dir", "a.txt")
-			require.Equal(t, memFS.Prefix()+path("dir", "a.txt"), string(file))
-			parsedFS, parsedPath := ParseRawURI(string(file))
-			require.Same(t, memFS, parsedFS)
-			require.Equal(t, path("dir", "a.txt"), parsedPath)
-			require.Equal(t, file, memFS.JoinCleanFile("C:"+path("dir", "a.txt")), "a path with the volume has the same File")
+			// Like on Windows the clean paths start with the volume,
+			// and a slash separates it from the ID in the URIs
+			prefix := "mem://" + memFS.ID() + "/"
+			require.Equal(t, prefix, memFS.Prefix())
+			require.Equal(t, "C:"+path("dir", "a.txt"), memFS.CleanPath(path("dir", "a.txt")))
+			require.Equal(t, "C:"+path("dir", "a.txt"), memFS.CleanPath("C:"+path("dir", "a.txt")))
+			require.Equal(t, "C:"+path("dir", "a.txt"), memFS.CleanPath(prefix+"C:"+path("dir", "a.txt")))
+			require.Equal(t, File(prefix+"C:"+sep), memFS.RootDir())
+			require.Equal(t, "C:"+sep, memFS.RootDir().Path())
+			require.Equal(t, memFS.RootDir(), memFS.RootDir().Join("dir").Dir())
+
+			// Every way to the same path gives the same URI, which round trips
+			wantURI := prefix + "C:" + path("dir", "a.txt")
+			for _, file := range []File{
+				memFS.RootDir().Join("dir", "a.txt"),
+				memFS.RootDir().Join("dir").Join("a.txt"),
+				memFS.JoinCleanFile(path("dir", "a.txt")),
+				memFS.JoinCleanFile("C:" + path("dir", "a.txt")),
+				memFS.RootDir().Join("dir", "a.txt", "child").Dir(),
+				File(wantURI).Dir().Join("a.txt"),
+			} {
+				require.Equal(t, wantURI, string(file))
+				parsedFS, parsedPath := ParseRawURI(string(file))
+				require.Same(t, memFS, parsedFS)
+				require.Equal(t, "C:"+path("dir", "a.txt"), parsedPath)
+				require.Equal(t, "C:", file.VolumeName())
+			}
+
+			// The FileInfo.File of Stat and ListDir is the same
+			// for paths with and without the volume
+			require.NoError(t, memFS.MakeDir(path("dir"), 0))
+			require.NoError(t, memFS.WriteAll(ctx, path("dir", "a.txt"), []byte("a"), 0))
+			for _, p := range []string{path("dir", "a.txt"), "C:" + path("dir", "a.txt")} {
+				info, err := memFS.Stat(p)
+				require.NoError(t, err)
+				require.Equal(t, wantURI, string(info.File), "Stat(%q).File", p)
+				require.Equal(t, "a.txt", info.Name, "Stat(%q).Name", p)
+			}
+			for _, dir := range []string{path("dir"), "C:" + path("dir")} {
+				require.NoError(t, memFS.ListDir(ctx, dir, nil, func(info *FileInfo) error {
+					require.Equal(t, wantURI, string(info.File), "ListDir(%q) FileInfo.File", dir)
+					return nil
+				}))
+			}
 
 			// Paths with and without the volume are the same files
 			require.NoError(t, memFS.MakeDir(path("a"), 0))

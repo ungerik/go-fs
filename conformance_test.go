@@ -25,13 +25,20 @@ func TestLocalFileSystem_Conformance(t *testing.T) {
 }
 
 func TestMemFileSystem_Conformance(t *testing.T) {
-	for _, sep := range []string{`/`, `\`} {
-		t.Run("separator "+sep, func(t *testing.T) {
-			memFS, err := fs.RegisteredTestMemFileSystem(&fs.MemFileSystemOptions{Separator: sep})
+	for _, tc := range []struct {
+		name string
+		opts fs.MemFileSystemOptions
+	}{
+		{"separator /", fs.MemFileSystemOptions{Separator: "/"}},
+		{`separator \`, fs.MemFileSystemOptions{Separator: `\`}},
+		{"volume C:", fs.MemFileSystemOptions{Separator: `\`, Volume: "C:"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			memFS, err := fs.RegisteredTestMemFileSystem(&tc.opts)
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, memFS.Close()) })
 
-			testDir := sep + "test"
+			testDir := memFS.CleanPath(tc.opts.Volume + tc.opts.Separator + "test")
 			require.NoError(t, memFS.MakeDir(testDir, 0), "creating test directory")
 
 			fstest.RunConformance(t, memFS, fstest.Config{
