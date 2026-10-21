@@ -28,11 +28,16 @@ func FileContentHash(ctx context.Context, fileReader FileReader, hashFunc Conten
 }
 
 // ContentHashFuncFrom returns a ContentHashFunc that uses a standard hash.Hash
-// implementation to return the hash sum as hex encoded string.
-func ContentHashFuncFrom(h hash.Hash) ContentHashFunc {
+// implementation to return the hash sum as hex encoded string,
+// for example ContentHashFuncFrom(sha256.New).
+//
+// Every call of the returned ContentHashFunc creates a new hash.Hash
+// with newHash, so the function can be used concurrently.
+func ContentHashFuncFrom(newHash func() hash.Hash) ContentHashFunc {
 	const readBlockSize = 4 * 1024 * 1024 // 4MB
 
 	return func(ctx context.Context, reader io.Reader) (string, error) {
+		h := newHash()
 		buf := make([]byte, readBlockSize)
 		for {
 			if ctx.Err() != nil {

@@ -3,7 +3,6 @@ package fs
 import (
 	"errors"
 	iofs "io/fs"
-	"os"
 	"strings"
 	"time"
 )
@@ -11,13 +10,21 @@ import (
 // FileInfo is a snapshot of a file's stat information.
 // In comparison to io/fs.FileInfo it's not an interface
 // but a struct with public fields.
+//
+// IsSymlink reports if the path itself is a symbolic link.
+// The FileInfo of Stat follows symbolic links,
+// so for a link all other fields describe the target.
+// The FileInfo values of ListDir and Lstat describe the directory entry:
+// for a link IsDir and IsRegular describe the target as far as the
+// file system knows it cheaply (both false if unknown),
+// and the other fields may describe the link itself.
 type FileInfo struct {
 	File        File
 	Name        string
 	Exists      bool
 	IsDir       bool
 	IsRegular   bool
-	IsSymlink   bool // The path itself is a symbolic link, the other fields describe the link target
+	IsSymlink   bool // The path itself is a symbolic link, see the FileInfo documentation
 	IsHidden    bool
 	Size        int64
 	Modified    time.Time
@@ -75,9 +82,17 @@ func NewNonExistingFileInfo(file File) *FileInfo {
 
 // StdFileInfo returns an io/fs.FileInfo wrapper
 // for the data stored in the FileInfo struct.
+//
+// Like the result of os.Stat it describes the file
+// a symbolic link points to: the mode never has io/fs.ModeSymlink set,
+// it has io/fs.ModeDir for a directory and io/fs.ModeIrregular
+// for a file that is neither a directory nor a regular file.
+// So Mode().IsDir() equals IsDir and Mode().IsRegular() equals IsRegular.
+//
+// A [StdDirEntry] describes a symbolic link itself.
 func (i *FileInfo) StdFileInfo() iofs.FileInfo { return fileInfo{i} }
 
-// fileInfo implements os.FileInfo and fs.FileInfo for a given FileInfo
+// fileInfo implements io/fs.FileInfo for a given FileInfo
 type fileInfo struct{ i *FileInfo }
 
 func (f fileInfo) Name() string       { return f.i.Name }
@@ -86,10 +101,21 @@ func (f fileInfo) ModTime() time.Time { return f.i.Modified }
 func (f fileInfo) IsDir() bool        { return f.i.IsDir }
 func (f fileInfo) Sys() any           { return f.i.Sys }
 
-func (f fileInfo) Mode() os.FileMode {
+func (f fileInfo) Mode() iofs.FileMode {
 	m := f.i.Permissions.FileMode(f.i.IsDir)
-	if f.i.IsSymlink {
-		m |= os.ModeSymlink
+	if !f.i.IsDir && !f.i.IsRegular {
+		m |= iofs.ModeIrregular
 	}
 	return m
+}
+
+// linkFileInfo implements io/fs.FileInfo like the result of os.Lstat
+// for the FileInfo of a symbolic link: the mode has io/fs.ModeSymlink
+// set and no other type bits, and IsDir is false.
+type linkFileInfo struct{ fileInfo }
+
+func (linkFileInfo) IsDir() bool { return false }
+
+func (f linkFileInfo) Mode() iofs.FileMode {
+	return f.i.Permissions.FileMode(false) | iofs.ModeSymlink
 }

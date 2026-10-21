@@ -18,6 +18,7 @@ func FileInfoToFileCallback(fileCallback func(File) error) func(*FileInfo) error
 }
 
 // ReadHeader reads up to maxNumBytes from the beginning of the passed FileReader.
+// Fewer bytes are only returned for a file that is shorter than maxNumBytes.
 // If fr is a MemFile then a slice of its FileData is returned
 // without copying it.
 func ReadHeader(fr FileReader, maxNumBytes int) ([]byte, error) {
@@ -40,9 +41,11 @@ func ReadHeader(fr FileReader, maxNumBytes int) ([]byte, error) {
 	}
 	defer r.Close()
 
+	// A single Read may return fewer bytes than available,
+	// ReadFull reads until maxNumBytes or the end of the file
 	data := make([]byte, maxNumBytes)
-	n, err := r.Read(data)
-	if err != nil && !errors.Is(err, io.EOF) {
+	n, err := io.ReadFull(r, data)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return data[:n], err
 	}
 	return data[:n], nil

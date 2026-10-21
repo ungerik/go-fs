@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	iofs "io/fs"
@@ -20,12 +21,10 @@ import (
 
 // Ensure MemFile implements interfaces
 var (
-	_ FileReader  = MemFile{}
-	_ io.Writer   = &MemFile{}
-	_ io.WriterTo = MemFile{}
-	_ io.ReaderAt = MemFile{}
-	// _ json.Marshaler   = MemFile{}
-	// _ json.Unmarshaler = &MemFile{}
+	_ FileReader     = MemFile{}
+	_ io.Writer      = &MemFile{}
+	_ io.WriterTo    = MemFile{}
+	_ io.ReaderAt    = MemFile{}
 	_ gob.GobEncoder = MemFile{}
 	_ gob.GobDecoder = &MemFile{}
 	_ fmt.Stringer   = MemFile{}
@@ -33,9 +32,9 @@ var (
 
 // MemFile implements FileReader with a filename and an in memory byte slice.
 // It exposes FileName and FileData as exported struct fields to emphasize
-// its simple nature as just an wrapper around a name and some bytes.
+// its simple nature as just a wrapper around a name and some bytes.
 //
-// As a small an simple struct MemFile is usually passed by value.
+// As a small and simple struct MemFile is usually passed by value.
 // This is why NewMemFile does not return a pointer.
 //
 // The FileName can mirror the complete path of a file or directory on a
@@ -58,11 +57,13 @@ var (
 //   - io.Writer
 //   - io.WriterTo
 //   - io.ReaderAt
-//   - json.Marshaler
-//   - json.Unmarshaler
 //   - gob.GobEncoder
 //   - gob.GobDecoder
 //   - fmt.Stringer
+//
+// MemFile has no JSON methods, encoding/json uses its struct tags:
+// "filename" for FileName and "data" for FileData,
+// which is encoded as base64 string and omitted if empty.
 type MemFile struct {
 	FileName string `json:"filename"`
 	FileData []byte `json:"data,omitempty"`
@@ -79,44 +80,43 @@ func NewMemFile(name string, data []byte) MemFile {
 	return MemFile{FileName: name, FileData: data}
 }
 
-// NewMemFileWriteJSON returns a new MemFile by value with the input mashalled to JSON as FileData.
-// Any indent arguments will be concanated and used as JSON line indentation.
+// NewMemFileWriteJSON returns a new MemFile by value with the input marshalled to JSON as FileData.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
-func NewMemFileWriteJSON(name string, input any, indent ...string) (MemFile, error) {
-	var (
-		data []byte
-		err  error
-	)
-	if len(indent) == 0 {
-		data, err = json.Marshal(input)
-	} else {
-		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
-	}
+func NewMemFileWriteJSON(name string, input any) (MemFile, error) {
+	return NewMemFileWriteJSONIndent(name, input, "")
+}
+
+// NewMemFileWriteJSONIndent returns a new MemFile by value with the input marshalled
+// to JSON with every line indented by indent as FileData.
+//
+// Returns a wrapped ErrMarshalJSON when the marshalling failed.
+func NewMemFileWriteJSONIndent(name string, input any, indent string) (MemFile, error) {
+	data, err := marshalJSON(input, indent)
 	if err != nil {
-		return MemFile{}, fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
+		return MemFile{}, err
 	}
 	return MemFile{FileName: name, FileData: data}, nil
 }
 
-// NewMemFileWriteXML returns a new MemFile by value with the input mashalled to XML as FileData.
-// Any indent arguments will be concanated and used as XML line indentation.
+// NewMemFileWriteXML returns a new MemFile by value with the input marshalled to XML
+// with a leading xml.Header as FileData.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
-func NewMemFileWriteXML(name string, input any, indent ...string) (MemFile, error) {
-	var (
-		data []byte
-		err  error
-	)
-	if len(indent) == 0 {
-		data, err = xml.Marshal(input)
-	} else {
-		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
-	}
+func NewMemFileWriteXML(name string, input any) (MemFile, error) {
+	return NewMemFileWriteXMLIndent(name, input, "")
+}
+
+// NewMemFileWriteXMLIndent returns a new MemFile by value with the input marshalled
+// to XML with every line indented by indent and a leading xml.Header as FileData.
+//
+// Returns a wrapped ErrMarshalXML when the marshalling failed.
+func NewMemFileWriteXMLIndent(name string, input any, indent string) (MemFile, error) {
+	data, err := marshalXML(input, indent)
 	if err != nil {
-		return MemFile{}, fmt.Errorf("%w because: %w", ErrMarshalXML, err)
+		return MemFile{}, err
 	}
-	return MemFile{FileName: name, FileData: append([]byte(xml.Header), data...)}, nil
+	return MemFile{FileName: name, FileData: data}, nil
 }
 
 // ReadMemFile returns a new MemFile by value with name and data from fileReader.
@@ -183,16 +183,15 @@ func (f MemFile) Name() string {
 
 // Dir returns the parent directory of the FileName as a MemFile
 // with nil FileData and the FileName truncated up to and including
-// the last slash. Because the returned FileName ends with a slash
+// the slash before the name. Because the returned FileName ends with a slash
 // (or is empty) the resulting MemFile is considered a directory.
 //
-// If FileName contains no slash then an empty MemFile is returned.
+// A single trailing slash that marks a directory is ignored like in Name,
+// so the parent of "a/b/" is "a/". The root "/" is its own parent.
+// If FileName contains no slash before the name then an empty MemFile is returned.
 func (f MemFile) Dir() MemFile {
-	i := strings.LastIndexByte(f.FileName, '/')
-	if i < 0 {
-		return MemFile{}
-	}
-	return MemFile{FileName: f.FileName[:i+1]}
+	dir, _ := f.DirAndName()
+	return dir
 }
 
 // DirAndName returns the parent directory of the FileName as a MemFile
@@ -201,17 +200,14 @@ func (f MemFile) Dir() MemFile {
 // but computes both results in a single scan.
 func (f MemFile) DirAndName() (dir MemFile, name string) {
 	s := f.FileName
-	if n := len(s); n > 0 && s[n-1] == '/' {
-		// A single trailing slash marks a directory: the path is its own
-		// parent directory, the name is the element before the trailing slash.
-		dir = MemFile{FileName: s}
-		s = s[:n-1]
-		if i := strings.LastIndexByte(s, '/'); i >= 0 {
-			return dir, s[i+1:]
-		}
-		return dir, s
+	if s == "/" {
+		return MemFile{FileName: s}, "" // The root is its own parent
 	}
-	// No trailing slash: a single scan splits the parent directory and name.
+	// Ignore a single trailing slash that marks a directory,
+	// a directory has the same parent as a file with its name.
+	if n := len(s); n > 0 && s[n-1] == '/' {
+		s = s[:n-1]
+	}
 	if i := strings.LastIndexByte(s, '/'); i >= 0 {
 		return MemFile{FileName: s[:i+1]}, s[i+1:]
 	}
@@ -280,8 +276,6 @@ func (f MemFile) Size() int64 {
 }
 
 // Exists returns true if the MemFile has non empty FileName.
-// It's valid to call this method on a nil pointer,
-// will return false in this case.
 func (f MemFile) Exists() bool {
 	return f.FileName != ""
 }
@@ -299,6 +293,12 @@ func (f MemFile) CheckExists() error {
 // In that case the MemFile is considered a directory and FileData is ignored.
 func (f MemFile) IsDir() bool {
 	return strings.HasSuffix(f.FileName, "/")
+}
+
+// IsSymbolicLink always returns false
+// because a MemFile can't be a symbolic link.
+func (MemFile) IsSymbolicLink() bool {
+	return false
 }
 
 // CheckIsDir returns nil if the MemFile is a directory
@@ -382,17 +382,23 @@ func (f MemFile) ReadAllString(ctx context.Context) (string, error) {
 // same input source.
 //
 // ReadAt implements the interface io.ReaderAt.
-// It returns an ErrIsDirectory error if the MemFile is a directory.
+// Like bytes.Reader it returns io.EOF when fewer than len(p) bytes
+// are available after off, an error wrapping io/fs.ErrInvalid
+// for a negative off, and an ErrIsDirectory error
+// if the MemFile is a directory.
 func (f MemFile) ReadAt(p []byte, off int64) (n int, err error) {
 	if f.IsDir() {
 		return 0, NewErrIsDirectory(f)
+	}
+	if off < 0 {
+		return 0, fmt.Errorf("MemFile.ReadAt: negative offset %d: %w", off, iofs.ErrInvalid)
 	}
 	if off >= int64(len(f.FileData)) {
 		return 0, io.EOF
 	}
 	n = copy(p, f.FileData[off:])
 	if n < len(p) {
-		return n, fmt.Errorf("could only read %d of %d requested bytes", n, len(p))
+		return n, io.EOF
 	}
 	return n, nil
 }
@@ -427,7 +433,7 @@ func (f MemFile) OpenReadSeeker() (ReadAtSeekCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
-// ReadJSON reads and unmarshalles the JSON content of the file to output.
+// ReadJSON reads and unmarshals the JSON content of the file to output.
 //
 // Returns an ErrIsDirectory error if the MemFile is a directory,
 // or a wrapped ErrUnmarshalJSON when the unmarshalling failed.
@@ -446,29 +452,31 @@ func (f MemFile) ReadJSON(ctx context.Context, output any) error {
 	return nil
 }
 
-// WriteJSON mashalles input to JSON and writes it as the file.
-// Any indent arguments will be concanated and used as JSON line indentation.
+// WriteJSON marshals input to JSON and sets it as FileData.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
-func (f *MemFile) WriteJSON(ctx context.Context, input any, indent ...string) (err error) {
+func (f *MemFile) WriteJSON(ctx context.Context, input any) error {
+	return f.WriteJSONIndent(ctx, input, "")
+}
+
+// WriteJSONIndent marshals input to JSON with every line
+// indented by indent and sets it as FileData.
+//
+// Returns a wrapped ErrMarshalJSON when the marshalling failed.
+func (f *MemFile) WriteJSONIndent(ctx context.Context, input any, indent string) error {
 	// Context is passed for identical call signature as other types
-	if err = ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	var data []byte
-	if len(indent) == 0 {
-		data, err = json.Marshal(input)
-	} else {
-		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
-	}
+	data, err := marshalJSON(input, indent)
 	if err != nil {
-		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
+		return err
 	}
 	f.FileData = data
 	return nil
 }
 
-// ReadXML reads and unmarshalles the XML content of the file to output.
+// ReadXML reads and unmarshals the XML content of the file to output.
 //
 // Returns an ErrIsDirectory error if the MemFile is a directory,
 // or a wrapped ErrUnmarshalXML when the unmarshalling failed.
@@ -487,25 +495,28 @@ func (f MemFile) ReadXML(ctx context.Context, output any) error {
 	return nil
 }
 
-// WriteXML mashalles input to XML and writes it as the file.
-// Any indent arguments will be concanated and used as XML line indentation.
+// WriteXML marshals input to XML and sets it
+// with a leading xml.Header as FileData.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
-func (f *MemFile) WriteXML(ctx context.Context, input any, indent ...string) (err error) {
+func (f *MemFile) WriteXML(ctx context.Context, input any) error {
+	return f.WriteXMLIndent(ctx, input, "")
+}
+
+// WriteXMLIndent marshals input to XML with every line indented
+// by indent and sets it with a leading xml.Header as FileData.
+//
+// Returns a wrapped ErrMarshalXML when the marshalling failed.
+func (f *MemFile) WriteXMLIndent(ctx context.Context, input any, indent string) error {
 	// Context is passed for identical call signature as other types
-	if err = ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	var data []byte
-	if len(indent) == 0 {
-		data, err = xml.Marshal(input)
-	} else {
-		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
-	}
+	data, err := marshalXML(input, indent)
 	if err != nil {
-		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
+		return err
 	}
-	f.FileData = append([]byte(xml.Header), data...)
+	f.FileData = data
 	return nil
 }
 
@@ -548,6 +559,8 @@ func (f *MemFile) Write(b []byte) (int, error) {
 }
 
 // Stat returns a io/fs.FileInfo describing the MemFile.
+// Its ModTime is the zero time.Time,
+// because a MemFile has no modification time.
 func (f MemFile) Stat() (iofs.FileInfo, error) {
 	return memFileInfo{f}, nil
 }
@@ -567,7 +580,7 @@ func (i memFileInfo) Mode() iofs.FileMode {
 	}
 	return 0666
 }
-func (i memFileInfo) ModTime() time.Time { return time.Now() }
+func (i memFileInfo) ModTime() time.Time { return time.Time{} }
 func (i memFileInfo) Sys() any           { return nil }
 
 // ReadMultipartFormMemFiles reads the multipart form
@@ -576,12 +589,7 @@ func ReadMultipartFormMemFiles(ctx context.Context, form *multipart.Form) (map[s
 	memFiles := make(map[string][]MemFile, len(form.File))
 	for fieldName, files := range form.File {
 		for _, file := range files {
-			reader, err := file.Open()
-			if err != nil {
-				return nil, err
-			}
-			defer reader.Close()
-			memFile, err := ReadAllMemFile(ctx, reader, file.Filename)
+			memFile, err := readMultipartMemFile(ctx, file)
 			if err != nil {
 				return nil, err
 			}
@@ -589,6 +597,18 @@ func ReadMultipartFormMemFiles(ctx context.Context, form *multipart.Form) (map[s
 		}
 	}
 	return memFiles, nil
+}
+
+// readMultipartMemFile reads a file of a multipart form
+// and closes it before returning, so that reading a form
+// keeps at most one of its files open.
+func readMultipartMemFile(ctx context.Context, file *multipart.FileHeader) (MemFile, error) {
+	reader, err := file.Open()
+	if err != nil {
+		return MemFile{}, err
+	}
+	memFile, err := ReadAllMemFile(ctx, reader, file.Filename)
+	return memFile, errors.Join(err, reader.Close())
 }
 
 // ParseRequestMultipartFormMemFiles parses the multipart form from the request

@@ -244,6 +244,7 @@ func (file File) IsWritable() bool {
 }
 
 // Stat returns a standard library io/fs.FileInfo describing the file.
+// Like os.Stat it follows symbolic links, see [FileInfo.StdFileInfo].
 func (file File) Stat() (iofs.FileInfo, error) {
 	if file == "" {
 		return nil, ErrEmptyPath
@@ -461,10 +462,13 @@ func (file File) ReadSymbolicLink() (string, error) {
 }
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.
+// File systems report different sizes for directories,
+// the size of their directory entries for example,
+// so a directory always has the size 0 here.
 func (file File) Size() int64 {
 	fileSystem, path := file.ParseRawURI()
 	info, err := fsStat(fileSystem, path)
-	if err != nil {
+	if err != nil || info.IsDir {
 		return 0
 	}
 	return info.Size
@@ -559,74 +563,34 @@ func (file File) ListDirIter(ctx context.Context, patterns ...string) iter.Seq2[
 	}
 }
 
-// MustGlob yields files and wildcard substituting path segments
-// matching a path pattern.
+// Glob yields the files matching a path pattern.
 //
-// The pattern is appended to the current working directory
-// if it is not an absolute path.
+// A relative pattern is matched relative to the current working directory,
+// an empty pattern yields the current working directory ".".
+// A pattern can also be the URI of a registered file system,
+// for example "mem://id/dir/*.txt".
+// The part of the pattern before the path segment with the first
+// wildcard is the base directory, see [File.Glob] for the syntax
+// of the rest and for the errors that are yielded.
 //
-// The yielded path segments are the strings necessary
-// to substitute all wildcard containing path segments
-// in the pattern to form a valid path for a yielded file.
-// This includes the name of the yielded file itself
-// if the pattern contains wildcards for the last segment.
-// Non wildcard segments are not included.
-//
-// The syntax of patterns is the same as in [path.Match].
-// It always uses slash '/' as path segment separator
-// independently of the file's file system.
-//
-// MustGlob ignores file system errors such as I/O errors reading directories.
-// The only possible panic is in case of a malformed pattern.
-func MustGlob(ctx context.Context, pattern string) iter.Seq2[File, []string] {
-	globIter, err := Glob(ctx, pattern)
-	if err != nil {
-		panic(err)
-	}
-	return globIter
-}
-
-// MustGlob yields files and wildcard substituting path segments
-// matching a path pattern relative to the file.
-//
-// See [File.Glob] for the pattern syntax.
-// The only possible panic is in case of a malformed pattern.
-func (file File) MustGlob(ctx context.Context, pattern string) iter.Seq2[File, []string] {
-	globIter, err := file.Glob(ctx, pattern)
-	if err != nil {
-		panic(err)
-	}
-	return globIter
-}
-
-// Glob yields files and wildcard substituting path segments
-// matching a path pattern.
-//
-// The pattern is appended to the current working directory
-// if it is not an absolute path.
-//
-// The yielded path segments are the strings necessary
-// to substitute all wildcard containing path segments
-// in the pattern to form a valid path for a yielded file.
-// This includes the name of the yielded file itself
-// if the pattern contains wildcards for the last segment.
-// Non wildcard segments are not included.
-//
-// The syntax of patterns is the same as in [path.Match].
-// It always uses slash '/' as path segment separator
-// independently of the file's file system.
-//
-// A pattern ending with a slash '/' will match only directories.
-//
-// Glob ignores file system errors such as I/O errors reading directories.
-// The only possible returned error is [path.ErrBadPattern],
-// reporting that the pattern is malformed.
-func Glob(ctx context.Context, pattern string) (iter.Seq2[File, []string], error) {
+// A pattern without wildcards yields the file it names if it exists,
+// or only if it is a directory when the pattern ends with a slash '/'.
+func Glob(ctx context.Context, pattern string) iter.Seq2[File, error] {
 	// Find the first wildcard
-	i := strings.IndexAny(pattern, `*?[\`)
+	i := strings.IndexAny(pattern, globWildcards)
 	if i == -1 {
-		// No wildcard in pattern, yield the cleaned pattern as File
-		return CleanFilePath(path.Clean(pattern)).Glob(ctx, "")
+		// No wildcard in pattern, yield the file the pattern names.
+		// The pattern is cleaned as path of its file system,
+		// path.Clean would break the "://" of URIs.
+		file := File(".")
+		if pattern != "" {
+			fileSystem, filePath := ParseRawURI(pattern)
+			file = fsFile(fileSystem, filePath)
+		}
+		if strings.HasSuffix(pattern, "/") {
+			return file.Glob(ctx, "/") // only a directory matches
+		}
+		return file.Glob(ctx, "")
 	}
 	// Find the last path separator before the first wildcard
 	i = strings.LastIndexByte(pattern[:i], '/')
@@ -639,104 +603,187 @@ func Glob(ctx context.Context, pattern string) (iter.Seq2[File, []string], error
 	return File(pattern[:i+1]).Glob(ctx, pattern[i+1:])
 }
 
-// Glob yields files and wildcard substituting path segments
-// matching a path pattern relative to the file.
-//
-// The yielded path segments are the strings necessary
-// to substitute all wildcard containing path segments
-// in the pattern to form a valid path for a yielded file.
-// This includes the name of the yielded file itself
-// if the pattern contains wildcards for the last segment.
-// Non wildcard segments are not included.
+// Glob yields the files matching a path pattern relative to the file.
 //
 // The syntax of patterns is the same as in [path.Match].
 // It always uses slash '/' as path segment separator
 // independently of the file's file system.
+// Empty and "." segments are ignored, ".." segments are not allowed.
+// A pattern ending with a slash '/' matches only directories,
+// an empty pattern yields the file itself if it exists.
 //
-// A pattern ending with a slash '/' will match only directories.
-//
-// Glob ignores file system errors such as I/O errors reading directories.
-// The only possible returned error is [path.ErrBadPattern],
-// reporting that the pattern is malformed.
-func (file File) Glob(ctx context.Context, pattern string) (iter.Seq2[File, []string], error) {
-	onlyDirs := strings.HasSuffix(pattern, "/")
-	pattern = strings.Trim(pattern, "/")
-	// Check if the pattern is valid
-	if _, err := path.Match(pattern, ""); err != nil {
-		return nil, fmt.Errorf("%w: %s", err, pattern)
+// Like [path/filepath.Glob], a path that does not exist or that continues
+// below a file is no match. Errors are yielded together with InvalidFile:
+// a malformed pattern (wrapping [path.ErrBadPattern]), an empty file path,
+// errors listing a directory (for example missing permissions) and the
+// error of a canceled context. The iteration stops after a pattern or
+// context error and continues after other errors as long as the loop does.
+func (file File) Glob(ctx context.Context, pattern string) iter.Seq2[File, error] {
+	return func(yield func(File, error) bool) {
+		if file == "" {
+			yield(InvalidFile, ErrEmptyPath)
+			return
+		}
+		segments, onlyDirs, err := globSegments(pattern)
+		if err != nil {
+			yield(InvalidFile, err)
+			return
+		}
+		g := globber{ctx: ctx, onlyDirs: onlyDirs, yield: yield}
+		g.walk(file, segments)
 	}
-	pSegments := strings.Split(pattern, "/")
-	pSegments = slices.DeleteFunc(pSegments, func(s string) bool {
-		return s == "" || s == "."
-	})
-	if slices.Contains(pSegments, "..") {
-		return nil, fmt.Errorf("%w, must not contain '..': %s", path.ErrBadPattern, pattern)
-	}
-	switch i := slices.IndexFunc(pSegments, containsWildcard); {
-	case i < 0:
-		// No wildcard in pattern, join path and yield file if it exists
-		file = file.Join(pSegments...)
-		pSegments = nil
-	case i > 0:
-		// Join non wildcard path before first wildcard
-		file = file.Join(pSegments[:i]...)
-		pSegments = pSegments[i:]
-	}
-	return file.glob(ctx, onlyDirs, pSegments, nil), nil
 }
+
+// globWildcards are the characters that make a pattern segment a wildcard.
+const globWildcards = `*?[\`
 
 func containsWildcard(pattern string) bool {
-	return strings.ContainsAny(pattern, `*?[\`)
+	return strings.ContainsAny(pattern, globWildcards)
 }
 
-func (file File) glob(ctx context.Context, onlyDirs bool, segments, values []string) iter.Seq2[File, []string] {
-	return func(yield func(File, []string) bool) {
-		switch len(segments) {
-		case 0:
-			// No more segments, yield the file itself
-			if onlyDirs && file.IsDir() || !onlyDirs && file.Exists() {
-				yield(file, values)
-			}
-
-		case 1:
-			// Last segment, yield all matching files
-			if pattern := segments[0]; containsWildcard(pattern) {
-				// Wildcard in last segment, list directory with segment as pattern
-				for f, err := range file.ListDirIter(ctx, pattern) {
-					// If file is not a directory then ErrIsNotDirectory is expected
-					if err != nil {
-						return
-					}
-					if onlyDirs && !f.IsDir() || !onlyDirs && !f.Exists() {
-						continue
-					}
-					if !yield(f, append(slices.Clone(values), f.Name())) {
-						return
-					}
-				}
-			} else {
-				// No wildcard in last segment, join path and yield file if it exists
-				f := file.Join(pattern)
-				if onlyDirs && f.IsDir() || !onlyDirs && f.Exists() {
-					yield(f, values)
-				}
-			}
-
-		default:
-			if pattern := segments[0]; containsWildcard(pattern) {
-				// Wildcard in segment, list directory with segment as pattern
-				for matchedFile, err := range file.ListDirIter(ctx, pattern) {
-					// If file is not a directory then ErrIsNotDirectory is expected
-					if err != nil {
-						return
-					}
-					matchedFile.glob(ctx, onlyDirs, segments[1:], append(slices.Clone(values), matchedFile.Name()))(yield)
-				}
-			} else {
-				// No wildcard in segment, join path and recurse
-				file.Join(segments[0]).glob(ctx, onlyDirs, segments[1:], values)(yield)
-			}
+// globSegments splits a Glob pattern into its path segments
+// and reports if it matches only directories.
+func globSegments(pattern string) (segments []string, onlyDirs bool, err error) {
+	onlyDirs = strings.HasSuffix(pattern, "/")
+	for segment := range strings.SplitSeq(strings.Trim(pattern, "/"), "/") {
+		switch segment {
+		case "", ".":
+			continue
+		case "..":
+			return nil, false, fmt.Errorf("%w, must not contain '..': %q", path.ErrBadPattern, pattern)
 		}
+		// path.Match validates the whole segment even if it does not match
+		if _, err := path.Match(segment, ""); err != nil {
+			return nil, false, fmt.Errorf("%w: %q", err, pattern)
+		}
+		segments = append(segments, segment)
+	}
+	return segments, onlyDirs, nil
+}
+
+// globber holds the state of one Glob iteration.
+type globber struct {
+	ctx      context.Context
+	onlyDirs bool
+	yield    func(File, error) bool
+	stopped  bool // yield returned false or the context was canceled
+}
+
+// walk yields the files below dir that match segments.
+func (g *globber) walk(dir File, segments []string) {
+	if g.stopped {
+		return
+	}
+	if err := g.ctx.Err(); err != nil {
+		g.fail(err)
+		return
+	}
+	i := slices.IndexFunc(segments, containsWildcard)
+	if i < 0 {
+		// No wildcard left, the joined path is the only candidate
+		g.yieldIfExists(dir.Join(segments...))
+		return
+	}
+	dir = dir.Join(segments[:i]...)
+	pattern, rest := segments[i], segments[i+1:]
+	if len(rest) == 0 {
+		// Last segment: yield the matching entries while listing
+		err := dir.ListDirInfo(g.ctx, func(info *FileInfo) error {
+			if g.onlyDirs && !info.IsDir {
+				return nil
+			}
+			if !g.yield(info.File, nil) {
+				g.stopped = true
+				return errStopListing
+			}
+			return nil
+		}, pattern)
+		g.listErr(dir, err)
+		return
+	}
+	// Collect the matching directories before descending
+	// so that only one directory is listed at a time
+	var subDirs []File
+	err := dir.ListDirInfo(g.ctx, func(info *FileInfo) error {
+		if info.IsDir {
+			subDirs = append(subDirs, info.File)
+		}
+		return nil
+	}, pattern)
+	g.listErr(dir, err)
+	for _, subDir := range subDirs {
+		g.walk(subDir, rest)
+	}
+}
+
+// yieldIfExists yields file if it exists
+// and is a directory in case of onlyDirs.
+func (g *globber) yieldIfExists(file File) {
+	fileSystem, filePath := file.ParseRawURI()
+	info, err := fsStat(fileSystem, filePath)
+	switch {
+	case err != nil:
+		if !globNoMatch(file, err) && !g.yield(InvalidFile, err) {
+			g.stopped = true
+		}
+	case g.onlyDirs && !info.IsDir:
+		// Not a directory, no match
+	case !g.yield(file, nil):
+		g.stopped = true
+	}
+}
+
+// listErr handles the error of listing dir.
+func (g *globber) listErr(dir File, err error) {
+	switch {
+	case err == nil || g.stopped:
+		// Listed completely or stopped by yield
+	case g.ctx.Err() != nil:
+		g.fail(err)
+	case globNoMatch(dir, err) || globIsNoDir(dir):
+		// Missing directory or not a directory, no match
+	case !g.yield(InvalidFile, err):
+		g.stopped = true
+	}
+}
+
+// globIsNoDir reports if file exists and is not a directory,
+// for file systems that don't return an ErrIsNotDirectory
+// when listing a file.
+func globIsNoDir(file File) bool {
+	fileSystem, filePath := file.ParseRawURI()
+	info, err := fsStat(fileSystem, filePath)
+	return err == nil && !info.IsDir
+}
+
+// fail yields an error that ends the iteration.
+func (g *globber) fail(err error) {
+	g.yield(InvalidFile, err)
+	g.stopped = true
+}
+
+// globNoMatch reports if err from accessing file means
+// that the path does not exist as needed by the pattern,
+// which is no match instead of an error that may hide matches.
+func globNoMatch(file File, err error) bool {
+	for {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrIsNotDirectory{}) {
+			return true
+		}
+		// Errors like the "not a directory" of a local path that
+		// continues below a file are no match if a parent is not
+		// a directory. The loop ends at the root, where Dir
+		// doesn't return a shorter path anymore.
+		dir := file.Dir()
+		if dir == "" || len(dir) >= len(file) {
+			return false
+		}
+		fileSystem, dirPath := dir.ParseRawURI()
+		info, statErr := fsStat(fileSystem, dirPath)
+		if statErr == nil {
+			return !info.IsDir
+		}
+		file, err = dir, statErr
 	}
 }
 
@@ -933,6 +980,11 @@ func (file File) WriteTo(writer io.Writer) (n int64, err error) {
 // ReadFrom implements the io.ReaderFrom interface.
 // The file is written with the existing permissions if it exists,
 // or with the default write permissions if it does not exist yet.
+//
+// The error of closing the writer is returned, because writers
+// of uploads commit the data in Close. If reading or writing fails,
+// a writer implementing [WriteAborter] is aborted instead of closed,
+// so no partial data replaces the file.
 func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	if file == "" {
 		return 0, ErrEmptyPath
@@ -941,8 +993,13 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 	if err != nil {
 		return 0, err
 	}
-	defer writer.Close()
-	return io.Copy(writer, reader)
+	n, err = io.Copy(writer, reader)
+	if err != nil {
+		if aborter, ok := writer.(WriteAborter); ok {
+			return n, errors.Join(err, aborter.Abort())
+		}
+	}
+	return n, errors.Join(err, writer.Close())
 }
 
 // OpenReader opens the file and returns a io/fs.File that has to be closed after reading.
@@ -1118,7 +1175,7 @@ func (file File) Renamef(ctx context.Context, newNameFormat string, args ...any)
 // MoveTo moves and/or renames the file to destination.
 // destination can be a directory or file-path and
 // can be on another FileSystem.
-// If the file and distination are using the LocalFileSystem
+// If the file and destination are using the LocalFileSystem
 // but are on different volumes, then the file will be copied
 // to the destination and then deleted.
 //
@@ -1151,18 +1208,26 @@ func (file File) RemoveDirContentsRecursive(ctx context.Context) error {
 }
 
 // RemoveDirContents deletes all files in this directory,
-// or if given all files with patterns from the this directory.
+// or if patterns are given the files with names matching
+// at least one of the patterns.
+//
+// Sub-directories and their contents are kept,
+// use [File.RemoveDirContentsRecursive] to delete them too.
+// Symbolic links are deleted, not the files they point to.
 func (file File) RemoveDirContents(ctx context.Context, patterns ...string) error {
-	return file.ListDir(ctx, func(f File) error {
-		err := f.Remove()
+	return file.ListDirInfo(ctx, func(info *FileInfo) error {
+		if info.IsDir && !info.IsSymlink {
+			return nil
+		}
+		err := info.File.Remove()
 		// Ignore files that have been deleted,
-		// after all we wanted to get rid of the in the first place,
+		// after all we wanted to get rid of them in the first place,
 		// so this is not an error for us
 		return RemoveErrDoesNotExist(err)
 	}, patterns...)
 }
 
-// ReadJSON reads and unmarshalles the JSON content of the file to output.
+// ReadJSON reads and unmarshals the JSON content of the file to output.
 //
 // Returns a wrapped ErrUnmarshalJSON when the unmarshalling failed.
 func (file File) ReadJSON(ctx context.Context, output any) error {
@@ -1177,27 +1242,52 @@ func (file File) ReadJSON(ctx context.Context, output any) error {
 	return nil
 }
 
-// WriteJSON marshals input to JSON and writes it as the file.
-// Any indent arguments will be concanated and used as JSON line indentation.
+// WriteJSON marshals input to JSON and writes it as the file
+// with the optional permissions like WriteAll.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
-func (file File) WriteJSON(ctx context.Context, input any, indent ...string) (err error) {
+func (file File) WriteJSON(ctx context.Context, input any, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	var data []byte
-	if len(indent) == 0 {
-		data, err = json.Marshal(input)
-	} else {
-		data, err = json.MarshalIndent(input, "", strings.Join(indent, ""))
-	}
+	data, err := marshalJSON(input, "")
 	if err != nil {
-		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
+		return err
 	}
-	return file.WriteAll(ctx, data)
+	return file.WriteAll(ctx, data, perm...)
 }
 
-// ReadXML reads and unmarshalles the XML content of the file to output.
+// WriteJSONIndent marshals input to JSON with every line indented
+// by indent and writes it as the file
+// with the optional permissions like WriteAll.
+//
+// Returns a wrapped ErrMarshalJSON when the marshalling failed.
+func (file File) WriteJSONIndent(ctx context.Context, input any, indent string, perm ...Permissions) error {
+	if file == "" {
+		return ErrEmptyPath
+	}
+	data, err := marshalJSON(input, indent)
+	if err != nil {
+		return err
+	}
+	return file.WriteAll(ctx, data, perm...)
+}
+
+// marshalJSON marshals input to JSON, indented if indent is not empty,
+// and wraps marshalling errors with ErrMarshalJSON.
+func marshalJSON(input any, indent string) (data []byte, err error) {
+	if indent == "" {
+		data, err = json.Marshal(input)
+	} else {
+		data, err = json.MarshalIndent(input, "", indent)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
+	}
+	return data, nil
+}
+
+// ReadXML reads and unmarshals the XML content of the file to output.
 //
 // Returns a wrapped ErrUnmarshalXML when the unmarshalling failed.
 func (file File) ReadXML(ctx context.Context, output any) error {
@@ -1212,25 +1302,51 @@ func (file File) ReadXML(ctx context.Context, output any) error {
 	return nil
 }
 
-// WriteXML marshals input to XML and writes it as the file.
-// Any indent arguments will be concanated and used as XML line indentation.
+// WriteXML marshals input to XML and writes it
+// with a leading xml.Header as the file
+// with the optional permissions like WriteAll.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
-func (file File) WriteXML(ctx context.Context, input any, indent ...string) (err error) {
+func (file File) WriteXML(ctx context.Context, input any, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	var data []byte
-	if len(indent) == 0 {
+	data, err := marshalXML(input, "")
+	if err != nil {
+		return err
+	}
+	return file.WriteAll(ctx, data, perm...)
+}
+
+// WriteXMLIndent marshals input to XML with every line indented
+// by indent and writes it with a leading xml.Header as the file
+// with the optional permissions like WriteAll.
+//
+// Returns a wrapped ErrMarshalXML when the marshalling failed.
+func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, perm ...Permissions) error {
+	if file == "" {
+		return ErrEmptyPath
+	}
+	data, err := marshalXML(input, indent)
+	if err != nil {
+		return err
+	}
+	return file.WriteAll(ctx, data, perm...)
+}
+
+// marshalXML marshals input to XML with a leading xml.Header,
+// indented if indent is not empty,
+// and wraps marshalling errors with ErrMarshalXML.
+func marshalXML(input any, indent string) (data []byte, err error) {
+	if indent == "" {
 		data, err = xml.Marshal(input)
 	} else {
-		data, err = xml.MarshalIndent(input, "", strings.Join(indent, ""))
+		data, err = xml.MarshalIndent(input, "", indent)
 	}
 	if err != nil {
-		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
+		return nil, fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
-	data = append([]byte(xml.Header), data...)
-	return file.WriteAll(ctx, data)
+	return append([]byte(xml.Header), data...), nil
 }
 
 // StdFS wraps the file as a StdFS struct that
@@ -1250,8 +1366,13 @@ func (file File) StdFS() StdFS {
 // StdDirEntry wraps the file as a StdDirEntry struct
 // that implements the io/fs.DirEntry interface
 // from the standard library for a File.
+//
+// The entry describes the file itself, not the target of a symbolic link,
+// and calls [File.Lstat] for every method except Name.
+// Use [NewStdDirEntry] with the FileInfo of a directory listing
+// to avoid that.
 func (file File) StdDirEntry() StdDirEntry {
-	return StdDirEntry{file}
+	return StdDirEntry{File: file}
 }
 
 // ListXAttr returns the names of all extended attributes for the file.

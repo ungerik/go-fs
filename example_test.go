@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"testing/fstest"
@@ -127,6 +129,109 @@ func ExampleFile_ListDir() {
 
 	// Output:
 	// [a.txt b.txt]
+}
+
+// ExampleFile_Glob matches files with wildcards in several path segments.
+// Errors, like a canceled context, are yielded by the iterator.
+func ExampleFile_Glob() {
+	memFS, err := fs.NewMemFileSystem(nil,
+		fs.NewMemFile("2024/jan/report.pdf", []byte("1")),
+		fs.NewMemFile("2024/feb/report.pdf", []byte("2")),
+		fs.NewMemFile("2024/feb/notes.txt", []byte("3")),
+	)
+	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
+		panic(err)
+	}
+	defer memFS.Close()
+
+	var paths []string
+	for file, err := range memFS.RootDir().Glob(context.Background(), "*/*/*.pdf") {
+		if err != nil {
+			panic(err)
+		}
+		paths = append(paths, file.Path())
+	}
+	slices.Sort(paths)
+	fmt.Println(paths)
+
+	// Output:
+	// [/2024/feb/report.pdf /2024/jan/report.pdf]
+}
+
+// ExampleFile_WriteJSONIndent writes indented JSON with explicit permissions.
+func ExampleFile_WriteJSONIndent() {
+	memFS, err := fs.NewMemFileSystem(nil)
+	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
+		panic(err)
+	}
+	defer memFS.Close()
+
+	ctx := context.Background()
+	file := memFS.RootDir().Join("config.json")
+	err = file.WriteJSONIndent(ctx, map[string]int{"timeout": 30}, "  ", fs.UserReadWrite)
+	if err != nil {
+		panic(err)
+	}
+
+	content, err := file.ReadAllString(ctx)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(content)
+
+	// Output:
+	// {
+	//   "timeout": 30
+	// }
+}
+
+// ExampleServeFileHTTP serves a file with a content type
+// deduced from the file name.
+func ExampleServeFileHTTP() {
+	file := fs.NewMemFile("index.html", []byte("<h1>Hello</h1>"))
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	fs.ServeFileHTTP(recorder, request, file, "")
+
+	fmt.Println(recorder.Code)
+	fmt.Println(recorder.Header().Get("Content-Type"))
+	fmt.Println(recorder.Body.String())
+
+	// Output:
+	// 200
+	// text/html; charset=utf-8
+	// <h1>Hello</h1>
+}
+
+// ExampleZipMemFiles zips MemFiles with their relative paths
+// and unzips them again.
+func ExampleZipMemFiles() {
+	zipped, err := fs.ZipMemFiles(
+		fs.NewMemFile("docs/a.txt", []byte("A")),
+		fs.NewMemFile("b.txt", []byte("B")),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	files, err := fs.UnzipToMemFiles(context.Background(), fs.NewMemFile("archive.zip", zipped))
+	if err != nil {
+		panic(err)
+	}
+	for _, file := range files {
+		fmt.Println(file.FileName, string(file.FileData))
+	}
+
+	// Output:
+	// docs/a.txt A
+	// b.txt B
 }
 
 // ExampleCopyFile copies a file between two different file systems.

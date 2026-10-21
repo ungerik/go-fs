@@ -489,61 +489,77 @@ func TestFile(t *testing.T) {
 	})
 
 	t.Run("WriteJSON", func(t *testing.T) {
-		// WriteJSON doesn't accept permissions, so we just test it once
-		// Create mock file system for this test with only needed functions
-		mockFS := createMockFS("mock" + t.Name() + "://")
-		Register(mockFS)
-		t.Cleanup(func() { Unregister(mockFS) })
+		for _, permTest := range permissionTests {
+			t.Run(permTest.name, func(t *testing.T) {
+				// Create mock file system for this test with only needed functions
+				mockFS := createMockFS("mock" + t.Name() + "://")
+				Register(mockFS)
+				t.Cleanup(func() { Unregister(mockFS) })
 
-		file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-		testData := map[string]any{"name": "test", "value": 123}
-		capturedPerm := Permissions(0777) // Sentinel that must be overwritten
-		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
-			capturedPerm = perm
-			assert.Equal(t, "/test/path/to/file.txt", filePath)
-			// Verify it's valid JSON
-			assert.Contains(t, string(data), `"name":"test"`)
-			assert.Contains(t, string(data), `"value":123`)
-			return nil
+				testData := map[string]any{"name": "test", "value": 123}
+				capturedPerm := Permissions(07777) // Sentinel that must be overwritten
+				var capturedData string
+				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
+					capturedData = string(data)
+					assert.Equal(t, "/test/path/to/file.txt", filePath)
+					return nil
+				}
+
+				err := file.WriteJSON(t.Context(), testData, permTest.permissions...)
+				require.NoError(t, err)
+				require.Equal(t, permTest.want, capturedPerm)
+				require.Equal(t, `{"name":"test","value":123}`, capturedData)
+
+				capturedPerm = 07777
+				err = file.WriteJSONIndent(t.Context(), testData, "  ", permTest.permissions...)
+				require.NoError(t, err)
+				require.Equal(t, permTest.want, capturedPerm)
+				require.Equal(t, "{\n  \"name\": \"test\",\n  \"value\": 123\n}", capturedData)
+			})
 		}
-
-		err := file.WriteJSON(t.Context(), testData)
-		require.NoError(t, err)
-		// WriteJSON doesn't support permissions, so it should pass the default
-		require.Equal(t, NoPermissions, capturedPerm)
 	})
 
 	t.Run("WriteXML", func(t *testing.T) {
-		// WriteXML doesn't accept permissions, so we just test it once
-		// Create mock file system for this test with only needed functions
-		mockFS := createMockFS("mock" + t.Name() + "://")
-		Register(mockFS)
-		t.Cleanup(func() { Unregister(mockFS) })
+		for _, permTest := range permissionTests {
+			t.Run(permTest.name, func(t *testing.T) {
+				// Create mock file system for this test with only needed functions
+				mockFS := createMockFS("mock" + t.Name() + "://")
+				Register(mockFS)
+				t.Cleanup(func() { Unregister(mockFS) })
 
-		file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-		testData := struct {
-			XMLName struct{} `xml:"root"`
-			Name    string   `xml:"name"`
-			Value   int      `xml:"value"`
-		}{Name: "test", Value: 123}
+				testData := struct {
+					XMLName struct{} `xml:"root"`
+					Name    string   `xml:"name"`
+					Value   int      `xml:"value"`
+				}{Name: "test", Value: 123}
 
-		capturedPerm := Permissions(0777) // Sentinel that must be overwritten
-		mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
-			capturedPerm = perm
-			assert.Equal(t, "/test/path/to/file.txt", filePath)
-			// Verify it's valid XML with header
-			assert.Contains(t, string(data), `<?xml version="1.0" encoding="UTF-8"?>`)
-			assert.Contains(t, string(data), `<name>test</name>`)
-			assert.Contains(t, string(data), `<value>123</value>`)
-			return nil
+				capturedPerm := Permissions(07777) // Sentinel that must be overwritten
+				var capturedData string
+				mockFS.MockWriteAll = func(ctx context.Context, filePath string, data []byte, perm Permissions) error {
+					capturedPerm = perm
+					capturedData = string(data)
+					assert.Equal(t, "/test/path/to/file.txt", filePath)
+					return nil
+				}
+
+				const header = `<?xml version="1.0" encoding="UTF-8"?>` + "\n"
+				err := file.WriteXML(t.Context(), testData, permTest.permissions...)
+				require.NoError(t, err)
+				require.Equal(t, permTest.want, capturedPerm)
+				require.Equal(t, header+`<root><name>test</name><value>123</value></root>`, capturedData)
+
+				capturedPerm = 07777
+				err = file.WriteXMLIndent(t.Context(), testData, "  ", permTest.permissions...)
+				require.NoError(t, err)
+				require.Equal(t, permTest.want, capturedPerm)
+				require.Equal(t, header+"<root>\n  <name>test</name>\n  <value>123</value>\n</root>", capturedData)
+			})
 		}
-
-		err := file.WriteXML(t.Context(), testData)
-		require.NoError(t, err)
-		// WriteXML doesn't support permissions, so it should pass the default
-		require.Equal(t, NoPermissions, capturedPerm)
 	})
 
 	t.Run("ReadFrom", func(t *testing.T) {

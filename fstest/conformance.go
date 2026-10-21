@@ -1266,7 +1266,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 		Count int    `json:"count" xml:"count"`
 	}
 	jsonFile := dir.Join("file.json")
-	require.NoError(t, jsonFile.WriteJSON(c.ctx, doc{Name: "go-fs", Count: 3}, "  "), "File.WriteJSON")
+	require.NoError(t, jsonFile.WriteJSONIndent(c.ctx, doc{Name: "go-fs", Count: 3}, "  "), "File.WriteJSONIndent")
 	var decoded doc
 	require.NoError(t, jsonFile.ReadJSON(c.ctx, &decoded), "File.ReadJSON")
 	assert.Equal(t, doc{Name: "go-fs", Count: 3}, decoded, "JSON round trip")

@@ -29,7 +29,7 @@ func HomeDir() File {
 }
 
 // CurrentWorkingDir returns the current working directory of the process.
-// In case of an erorr, Exists() of the result File will return false.
+// In case of an error, Exists() of the result File will return false.
 func CurrentWorkingDir() File {
 	cwd, _ := os.Getwd()
 	return File(cwd)
