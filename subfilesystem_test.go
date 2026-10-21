@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -310,6 +311,163 @@ func TestSubFileSystem_ReadSymbolicLinkSiblingRoot(t *testing.T) {
 	target, err = subFS.ReadSymbolicLink("/outside")
 	require.NoError(t, err)
 	assert.Equal(t, "/elsewhere/file", target, "an unrelated target stays untranslated")
+}
+
+// TestSubFileSystem_ParentSeparator verifies that a name containing the
+// separator of the parent can't escape the root directory. The view used
+// to pass `/..\secret.txt` to a parent with the separator `\`, which split
+// the name into ".." and "secret.txt" and read and wrote outside of the root.
+func TestSubFileSystem_ParentSeparator(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := fs.RegisteredTestMemFileSystem(&fs.MemFileSystemOptions{Separator: `\`})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memFS.Close() })
+	require.NoError(t, memFS.MakeDir(`\root`, 0))
+	require.NoError(t, memFS.WriteAll(ctx, `\secret.txt`, []byte("secret"), 0))
+
+	subFS, err := fs.NewSubFileSystem(memFS, `\root`, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(subFS))
+	t.Cleanup(func() { _ = subFS.Close() })
+	root := subFS.RootDir()
+
+	// Reading outside of the root
+	secret := root.Join(`..\secret.txt`)
+	_, err = secret.ReadAll(ctx)
+	assert.ErrorIs(t, err, os.ErrInvalid, "File.ReadAll of a name with the parent's separator")
+	_, err = subFS.Stat(`/..\secret.txt`)
+	assert.ErrorIs(t, err, os.ErrInvalid, "Stat of a name with the parent's separator")
+	_, err = subFS.OpenReader(`/..\secret.txt`)
+	assert.ErrorIs(t, err, os.ErrInvalid, "OpenReader of a name with the parent's separator")
+	assert.False(t, secret.Exists(), "a name with the parent's separator does not exist")
+	exists, err := subFS.Exists(`/..\secret.txt`)
+	assert.NoError(t, err)
+	assert.False(t, exists)
+
+	// Writing outside of the root
+	err = root.Join(`..\evil.txt`).WriteAllString(ctx, "evil")
+	assert.ErrorIs(t, err, os.ErrInvalid, "File.WriteAll of a name with the parent's separator")
+	assert.ErrorIs(t, subFS.MakeDir(`/a\..\..\evil`, 0), os.ErrInvalid)
+	assert.ErrorIs(t, subFS.Remove(`/..\secret.txt`), os.ErrInvalid)
+	assert.ErrorIs(t, subFS.CopyFile(ctx, `/..\secret.txt`, "/copy.txt"), os.ErrInvalid)
+	assert.ErrorIs(t, subFS.Move(ctx, `/..\secret.txt`, "/moved.txt"), os.ErrInvalid)
+	files, err := memFS.RootDir().ListDirMax(ctx, -1)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []fs.File{memFS.RootDir().Join("root"), memFS.RootDir().Join("secret.txt")}, files,
+		"nothing written outside of the root")
+	data, err := memFS.ReadAll(ctx, `\secret.txt`)
+	require.NoError(t, err)
+	assert.Equal(t, "secret", string(data), "the file outside of the root is untouched")
+
+	// Paths with the separator of the view are translated element by element
+	require.NoError(t, root.Join("dir").MakeDir())
+	require.NoError(t, root.Join("dir", "a.txt").WriteAllString(ctx, "a"))
+	data, err = memFS.ReadAll(ctx, `\root\dir\a.txt`)
+	require.NoError(t, err)
+	assert.Equal(t, "a", string(data))
+}
+
+// TestSubFileSystem_MoveRoot verifies that the root directory of the view
+// can't be moved or renamed, which would move the directory in the parent,
+// and that it can't be replaced as an existing directory.
+func TestSubFileSystem_MoveRoot(t *testing.T) {
+	ctx := t.Context()
+	subFS := newSubTestFS(t)
+	rootDir := subFS.Dir()
+
+	assert.ErrorIs(t, subFS.Move(ctx, "/", "/moved"), os.ErrInvalid, "Move of the root")
+	_, err := subFS.RootDir().Rename(ctx, "renamed")
+	assert.Error(t, err, "File.Rename of the root")
+	assert.ErrorIs(t, subFS.Move(ctx, "/a.txt", "/"), os.ErrExist, "the root is an existing directory")
+	require.NoError(t, subFS.Move(ctx, "/", "/"), "Move onto itself is a no-op")
+
+	assert.True(t, rootDir.IsDir(), "the root directory must stay in the parent")
+	assert.True(t, rootDir.Join("a.txt").Exists(), "the file must stay in the root directory")
+	assert.False(t, rootDir.Dir().Join("renamed").Exists(), "nothing renamed in the parent")
+}
+
+// TestSubFileSystem_CopyFileOntoDirectory verifies that the destination of
+// CopyFile is the final path, an existing directory is an fs.ErrIsDirectory.
+// The view used fs.CopyFile, which copied into the directory instead.
+func TestSubFileSystem_CopyFileOntoDirectory(t *testing.T) {
+	ctx := t.Context()
+	subFS := newSubTestFS(t)
+	require.NoError(t, subFS.MakeDir("/dir", 0))
+
+	err := subFS.CopyFile(ctx, "/a.txt", "/dir")
+	assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "CopyFile onto a directory")
+	assert.Contains(t, err.Error(), subFS.Prefix(), "the error names the file of the view")
+	exists, err := subFS.Exists("/dir/a.txt")
+	require.NoError(t, err)
+	assert.False(t, exists, "nothing copied into the directory")
+
+	// An existing file is replaced, a missing one created
+	require.NoError(t, subFS.WriteAll(ctx, "/b.txt", []byte("old"), 0))
+	require.NoError(t, subFS.CopyFile(ctx, "/a.txt", "/b.txt"))
+	data, err := subFS.ReadAll(ctx, "/b.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "a", string(data))
+	require.NoError(t, subFS.CopyFile(ctx, "/a.txt", "/c.txt"))
+	data, err = subFS.ReadAll(ctx, "/c.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "a", string(data))
+	require.NoError(t, subFS.CopyFile(ctx, "/a.txt", "/a.txt"), "CopyFile onto itself is a no-op")
+}
+
+// TestSubFileSystem_CreateSymbolicLink verifies the link targets stored in
+// the parent: a relative target is stored verbatim, it used to be turned into
+// an absolute path of the parent resolved against the root instead of the
+// directory of the link, which also allowed targets outside of the root.
+func TestSubFileSystem_CreateSymbolicLink(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	rootDir := filepath.Join(dir, "root")
+	require.NoError(t, os.MkdirAll(filepath.Join(rootDir, "d"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(rootDir, "d", "target.txt"), []byte("target"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("secret"), 0o600))
+	subFS, err := fs.NewSubFileSystem(fs.Local, rootDir, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = subFS.Close() })
+
+	err = subFS.CreateSymbolicLink("target.txt", "/d/link")
+	if errors.Is(err, os.ErrPermission) || errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("symbolic links not available: %v", err)
+	}
+	require.NoError(t, err)
+	stored, err := os.Readlink(filepath.Join(rootDir, "d", "link"))
+	require.NoError(t, err)
+	assert.Equal(t, "target.txt", stored, "a relative target is stored verbatim")
+	target, err := subFS.ReadSymbolicLink("/d/link")
+	require.NoError(t, err)
+	assert.Equal(t, "target.txt", target)
+	data, err := subFS.ReadAll(ctx, "/d/link")
+	require.NoError(t, err)
+	assert.Equal(t, "target", string(data), "reading through the relative link")
+
+	// A relative target may go up as long as it stays in the view
+	require.NoError(t, subFS.CreateSymbolicLink("../d/./target.txt", "/d/up"))
+	data, err = subFS.ReadAll(ctx, "/d/up")
+	require.NoError(t, err)
+	assert.Equal(t, "target", string(data))
+
+	// An absolute target is a path of the view
+	require.NoError(t, subFS.CreateSymbolicLink("/d/target.txt", "/abs"))
+	stored, err = os.Readlink(filepath.Join(rootDir, "abs"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(rootDir, "d", "target.txt"), stored, "stored as path of the parent")
+	target, err = subFS.ReadSymbolicLink("/abs")
+	require.NoError(t, err)
+	assert.Equal(t, "/d/target.txt", target, "read as path of the view")
+
+	// A relative target must not leave the view
+	assert.ErrorIs(t, subFS.CreateSymbolicLink("../../secret.txt", "/d/escape"), os.ErrInvalid)
+	assert.ErrorIs(t, subFS.CreateSymbolicLink("../secret.txt", "/escape"), os.ErrInvalid)
+	assert.ErrorIs(t, subFS.CreateSymbolicLink("d/../../secret.txt", "/escape"), os.ErrInvalid)
+	for _, link := range []string{filepath.Join(rootDir, "d", "escape"), filepath.Join(rootDir, "escape")} {
+		_, err = os.Lstat(link)
+		assert.ErrorIs(t, err, os.ErrNotExist, "no link created at %s", link)
+	}
+	assert.ErrorIs(t, subFS.CreateSymbolicLink("", "/empty"), fs.ErrEmptyPath)
 }
 
 // symlinkMockFileSystem is a MockFileSystem that also implements

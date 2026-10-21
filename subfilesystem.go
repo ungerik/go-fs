@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync/atomic"
 
@@ -40,7 +41,13 @@ var (
 // It forwards every operation to the parent file system with
 // translated paths, so the parent's native implementations of the
 // optional interfaces are used where they exist and the generic
-// emulations otherwise. Paths can't escape the directory.
+// emulations otherwise.
+//
+// Paths can't escape the directory: ".." elements are cleaned away
+// at the root of the view, and a name that the parent would split
+// into several elements, like `..\x` for a parent with the separator `\`,
+// is an error wrapping os.ErrInvalid. Symbolic links that already exist
+// in the parent are followed by the parent wherever they point to.
 //
 // The parent must stay registered while the view is used,
 // because emulated operations go through the File API.
@@ -121,9 +128,61 @@ func (s *SubFileSystem) Dir() File {
 	return fsFile(s.parent, s.dir)
 }
 
-// parentPath translates a path of this file system to the parent.
-func (s *SubFileSystem) parentPath(filePath string) string {
-	return s.parent.CleanPath(s.dir, filePath)
+// parentPath translates a path of this file system to the parent
+// element by element. The view cleans its paths with the separator "/",
+// so a name like `..\secret.txt` is a single element of the view.
+// A parent with the separator `\` would split that name into the
+// elements ".." and "secret.txt" and resolve the path outside of the
+// root directory, so a name containing the separator of the parent
+// is an error wrapping os.ErrInvalid.
+func (s *SubFileSystem) parentPath(filePath string) (string, error) {
+	names := s.paths.SplitPath(s.CleanPath(filePath))
+	for _, name := range names {
+		if !isValidName(s.parent, name) {
+			return "", s.errInvalidName(filePath, name)
+		}
+	}
+	return s.parent.CleanPath(append([]string{s.dir}, names...)...), nil
+}
+
+// errInvalidName returns an error wrapping os.ErrInvalid
+// for a name in filePath that the parent can't represent.
+func (s *SubFileSystem) errInvalidName(filePath, name string) error {
+	return fmt.Errorf("%w: the name %q in %s contains the separator %q of the parent file system",
+		os.ErrInvalid, name, s.paths.JoinCleanURI(filePath), s.parent.Separator())
+}
+
+// linkTarget translates the target of a symbolic link at linkPath
+// to the parent. An absolute target is a path of the view and translated
+// like every path. A relative target is stored verbatim, because the parent
+// resolves it relative to the directory of the link just like the view.
+// A relative target that would leave the view, like "../x" for a link
+// in the root directory, or that contains a name with the separator
+// of the parent is an error wrapping os.ErrInvalid.
+func (s *SubFileSystem) linkTarget(targetPath, linkPath string) (string, error) {
+	if strings.HasPrefix(targetPath, "/") {
+		return s.parentPath(targetPath)
+	}
+	linkDir, _ := s.paths.SplitDirAndName(s.CleanPath(linkPath))
+	depth := len(s.paths.SplitPath(linkDir))
+	for name := range strings.SplitSeq(targetPath, "/") {
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			depth--
+		default:
+			if !isValidName(s.parent, name) {
+				return "", s.errInvalidName(targetPath, name)
+			}
+			depth++
+		}
+		if depth < 0 {
+			return "", fmt.Errorf("%w: the link target %q of %s leaves the root directory of %s",
+				os.ErrInvalid, targetPath, s.paths.JoinCleanURI(linkPath), s)
+		}
+	}
+	return targetPath, nil
 }
 
 // belowDir reports whether the parent path is the root directory
@@ -154,6 +213,19 @@ func (s *SubFileSystem) subInfo(info *FileInfo) *FileInfo {
 	subInfo := *info
 	subInfo.File = s.subFile(info.File)
 	return &subInfo
+}
+
+// checkPath returns the parent path of filePath,
+// or an error if the file system is closed, filePath is empty
+// or can't be translated to the parent.
+func (s *SubFileSystem) checkPath(filePath string) (string, error) {
+	if err := s.checkClosed(); err != nil {
+		return "", err
+	}
+	if filePath == "" {
+		return "", ErrEmptyPath
+	}
+	return s.parentPath(filePath)
 }
 
 func (s *SubFileSystem) checkClosed() error {
@@ -197,13 +269,11 @@ func (s *SubFileSystem) String() string {
 // Stat returns the FileInfo of the file with the path translated
 // to the parent file system.
 func (s *SubFileSystem) Stat(filePath string) (*FileInfo, error) {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return nil, err
 	}
-	if filePath == "" {
-		return nil, ErrEmptyPath
-	}
-	info, err := fsStat(s.parent, s.parentPath(filePath))
+	info, err := fsStat(s.parent, parentPath)
 	if err != nil {
 		return nil, s.subErr(err)
 	}
@@ -224,13 +294,11 @@ func (s *SubFileSystem) subErr(err error) error {
 // matches any of the patterns, or for all files if no patterns are passed.
 // The FileInfo passed to the callback has a File of this file system.
 func (s *SubFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(dirPath)
+	if err != nil {
 		return err
 	}
-	if dirPath == "" {
-		return ErrEmptyPath
-	}
-	err := fsListDir(ctx, s.parent, s.parentPath(dirPath), patterns, func(info *FileInfo) error {
+	err = fsListDir(ctx, s.parent, parentPath, patterns, func(info *FileInfo) error {
 		return callback(s.subInfo(info))
 	})
 	return s.subErr(err)
@@ -238,13 +306,11 @@ func (s *SubFileSystem) ListDir(ctx context.Context, dirPath string, patterns []
 
 // OpenReader opens the file of the parent file system for reading.
 func (s *SubFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return nil, err
 	}
-	if filePath == "" {
-		return nil, ErrEmptyPath
-	}
-	r, err := fsOpenReader(s.parent, s.parentPath(filePath))
+	r, err := fsOpenReader(s.parent, parentPath)
 	return r, s.subErr(err)
 }
 
@@ -264,37 +330,30 @@ func (s *SubFileSystem) Close() error {
 // OpenWriter opens the file of the parent file system for writing,
 // creating it if it does not exist and truncating it if it does.
 func (s *SubFileSystem) OpenWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return nil, err
 	}
-	if filePath == "" {
-		return nil, ErrEmptyPath
-	}
-	w, err := fsOpenWriter(s.parent, s.parentPath(filePath), perm)
+	w, err := fsOpenWriter(s.parent, parentPath, perm)
 	return w, s.subErr(err)
 }
 
 // MakeDir creates a directory in the parent file system.
 func (s *SubFileSystem) MakeDir(dirPath string, perm Permissions) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(dirPath)
+	if err != nil {
 		return err
 	}
-	if dirPath == "" {
-		return ErrEmptyPath
-	}
-	return s.subErr(fsMakeDir(s.parent, s.parentPath(dirPath), perm))
+	return s.subErr(fsMakeDir(s.parent, parentPath, perm))
 }
 
 // Remove removes a file or empty directory from the parent file system.
 // The root directory of the view can't be removed.
 func (s *SubFileSystem) Remove(filePath string) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return err
 	}
-	if filePath == "" {
-		return ErrEmptyPath
-	}
-	parentPath := s.parentPath(filePath)
 	if parentPath == s.dir {
 		return fmt.Errorf("can't remove root directory of %s", s)
 	}
@@ -306,6 +365,7 @@ func (s *SubFileSystem) Remove(filePath string) error {
 // so the parent's native implementation or the emulation is used
 
 // Exists reports if the file exists in the parent file system.
+// A path with a name that the parent can't represent does not exist.
 func (s *SubFileSystem) Exists(filePath string) (bool, error) {
 	if err := s.checkClosed(); err != nil {
 		return false, err
@@ -313,117 +373,103 @@ func (s *SubFileSystem) Exists(filePath string) (bool, error) {
 	if filePath == "" {
 		return false, nil
 	}
-	return fsExists(s.parent, s.parentPath(filePath))
+	parentPath, err := s.parentPath(filePath)
+	if err != nil {
+		// A name that the parent can't represent can't exist
+		return false, nil
+	}
+	return fsExists(s.parent, parentPath)
 }
 
 // ReadAll reads the complete file from the parent file system.
 func (s *SubFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return nil, err
 	}
-	if filePath == "" {
-		return nil, ErrEmptyPath
-	}
-	data, err := fsReadAll(ctx, s.parent, s.parentPath(filePath))
+	data, err := fsReadAll(ctx, s.parent, parentPath)
 	return data, s.subErr(err)
 }
 
 // WriteAll writes data to the file of the parent file system,
 // creating it if it does not exist and replacing its content if it does.
 func (s *SubFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm Permissions) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return err
 	}
-	if filePath == "" {
-		return ErrEmptyPath
-	}
-	return s.subErr(fsWriteAll(ctx, s.parent, s.parentPath(filePath), data, perm))
+	return s.subErr(fsWriteAll(ctx, s.parent, parentPath, data, perm))
 }
 
 // Append appends data to the file of the parent file system,
 // creating it if it does not exist.
 func (s *SubFileSystem) Append(ctx context.Context, filePath string, data []byte, perm Permissions) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return err
 	}
-	if filePath == "" {
-		return ErrEmptyPath
-	}
-	return s.subErr(fsAppend(ctx, s.parent, s.parentPath(filePath), data, perm))
+	return s.subErr(fsAppend(ctx, s.parent, parentPath, data, perm))
 }
 
 // OpenAppendWriter opens the file of the parent file system for appending,
 // creating it if it does not exist.
 func (s *SubFileSystem) OpenAppendWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return nil, err
 	}
-	if filePath == "" {
-		return nil, ErrEmptyPath
-	}
-	w, err := fsOpenAppendWriter(s.parent, s.parentPath(filePath), perm)
+	w, err := fsOpenAppendWriter(s.parent, parentPath, perm)
 	return w, s.subErr(err)
 }
 
 // OpenReadWriter opens the file of the parent file system
 // for reading and writing at any offset.
 func (s *SubFileSystem) OpenReadWriter(filePath string, perm Permissions) (ReadWriteSeekCloser, error) {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return nil, err
 	}
-	if filePath == "" {
-		return nil, ErrEmptyPath
-	}
-	rw, err := fsOpenReadWriter(s.parent, s.parentPath(filePath), perm)
+	rw, err := fsOpenReadWriter(s.parent, parentPath, perm)
 	return rw, s.subErr(err)
 }
 
 // Truncate changes the size of the file in the parent file system.
 func (s *SubFileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return err
 	}
-	if filePath == "" {
-		return ErrEmptyPath
-	}
-	return s.subErr(fsTruncate(ctx, s.parent, s.parentPath(filePath), size))
+	return s.subErr(fsTruncate(ctx, s.parent, parentPath, size))
 }
 
 // Touch creates the file in the parent file system if it does not exist,
 // else it updates its modification time.
 func (s *SubFileSystem) Touch(filePath string, perm Permissions) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return err
 	}
-	if filePath == "" {
-		return ErrEmptyPath
-	}
-	return s.subErr(fsTouch(s.parent, s.parentPath(filePath), perm))
+	return s.subErr(fsTouch(s.parent, parentPath, perm))
 }
 
 // MakeAllDirs creates a directory and all missing parent directories
 // within the view, never above its root.
 func (s *SubFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(dirPath)
+	if err != nil {
 		return err
 	}
-	if dirPath == "" {
-		return ErrEmptyPath
-	}
-	return s.subErr(fsMakeAllDirs(s.parent, s.parentPath(dirPath), perm))
+	return s.subErr(fsMakeAllDirs(s.parent, parentPath, perm))
 }
 
 // RemoveAll removes the file or directory with all its content
 // from the parent file system. The root directory of the view
 // can't be removed.
 func (s *SubFileSystem) RemoveAll(ctx context.Context, filePath string) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return err
 	}
-	if filePath == "" {
-		return ErrEmptyPath
-	}
-	parentPath := s.parentPath(filePath)
 	if parentPath == s.dir {
 		return fmt.Errorf("can't remove root directory of %s", s)
 	}
@@ -431,42 +477,53 @@ func (s *SubFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 }
 
 // CopyFile copies a file within the view using the parent file system.
+// destFile is the final path of the copy: an existing file is replaced,
+// an existing directory is an ErrIsDirectory.
 func (s *SubFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
-	if err := s.checkClosed(); err != nil {
+	srcPath, err := s.checkPath(srcFile)
+	if err != nil {
 		return err
 	}
-	if srcFile == "" || destFile == "" {
-		return ErrEmptyPath
+	destPath, err := s.checkPath(destFile)
+	if err != nil {
+		return err
 	}
-	src, dest := fsFile(s.parent, s.parentPath(srcFile)), fsFile(s.parent, s.parentPath(destFile))
-	if src == dest {
-		return nil
-	}
-	return s.subErr(CopyFile(ctx, src, dest))
+	src, dest := fsFile(s.parent, srcPath), fsFile(s.parent, destPath)
+	return s.subErr(copyFileFinal(ctx, src, dest, nil, nil))
 }
 
 // Move moves and/or renames a file within the view
-// using the parent file system.
+// using the parent file system, see [MoveFileSystem].
+// The root directory of the view can't be moved,
+// and as an existing directory it can't be replaced.
 func (s *SubFileSystem) Move(ctx context.Context, filePath string, destPath string) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return err
 	}
-	if filePath == "" || destPath == "" {
-		return ErrEmptyPath
+	parentDest, err := s.checkPath(destPath)
+	if err != nil {
+		return err
 	}
-	return s.subErr(fsMove(ctx, s.parent, s.parentPath(filePath), s.parentPath(destPath)))
+	switch {
+	case parentPath == parentDest:
+		return nil
+	case parentPath == s.dir:
+		return fmt.Errorf("%w: can't move the root directory of %s", os.ErrInvalid, s)
+	case parentDest == s.dir:
+		return NewErrAlreadyExists(s.RootDir())
+	}
+	return s.subErr(fsMove(ctx, s.parent, parentPath, parentDest))
 }
 
 // ListDirRecursive calls the callback for every file below the directory
 // that matches any of the patterns.
 func (s *SubFileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(dirPath)
+	if err != nil {
 		return err
 	}
-	if dirPath == "" {
-		return ErrEmptyPath
-	}
-	err := fsListDirRecursive(ctx, s.parent, s.parentPath(dirPath), patterns, func(info *FileInfo) error {
+	err = fsListDirRecursive(ctx, s.parent, parentPath, patterns, func(info *FileInfo) error {
 		return callback(s.subInfo(info))
 	})
 	return s.subErr(err)
@@ -474,11 +531,12 @@ func (s *SubFileSystem) ListDirRecursive(ctx context.Context, dirPath string, pa
 
 // SetPermissions sets the permissions of the file in the parent file system.
 func (s *SubFileSystem) SetPermissions(filePath string, perm Permissions) error {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return err
 	}
 	if p, ok := s.parent.(PermissionsFileSystem); ok {
-		return s.subErr(p.SetPermissions(s.parentPath(filePath), perm))
+		return s.subErr(p.SetPermissions(parentPath, perm))
 	}
 	return NewErrUnsupported(s, "SetPermissions")
 }
@@ -486,13 +544,11 @@ func (s *SubFileSystem) SetPermissions(filePath string, perm Permissions) error 
 // Lstat returns the FileInfo of the file in the parent file system
 // without following a symbolic link.
 func (s *SubFileSystem) Lstat(filePath string) (*FileInfo, error) {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return nil, err
 	}
-	if filePath == "" {
-		return nil, ErrEmptyPath
-	}
-	info, err := fsLstat(s.parent, s.parentPath(filePath))
+	info, err := fsLstat(s.parent, parentPath)
 	if err != nil {
 		return nil, s.subErr(err)
 	}
@@ -500,28 +556,43 @@ func (s *SubFileSystem) Lstat(filePath string) (*FileInfo, error) {
 }
 
 // CreateSymbolicLink creates a link at linkPath to targetPath.
-// The target is stored as a path of the parent file system.
+// An absolute targetPath is a path of the view and stored as the
+// corresponding path of the parent file system. A relative targetPath
+// is stored verbatim, the parent resolves it relative to the directory
+// of the link. A relative targetPath that leaves the root directory
+// of the view is an error wrapping os.ErrInvalid.
 func (s *SubFileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
-	if err := s.checkClosed(); err != nil {
+	parentLink, err := s.checkPath(linkPath)
+	if err != nil {
 		return err
 	}
-	if p, ok := s.parent.(SymbolicLinkFileSystem); ok {
-		return s.subErr(p.CreateSymbolicLink(s.parentPath(targetPath), s.parentPath(linkPath)))
+	if targetPath == "" {
+		return ErrEmptyPath
 	}
-	return NewErrUnsupported(s, "CreateSymbolicLink")
+	p, ok := s.parent.(SymbolicLinkFileSystem)
+	if !ok {
+		return NewErrUnsupported(s, "CreateSymbolicLink")
+	}
+	parentTarget, err := s.linkTarget(targetPath, linkPath)
+	if err != nil {
+		return err
+	}
+	return s.subErr(p.CreateSymbolicLink(parentTarget, parentLink))
 }
 
-// ReadSymbolicLink returns the target of the link translated
-// to this file system if it points below the root directory.
+// ReadSymbolicLink returns the target of the link. An absolute target
+// that points below the root directory is translated to a path
+// of this file system, other targets are returned as stored.
 func (s *SubFileSystem) ReadSymbolicLink(linkPath string) (targetPath string, err error) {
-	if err := s.checkClosed(); err != nil {
+	parentLink, err := s.checkPath(linkPath)
+	if err != nil {
 		return "", err
 	}
 	p, ok := s.parent.(SymbolicLinkFileSystem)
 	if !ok {
 		return "", NewErrUnsupported(s, "ReadSymbolicLink")
 	}
-	target, err := p.ReadSymbolicLink(s.parentPath(linkPath))
+	target, err := p.ReadSymbolicLink(parentLink)
 	if err != nil {
 		return "", s.subErr(err)
 	}
@@ -534,14 +605,15 @@ func (s *SubFileSystem) ReadSymbolicLink(linkPath string) (targetPath string, er
 // Watch registers the callback for file system events of the file
 // at the parent file system and returns a cancel function.
 func (s *SubFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
-	if err := s.checkClosed(); err != nil {
+	parentPath, err := s.checkPath(filePath)
+	if err != nil {
 		return nil, err
 	}
 	p, ok := s.parent.(WatchFileSystem)
 	if !ok {
 		return nil, NewErrUnsupported(s, "Watch")
 	}
-	cancel, err = p.Watch(s.parentPath(filePath), func(file File, event Event) {
+	cancel, err = p.Watch(parentPath, func(file File, event Event) {
 		onEvent(s.subFile(file), event)
 	})
 	return cancel, s.subErr(err)
