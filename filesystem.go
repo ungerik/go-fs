@@ -114,7 +114,9 @@ type FileSystem interface {
 
 	// Close closes the file system and unregisters it if it was registered
 	// by calling [Unregister]. Calling Close more than once is valid and returns nil.
-	// File systems that can't be closed only unregister.
+	// After Close every method returns an error wrapping [ErrFileSystemClosed].
+	// Process wide singletons like [Local] that are never closed only unregister,
+	// they are tested with fstest.Config.SkipClose.
 	Close() error
 }
 
