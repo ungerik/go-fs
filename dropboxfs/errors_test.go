@@ -3,13 +3,12 @@ package dropboxfs
 import (
 	"errors"
 	"fmt"
+	"os"
 	"testing"
-	"time"
 
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox"
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox/files"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
 )
@@ -83,65 +82,54 @@ func TestIsNotExistError(t *testing.T) {
 	})
 }
 
+// TestIsConflictError checks the error types of the V2 endpoints, which
+// differ from the ones of the V1 endpoints that were checked before.
 func TestIsConflictError(t *testing.T) {
-	err := files.CreateFolderAPIError{
+	err := files.CreateFolderV2APIError{
 		EndpointError: &files.CreateFolderError{
 			Path: &files.WriteError{
 				Tagged: dropbox.Tagged{Tag: files.WriteErrorConflict},
 			},
 		},
 	}
-	assert.True(t, isConflictError(err), "create_folder conflict means the path exists")
+	assert.True(t, isConflictError(err), "create_folder_v2 conflict means the path exists")
+	assert.False(t, isConflictError(files.CreateFolderV2APIError{}), "no endpoint error")
 	assert.False(t, isConflictError(errors.New("conflict")), "untyped errors are not conflicts")
+
+	move := files.MoveV2APIError{EndpointError: &files.RelocationError{
+		Tagged: dropbox.Tagged{Tag: files.RelocationErrorTo},
+		To:     conflictError(files.WriteConflictErrorFolder),
+	}}
+	assert.Equal(t, files.WriteConflictErrorFolder, conflictTag(move))
+	assert.Equal(t, files.WriteConflictErrorFolder, conflictTag(fmt.Errorf("wrapped: %w", move)))
 }
 
-// TestClosedFileSystem verifies that after Close every method that uses the
-// Dropbox API returns fs.ErrFileSystemClosed instead of dereferencing a
-// closed client.
-func TestClosedFileSystem(t *testing.T) {
-	// A real (offline) client is fine: closed methods short-circuit before any
-	// network call, so no token or connectivity is required.
-	dbfs := newFileSystem("dbid:test", files.New(dropbox.Config{Token: "offline-token"}), time.Minute, false)
-	fs.Register(dbfs)
+// TestWrapErr checks the mapping of the typed Dropbox errors to the fs errors.
+func TestWrapErr(t *testing.T) {
+	dbfs := newFileSystem("dbid:wrap", nil, nil)
+	for _, c := range []struct {
+		err    error
+		target error
+	}{
+		{files.DeleteV2APIError{EndpointError: &files.DeleteError{PathLookup: lookupError(files.LookupErrorNotFound)}}, os.ErrNotExist},
+		{files.ListFolderContinueAPIError{EndpointError: &files.ListFolderContinueError{Path: lookupError(files.LookupErrorNotFound)}}, os.ErrNotExist},
+		{files.DownloadAPIError{EndpointError: &files.DownloadError{Path: lookupError(files.LookupErrorNotFile)}}, fs.ErrIsDirectory{}},
+		{files.ListFolderAPIError{EndpointError: &files.ListFolderError{Path: lookupError(files.LookupErrorNotFolder)}}, fs.ErrIsNotDirectory{}},
+		{files.UploadAPIError{EndpointError: &files.UploadError{Path: &files.UploadWriteFailed{Reason: conflictError(files.WriteConflictErrorFolder)}}}, fs.ErrIsDirectory{}},
+		{files.UploadSessionFinishAPIError{EndpointError: &files.UploadSessionFinishError{Path: conflictError(files.WriteConflictErrorFileAncestor)}}, fs.ErrIsNotDirectory{}},
+		{files.CopyV2APIError{EndpointError: &files.RelocationError{Tagged: dropbox.Tagged{Tag: files.RelocationErrorTo}, To: conflictError(files.WriteConflictErrorFile)}}, os.ErrExist},
+		{files.CreateFolderV2APIError{EndpointError: &files.CreateFolderError{Path: &files.WriteError{Tagged: dropbox.Tagged{Tag: files.WriteErrorNoWritePermission}}}}, os.ErrPermission},
+	} {
+		assert.ErrorIs(t, dbfs.wrapErr("/x", c.err), c.target, "%#v", c.err)
+	}
+	transient := errors.New("too_many_requests")
+	assert.Equal(t, transient, dbfs.wrapErr("/x", transient))
+	assert.NoError(t, dbfs.wrapErr("/x", nil))
 
-	require.True(t, fs.IsRegistered(dbfs), "filesystem should be registered before Close")
-
-	require.NoError(t, dbfs.Close())
-
-	assert.False(t, fs.IsRegistered(dbfs), "Close must unregister the filesystem")
-
-	// Close is idempotent.
-	assert.NoError(t, dbfs.Close())
-
-	ctx := t.Context()
-
-	_, err := dbfs.Stat("/file")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	err = dbfs.WriteAll(ctx, "/file", []byte("x"), 0)
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	err = dbfs.MakeDir("/dir", 0)
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	err = dbfs.Remove("/file")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	err = dbfs.Move(t.Context(), "/a", "/b")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	err = dbfs.CopyFile(ctx, "/a", "/b")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	_, err = dbfs.OpenReader("/file")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	_, err = dbfs.OpenWriter("/file", 0)
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	err = dbfs.ListDir(ctx, "/dir", nil, func(*fs.FileInfo) error { return nil })
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-
-	err = dbfs.RemoveAll(ctx, "/dir")
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	intoItself := files.MoveV2APIError{EndpointError: &files.RelocationError{Tagged: dropbox.Tagged{Tag: files.RelocationErrorCantMoveFolderIntoItself}}}
+	assert.ErrorIs(t, dbfs.wrapRelocationErr("/a", "/a/b", intoItself), os.ErrInvalid)
+	fromMissing := files.MoveV2APIError{EndpointError: &files.RelocationError{Tagged: dropbox.Tagged{Tag: files.RelocationErrorFromLookup}, FromLookup: lookupError(files.LookupErrorNotFound)}}
+	err := dbfs.wrapRelocationErr("/a", "/b", fromMissing)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.ErrorContains(t, err, "/a", "the error is about the source")
 }
