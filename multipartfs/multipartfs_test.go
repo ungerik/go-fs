@@ -333,6 +333,32 @@ func TestOpenReaderStat(t *testing.T) {
 	assert.Equal(t, fs.AllRead, fsInfo.Permissions)
 }
 
+// TestOpenReader_Directory verifies that opening the root or a form field
+// directory reports fs.ErrIsDirectory. Both used to be reported as missing,
+// although Stat describes them as existing directories.
+func TestOpenReader_Directory(t *testing.T) {
+	multipartFS := newTestFS(t, []upload{{field: "files", name: "a.txt", content: "A"}}, nil)
+
+	for _, dirPath := range []string{multipartFS.CleanPath(""), multipartFS.CleanPath("files")} {
+		_, err := multipartFS.OpenReader(dirPath)
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenReader(%q)", dirPath)
+		assert.NotErrorIs(t, err, os.ErrNotExist, "OpenReader(%q)", dirPath)
+		_, err = multipartFS.ReadAll(t.Context(), dirPath)
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "ReadAll(%q)", dirPath)
+	}
+
+	// Missing paths are still reported as missing
+	_, err := multipartFS.OpenReader(multipartFS.CleanPath("missing"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	_, err = multipartFS.OpenReader(multipartFS.CleanPath("files", "missing.txt"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+
+	// After Close a directory is reported as closed, not as directory
+	require.NoError(t, multipartFS.Close())
+	_, err = multipartFS.OpenReader(multipartFS.CleanPath("files"))
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+}
+
 // newDiskFS returns a MultipartFileSystem whose uploads larger than one
 // byte are stored in temporary files in a new directory, which is returned.
 func newDiskFS(t *testing.T, uploads []upload, values map[string]string) (*MultipartFileSystem, string) {

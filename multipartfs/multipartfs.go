@@ -489,8 +489,14 @@ func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 // OpenReader opens an uploaded file for reading.
 // The reader implements io/fs.File, Close of the
 // file system closes it if it is still open.
+// The root and the form field directories are an fs.ErrIsDirectory.
 func (f *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	header, err := f.GetMultipartFileHeader(filePath)
+	if errors.Is(err, iofs.ErrNotExist) {
+		if info := f.info(filePath); info.IsDir {
+			return nil, fs.NewErrIsDirectory(info.File)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

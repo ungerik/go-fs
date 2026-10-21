@@ -188,9 +188,16 @@ func (m *minimalFileSystem) Remove(filePath string) error {
 	return m.backing.Remove(filePath)
 }
 
+// Close unregisters the file system and closes the backing file system,
+// so that every operation reports fs.ErrFileSystemClosed afterwards
+// like the backing does. The local file system is shared by all tests
+// and never closed.
 func (m *minimalFileSystem) Close() error {
 	fs.Unregister(m)
-	return nil
+	if m.backing == fs.WriteFileSystem(fs.Local) {
+		return nil
+	}
+	return m.backing.Close()
 }
 
 // hookReader is a reader from minimalFileSystem.OpenReader
