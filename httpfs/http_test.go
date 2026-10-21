@@ -443,3 +443,20 @@ func TestErrorsRedacted(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "topsecret")
 }
+
+// TestFile_ExtTrimExt_query checks that the extension of an HTTP file
+// is the one of the name before the query string.
+func TestFile_ExtTrimExt_query(t *testing.T) {
+	file := fs.File("https://example.com/dir/report.pdf?token=a.b")
+	assert.Equal(t, ".pdf", file.Ext())
+	assert.Equal(t, fs.File("https://example.com/dir/report?token=a.b"), file.TrimExt())
+	assert.Equal(t, fs.File("https://example.com/dir/report"), fs.File("https://example.com/dir/report").TrimExt())
+}
+
+// TestErrorMessage_noQuery checks that error messages of HTTP files
+// don't contain the query, which can carry presigned URL signatures.
+func TestErrorMessage_noQuery(t *testing.T) {
+	err := fs.NewErrDoesNotExist(fs.File("https://example.com/key.txt?X-Amz-Signature=secret"))
+	assert.NotContains(t, err.Error(), "secret")
+	assert.Contains(t, err.Error(), "https://example.com/key.txt")
+}

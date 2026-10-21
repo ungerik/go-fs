@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 )
 
 // SentinelError is used for const sentinel errors
@@ -398,7 +399,14 @@ func errSubject(fileReader FileReader) string {
 	case nil:
 		return ""
 	case File:
-		return redactURI(r.String())
+		uri := r.String()
+		if _, ok := r.FileSystem().(URIFileSystem); ok {
+			// A query can carry secrets like presigned URL signatures
+			if i := strings.IndexAny(uri, "?#"); i >= 0 {
+				uri = uri[:i]
+			}
+		}
+		return redactURI(uri)
 	case MemFile:
 		return r.FileName
 	default:

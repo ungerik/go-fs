@@ -33,11 +33,10 @@ func fsURL(fileSystem FileSystem, cleanPath string) string {
 	if u, ok := fileSystem.(URIFileSystem); ok {
 		return u.URIFromPath(cleanPath)
 	}
-	prefix, sep := fileSystem.Prefix(), fileSystem.Separator()
-	if strings.HasSuffix(prefix, sep) && strings.HasPrefix(cleanPath, sep) {
-		cleanPath = cleanPath[len(sep):]
-	}
-	return prefix + fsimpl.EscapeURIPath(cleanPath)
+	// Same rule as PathHelper.URL: a prefix ending with the separator
+	// after a host doesn't double it, a scheme-only prefix like "x://"
+	// is followed by the whole rooted path
+	return fsimpl.PathHelper{URIPrefix: fileSystem.Prefix(), PathSep: fileSystem.Separator()}.URL(cleanPath)
 }
 
 // fsFile returns the File for a clean path within fileSystem.

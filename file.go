@@ -160,6 +160,11 @@ func (file File) VolumeName() string {
 //	File("dir.with.ext/file.ext").Ext() == ".ext"
 func (file File) Ext() string {
 	fileSystem, path := file.ParseRawURI()
+	if _, ok := fileSystem.(URIFileSystem); ok {
+		// The path of a URI can end with a query or fragment
+		_, name := fsSplitDirAndName(fileSystem, path)
+		return fsimpl.Ext(name, fileSystem.Separator())
+	}
 	return fsimpl.Ext(path, fileSystem.Separator())
 }
 
@@ -171,8 +176,26 @@ func (file File) ExtLower() string {
 
 // TrimExt returns a File with a path where the extension is removed.
 // Note that this does not rename an actual existing file.
+// For URIs with a query or fragment like HTTP URLs,
+// the extension of the name before the query is removed.
 func (file File) TrimExt() File {
-	return File(fsimpl.TrimExt(string(file), file.FileSystem().Separator()))
+	fileSystem, path := file.ParseRawURI()
+	if _, ok := fileSystem.(URIFileSystem); ok {
+		ext := file.Ext()
+		if ext == "" {
+			return file
+		}
+		// The path of a URI ends at the first "?" or "#"
+		end := strings.IndexAny(path, "?#")
+		if end < 0 {
+			end = len(path)
+		}
+		if !strings.HasSuffix(path[:end], ext) {
+			return file
+		}
+		return fsFile(fileSystem, path[:end-len(ext)]+path[end:])
+	}
+	return File(fsimpl.TrimExt(string(file), fileSystem.Separator()))
 }
 
 // Join returns a new File with pathParts cleaned and joined to the current File's URI.

@@ -200,7 +200,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				// MakeDir stats first and is a no-op for an existing directory
 				// (or an error for an existing file), so the path must not exist
@@ -230,7 +230,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				// MockFullyFeaturedFileSystem implements MakeAllDirsFileSystem,
 				// so the permissions are passed to the native MakeAllDirs
@@ -257,7 +257,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				var capturedPerm Permissions
 				mockFS.MockOpenWriter = func(filePath string, perm Permissions) (WriteCloser, error) {
@@ -282,7 +282,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				// Mock ReadAll to return existing content
 				mockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -315,7 +315,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				var capturedPerm Permissions
 				mockFS.MockOpenReadWriter = func(filePath string, perm Permissions) (ReadWriteSeekCloser, error) {
@@ -340,7 +340,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testData := []byte("test content")
 				var capturedPerm Permissions
@@ -366,7 +366,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testData := []byte("test content")
 				var capturedPerm Permissions
@@ -392,7 +392,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testStr := "test content"
 				var capturedPerm Permissions
@@ -418,7 +418,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testStr := "test content"
 				var capturedPerm Permissions
@@ -444,7 +444,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testData := []byte("appended content")
 				var capturedPerm Permissions
@@ -470,7 +470,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testStr := "appended content"
 				var capturedPerm Permissions
@@ -496,7 +496,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testData := map[string]any{"name": "test", "value": 123}
 				capturedPerm := Permissions(07777) // Sentinel that must be overwritten
@@ -530,7 +530,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testData := struct {
 					XMLName struct{} `xml:"root"`
@@ -570,7 +570,7 @@ func TestFile(t *testing.T) {
 				Register(mockFS)
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + "://test/path/to/file.txt")
+				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 				testReader := strings.NewReader("test content")
 
@@ -608,7 +608,7 @@ func TestFile(t *testing.T) {
 		Register(mockFS)
 		t.Cleanup(func() { Unregister(mockFS) })
 
-		file := File("mock" + t.Name() + "://test/path/to/file.txt")
+		file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 		t.Run("FileSystem", func(t *testing.T) {
 			fs := file.FileSystem()
@@ -692,7 +692,7 @@ func TestFile(t *testing.T) {
 
 		t.Run("TrimExt", func(t *testing.T) {
 			trimmed := file.TrimExt()
-			assert.True(t, strings.HasSuffix(string(trimmed), "://test/path/to/file"))
+			assert.True(t, strings.HasSuffix(string(trimmed), ":///test/path/to/file"))
 		})
 
 		t.Run("Join", func(t *testing.T) {
@@ -712,7 +712,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Mock Stat to return a readable file
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -736,7 +736,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Mock Stat to return a writable file
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -760,7 +760,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			expectedInfo := &FileInfo{
 				Name:        "file.txt",
@@ -790,7 +790,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			expectedInfo := &FileInfo{
 				Name:        "file.txt",
@@ -816,7 +816,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Mock Stat to return no error (file exists)
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -833,7 +833,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Test with existing file
 			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -923,7 +923,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Create file with matching prefix
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Mock Stat to return a regular file
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -946,7 +946,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Create file with matching prefix
-			file := File("mock" + t.Name() + "://test/path/to/dir")
+			file := File("mock" + t.Name() + ":///test/path/to/dir")
 
 			// Mock ListDir to return an empty directory
 			mockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -965,7 +965,7 @@ func TestFile(t *testing.T) {
 
 			// MockFullyFeaturedFileSystem implements HiddenFileSystem,
 			// MockIsHidden uses the dot rule
-			hiddenFile := File("mock" + t.Name() + "://test/path/to/.hidden")
+			hiddenFile := File("mock" + t.Name() + ":///test/path/to/.hidden")
 			hidden := hiddenFile.IsHidden()
 			assert.True(t, hidden)
 		})
@@ -977,7 +977,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			symlink := file.IsSymbolicLink()
 			assert.False(t, symlink) // MockIsSymbolicLink returns false
@@ -989,7 +989,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Mock Stat to return a file with size
 			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -1011,7 +1011,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Mock OpenReader to return a reader with content
 			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
@@ -1030,7 +1030,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Mock OpenReader to return a reader with content
 			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
@@ -1048,7 +1048,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			expectedTime := time.Now()
 			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -1070,7 +1070,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
 				return &FileInfo{
@@ -1090,7 +1090,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements SetPermissions
 			err := testFile.SetPermissions(0644)
@@ -1103,11 +1103,11 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/dir")
+			testFile := File("mock" + t.Name() + ":///test/path/to/dir")
 
 			expectedFiles := []File{
-				File("mock" + t.Name() + "://test/path/to/dir/file1.txt"),
-				File("mock" + t.Name() + "://test/path/to/dir/file2.txt"),
+				File("mock" + t.Name() + ":///test/path/to/dir/file1.txt"),
+				File("mock" + t.Name() + ":///test/path/to/dir/file2.txt"),
 			}
 
 			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1137,11 +1137,11 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/dir")
+			testFile := File("mock" + t.Name() + ":///test/path/to/dir")
 
 			expectedFiles := []File{
-				File("mock" + t.Name() + "://test/path/to/dir/file1.txt"),
-				File("mock" + t.Name() + "://test/path/to/dir/file2.txt"),
+				File("mock" + t.Name() + ":///test/path/to/dir/file1.txt"),
+				File("mock" + t.Name() + ":///test/path/to/dir/file2.txt"),
 			}
 
 			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1170,11 +1170,11 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/dir")
+			testFile := File("mock" + t.Name() + ":///test/path/to/dir")
 
 			expectedFiles := []File{
-				File("mock" + t.Name() + "://test/path/to/dir/file1.txt"),
-				File("mock" + t.Name() + "://test/path/to/dir/file2.txt"),
+				File("mock" + t.Name() + ":///test/path/to/dir/file1.txt"),
+				File("mock" + t.Name() + ":///test/path/to/dir/file2.txt"),
 			}
 
 			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1202,11 +1202,11 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/dir")
+			testFile := File("mock" + t.Name() + ":///test/path/to/dir")
 
 			expectedFiles := []File{
-				File("mock" + t.Name() + "://test/path/to/dir/file1.txt"),
-				File("mock" + t.Name() + "://test/path/to/dir/file2.txt"),
+				File("mock" + t.Name() + ":///test/path/to/dir/file1.txt"),
+				File("mock" + t.Name() + ":///test/path/to/dir/file2.txt"),
 			}
 
 			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1229,7 +1229,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements User methods
 			user, err := testFile.User()
@@ -1243,7 +1243,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements SetUser
 			err := testFile.SetUser("testuser")
@@ -1256,7 +1256,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Group
 			group, err := testFile.Group()
@@ -1270,7 +1270,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements SetGroup
 			err := testFile.SetGroup("testgroup")
@@ -1283,7 +1283,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Touch
 			err := testFile.Touch()
@@ -1296,7 +1296,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			testMockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
 				return io.NopCloser(strings.NewReader("test content")), nil
@@ -1315,7 +1315,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			testMockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
 				assert.Equal(t, "/test/path/to/file.txt", filePath)
@@ -1343,7 +1343,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
 				return io.NopCloser(strings.NewReader("test content")), nil
@@ -1368,7 +1368,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1386,7 +1386,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1404,7 +1404,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1423,7 +1423,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1441,7 +1441,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1459,7 +1459,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			jsonData := []byte(`{"name": "test", "value": 123}`)
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1479,7 +1479,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			xmlData := []byte(`<root><name>test</name><value>123</value></root>`)
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1502,7 +1502,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Watch
 			cancel, err := testFile.Watch(func(f File, e Event) {})
@@ -1520,7 +1520,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Truncate
 			err := testFile.Truncate(t.Context(), 100)
@@ -1533,7 +1533,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Rename uses the Move of fstest.MockFullyFeaturedFileSystem
 			renamedFile, err := testFile.Rename(t.Context(), "newfile.txt")
@@ -1547,7 +1547,7 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// Rename uses the Move of fstest.MockFullyFeaturedFileSystem
 			renamedFile, err := testFile.Renamef(t.Context(), "newfile_%d.txt", 123)
@@ -1561,8 +1561,8 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
-			dest := File("mock" + t.Name() + "://test/path/to/destination.txt")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			dest := File("mock" + t.Name() + ":///test/path/to/destination.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Move,
 			// the destination is a file (default MockStat) so it is the final path
@@ -1584,8 +1584,8 @@ func TestFile(t *testing.T) {
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
-			destDir := File("mock" + t.Name() + "://test/other")
+			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			destDir := File("mock" + t.Name() + ":///test/other")
 
 			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
 				return &FileInfo{Name: path.Base(filePath), Exists: true, IsDir: filePath == "/test/other"}, nil
@@ -1629,7 +1629,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			mockFS.MockRemove = func(filePath string) error {
 				assert.Equal(t, "/test/path/to/file.txt", filePath)
@@ -1647,7 +1647,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			// RemoveRecursive uses the native RemoveAll of
 			// fstest.MockFullyFeaturedFileSystem instead of
@@ -1670,7 +1670,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			stdFS := file.StdFS()
 			assert.NotNil(t, stdFS)
@@ -1684,7 +1684,7 @@ func TestFile(t *testing.T) {
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + "://test/path/to/file.txt")
+			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
 
 			stdDirEntry := file.StdDirEntry()
 			assert.NotNil(t, stdDirEntry)
