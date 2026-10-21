@@ -98,7 +98,7 @@ type FileSystem interface {
 	Stat(path string) (*FileInfo, error)
 	ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error
 	OpenReader(path string) (io.ReadCloser, error)
-	Close() error // idempotent; unregisters if registered; no-op for Local/Invalid
+	Close() error // idempotent; unregisters if registered; Local only stops its watcher and stays usable; no-op for Invalid
 }
 
 type WriteFileSystem interface {

@@ -1,4 +1,4 @@
-//go:build darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris
+//go:build unix
 
 package fs
 
@@ -14,6 +14,11 @@ import (
 
 const localRoot = `/`
 
+var (
+	_ UserFileSystem  = new(LocalFileSystem)
+	_ GroupFileSystem = new(LocalFileSystem)
+)
+
 // isCrossDeviceError reports whether the error is
 // a cross-device link error (EXDEV) from os.Rename.
 func isCrossDeviceError(err error) bool {
@@ -22,20 +27,22 @@ func isCrossDeviceError(err error) bool {
 
 var extraDirPermissions Permissions = AllExecute
 
-func hasLocalFileAttributeHidden(string) (bool, error) {
-	return false, nil
+// localHiddenAttribute returns false,
+// Unix has no hidden attribute, only the dot rule.
+func localHiddenAttribute(string, os.FileInfo) bool {
+	return false
 }
 
-// localFileSystemID returns the statfs f_fsid of the root directory
+// localFileSystemID returns the file system id of the root directory
 // formatted as hex, or "/" if it can't be determined.
 func localFileSystemID() string {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(localRoot, &stat); err != nil {
+	fsid, err := rootFileSystemID()
+	if err != nil {
 		return localRoot
 	}
-	// The field name of the fsid array differs between platforms,
-	// so format the struct and strip the decoration: "{[a b]}" -> "a-b"
-	id := strings.Trim(fmt.Sprintf("%x", stat.Fsid), "{}[]")
+	// The type of the id differs between platforms,
+	// so format it and strip the decoration: "{[a b]}" -> "a-b"
+	id := strings.Trim(fmt.Sprintf("%x", fsid), "{}[]")
 	return strings.ReplaceAll(id, " ", "-")
 }
 
@@ -45,11 +52,9 @@ func (local *LocalFileSystem) User(filePath string) (string, error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
 	}
-	filePath = expandTilde(filePath)
-
 	info, err := os.Stat(filePath)
 	if err != nil {
-		return "", err
+		return "", wrapOSErr(filePath, err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -68,8 +73,6 @@ func (local *LocalFileSystem) SetUser(filePath string, username string) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	filePath = expandTilde(filePath)
-
 	u, err := user.Lookup(username)
 	if err != nil {
 		return err
@@ -78,7 +81,7 @@ func (local *LocalFileSystem) SetUser(filePath string, username string) error {
 	if err != nil {
 		return err
 	}
-	return os.Chown(filePath, uid, -1)
+	return wrapOSErr(filePath, os.Chown(filePath, uid, -1))
 }
 
 // Group returns the name of the group owning the file.
@@ -87,11 +90,9 @@ func (local *LocalFileSystem) Group(filePath string) (string, error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
 	}
-	filePath = expandTilde(filePath)
-
 	info, err := os.Stat(filePath)
 	if err != nil {
-		return "", err
+		return "", wrapOSErr(filePath, err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -107,13 +108,9 @@ func (local *LocalFileSystem) Group(filePath string) (string, error) {
 // SetGroup changes the group owning the file.
 // Only available on Unix systems.
 func (local *LocalFileSystem) SetGroup(filePath string, group string) error {
-	filePath = expandTilde(filePath)
-
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	filePath = expandTilde(filePath)
-
 	g, err := user.LookupGroup(group)
 	if err != nil {
 		return err
@@ -122,5 +119,5 @@ func (local *LocalFileSystem) SetGroup(filePath string, group string) error {
 	if err != nil {
 		return err
 	}
-	return os.Chown(filePath, -1, gid)
+	return wrapOSErr(filePath, os.Chown(filePath, -1, gid))
 }
