@@ -29,12 +29,17 @@ func main() {
         ctx,
         os.Getenv("AZURE_STORAGE_CONNECTION_STRING"),
         "assets", // container name
-        false,    // read-only
+        nil,      // or &azureblobfs.Options{ReadOnly: true}
     )
     if err != nil {
         panic(err)
     }
-    defer blobFS.Close()
+    // Files resolve to their file system with the registry
+    err = fs.Register(blobFS)
+    if err != nil {
+        panic(err)
+    }
+    defer blobFS.Close() // Also unregisters it
 
     // Use it like any other go-fs file system
     file := blobFS.RootDir().Join("images", "logo.png")
@@ -45,10 +50,15 @@ func main() {
 }
 ```
 
-`NewFromConnectionString` builds the container client from a connection
-string and registers the file system. `NewAndRegister` takes a configured
-`*container.Client`, which is the way to use managed identities, SAS tokens
-or any other credential type the Azure SDK supports:
+- `New(ctx, client, opts)` takes a configured `*container.Client`, which is
+  the way to use managed identities, SAS tokens or any other credential type
+  the Azure SDK supports. It doesn't register the file system.
+- `NewFromConnectionString(ctx, connectionString, container, opts)` builds
+  the container client from a connection string, like `New` it doesn't
+  register the file system.
+- `NewAndRegister(ctx, client, opts)` creates and registers it in one step
+  and returns only an error, wrapping `fs.ErrAlreadyRegistered` if another
+  file system is registered for the container.
 
 ```go
 client, err := container.NewClient(
@@ -56,46 +66,80 @@ client, err := container.NewClient(
     credential, // e.g. from azidentity.NewDefaultAzureCredential
     nil,
 )
-blobFS, err := azureblobfs.NewAndRegister(ctx, client, false)
+err = azureblobfs.NewAndRegister(ctx, client, nil)
 ```
 
-`New` does the same without registering the file system.
+### Options
+
+```go
+&azureblobfs.Options{
+    ReadOnly:           true, // writes return fs.ErrReadOnlyFileSystem
+    SkipContainerCheck: true, // New sends no request
+}
+```
+
+Unless `SkipContainerCheck` is set, `New` lists one blob to verify that the
+container exists and can be listed. That works with account keys, Entra ID
+roles and SAS tokens with the list permission, also container SAS tokens,
+which don't allow reading the container properties that v0 requested.
+Set it for credentials without the list permission, like an upload-only SAS;
+writes then skip their directory check, which needs a listing too.
 
 File URIs have the form `azblob://<host>/<container>/<blob name>`, for
 example `azblob://myaccount.blob.core.windows.net/assets/images/logo.png`.
-`blobFS.ID()` is that prefix without the scheme.
+The query of the container URL, like a SAS token, is not part of the URIs,
+and the file system removes URL queries and SAS signatures from the
+messages of the errors it returns, so they don't leak into logs.
+`Name()` is `"Azure Blob Storage"`, `ID()` the prefix without the scheme.
 
 ## How Azure Blob concepts map to the file system
 
 - **Paths and blob names.** File system paths are rooted
-  (`/images/logo.png`), blob names are not (`images/logo.png`).
+  (`/images/logo.png`), blob names are not (`images/logo.png`). Blobs that
+  no path maps to, because their name starts with a slash or contains an
+  empty element (`/x.txt`, `images//x.png`), are skipped by the listings.
 - **Directories.** Blob Storage has no directories. A blob name prefix with
   at least one blob below it is an implicit directory. `MakeDir` creates a
   zero-byte marker blob with a trailing slash so empty directories exist
   too; `Stat`, `ListDir` and `Remove` treat both the same way. `MakeDir` on
-  an existing path wraps `os.ErrExist`, `Remove` of a directory with content
-  fails, and `RemoveAll` deletes everything below a prefix.
+  an existing path wraps `os.ErrExist`, `ListDir` of a missing directory
+  wraps `os.ErrNotExist`, `Remove` of a directory with content returns
+  `fs.ErrDirectoryNotEmpty`, and `RemoveAll` deletes everything below a
+  prefix. Writing or copying onto a directory returns `fs.ErrIsDirectory`
+  instead of creating a blob that would turn the directory into a file.
 - **Native operations.** `ReadAll`, `WriteAll`, `OpenReadWriter`, `Touch`,
   `RemoveAll`, `ListDirRecursive` and `CopyFile` are native, and readers
   seek with range requests; everything else uses the generic emulation of
-  the `fs` package.
-- **Copy and touch.** `CopyFile` is a server-side copy. `Touch` updates the
-  modification time by setting the blob metadata, because Blob Storage
-  can't update it in place.
+  the `fs` package, `Move` and `Rename` copy and delete.
+- **Streaming writes.** `OpenWriter` streams the written data into an
+  upload: blocks of 4 MiB are staged while the data is written and committed
+  on `Close`, smaller data is uploaded with one request on `Close`. Memory
+  stays bounded and the blob only appears or changes when `Close` completes.
+  The writers implement `fs.WriteAborter`: `Abort` cancels the upload,
+  nothing is committed (Azure deletes uncommitted blocks after a week).
+- **Copy and touch.** `CopyFile` is a server-side copy. `Touch` updates
+  the modification time by setting the metadata of the blob again, which
+  keeps the metadata (with the case of their names), the content headers
+  and the content.
 - **Permissions.** Access is governed by Azure roles and SAS tokens, the
-  reported permissions are `azureblobfs.DefaultPermissions` /
+  reported permissions are the constants `azureblobfs.DefaultPermissions` /
   `azureblobfs.DefaultDirPermissions`. There are no symbolic links and no
   append; `Append` is emulated by rewriting the blob.
 - **Errors.** Missing blobs wrap `os.ErrNotExist`; after `Close` every
-  method returns `fs.ErrFileSystemClosed`.
+  method returns `fs.ErrFileSystemClosed`, also the `Close` of a writer that
+  was opened before.
 
 ## Testing
 
 The tests run the go-fs conformance suite against
 [Azurite](https://github.com/Azure/Azurite), the Azure Storage emulator, in
-a Docker container (`mcr.microsoft.com/azure-storage/azurite`). Docker is
-required; if it is not installed the tests are skipped, if it is installed
-but the container can't be started the tests fail.
+a Docker container (`mcr.microsoft.com/azure-storage/azurite`), plus tests
+for container SAS tokens, streaming writers and the regressions of the v1
+review. Azurite stores metadata names in lower case, so the case
+preservation of `Touch` is only exercised on Azure. Docker is required for
+most tests; if it is not installed they are skipped, if it is installed but
+the container can't be started the tests fail. The offline tests
+(constructors, error redaction, writers) always run.
 
 ```bash
 go test ./...
