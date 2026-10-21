@@ -57,14 +57,10 @@ const (
 ///////////////////////////////////////////////////////////////////////////////
 // Typed file errors
 //
-// The typed file errors are constructed for a FileReader,
-// usually a File. Their File method returns the File and true,
-// or false if the error is about a FileReader that is not a File,
-// like a MemFile, whose name is never converted to a File,
-// because it would be interpreted as a local file path.
-// FileReader returns the FileReader the error was created for.
-// The errors store a pointer to a FileReader that is not a File,
-// so they are always comparable and errors.Is never panics.
+// The typed file errors store the FileReader they were created for,
+// usually a File. FileReader returns it, File returns it if it is a File.
+// The FileReader is stored behind a pointer, so the errors stay comparable
+// even for FileReaders that are not, like MemFile, and errors.Is never panics.
 
 // RemoveErrDoesNotExist returns nil if err wraps os.ErrNotExist,
 // else err will be returned unchanged.
@@ -85,29 +81,26 @@ func RemoveErrDoesNotExist(err error) error {
 //
 // Implements http.Handler by responding with http.NotFound.
 type ErrDoesNotExist struct {
-	file   File        // empty if the error is not about a File
-	reader *FileReader // FileReader that is not a File, a pointer to stay comparable
-	name   string      // name or path that is not a File, for the message
+	file *FileReader // pointer to stay comparable for every FileReader
 }
 
 // NewErrDoesNotExist returns a new ErrDoesNotExist for a File
-// or another FileReader, see ErrDoesNotExist.File.
+// or another FileReader like a MemFile.
 func NewErrDoesNotExist(file FileReader) ErrDoesNotExist {
-	f, reader := fileReaderSubject(file)
-	return ErrDoesNotExist{file: f, reader: reader}
+	return ErrDoesNotExist{&file}
 }
 
-// NewErrPathDoesNotExist returns an ErrDoesNotExist
-// for a name or path that is not a File, like the name
-// of a document part, so the File method of the error
-// returns false and the name can't be mistaken for a local file.
+// NewErrPathDoesNotExist returns an ErrDoesNotExist for a name
+// or path that is not a File, like the name of a document part.
+// The FileReader of the error is a MemFile without data with
+// the path as FileName, so the path can't be mistaken for a local file.
 func NewErrPathDoesNotExist(path string) ErrDoesNotExist {
-	return ErrDoesNotExist{name: path}
+	return NewErrDoesNotExist(MemFile{FileName: path})
 }
 
 // Error implements the error interface
 func (err ErrDoesNotExist) Error() string {
-	return "file does not exist: " + errSubject(err.file, err.reader, err.name)
+	return "file does not exist: " + errSubject(err.FileReader())
 }
 
 // Unwrap returns os.ErrNotExist
@@ -122,16 +115,20 @@ func (ErrDoesNotExist) Is(target error) bool {
 	return ok
 }
 
-// File returns the File that the error concerns and true,
-// or false if the error concerns a FileReader that is not a File.
-func (err ErrDoesNotExist) File() (file File, ok bool) {
-	return err.file, err.file != ""
+// FileReader returns the File or other FileReader
+// the error was created for, or nil for the zero value.
+func (err ErrDoesNotExist) FileReader() FileReader {
+	if err.file == nil {
+		return nil
+	}
+	return *err.file
 }
 
-// FileReader returns the File or other FileReader that the error concerns,
-// or nil if the error does not concern a FileReader.
-func (err ErrDoesNotExist) FileReader() FileReader {
-	return errFileReader(err.file, err.reader)
+// File returns the File the error was created for and true,
+// or false if it was created for a FileReader that is not a File.
+func (err ErrDoesNotExist) File() (file File, ok bool) {
+	file, ok = err.FileReader().(File)
+	return file, ok
 }
 
 // ServeHTTP implements http.Handler by responding with http.NotFound
@@ -150,21 +147,18 @@ func (err ErrDoesNotExist) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 // Implements http.Handler by responding with 403 Forbidden.
 type ErrPermission struct {
-	file   File        // empty if the error is not about a File
-	reader *FileReader // FileReader that is not a File, a pointer to stay comparable
-	name   string      // name or path that is not a File, for the message
+	file *FileReader // pointer to stay comparable for every FileReader
 }
 
 // NewErrPermission returns a new ErrPermission for a File
-// or another FileReader, see ErrPermission.File.
+// or another FileReader like a MemFile.
 func NewErrPermission(file FileReader) ErrPermission {
-	f, reader := fileReaderSubject(file)
-	return ErrPermission{file: f, reader: reader}
+	return ErrPermission{&file}
 }
 
 // Error implements the error interface
 func (err ErrPermission) Error() string {
-	return "file lacks permission: " + errSubject(err.file, err.reader, err.name)
+	return "file lacks permission: " + errSubject(err.FileReader())
 }
 
 // Unwrap returns os.ErrPermission
@@ -179,16 +173,20 @@ func (ErrPermission) Is(target error) bool {
 	return ok
 }
 
-// File returns the File that the error concerns and true,
-// or false if the error concerns a FileReader that is not a File.
-func (err ErrPermission) File() (file File, ok bool) {
-	return err.file, err.file != ""
+// FileReader returns the File or other FileReader
+// the error was created for, or nil for the zero value.
+func (err ErrPermission) FileReader() FileReader {
+	if err.file == nil {
+		return nil
+	}
+	return *err.file
 }
 
-// FileReader returns the File or other FileReader that the error concerns,
-// or nil if the error does not concern a FileReader.
-func (err ErrPermission) FileReader() FileReader {
-	return errFileReader(err.file, err.reader)
+// File returns the File the error was created for and true,
+// or false if it was created for a FileReader that is not a File.
+func (err ErrPermission) File() (file File, ok bool) {
+	file, ok = err.FileReader().(File)
+	return file, ok
 }
 
 // ServeHTTP implements http.Handler by responding with 403 Forbidden
@@ -204,21 +202,18 @@ func (err ErrPermission) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 //	errors.Is(err, os.ErrExist)
 type ErrAlreadyExists struct {
-	file   File        // empty if the error is not about a File
-	reader *FileReader // FileReader that is not a File, a pointer to stay comparable
-	name   string      // name or path that is not a File, for the message
+	file *FileReader // pointer to stay comparable for every FileReader
 }
 
 // NewErrAlreadyExists returns a new ErrAlreadyExists for a File
-// or another FileReader, see ErrAlreadyExists.File.
+// or another FileReader like a MemFile.
 func NewErrAlreadyExists(file FileReader) ErrAlreadyExists {
-	f, reader := fileReaderSubject(file)
-	return ErrAlreadyExists{file: f, reader: reader}
+	return ErrAlreadyExists{&file}
 }
 
 // Error implements the error interface
 func (err ErrAlreadyExists) Error() string {
-	return "file already exists: " + errSubject(err.file, err.reader, err.name)
+	return "file already exists: " + errSubject(err.FileReader())
 }
 
 // Unwrap returns os.ErrExist
@@ -233,16 +228,20 @@ func (ErrAlreadyExists) Is(target error) bool {
 	return ok
 }
 
-// File returns the File that the error concerns and true,
-// or false if the error concerns a FileReader that is not a File.
-func (err ErrAlreadyExists) File() (file File, ok bool) {
-	return err.file, err.file != ""
+// FileReader returns the File or other FileReader
+// the error was created for, or nil for the zero value.
+func (err ErrAlreadyExists) FileReader() FileReader {
+	if err.file == nil {
+		return nil
+	}
+	return *err.file
 }
 
-// FileReader returns the File or other FileReader that the error concerns,
-// or nil if the error does not concern a FileReader.
-func (err ErrAlreadyExists) FileReader() FileReader {
-	return errFileReader(err.file, err.reader)
+// File returns the File the error was created for and true,
+// or false if it was created for a FileReader that is not a File.
+func (err ErrAlreadyExists) File() (file File, ok bool) {
+	file, ok = err.FileReader().(File)
+	return file, ok
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -253,21 +252,18 @@ func (err ErrAlreadyExists) FileReader() FileReader {
 //
 //	errors.Is(err, fs.ErrIsDirectory{})
 type ErrIsDirectory struct {
-	file   File        // empty if the error is not about a File
-	reader *FileReader // FileReader that is not a File, a pointer to stay comparable
-	name   string      // name or path that is not a File, for the message
+	file *FileReader // pointer to stay comparable for every FileReader
 }
 
 // NewErrIsDirectory returns a new ErrIsDirectory for a File
-// or another FileReader, see ErrIsDirectory.File.
+// or another FileReader like a MemFile.
 func NewErrIsDirectory(file FileReader) ErrIsDirectory {
-	f, reader := fileReaderSubject(file)
-	return ErrIsDirectory{file: f, reader: reader}
+	return ErrIsDirectory{&file}
 }
 
 // Error implements the error interface
 func (err ErrIsDirectory) Error() string {
-	return "file is a directory: " + errSubject(err.file, err.reader, err.name)
+	return "file is a directory: " + errSubject(err.FileReader())
 }
 
 // Is reports if target is an ErrIsDirectory of any file,
@@ -277,16 +273,20 @@ func (ErrIsDirectory) Is(target error) bool {
 	return ok
 }
 
-// File returns the File that the error concerns and true,
-// or false if the error concerns a FileReader that is not a File.
-func (err ErrIsDirectory) File() (file File, ok bool) {
-	return err.file, err.file != ""
+// FileReader returns the File or other FileReader
+// the error was created for, or nil for the zero value.
+func (err ErrIsDirectory) FileReader() FileReader {
+	if err.file == nil {
+		return nil
+	}
+	return *err.file
 }
 
-// FileReader returns the File or other FileReader that the error concerns,
-// or nil if the error does not concern a FileReader.
-func (err ErrIsDirectory) FileReader() FileReader {
-	return errFileReader(err.file, err.reader)
+// File returns the File the error was created for and true,
+// or false if it was created for a FileReader that is not a File.
+func (err ErrIsDirectory) File() (file File, ok bool) {
+	file, ok = err.FileReader().(File)
+	return file, ok
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -297,21 +297,18 @@ func (err ErrIsDirectory) FileReader() FileReader {
 //
 //	errors.Is(err, fs.ErrIsNotDirectory{})
 type ErrIsNotDirectory struct {
-	file   File        // empty if the error is not about a File
-	reader *FileReader // FileReader that is not a File, a pointer to stay comparable
-	name   string      // name or path that is not a File, for the message
+	file *FileReader // pointer to stay comparable for every FileReader
 }
 
 // NewErrIsNotDirectory returns a new ErrIsNotDirectory for a File
-// or another FileReader, see ErrIsNotDirectory.File.
+// or another FileReader like a MemFile.
 func NewErrIsNotDirectory(file FileReader) ErrIsNotDirectory {
-	f, reader := fileReaderSubject(file)
-	return ErrIsNotDirectory{file: f, reader: reader}
+	return ErrIsNotDirectory{&file}
 }
 
 // Error implements the error interface
 func (err ErrIsNotDirectory) Error() string {
-	return "file is not a directory: " + errSubject(err.file, err.reader, err.name)
+	return "file is not a directory: " + errSubject(err.FileReader())
 }
 
 // Is reports if target is an ErrIsNotDirectory of any file,
@@ -321,16 +318,20 @@ func (ErrIsNotDirectory) Is(target error) bool {
 	return ok
 }
 
-// File returns the File that the error concerns and true,
-// or false if the error concerns a FileReader that is not a File.
-func (err ErrIsNotDirectory) File() (file File, ok bool) {
-	return err.file, err.file != ""
+// FileReader returns the File or other FileReader
+// the error was created for, or nil for the zero value.
+func (err ErrIsNotDirectory) FileReader() FileReader {
+	if err.file == nil {
+		return nil
+	}
+	return *err.file
 }
 
-// FileReader returns the File or other FileReader that the error concerns,
-// or nil if the error does not concern a FileReader.
-func (err ErrIsNotDirectory) FileReader() FileReader {
-	return errFileReader(err.file, err.reader)
+// File returns the File the error was created for and true,
+// or false if it was created for a FileReader that is not a File.
+func (err ErrIsNotDirectory) File() (file File, ok bool) {
+	file, ok = err.FileReader().(File)
+	return file, ok
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -341,21 +342,18 @@ func (err ErrIsNotDirectory) FileReader() FileReader {
 //
 //	errors.Is(err, fs.ErrDirectoryNotEmpty{})
 type ErrDirectoryNotEmpty struct {
-	file   File        // empty if the error is not about a File
-	reader *FileReader // FileReader that is not a File, a pointer to stay comparable
-	name   string      // name or path that is not a File, for the message
+	file *FileReader // pointer to stay comparable for every FileReader
 }
 
 // NewErrDirectoryNotEmpty returns a new ErrDirectoryNotEmpty for a File
-// or another FileReader, see ErrDirectoryNotEmpty.File.
+// or another FileReader like a MemFile.
 func NewErrDirectoryNotEmpty(file FileReader) ErrDirectoryNotEmpty {
-	f, reader := fileReaderSubject(file)
-	return ErrDirectoryNotEmpty{file: f, reader: reader}
+	return ErrDirectoryNotEmpty{&file}
 }
 
 // Error implements the error interface
 func (err ErrDirectoryNotEmpty) Error() string {
-	return "directory is not empty: " + errSubject(err.file, err.reader, err.name)
+	return "directory is not empty: " + errSubject(err.FileReader())
 }
 
 // Is reports if target is an ErrDirectoryNotEmpty of any file,
@@ -365,52 +363,37 @@ func (ErrDirectoryNotEmpty) Is(target error) bool {
 	return ok
 }
 
-// File returns the File that the error concerns and true,
-// or false if the error concerns a FileReader that is not a File.
-func (err ErrDirectoryNotEmpty) File() (file File, ok bool) {
-	return err.file, err.file != ""
-}
-
-// FileReader returns the File or other FileReader that the error concerns,
-// or nil if the error does not concern a FileReader.
+// FileReader returns the File or other FileReader
+// the error was created for, or nil for the zero value.
 func (err ErrDirectoryNotEmpty) FileReader() FileReader {
-	return errFileReader(err.file, err.reader)
+	if err.file == nil {
+		return nil
+	}
+	return *err.file
 }
 
-// fileReaderSubject returns fileReader as File if it is one,
-// else a pointer to fileReader, so that the error stays comparable
-// even for FileReaders like MemFile that are not comparable.
-func fileReaderSubject(fileReader FileReader) (file File, reader *FileReader) {
-	if file, ok := fileReader.(File); ok {
-		return file, nil
-	}
-	if fileReader == nil {
-		return InvalidFile, nil
-	}
-	return InvalidFile, &fileReader
+// File returns the File the error was created for and true,
+// or false if it was created for a FileReader that is not a File.
+func (err ErrDirectoryNotEmpty) File() (file File, ok bool) {
+	file, ok = err.FileReader().(File)
+	return file, ok
 }
 
-// errFileReader returns the FileReader of a typed error.
-func errFileReader(file File, reader *FileReader) FileReader {
-	switch {
-	case file != "":
-		return file
-	case reader != nil:
-		return *reader
+// errSubject returns what an error message says about fileReader:
+// the URI of a File with a redacted password, the FileName of a MemFile,
+// or the name of another FileReader. A name is never converted
+// to a File, because it would be interpreted as a local file path.
+func errSubject(fileReader FileReader) string {
+	switch r := fileReader.(type) {
+	case nil:
+		return ""
+	case File:
+		return redactURI(r.String())
+	case MemFile:
+		return r.FileName
+	default:
+		return r.Name()
 	}
-	return nil
-}
-
-// errSubject returns the file, FileReader name or name for an error message,
-// the password of a URI is redacted.
-func errSubject(file File, reader *FileReader, name string) string {
-	switch {
-	case file != "":
-		return redactURI(file.String())
-	case reader != nil:
-		return (*reader).Name()
-	}
-	return name
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -429,18 +412,30 @@ func translateErrFile(err error, mapFile func(File) File) error {
 		perm     ErrPermission
 	)
 	switch {
-	case errors.As(err, &notExist) && notExist.file != "":
-		return ErrDoesNotExist{file: mapFile(notExist.file)}
-	case errors.As(err, &exists) && exists.file != "":
-		return ErrAlreadyExists{file: mapFile(exists.file)}
-	case errors.As(err, &isDir) && isDir.file != "":
-		return ErrIsDirectory{file: mapFile(isDir.file)}
-	case errors.As(err, &isNotDir) && isNotDir.file != "":
-		return ErrIsNotDirectory{file: mapFile(isNotDir.file)}
-	case errors.As(err, &notEmpty) && notEmpty.file != "":
-		return ErrDirectoryNotEmpty{file: mapFile(notEmpty.file)}
-	case errors.As(err, &perm) && perm.file != "":
-		return ErrPermission{file: mapFile(perm.file)}
+	case errors.As(err, &notExist):
+		if f, ok := notExist.File(); ok {
+			return NewErrDoesNotExist(mapFile(f))
+		}
+	case errors.As(err, &exists):
+		if f, ok := exists.File(); ok {
+			return NewErrAlreadyExists(mapFile(f))
+		}
+	case errors.As(err, &isDir):
+		if f, ok := isDir.File(); ok {
+			return NewErrIsDirectory(mapFile(f))
+		}
+	case errors.As(err, &isNotDir):
+		if f, ok := isNotDir.File(); ok {
+			return NewErrIsNotDirectory(mapFile(f))
+		}
+	case errors.As(err, &notEmpty):
+		if f, ok := notEmpty.File(); ok {
+			return NewErrDirectoryNotEmpty(mapFile(f))
+		}
+	case errors.As(err, &perm):
+		if f, ok := perm.File(); ok {
+			return NewErrPermission(mapFile(f))
+		}
 	}
 	return err
 }

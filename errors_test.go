@@ -71,7 +71,7 @@ func TestTypedErrors_FileReader(t *testing.T) {
 	f, ok := err.File()
 	assert.False(t, ok, "a MemFile is not a File")
 	assert.Equal(t, InvalidFile, f)
-	assert.Equal(t, memFile, err.FileReader())
+	assert.Equal(t, FileReader(memFile), err.FileReader(), "the passed FileReader")
 	assert.Contains(t, err.Error(), "local-looking-name.txt")
 
 	file := File("/dir/file.txt")
@@ -81,12 +81,17 @@ func TestTypedErrors_FileReader(t *testing.T) {
 	assert.Equal(t, file, f)
 	assert.Equal(t, FileReader(file), err.FileReader())
 
-	pathErr := NewErrPathDoesNotExist("document part.pdf")
+	pathErr := NewErrPathDoesNotExist("docs/document part.pdf")
 	_, ok = pathErr.File()
 	assert.False(t, ok, "a path is not a File")
-	assert.Nil(t, pathErr.FileReader())
-	assert.Contains(t, pathErr.Error(), "document part.pdf")
+	assert.Equal(t, FileReader(MemFile{FileName: "docs/document part.pdf"}), pathErr.FileReader())
+	assert.Equal(t, "file does not exist: docs/document part.pdf", pathErr.Error())
 	assert.ErrorIs(t, pathErr, os.ErrNotExist)
+
+	var zero ErrDoesNotExist
+	assert.Nil(t, zero.FileReader(), "zero value")
+	_, ok = zero.File()
+	assert.False(t, ok, "zero value")
 }
 
 // TestErrEmptyPath checks that an empty path is not reported as not existing,
