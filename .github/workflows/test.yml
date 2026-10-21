@@ -8,71 +8,70 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        # go.work: the minimum Go version, from the go directive of go.work
+        # stable: the latest Go release, the one most consumers build with
+        go: [go.work, stable]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version-file: go.work
+          go-version: ${{ matrix.go == 'stable' && 'stable' || '' }}
+          go-version-file: ${{ matrix.go == 'go.work' && 'go.work' || '' }}
           cache-dependency-path: |
             go.sum
-            azureblobfs/go.sum
-            dropboxfs/go.sum
-            ftpfs/go.sum
-            s3fs/go.sum
-            sftpfs/go.sum
-            smbfs/go.sum
-            tools/go.sum
-            webdavfs/go.sum
+            go.work.sum
+            */go.sum
 
       - name: Build all workspace modules
-        shell: bash
         run: |
           for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
             go -C "$dir" build ./...
           done
 
       - name: Vet all workspace modules
-        shell: bash
         run: |
           for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
             go -C "$dir" vet ./...
           done
 
       - name: Test all workspace modules (race detector)
-        shell: bash
         run: |
           for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
             go -C "$dir" test -race -count=1 ./...
           done
 
   lint:
-    name: Lint
-    runs-on: ubuntu-latest
+    name: Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The linters only see the files of the GOOS they run on,
+        # so the platform specific files need a run on each OS
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version-file: go.work
+          go-version: stable
           cache-dependency-path: |
             go.sum
-            azureblobfs/go.sum
-            dropboxfs/go.sum
-            ftpfs/go.sum
-            s3fs/go.sum
-            sftpfs/go.sum
-            smbfs/go.sum
-            tools/go.sum
-            webdavfs/go.sum
+            go.work.sum
+            */go.sum
 
       # "go tool" resolves the tools of every workspace module,
       # so staticcheck and gosec can be run from any module directory.
@@ -87,3 +86,87 @@ jobs:
           for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
             go -C "$dir" tool gosec -quiet ./...
           done
+
+  cross-compile:
+    name: Cross-compile (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Platforms the build tags of the root module claim to support
+        # beyond the native linux, darwin and windows runners of the test job.
+        # Keep in sync with cross_targets in test-workspace.sh.
+        target:
+          - freebsd/amd64
+          - netbsd/amd64
+          - openbsd/amd64
+          - solaris/amd64
+          - wasip1/wasm
+          - js/wasm
+          - linux/arm64
+          - windows/arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: |
+            go.sum
+            go.work.sum
+            */go.sum
+
+      - name: Build the root module
+        env:
+          TARGET: ${{ matrix.target }}
+        run: GOOS="${TARGET%/*}" GOARCH="${TARGET#*/}" go build ./...
+
+  modules:
+    name: Modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: |
+            go.sum
+            go.work.sum
+            */go.sum
+
+      # The steps below report every failing module, not only the first one
+
+      - name: go mod tidy -diff
+        run: |
+          status=0
+          for dir in $(go list -f '{{.Dir}}' -m); do
+            go -C "$dir" mod tidy -diff || { echo "::error::go.mod or go.sum of $dir is not tidy"; status=1; }
+          done
+          exit $status
+
+      # A consumer builds a module with only its own go.mod and go.sum,
+      # while go.work.sum can hide missing go.sum entries in workspace mode
+      - name: Build every module without the workspace
+        run: |
+          status=0
+          for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
+            GOWORK=off go -C "$dir" build ./... || { echo "::error::GOWORK=off build of $dir failed"; status=1; }
+          done
+          exit $status
+
+      # govulncheck runs on every module without the workspace: in workspace
+      # mode all modules share one build list, so the newer dependencies of
+      # one module (the tools module in particular) would hide vulnerable
+      # versions that a consumer of another module gets.
+      # "go tool" needs the workspace to find the pinned govulncheck,
+      # so "go tool -n" builds it and prints the path of the executable.
+      - name: govulncheck
+        run: |
+          govulncheck=$(go tool -n govulncheck)
+          status=0
+          for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
+            echo "== $dir"
+            GOWORK=off "$govulncheck" -C "$dir" ./... || { echo "::error::govulncheck failed for $dir"; status=1; }
+          done
+          exit $status

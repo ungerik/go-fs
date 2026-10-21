@@ -1,0 +1,40 @@
+name: Release tags
+
+# Checks that the tags of all modules of a release point at one commit.
+#
+# GitHub creates no push events when more than three tags are pushed at once,
+# and tag-release.sh pushes the tags of all modules in one atomic push,
+# so a "push: tags" trigger would never fire for a release. The check runs
+# when tag-release.sh publishes the GitHub release instead, and on demand.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to check, for example v1.2.3
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Module tags point at one commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # All tags, to compare the module tags of the release
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - name: Check the module tags
+        env:
+          VERSION: ${{ github.event.release.tag_name || inputs.version }}
+        # A release of a module tag like s3fs/v1.2.3 checks v1.2.3
+        run: ./tag-release.sh --check "${VERSION##*/}"

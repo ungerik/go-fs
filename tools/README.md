@@ -2,10 +2,11 @@
 
 This module has no code of its own. It exists to pin the versions of the
 development tools used by [go-fs](https://github.com/ungerik/go-fs), so that
-every contributor and the CI run the same linters:
+every contributor and the CI run the same linters and checks:
 
 - [staticcheck](https://staticcheck.dev) (`honnef.co/go/tools/cmd/staticcheck`)
 - [gosec](https://github.com/securego/gosec) (`github.com/securego/gosec/v2/cmd/gosec`)
+- [govulncheck](https://go.dev/doc/tutorial/govulncheck) (`golang.org/x/vuln/cmd/govulncheck`)
 
 They are declared in a `tool` directive in `go.mod` and installed as a
 side effect of the module's dependencies, so no separate `go install` step
@@ -21,22 +22,33 @@ go tool staticcheck ./...
 go tool gosec -quiet ./...
 ```
 
-`../test-workspace.sh` runs `go vet`, the tests with the race detector, and
-both linters for every module of the workspace — the same steps as the
-GitHub Actions workflow.
+govulncheck has to check a module without the workspace, because in
+workspace mode all modules share one build list and the newer dependencies
+of one module would hide the vulnerable versions a consumer of another
+module gets. `go tool` itself needs the workspace to find the tool, so
+build it with `go tool -n`, which prints the path of the executable:
+
+```bash
+GOWORK=off "$(go tool -n govulncheck)" ./...
+```
+
+`../test-workspace.sh` runs the checks of the GitHub Actions workflow for
+every module of the workspace: the cross-compile of the root module,
+`go mod tidy -diff`, a build without the workspace, `go vet`, the tests with
+the race detector, staticcheck, gosec and govulncheck.
 
 ## Upgrading
 
 ```bash
-go -C tools get -u
+go -C tools get -u tool
 go -C tools mod tidy
 ```
 
 Then run `./test-workspace.sh` from the repository root and fix whatever
 the new versions report.
 
-This module is tagged in lockstep with the other modules of the repository,
-even though it is not imported by anything.
+This module is not tagged and not released: it is not imported by anything,
+and `../tag-release.sh` skips it when it tags the other modules in lockstep.
 
 ## License
 
