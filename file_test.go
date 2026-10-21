@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
-	"fmt"
 	"io"
 	iofs "io/fs"
 	"iter"
@@ -13,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -250,68 +250,76 @@ func TestFile_RelPathOf(t *testing.T) {
 }
 
 func TestFile_Watch(t *testing.T) {
-	Local.WatchEventLogger = LoggerFunc(func(format string, args ...any) {
-		fmt.Printf(format+"\n", args...)
-	})
-	Local.WatchErrorLogger = LoggerFunc(func(format string, args ...any) {
-		t.Errorf(format, args...)
-	})
-	const sleepDurationForCallback = time.Millisecond * 10
-	var (
-		dir       = File(t.TempDir())
-		mtx       sync.Mutex // the callback runs on the watcher goroutine
-		gotFiles  []File
-		gotEvents []Event
-	)
-	cancel, err := dir.Watch(func(file File, event Event) {
-		mtx.Lock()
-		defer mtx.Unlock()
-		gotFiles = append(gotFiles, file)
-		gotEvents = append(gotEvents, event)
-	})
-	require.NoError(t, err, "dir.Watch")
-
-	newFile := dir.Join("newFile")
-	err = newFile.Touch()
-	require.NoError(t, err, "newFile.Touch")
-
-	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
-
-	renamedFile, err := newFile.Rename(t.Context(), "renamedFile")
-	require.NoError(t, err, "newFile.Rename")
-
-	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
-
-	err = renamedFile.Remove()
-	require.NoError(t, err, "renamedFile.Remove")
-
-	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
-
-	// The order in which fsnotify delivers the events differs between
-	// platforms (inotify reports the RENAME of newFile before the CREATE
-	// of renamedFile, kqueue the other way round), so compare as a set.
 	type fileEvent struct {
 		file  File
 		event Event
 	}
-	mtx.Lock()
-	defer mtx.Unlock()
-	var got []fileEvent
-	for i := range gotFiles {
-		got = append(got, fileEvent{gotFiles[i], gotEvents[i]})
-	}
-	assert.ElementsMatch(t,
-		[]fileEvent{
-			{newFile, EventCreate},
-			{newFile, EventRename},
-			{renamedFile, EventCreate},
-			{renamedFile, EventRemove},
-		},
-		got,
+	var (
+		dir = File(t.TempDir())
+		mtx sync.Mutex // the callback runs on a goroutine of the watch
+		got []fileEvent
 	)
+	cancel, err := dir.Watch(func(file File, event Event) {
+		mtx.Lock()
+		defer mtx.Unlock()
+		got = append(got, fileEvent{file, event})
+	})
+	require.NoError(t, err, "dir.Watch")
+
+	// received reports if an event of file has the operation op,
+	// fsnotify can report several operations in one event
+	received := func(file File, op Event) bool {
+		mtx.Lock()
+		defer mtx.Unlock()
+		return slices.ContainsFunc(got, func(e fileEvent) bool {
+			return e.file == file && e.event&op == op
+		})
+	}
+	// The watcher reports the events asynchronously, so wait for
+	// the event of every step before taking the next one.
+	waitFor := func(file File, op Event) {
+		t.Helper()
+		require.Eventually(t, func() bool { return received(file, op) },
+			5*time.Second, time.Millisecond, "event %s of %s", op, file)
+	}
+
+	// kqueue reports the RENAME and REMOVE of a file in a directory
+	// only through a watch of the file, which fsnotify adds after it
+	// reported the CREATE. A WRITE comes through that watch, so the
+	// file is written until a WRITE shows that the watch exists.
+	writeUntilWatched := func(file File) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			require.NoError(t, file.WriteAllString(t.Context(), "content"), "WriteAllString")
+			return received(file, EventWrite)
+		}, 5*time.Second, 5*time.Millisecond, "event %s of %s", EventWrite, file)
+	}
+
+	newFile := dir.Join("newFile")
+	require.NoError(t, newFile.Touch(), "newFile.Touch")
+	waitFor(newFile, EventCreate)
+	writeUntilWatched(newFile)
+
+	renamedFile, err := newFile.Rename(t.Context(), "renamedFile")
+	require.NoError(t, err, "newFile.Rename")
+	// The order of the two events differs between platforms
+	// (inotify reports the RENAME of newFile before the CREATE
+	// of renamedFile, kqueue the other way round)
+	waitFor(newFile, EventRename)
+	waitFor(renamedFile, EventCreate)
+	writeUntilWatched(renamedFile)
+
+	require.NoError(t, renamedFile.Remove(), "renamedFile.Remove")
+	waitFor(renamedFile, EventRemove)
 
 	err = cancel()
 	assert.NoError(t, err, "cancel watch")
+
+	mtx.Lock()
+	defer mtx.Unlock()
+	for _, e := range got {
+		assert.Contains(t, []File{newFile, renamedFile}, e.file, "event %s of an unexpected file", e.event)
+	}
 }
 
 // mapFSDir registers a read-only StdFileSystem over the MapFS
