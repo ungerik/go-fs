@@ -1,5 +1,6 @@
 // Package smbfs implements an SMB2/3 client file system for Windows
-// shares, Samba and NAS devices using the pure Go github.com/hirochachacha/go-smb2.
+// shares, Samba and NAS devices using the pure Go github.com/cloudsoda/go-smb2,
+// the maintained fork of github.com/hirochachacha/go-smb2.
 //
 // SMB shares have real directories and files with random access, so the
 // file system implements nearly every optional interface natively:
@@ -20,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hirochachacha/go-smb2"
+	"github.com/cloudsoda/go-smb2"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
@@ -123,7 +124,7 @@ func Dial(ctx context.Context, address string, opts *Options) (fs.FileSystem, er
 	if err != nil {
 		return nil, err
 	}
-	session, err := (&smb2.Dialer{Initiator: &initiator}).DialContext(ctx, conn)
+	session, err := (&smb2.Dialer{Initiator: &initiator}).DialConn(ctx, conn, host)
 	if err != nil {
 		return nil, errors.Join(err, conn.Close())
 	}
