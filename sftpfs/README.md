@@ -15,6 +15,8 @@ go get github.com/ungerik/go-fs/sftpfs
 ```go
 import (
     "context"
+    "os"
+    "path/filepath"
 
     "golang.org/x/crypto/ssh/knownhosts"
 
@@ -25,19 +27,29 @@ import (
 func main() {
     ctx := context.Background()
 
-    sftpFS, err := sftpfs.DialAndRegister(
-        ctx,
-        "sftp://user@example.com",              // port 22 if not in the address
-        sftpfs.Password("secret"),              // or UsernameAndPassword
-        knownhosts.New("~/.ssh/known_hosts"),   // ssh.HostKeyCallback
-        nil,                                    // optional fs.Logger for connection events
-    )
+    // knownhosts.New returns the callback and an error, and it does not expand "~"
+    home, err := os.UserHomeDir()
+    if err != nil {
+        panic(err)
+    }
+    hostKeyCallback, err := knownhosts.New(filepath.Join(home, ".ssh", "known_hosts"))
+    if err != nil {
+        panic(err)
+    }
+
+    sftpFS, err := sftpfs.Dial(ctx, "sftp://user@example.com", &sftpfs.Options{
+        Password:        os.Getenv("SFTP_PASSWORD"),
+        HostKeyCallback: hostKeyCallback, // required
+    })
     if err != nil {
         panic(err)
     }
     defer sftpFS.Close()
 
-    // Use it like any other go-fs file system
+    // Register it so that File URIs with its prefix work
+    if err := fs.Register(sftpFS); err != nil {
+        panic(err)
+    }
     file := fs.File("sftp://user@example.com/home/user/notes.txt")
 
     err = file.WriteAllString(ctx, "Hello, SFTP!")
@@ -47,32 +59,82 @@ func main() {
 ```
 
 `Dial` returns a file system without registering it, `DialAndRegister`
-registers it so `fs.File` values with its prefix work, and
-`EnsureRegistered` shares one connection per address between callers with
-reference counting and returns a `free` function instead of `Close`.
+registers it and returns only an error (close it later with
+`fs.GetFileSystemByPrefixOrNil("sftp://user@example.com").Close()`), and
+`EnsureRegistered` shares one connection per prefix between callers with
+reference counting and returns a `free` function instead:
+
+```go
+free, err := sftpfs.EnsureRegistered(ctx, "sftp://user@example.com", opts)
+if err != nil {
+    return err
+}
+defer free() // the last free closes the connection
+```
+
+The address is `host`, `host:port` or `user@host:port`, with or without the
+`sftp://` scheme. IPv6 addresses are written in brackets (`[::1]`,
+`sftp://user@[::1]:2222`). The port defaults to 22. A path in the address is
+ignored.
 
 File URIs have the form `sftp://user@host/path`; `:22` is accepted and
 trimmed, other ports stay part of the prefix. `sftpFS.ID()` is the URI
-prefix of the connection (`sftp://user@host`).
+prefix of the connection (`sftp://user@host`), `sftpFS.String()` is
+`SFTP sftp://user@host`.
+
+### Options
+
+| Field | Meaning | Zero value |
+|---|---|---|
+| `Username`, `Password` | SSH login; empty values are taken from the address | |
+| `Credentials` | callback for the username and password, called when the file system is dialed and again before every reconnect (rotated secrets) | not used |
+| `Auth` | `ssh.AuthMethod`s tried before the password: `ssh.PublicKeys`, an SSH agent via `ssh.PublicKeysCallback`, `ssh.KeyboardInteractive` | none |
+| `HostKeyCallback` | verifies the server, **required** | dialing fails |
+| `Logger` | logs dials, retries, lost connections and reconnects | no logging |
+| `ConnectRetries` | retries of a failed connection attempt, so a dial makes up to 1+N attempts; only network errors and timeouts are retried, not authentication or host key errors | `DefaultConnectRetries` (3), negative: no retries |
+| `RetryBackoff` | wait before the first retry, doubled for every further retry | `DefaultRetryBackoff` (100 ms) |
+| `Timeout` | limit of every connection attempt: TCP connect, SSH handshake and start of the SFTP session | `DefaultTimeout` (30 s), negative: none |
+| `KeepAlive` | interval of SSH keep-alive requests; a connection that does not answer within the interval is closed | `DefaultKeepAlive` (30 s), negative: off |
+| `DialContext` | opens the network connection, for example through a proxy | `net.Dialer` |
+
+### Credentials in URIs
+
+The password of an address like `sftp://user:password@host/path` is used to
+dial, so such a URI can be passed to `EnsureRegistered`. The prefix of the
+file system never contains the password: files are addressed as
+`sftp://user@host/path`, and passwords never appear in errors, log
+messages, `FileInfo.File` or `String()`. There is no file system for the
+plain `sftp://` scheme anymore that dials a connection per operation.
 
 ### Host keys
 
-The `hostKeyCallback` argument is a standard `ssh.HostKeyCallback`. Use
-`knownhosts.New` in production; `sftpfs.AcceptAnyHostKey` skips the check
-and is only meant for tests.
-
-For URIs with embedded credentials (`sftp://user:password@host/path`) the
-package registers a file system under the plain `sftp://` prefix that dials
-a connection per operation. It verifies host keys with the package variable
-`sftpfs.URLHostKeyCallback`, which must be set before such a URI is used.
+`Options.HostKeyCallback` is a standard `ssh.HostKeyCallback` and required.
+Use `knownhosts.New` or `ssh.FixedHostKey` in production;
+`sftpfs.AcceptAnyHostKey` skips the check and is only meant for tests.
 
 ### Connections
 
-A dialed file system keeps one SFTP connection. If it breaks, the next
-operation reconnects with the stored credentials and host key callback and
-is retried once. A single dial retries connection errors up to
-`sftpfs.MaxConnectRetries` (3) times with exponential backoff starting at
-`sftpfs.InitialRetryBackoff`.
+A file system keeps one SSH connection with one SFTP session. `Close`
+closes the SSH connection, ends a reconnect in progress and unregisters the
+file system; afterwards every method returns `fs.ErrFileSystemClosed`.
+
+If the connection is lost, the next operation reconnects with the stored
+options. A reconnect runs without holding a lock, so a server that does not
+answer blocks neither `Close` nor operations, which stop waiting when their
+context ends. A canceled or timed out context of an operation never drops
+the connection.
+
+An operation that fails because the connection was lost while it ran is
+retried once on a new connection if repeating it can't change the result:
+`Stat`, `Lstat`, `ReadSymbolicLink`, `OpenReader`, `Truncate`,
+`SetPermissions`, `MakeAllDirs`, `RemoveAll`. Operations that change the
+server in a way that can't be repeated (`Remove`, `Move`, `MakeDir`,
+`CreateSymbolicLink`, `Touch` of a new file, opening a writer) are only
+retried if the connection was lost before their request was sent; else
+they return the connection error, although the server may have executed
+the request. `ListDir` and `ListDirRecursive` are never retried after
+they called the callback, and the errors of the callback are returned as
+they are.
 
 ## How SFTP concepts map to the file system
 
@@ -81,18 +143,31 @@ is retried once. A single dial retries connection errors up to
   so `OpenAppendWriter`, `OpenReadWriter`, `Truncate`, `Touch`,
   `MakeAllDirs`, `RemoveAll`, `ListDirRecursive`, `Move`,
   `SetPermissions` and symbolic links are native; everything else uses the
-  generic emulation of the `fs` package.
+  generic emulation of the `fs` package. Append writers start at the end
+  of the file, also on servers that write at the offset the client sends.
+- **Move.** An existing file at the destination is replaced, atomically
+  with the `posix-rename@openssh.com` extension (OpenSSH). Without the
+  extension the destination file is removed before the rename, so for a
+  moment neither file exists there, and if the rename fails the destination
+  is gone. An existing directory at the destination is an error wrapping
+  `os.ErrExist`, a directory onto a file is an `fs.ErrIsNotDirectory`, a
+  directory into itself an error wrapping `os.ErrInvalid`.
 - **Permissions.** Unix permission bits, set with `SetPermissions`.
-- **Errors.** Missing files wrap `os.ErrNotExist`, `MakeDir` on an existing
-  path wraps `os.ErrExist`, and after `Close` every method returns
-  `fs.ErrFileSystemClosed`.
+- **Errors.** Missing files wrap `os.ErrNotExist` (`fs.ErrDoesNotExist`
+  with the file URI), `MakeDir` on an existing path wraps `os.ErrExist`,
+  reading or writing a directory is an `fs.ErrIsDirectory`, `Remove` of a
+  non-empty directory an `fs.ErrDirectoryNotEmpty`.
 
 ## Testing
 
-The tests run the go-fs conformance suite against an OpenSSH server in a
-Docker container built from `Dockerfile.sftp-test`. Docker is required; if
-it is not installed the tests are skipped, if it is installed but the
-container can't be started the tests fail.
+Most tests run offline against an in-process SSH server with the SFTP
+servers of `pkg/sftp`, including the go-fs conformance suite on a
+temporary directory and tests that lose the connection at chosen requests.
+
+The conformance suite also runs against an OpenSSH server in a Docker
+container built from `Dockerfile.sftp-test`. If Docker is not installed
+these tests are skipped, if it is installed but the container can't be
+started the tests fail.
 
 Tests against public internet SFTP servers only run with
 `GOFS_ONLINE_TESTS=1`.
