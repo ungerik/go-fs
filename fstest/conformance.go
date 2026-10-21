@@ -390,11 +390,7 @@ func (c *conformance) url(cleanPath string) string {
 	if u, ok := c.fs.(fs.URIFileSystem); ok {
 		return u.URIFromPath(cleanPath)
 	}
-	prefix, sep := c.fs.Prefix(), c.fs.Separator()
-	if strings.HasSuffix(prefix, sep) && strings.HasPrefix(cleanPath, sep) {
-		cleanPath = cleanPath[len(sep):]
-	}
-	return prefix + fsimpl.EscapeURIPath(cleanPath)
+	return fsimpl.PathHelper{URIPrefix: c.fs.Prefix(), PathSep: c.fs.Separator()}.URL(cleanPath)
 }
 
 // boundaryPrefix returns the longest prefix or prefix alias of fileSystem

@@ -13,12 +13,6 @@ import (
 )
 
 func TestConformance(t *testing.T) {
-	// The paths of httpfs are URLs in escaped form, while the suite builds
-	// the URI of a path as prefix + path with every "%" escaped. That only
-	// holds for file systems that don't implement fs.URIFileSystem, so the
-	// suite needs to build the URIs of a URIFileSystem with URIFromPath.
-	t.Skip("fstest builds URIs as prefix + escaped path, which doesn't apply to fs.URIFileSystem")
-
 	// Serve the seed tree from a temporary directory. The seed names are
 	// paths of URLs, so the server decodes them to the names of the files.
 	root := t.TempDir()
