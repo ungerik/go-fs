@@ -117,7 +117,9 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 ```
 
 Calls `callback` for every directory below `baseDir` that represents a UUID.
-It walks exactly five levels deep.
+It walks exactly five levels deep with `File.ListDirInfo`, so the `FileInfo` of
+the listing tells directories, files and hidden entries apart without an extra
+`Stat` per entry, which matters on remote backends.
 
 Entries that don't fit the layout are **skipped, not reported**: hidden
 entries, files where a directory was expected, and leaf directories whose path
