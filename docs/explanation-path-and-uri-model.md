@@ -41,7 +41,7 @@ like `s3://` alone, the longer one would still win.
 
 A `PrefixAliasFileSystem` declares extra prefixes it also answers to —
 typically the same prefix with the protocol's default port spelled out, like
-`sftp://user@host:22`. The aliases count in the same pass as the prefixes, so
+`sftp://user@host:22`, `ftp://user@host:21` or `smb://user@host:445/share`. The aliases count in the same pass as the prefixes, so
 the longest match of either wins. The alias is rewritten to the canonical
 prefix before cleaning.
 
