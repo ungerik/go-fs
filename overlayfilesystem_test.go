@@ -1,7 +1,10 @@
 package fs_test
 
 import (
+	"io"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	stdfstest "testing/fstest"
 
@@ -105,7 +108,8 @@ func TestOverlayFileSystem_Layers(t *testing.T) {
 	assert.False(t, root.Join("config.json").Exists())
 	_, err = root.Join("config.json").Stat()
 	assert.ErrorIs(t, err, os.ErrNotExist)
-	assert.Error(t, root.Join("docs", "old").Remove(), "non-empty directory")
+	assert.ErrorIs(t, root.Join("docs", "old").Remove(), fs.ErrDirectoryNotEmpty{}, "non-empty directory")
+	assert.ErrorIs(t, overlay.Remove("/docs/old"), fs.ErrDirectoryNotEmpty{}, "non-empty directory")
 	require.NoError(t, root.Join("docs", "old").RemoveRecursive(ctx))
 	assert.False(t, root.Join("docs", "old", "a.txt").Exists(), "hidden below a removed directory")
 	names, err = root.Join("docs").ListDirMax(ctx, -1)
@@ -137,13 +141,20 @@ func mustRead(t *testing.T, f fs.File) []byte {
 }
 
 // newOverlayTestFS returns a registered overlay of a mem upper layer
-// on a read-only MapFS base containing "/base.txt".
+// on a read-only MapFS base containing "/base.txt" and "/basedir/x.txt".
 func newOverlayTestFS(t *testing.T) *fs.OverlayFileSystem {
 	t.Helper()
-	base := fs.NewStdFileSystem(stdfstest.MapFS{
+	return newOverlayOfMapFS(t, stdfstest.MapFS{
 		"base.txt":      {Data: []byte("base")},
 		"basedir/x.txt": {Data: []byte("x")},
-	}, "")
+	})
+}
+
+// newOverlayOfMapFS returns a registered overlay of
+// a mem upper layer on a read-only base with the files of mapFS.
+func newOverlayOfMapFS(t *testing.T, mapFS stdfstest.MapFS) *fs.OverlayFileSystem {
+	t.Helper()
+	base := fs.NewStdFileSystem(mapFS, "")
 	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { _ = base.Close() })
 	upper, err := fs.RegisteredTestMemFileSystem(nil)
@@ -262,4 +273,212 @@ func TestOverlayFileSystem_IsDirectoryErrors(t *testing.T) {
 
 	// The root can't be removed recursively either
 	assert.Error(t, overlay.RemoveAll(ctx, "/"))
+}
+
+// TestOverlayFileSystem_RecreateRemovedDir verifies that a directory
+// created at the path of a removed base directory is opaque. Creating it
+// used to drop the whiteouts of the path and its ancestors, which brought
+// back the removed base entries.
+func TestOverlayFileSystem_RecreateRemovedDir(t *testing.T) {
+	ctx := t.Context()
+	overlay := newOverlayOfMapFS(t, stdfstest.MapFS{
+		"made/old.txt":     {Data: []byte("old")},
+		"all/old.txt":      {Data: []byte("old")},
+		"all/sub/old.txt":  {Data: []byte("old")},
+		"emptied/x.txt":    {Data: []byte("x")},
+		"emptied/keep.txt": {Data: []byte("keep")},
+	})
+	listNames := func(dirPath string) (names []string) {
+		t.Helper()
+		err := overlay.ListDir(ctx, dirPath, nil, func(info *fs.FileInfo) error {
+			names = append(names, info.Name)
+			return nil
+		})
+		require.NoError(t, err, "ListDir(%q)", dirPath)
+		return names
+	}
+	exists := func(filePath string) bool {
+		_, err := overlay.Stat(filePath)
+		return err == nil
+	}
+
+	// MakeDir after RemoveAll
+	require.NoError(t, overlay.RemoveAll(ctx, "/made"))
+	require.NoError(t, overlay.MakeDir("/made", 0))
+	assert.False(t, exists("/made/old.txt"), "the removed base file must stay hidden")
+	assert.Empty(t, listNames("/made"), "the recreated directory must be empty")
+
+	// MakeAllDirs below a removed directory
+	require.NoError(t, overlay.RemoveAll(ctx, "/all"))
+	require.NoError(t, overlay.MakeAllDirs("/all/sub/deeper", 0))
+	assert.False(t, exists("/all/old.txt"), "the removed base file must stay hidden")
+	assert.False(t, exists("/all/sub/old.txt"), "the removed base file must stay hidden")
+	assert.Equal(t, []string{"sub"}, listNames("/all"))
+	assert.Equal(t, []string{"deeper"}, listNames("/all/sub"))
+
+	// A directory that was emptied and removed entry by entry
+	require.NoError(t, overlay.Remove("/emptied/x.txt"))
+	require.NoError(t, overlay.Remove("/emptied/keep.txt"))
+	require.NoError(t, overlay.Remove("/emptied"))
+	require.NoError(t, overlay.MakeDir("/emptied", 0))
+	assert.Empty(t, listNames("/emptied"))
+
+	// Writing into the recreated directory works
+	require.NoError(t, overlay.WriteAll(ctx, "/made/new.txt", []byte("new"), 0))
+	assert.Equal(t, []string{"new.txt"}, listNames("/made"))
+}
+
+// TestOverlayFileSystem_DirOverRemovedFile verifies that a directory created
+// at the path of a removed base file can be listed. The base file was not
+// hidden anymore, so ListDir failed listing it as a directory of the base.
+func TestOverlayFileSystem_DirOverRemovedFile(t *testing.T) {
+	ctx := t.Context()
+	overlay := newOverlayTestFS(t)
+
+	require.NoError(t, overlay.Remove("/base.txt"))
+	require.NoError(t, overlay.MakeDir("/base.txt", 0))
+	info, err := overlay.Stat("/base.txt")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir)
+	var names []string
+	listNames := func(info *fs.FileInfo) error { names = append(names, info.Name); return nil }
+	require.NoError(t, overlay.ListDir(ctx, "/base.txt", nil, listNames))
+	assert.Empty(t, names)
+
+	require.NoError(t, overlay.WriteAll(ctx, "/base.txt/inner.txt", []byte("inner"), 0))
+	require.NoError(t, overlay.ListDir(ctx, "/base.txt", nil, listNames))
+	assert.Equal(t, []string{"inner.txt"}, names)
+}
+
+// TestOverlayFileSystem_WriteOnDirectory verifies that writing a file over
+// a directory of either layer is an fs.ErrIsDirectory. Writes to a directory
+// that only exists in the base created a file in the upper layer that hid
+// the directory and its content.
+func TestOverlayFileSystem_WriteOnDirectory(t *testing.T) {
+	ctx := t.Context()
+	overlay := newOverlayTestFS(t)
+	require.NoError(t, overlay.MakeDir("/upperdir", 0))
+
+	for _, dir := range []string{"/basedir", "/upperdir"} {
+		assert.ErrorIs(t, overlay.WriteAll(ctx, dir, []byte("data"), 0), fs.ErrIsDirectory{}, "WriteAll(%q)", dir)
+		w, err := overlay.OpenWriter(dir, 0)
+		if err == nil {
+			_ = w.Close()
+		}
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenWriter(%q)", dir)
+		assert.ErrorIs(t, overlay.Append(ctx, dir, []byte("data"), 0), fs.ErrIsDirectory{}, "Append(%q)", dir)
+		aw, err := overlay.OpenAppendWriter(dir, 0)
+		if err == nil {
+			_ = aw.Close()
+		}
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenAppendWriter(%q)", dir)
+		rw, err := overlay.OpenReadWriter(dir, 0)
+		if err == nil {
+			_ = rw.Close()
+		}
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenReadWriter(%q)", dir)
+		assert.ErrorIs(t, overlay.Truncate(ctx, dir, 0), fs.ErrIsDirectory{}, "Truncate(%q)", dir)
+		err = fs.File(overlay.Prefix()+dir).WriteAllString(ctx, "data")
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "File.WriteAll(%q)", dir)
+
+		info, err := overlay.Stat(dir)
+		require.NoError(t, err)
+		assert.True(t, info.IsDir, "%s must stay a directory", dir)
+	}
+	data, err := overlay.ReadAll(ctx, "/basedir/x.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(data), "the content of the base directory must stay visible")
+	assert.False(t, overlay.Upper().RootDir().Join("basedir").Exists(), "nothing written to the upper layer")
+
+	// Touch of a directory in the upper layer is forwarded to it
+	assert.NoError(t, overlay.Touch("/upperdir", 0))
+}
+
+// TestOverlayFileSystem_MakeAllDirsBelowFile verifies that MakeAllDirs
+// below a file of either layer is an fs.ErrIsNotDirectory. Below a base
+// file it created a directory in the upper layer that hid the file.
+func TestOverlayFileSystem_MakeAllDirsBelowFile(t *testing.T) {
+	ctx := t.Context()
+	overlay := newOverlayTestFS(t)
+	require.NoError(t, overlay.WriteAll(ctx, "/upper.txt", []byte("upper"), 0))
+
+	for _, file := range []string{"/base.txt", "/upper.txt"} {
+		assert.ErrorIs(t, overlay.MakeAllDirs(file+"/sub", 0), fs.ErrIsNotDirectory{}, "MakeAllDirs below %s", file)
+		assert.ErrorIs(t, overlay.MakeAllDirs(file+"/sub/deeper", 0), fs.ErrIsNotDirectory{}, "MakeAllDirs below %s", file)
+		assert.ErrorIs(t, overlay.MakeDir(file+"/sub", 0), fs.ErrIsNotDirectory{}, "MakeDir below %s", file)
+		info, err := overlay.Stat(file)
+		require.NoError(t, err)
+		assert.False(t, info.IsDir, "%s must stay a file", file)
+	}
+	data, err := overlay.ReadAll(ctx, "/base.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "base", string(data))
+	assert.False(t, overlay.Upper().RootDir().Join("base.txt").Exists(), "nothing created in the upper layer")
+}
+
+// TestOverlayFileSystem_ConcurrentAppend verifies that concurrent appends
+// to a base-only file are serialized with its copy up. Every append copied
+// the base file up and the later copies overwrote the earlier appends.
+func TestOverlayFileSystem_ConcurrentAppend(t *testing.T) {
+	ctx := t.Context()
+	const writers = 8
+	for range 20 {
+		overlay := newOverlayOfMapFS(t, stdfstest.MapFS{"log.txt": {Data: []byte("base\n")}})
+		var wg sync.WaitGroup
+		for range writers {
+			wg.Go(func() {
+				assert.NoError(t, overlay.Append(ctx, "/log.txt", []byte("line\n"), 0))
+			})
+		}
+		wg.Wait()
+		data, err := overlay.ReadAll(ctx, "/log.txt")
+		require.NoError(t, err)
+		require.Equal(t, "base\n"+strings.Repeat("line\n", writers), string(data), "no append may be lost")
+	}
+
+	// The same for the append writers
+	overlay := newOverlayOfMapFS(t, stdfstest.MapFS{"log.txt": {Data: []byte("base\n")}})
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Go(func() {
+			w, err := overlay.OpenAppendWriter("/log.txt", 0)
+			if !assert.NoError(t, err) {
+				return
+			}
+			_, err = io.WriteString(w, "line\n")
+			assert.NoError(t, err)
+			assert.NoError(t, w.Close())
+		})
+	}
+	wg.Wait()
+	data, err := overlay.ReadAll(ctx, "/log.txt")
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(string(data), "base\nline\n"), "the base content must be copied up once: %q", data)
+}
+
+// TestOverlayFileSystem_LayerSeparator verifies that a name containing the
+// separator of a layer is rejected. A base with the separator `\` resolved
+// "/d/..\x" to "/x", which made a removed base file readable again.
+func TestOverlayFileSystem_LayerSeparator(t *testing.T) {
+	ctx := t.Context()
+	base, err := fs.RegisteredTestMemFileSystem(&fs.MemFileSystemOptions{Separator: `\`})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = base.Close() })
+	require.NoError(t, base.WriteAll(ctx, `\removed.txt`, []byte("removed"), 0))
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = upper.Close() })
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+	require.NoError(t, err)
+	require.NoError(t, overlay.Remove("/removed.txt"))
+
+	_, err = overlay.ReadAll(ctx, `/d/..\removed.txt`)
+	assert.ErrorIs(t, err, os.ErrInvalid, "ReadAll of a name with the separator of the base")
+	_, err = overlay.Stat(`/d/..\removed.txt`)
+	assert.ErrorIs(t, err, os.ErrInvalid, "Stat of a name with the separator of the base")
+	err = overlay.ListDir(ctx, `/d/..\`, nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, os.ErrInvalid, "ListDir of a name with the separator of the base")
+	assert.ErrorIs(t, overlay.WriteAll(ctx, `/a\b.txt`, []byte("x"), 0), os.ErrInvalid, "WriteAll of a name with the separator of the base")
+	_, err = overlay.Stat("/removed.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "the removed file stays hidden")
 }
