@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -320,9 +321,88 @@ func TestOpenReaderStat(t *testing.T) {
 	assert.Equal(t, "a (2).txt", info.Name(), "the unique file system name, not the uploaded one")
 	assert.Equal(t, int64(2), info.Size())
 	assert.False(t, info.IsDir())
-	assert.Equal(t, iofs.FileMode(0666), info.Mode())
+	assert.Equal(t, iofs.FileMode(0444), info.Mode(), "read-only like the Permissions of Stat")
 	assert.True(t, info.ModTime().IsZero(), "multipart parts carry no modification time")
 	assert.Nil(t, info.Sys())
+
+	// The reader and the file system must agree on the permissions,
+	// the reader used to report 0666 for a read-only file system
+	fsInfo, err := multipartFS.Stat(multipartFS.CleanPath("files", "a (2).txt"))
+	require.NoError(t, err)
+	assert.Equal(t, fsInfo.Permissions, fs.PermissionsFromStdFileInfo(info))
+	assert.Equal(t, fs.AllRead, fsInfo.Permissions)
+}
+
+// newDiskFS returns a MultipartFileSystem whose uploads larger than one
+// byte are stored in temporary files in a new directory, which is returned.
+func newDiskFS(t *testing.T, uploads []upload, values map[string]string) (*MultipartFileSystem, string) {
+	t.Helper()
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir) // os.TempDir on Unix
+	t.Setenv("TMP", tempDir)    // os.TempDir on Windows
+	multipartFS, err := NewFromRequest(newFormRequest(t, uploads, values), 1, "")
+	require.NoError(t, err, "NewFromRequest")
+	require.NotEmpty(t, dirEntries(t, tempDir), "the uploads are stored in temporary files")
+	t.Cleanup(func() { _ = multipartFS.Close() })
+	return multipartFS, tempDir
+}
+
+func dirEntries(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	return entries
+}
+
+// TestClose_ClosesReaders verifies that Close closes the readers that are
+// still open before it removes the temporary files. On Windows open files
+// can't be removed, so the temporary files leaked.
+func TestClose_ClosesReaders(t *testing.T) {
+	multipartFS, tempDir := newDiskFS(t, []upload{
+		{field: "files", name: "a.txt", content: "stored on disk"},
+	}, map[string]string{"comment": "kept in memory"})
+
+	reader, err := multipartFS.OpenReader(multipartFS.CleanPath("files", "a.txt"))
+	require.NoError(t, err)
+	buf := make([]byte, 6)
+	_, err = io.ReadFull(reader, buf)
+	require.NoError(t, err)
+
+	require.NoError(t, multipartFS.Close())
+	assert.Empty(t, dirEntries(t, tempDir), "the temporary files are removed")
+	_, err = reader.Read(buf)
+	assert.ErrorIs(t, err, os.ErrClosed, "Close of the file system closed the reader")
+	assert.NoError(t, reader.Close(), "closing a closed reader is no error")
+
+	// The form values are kept in memory and stay usable, as documented
+	assert.Equal(t, "kept in memory", multipartFS.FormValue("comment"))
+	assert.Equal(t, []string{"kept in memory"}, multipartFS.FormValues("comment"))
+}
+
+// TestClose_Retry verifies that a Close that failed to remove the
+// temporary files returns the error and can be retried. Close used to
+// mark the file system as closed first, so a second Close returned nil
+// and the files leaked.
+func TestClose_Retry(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory that denies removing files")
+	}
+	multipartFS, tempDir := newDiskFS(t, []upload{
+		{field: "files", name: "a.txt", content: "stored on disk"},
+	}, nil)
+	filePath := multipartFS.CleanPath("files", "a.txt")
+
+	require.NoError(t, os.Chmod(tempDir, 0o500)) //#nosec G302 -- the test directory must deny removing files
+	t.Cleanup(func() { _ = os.Chmod(tempDir, 0o700) })
+	assert.Error(t, multipartFS.Close(), "the temporary files can't be removed")
+	_, err := multipartFS.Stat(filePath)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "the file system is closed even if removing failed")
+	assert.NotEmpty(t, dirEntries(t, tempDir))
+
+	require.NoError(t, os.Chmod(tempDir, 0o700)) //#nosec G302 -- restore the permissions of the test directory
+	require.NoError(t, multipartFS.Close(), "the retry removes the temporary files")
+	assert.Empty(t, dirEntries(t, tempDir))
+	require.NoError(t, multipartFS.Close(), "Close is idempotent after success")
 }
 
 // fileSystemName returns the file system name of a file uploaded as name:

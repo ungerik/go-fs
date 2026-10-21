@@ -1,10 +1,22 @@
 // Package multipartfs implements a read-only file system
 // for the files of a parsed multipart HTTP form.
 //
-// FromRequestForm parses the form of a request; the uploaded
-// files are then accessible as fs.File values and the form
-// values via the Form field. Close removes the temporary files
-// of the form.
+// NewFromRequest parses the form of a request and New wraps an already
+// parsed form. After the file system was registered with fs.Register,
+// the uploaded files are accessible as fs.File values, see FormFile
+// and FormFiles, and the form values via FormValue, FormValues and
+// the Form field. Close unregisters the file system and removes the
+// temporary files of the form:
+//
+//	formFS, err := multipartfs.NewFromRequest(request, 32<<20, "")
+//	if err != nil {
+//		return err
+//	}
+//	err = fs.Register(formFS)
+//	if err != nil {
+//		return err
+//	}
+//	defer formFS.Close()
 package multipartfs
 
 import (
@@ -67,16 +79,22 @@ var (
 // "files" or "my files", are used as they are. A path is split into its
 // elements before the field name is unescaped, so neither a field nor a file
 // name can address an upload of another field.
+//
+// The uploaded files are read-only with the permissions fs.AllRead
+// and have no modification time.
 type MultipartFileSystem struct {
 	paths fsimpl.PathHelper
 
 	// Form of the parsed multipart message.
 	// Form.Value holds the values of the non file form fields,
-	// see also FormValue and FormValues.
+	// see also FormValue and FormValues. The values stay
+	// usable after Close, the uploaded files of Form.File don't.
 	Form *multipart.Form
 
-	mtx    sync.RWMutex
-	closed bool
+	mtx     sync.RWMutex
+	closed  bool
+	removed bool                        // the temporary files of Form were removed
+	readers map[*multipartFile]struct{} // the open readers of uploaded files
 }
 
 // Prefix returns the URI prefix of the file system.
@@ -110,8 +128,9 @@ func New(form *multipart.Form, id string) (*MultipartFileSystem, error) {
 		id = fsimpl.RandomString()
 	}
 	f := &MultipartFileSystem{
-		paths: fsimpl.PathHelper{URIPrefix: Prefix + id, Rooted: true},
-		Form:  form,
+		paths:   fsimpl.PathHelper{URIPrefix: Prefix + id, Rooted: true},
+		Form:    form,
+		readers: make(map[*multipartFile]struct{}),
 	}
 	return f, nil
 }
@@ -131,6 +150,8 @@ func NewFromRequest(request *http.Request, maxMemory int64, id string) (*Multipa
 
 // FormValue returns the first value of the form field with the passed name,
 // or an empty string if the form has no value for that name.
+// The form values are kept in memory, so FormValue
+// still works after Close.
 func (f *MultipartFileSystem) FormValue(name string) string {
 	values := f.Form.Value[name]
 	if len(values) == 0 {
@@ -141,6 +162,8 @@ func (f *MultipartFileSystem) FormValue(name string) string {
 
 // FormValues returns all values of the form field with the passed name,
 // or nil if the form has no value for that name.
+// The form values are kept in memory, so FormValues
+// still works after Close.
 func (f *MultipartFileSystem) FormValues(name string) []string {
 	return f.Form.Value[name]
 }
@@ -464,42 +487,89 @@ func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 }
 
 // OpenReader opens an uploaded file for reading.
+// The reader implements io/fs.File, Close of the
+// file system closes it if it is still open.
 func (f *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	header, err := f.GetMultipartFileHeader(filePath)
 	if err != nil {
 		return nil, err
+	}
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+	if f.closed {
+		return nil, fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
 	}
 	file, err := header.Open()
 	if err != nil {
 		return nil, err
 	}
 	_, name := f.paths.SplitDirAndName(filePath)
-	return multipartFile{File: file, name: name, header: header}, nil
+	reader := &multipartFile{File: file, fs: f, name: name, header: header}
+	f.readers[reader] = struct{}{}
+	return reader, nil
 }
 
-// Close unregisters the file system and removes the temporary
-// files of the multipart form. It is safe to call Close more than once.
-// All file system methods return fs.ErrFileSystemClosed afterwards.
+// Close unregisters the file system, closes the readers of uploaded
+// files that are still open and removes the temporary files of the
+// multipart form. Afterwards all file system methods that return an
+// error return fs.ErrFileSystemClosed; FormValue, FormValues and the
+// values of the Form field stay usable.
+//
+// Close is idempotent. If the temporary files could not be removed,
+// the error is returned and the next Close tries again.
 func (f *MultipartFileSystem) Close() error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
+	if !f.closed {
+		f.closed = true
+		fs.Unregister(f)
+	}
+	if f.removed {
+		return nil
+	}
+	// Open files can't be removed on Windows
+	var errs []error
+	for reader := range f.readers {
+		errs = append(errs, reader.closeLocked())
+	}
+	err := f.Form.RemoveAll()
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	f.removed = true
+	return errors.Join(errs...)
+}
+
+// multipartFile is a reader of an uploaded file.
+type multipartFile struct {
+	multipart.File
+
+	fs     *MultipartFileSystem
+	name   string // file system name, see fileNames
+	header *multipart.FileHeader
+	closed bool // guarded by fs.mtx
+}
+
+// Stat returns the FileInfo of the uploaded file, implementing io/fs.File.
+func (f *multipartFile) Stat() (iofs.FileInfo, error) {
+	return multipartFileInfo{name: f.name, header: f.header}, nil
+}
+
+// Close closes the uploaded file. Close is idempotent.
+func (f *multipartFile) Close() error {
+	f.fs.mtx.Lock()
+	defer f.fs.mtx.Unlock()
+	return f.closeLocked()
+}
+
+// closeLocked closes the uploaded file. f.fs.mtx must be held.
+func (f *multipartFile) closeLocked() error {
 	if f.closed {
 		return nil
 	}
 	f.closed = true
-	fs.Unregister(f)
-	return f.Form.RemoveAll()
-}
-
-type multipartFile struct {
-	multipart.File
-
-	name   string // file system name, see fileNames
-	header *multipart.FileHeader
-}
-
-func (f multipartFile) Stat() (iofs.FileInfo, error) {
-	return multipartFileInfo{name: f.name, header: f.header}, nil
+	delete(f.fs.readers, f)
+	return f.File.Close()
 }
 
 type multipartFileInfo struct {
@@ -509,7 +579,7 @@ type multipartFileInfo struct {
 
 func (f multipartFileInfo) Name() string        { return f.name }
 func (f multipartFileInfo) Size() int64         { return f.header.Size }
-func (f multipartFileInfo) Mode() iofs.FileMode { return 0666 }
+func (f multipartFileInfo) Mode() iofs.FileMode { return fs.AllRead.FileMode(false) }
 func (f multipartFileInfo) ModTime() time.Time  { return time.Time{} }
 func (f multipartFileInfo) IsDir() bool         { return false }
 func (f multipartFileInfo) Sys() any            { return nil }
