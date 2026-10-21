@@ -2,6 +2,7 @@ package smbfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -24,6 +25,8 @@ const (
 	testUsername = "testuser"
 	testPassword = "testpass"
 	testShare    = "share"
+
+	testGuestShare = "public"
 )
 
 var (
@@ -60,6 +63,8 @@ func TestMain(m *testing.M) {
 		"-p",
 		"-u", fmt.Sprintf("%s;%s", testUsername, testPassword),
 		"-s", fmt.Sprintf("%s;/share;no;no;no;%s", testShare, testUsername),
+		// A share with guest access for anonymous sessions
+		"-s", fmt.Sprintf("%s;/public;yes;no;yes", testGuestShare),
 	)
 	output, err := runCmd.CombinedOutput()
 	if err != nil {
@@ -137,7 +142,7 @@ func Test_fileSystem(t *testing.T) {
 	require.Equal(t, expectedPrefix, smbFS.Prefix())
 
 	fstest.RunConformance(t, smbFS, fstest.Config{
-		Name:    "SMB file system",
+		Name:    "SMB",
 		Prefix:  expectedPrefix,
 		TestDir: "/conformance",
 		// SMB only stores a read-only attribute
@@ -145,21 +150,145 @@ func Test_fileSystem(t *testing.T) {
 	})
 }
 
-// TestDial_AddressErrors verifies the address parsing of Dial without a
-// server: an invalid address must be rejected before a TCP connection is
-// attempted, so a typo fails fast instead of timing out.
-func TestDial_AddressErrors(t *testing.T) {
-	ctx := t.Context()
-	for _, address := range []string{
-		"ftp://host/share", // wrong scheme
-		"smb://host",       // no share
-		"smb://host/",      // empty share
-		"smb:///share",     // no host
-		"smb://host/a/b",   // share must not contain a path
-	} {
-		_, err := Dial(ctx, address, nil)
-		require.Error(t, err, "Dial(%q) must fail", address)
+// Test_fileSystem_Identity checks the prefix, ID, Name and String,
+// which never contain the password.
+func Test_fileSystem_Identity(t *testing.T) {
+	f := &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: "smb://alice@nas/share", Rooted: true}}
+	assert.Equal(t, "alice@nas/share", f.ID())
+	assert.Equal(t, "SMB", f.Name())
+	assert.Equal(t, "SMB smb://alice@nas/share", f.String())
+	assert.Equal(t, fs.File("smb://alice@nas/share/"), f.RootDir())
+	readable, writable := f.ReadableWritable()
+	assert.True(t, readable)
+	assert.True(t, writable)
+}
+
+// TestDial_Credentials verifies the credentials of the address and the
+// options: Options.Password is used with a username from the address
+// (it logged in with an empty password), a password of the address works,
+// and a wrong password is an error without the password.
+func TestDial_Credentials(t *testing.T) {
+	if !dockerSMBAvailable {
+		t.Skip("Docker Samba server not available")
 	}
+	ctx := t.Context()
+	hostShare := fmt.Sprintf("127.0.0.1:%s/%s", testSMBPort, testShare)
+
+	smbFS, err := Dial(ctx, fmt.Sprintf("smb://%s@%s", testUsername, hostShare), &Options{Password: testPassword})
+	require.NoError(t, err, "Options.Password with the username of the address")
+	assert.Equal(t, fmt.Sprintf("smb://%s@%s", testUsername, hostShare), smbFS.Prefix())
+	require.NoError(t, smbFS.Close())
+
+	smbFS, err = Dial(ctx, fmt.Sprintf("%s:%s@%s", testUsername, testPassword, hostShare), nil)
+	require.NoError(t, err, "password of the address")
+	assert.Equal(t, fmt.Sprintf("smb://%s@%s", testUsername, hostShare), smbFS.Prefix(), "no password in the prefix")
+	require.NoError(t, smbFS.Close())
+
+	_, err = Dial(ctx, fmt.Sprintf("smb://%s:S3cretWrong@%s", testUsername, hostShare), nil)
+	require.Error(t, err, "wrong password")
+	assert.NotContains(t, err.Error(), "S3cretWrong")
+}
+
+// TestDial_Anonymous verifies that a share with guest access
+// can be mounted without credentials.
+func TestDial_Anonymous(t *testing.T) {
+	if !dockerSMBAvailable {
+		t.Skip("Docker Samba server not available")
+	}
+	address := fmt.Sprintf("smb://127.0.0.1:%s/%s", testSMBPort, testGuestShare)
+	smbFS, err := Dial(t.Context(), address, nil)
+	require.NoError(t, err, "anonymous session")
+	defer smbFS.Close()
+	assert.Equal(t, address, smbFS.Prefix())
+	_, err = smbFS.Stat("/")
+	require.NoError(t, err)
+	err = smbFS.ListDir(t.Context(), "/", nil, func(*fs.FileInfo) error { return nil })
+	require.NoError(t, err)
+}
+
+// TestEnsureRegistered verifies that EnsureRegistered shares one
+// registered file system per prefix with reference counting.
+func TestEnsureRegistered(t *testing.T) {
+	if !dockerSMBAvailable {
+		t.Skip("Docker Samba server not available")
+	}
+	ctx := t.Context()
+	address := fmt.Sprintf("smb://%s:%s@127.0.0.1:%s/%s", testUsername, testPassword, testSMBPort, testShare)
+	prefix := fmt.Sprintf("smb://%s@127.0.0.1:%s/%s", testUsername, testSMBPort, testShare)
+
+	free1, err := EnsureRegistered(ctx, address, nil)
+	require.NoError(t, err)
+	free2, err := EnsureRegistered(ctx, address, nil)
+	require.NoError(t, err)
+	registered := fs.GetFileSystemByPrefixOrNil(prefix)
+	require.NotNil(t, registered)
+
+	name := fmt.Sprintf("/ensure-%d.txt", time.Now().UnixNano())
+	file := fs.File(prefix + name)
+	require.NoError(t, file.WriteAllString(ctx, "registered"))
+	content, err := file.ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "registered", content)
+	require.NoError(t, file.Remove())
+
+	require.NoError(t, free1())
+	require.NoError(t, free1(), "free is idempotent")
+	assert.True(t, fs.IsRegistered(registered), "registered while a reference remains")
+	require.NoError(t, free2())
+	assert.False(t, fs.IsRegistered(registered), "unregistered after the last free")
+	_, err = registered.Stat("/")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+
+	free, err := EnsureRegistered(ctx, "smb://alice:S3cret@host", nil)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "S3cret")
+	require.NotNil(t, free)
+	require.NoError(t, free())
+}
+
+// TestDialAndRegister verifies the registration and that a second
+// registration of the prefix fails without closing the first.
+func TestDialAndRegister(t *testing.T) {
+	if !dockerSMBAvailable {
+		t.Skip("Docker Samba server not available")
+	}
+	ctx := t.Context()
+	opts := &Options{Username: testUsername, Password: testPassword}
+	require.NoError(t, DialAndRegister(ctx, testSMBAddress, opts))
+	prefix := fmt.Sprintf("smb://%s@127.0.0.1:%s/%s", testUsername, testSMBPort, testShare)
+	registered := fs.GetFileSystemByPrefixOrNil(prefix)
+	require.NotNil(t, registered)
+	defer registered.Close()
+
+	err := DialAndRegister(ctx, testSMBAddress, opts)
+	require.ErrorIs(t, err, fs.ErrAlreadyRegistered)
+	_, err = registered.Stat("/")
+	assert.NoError(t, err, "the registered file system must still work")
+	require.Error(t, DialAndRegister(ctx, "smb://host", nil))
+}
+
+// TestSymbolicLink verifies that creating a symbolic link on a server
+// without symbolic link support is an fs.ErrUnsupported and that
+// reading a missing link is an os.ErrNotExist.
+func TestSymbolicLink(t *testing.T) {
+	f, _ := dialTestFS(t)
+	err := f.CreateSymbolicLink("/target.txt", fmt.Sprintf("/link-%d", time.Now().UnixNano()))
+	if err == nil {
+		t.Skip("the server supports symbolic links")
+	}
+	assert.ErrorIs(t, err, errors.ErrUnsupported)
+	_, err = f.ReadSymbolicLink("/missing-link")
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.ErrorIs(t, f.CreateSymbolicLink("", "/link"), fs.ErrEmptyPath)
+}
+
+// TestRemove_Root verifies that the root directory of the share is never removed.
+func TestRemove_Root(t *testing.T) {
+	f, _ := dialTestFS(t)
+	assert.Error(t, f.Remove("/"))
+	assert.Error(t, f.RemoveAll(t.Context(), "/"))
+	assert.ErrorIs(t, f.MakeDir("/", 0), os.ErrExist)
+	assert.NoError(t, f.MakeAllDirs("/", 0))
 }
 
 // TestClosedFileSystem verifies that a closed SMB file system reports
@@ -187,12 +316,13 @@ func TestClosedFileSystem(t *testing.T) {
 	_, err = f.ReadAll(ctx, "/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.WriteAll(ctx, "/file", []byte("x"), 0), fs.ErrFileSystemClosed)
-	assert.ErrorIs(t, f.Truncate(t.Context(), "/file", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.Truncate(ctx, "/file", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.Touch("/file", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.MakeDir("/dir", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.MakeAllDirs("/dir/sub", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.SetPermissions("/file", 0), fs.ErrFileSystemClosed)
-	assert.ErrorIs(t, f.Move(t.Context(), "/a", "/b"), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.Move(ctx, "/a", "/b"), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.Move(ctx, "/a", "/a"), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.Remove("/file"), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.RemoveAll(ctx, "/dir"), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.CreateSymbolicLink("/a", "/link"), fs.ErrFileSystemClosed)
@@ -200,6 +330,11 @@ func TestClosedFileSystem(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 	_, err = f.Lstat("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+
+	// Empty paths are rejected before anything else
+	_, err = f.Stat("")
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.Move(ctx, "", "/b"), fs.ErrEmptyPath)
 
 	// Close on an already-closed file system is a safe no-op
 	// that must not touch the released connection.

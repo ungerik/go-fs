@@ -6,6 +6,21 @@
 // file system implements nearly every optional interface natively:
 // append and read-write handles, Truncate, Touch, MakeAllDirs,
 // RemoveAll, Move (server-side rename), SetPermissions and symbolic links.
+//
+// A file system keeps one SMB session that operations use concurrently.
+// When its connection broke, for example because a Windows server
+// disconnected the idle session, the next operation dials a new session
+// before it sends its request. An operation that fails because the
+// connection broke while its request was on the way is retried once on a
+// new session if it is idempotent; Remove, MakeDir, Move and
+// CreateSymbolicLink return the connection error instead, because the
+// server may have executed them. Open file handles belong to their
+// session and fail after a reconnect.
+//
+// URIs have the form "smb://user@host:port/share/path" and never contain a
+// password; the port is omitted if it is 445, and "smb://user@host:445/share"
+// is an alias. Without a user and password the session is anonymous and
+// the URIs have the form "smb://host/share/path".
 package smbfs
 
 import (
@@ -13,11 +28,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,17 +42,15 @@ import (
 )
 
 const (
-	// Prefix of smbfs URIs: smb://user@host/share
+	// Prefix is the URI scheme prefix of smbfs URIs: smb://user@host/share
 	Prefix = "smb://"
 
 	// Separator used in smbfs paths
 	Separator = "/"
-
-	defaultPort = "445"
 )
 
+// Compile-time interface checks
 var (
-	// Compile-time interface checks
 	_ fs.FileSystem             = new(fileSystem)
 	_ fs.WriteFileSystem        = new(fileSystem)
 	_ fs.ReadAllFileSystem      = new(fileSystem)
@@ -54,107 +66,99 @@ var (
 	_ fs.SymbolicLinkFileSystem = new(fileSystem)
 )
 
-// Options for dialing an SMB share. A nil *Options uses the defaults.
-type Options struct {
-	// Username and Password for NTLMv2 authentication.
-	// They override credentials in the address.
-	Username string
-	Password string
-
-	// Domain and Workstation are optional NTLM parameters.
-	Domain      string
-	Workstation string
-
-	// Dialer for the TCP connection, nil uses a net.Dialer.
-	Dialer *net.Dialer
-}
-
 type fileSystem struct {
 	fsimpl.PathHelper
+	cfg *dialConfig
 
-	conn    net.Conn
-	session *smb2.Session
-	share   *smb2.Share
 	closed  atomic.Bool
+	closing context.Context // canceled by Close to abort running operations
+	cancel  context.CancelCauseFunc
+
+	mtx     sync.Mutex
+	sess    *session  // guarded by mtx
+	dialing *dialCall // reconnect in progress, guarded by mtx
 }
 
 // Dial connects to an SMB share and returns its file system without
-// registering it. The address has the form "[smb://][user[:password]@]host[:port]/share";
-// the default port is 445. The URI prefix is "smb://user@host/share",
-// or "smb://host/share" without a user.
+// registering it. The address has the form [smb://][user[:password]@]host[:port]/share;
+// the default port is 445. See Options for the credentials.
+// The URI prefix is "smb://user@host/share", or "smb://host/share"
+// for an anonymous session.
+//
+// The context limits the dial including the authentication and
+// mounting the share, see also Options.Timeout.
 func Dial(ctx context.Context, address string, opts *Options) (fs.FileSystem, error) {
-	if !strings.Contains(address, "://") {
-		address = Prefix + address
-	}
-	u, err := url.Parse(address)
+	cfg, err := parseAddress(address, opts)
 	if err != nil {
 		return nil, err
 	}
-	if u.Scheme != "smb" {
-		return nil, fmt.Errorf("smbfs: not an smb URL: %s", address)
-	}
-	share := strings.Trim(u.Path, "/")
-	if u.Host == "" || share == "" || strings.Contains(share, "/") {
-		return nil, fmt.Errorf("smbfs: address must be host/share: %s", address)
-	}
-	var username, password string
-	if u.User != nil {
-		username = u.User.Username()
-		password, _ = u.User.Password()
-	}
-	var initiator smb2.NTLMInitiator
-	dialer := &net.Dialer{Timeout: 30 * time.Second}
-	if opts != nil {
-		if opts.Username != "" {
-			username, password = opts.Username, opts.Password
-		}
-		initiator.Domain = opts.Domain
-		initiator.Workstation = opts.Workstation
-		if opts.Dialer != nil {
-			dialer = opts.Dialer
-		}
-	}
-	initiator.User, initiator.Password = username, password
-
-	host := u.Host
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		host = net.JoinHostPort(host, defaultPort)
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", host)
-	if err != nil {
-		return nil, err
-	}
-	session, err := (&smb2.Dialer{Initiator: &initiator}).DialConn(ctx, conn, host)
-	if err != nil {
-		return nil, errors.Join(err, conn.Close())
-	}
-	mounted, err := session.Mount(share)
-	if err != nil {
-		return nil, errors.Join(err, session.Logoff(), conn.Close())
-	}
-	prefix := Prefix
-	if username != "" {
-		prefix += url.User(username).String() + "@"
-	}
-	prefix += strings.TrimSuffix(u.Host, ":"+defaultPort) + "/" + share
-	return &fileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: prefix, Rooted: true},
-		conn:       conn,
-		session:    session,
-		share:      mounted,
-	}, nil
+	return dialFileSystem(ctx, cfg)
 }
 
-// DialAndRegister connects to an SMB share and registers its file system, see Dial.
-func DialAndRegister(ctx context.Context, address string, opts *Options) (fs.FileSystem, error) {
-	f, err := Dial(ctx, address, opts)
+// dialFileSystem dials the first session of a new file system.
+func dialFileSystem(ctx context.Context, cfg *dialConfig) (fs.FileSystem, error) {
+	s, err := dial(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	if err := fs.Register(f); err != nil {
-		return nil, errors.Join(err, f.Close())
+	f := &fileSystem{
+		PathHelper: fsimpl.PathHelper{URIPrefix: cfg.prefix, AltPrefixes: cfg.aliases, Rooted: true},
+		cfg:        cfg,
+		sess:       s,
 	}
+	f.closing, f.cancel = context.WithCancelCause(context.Background())
 	return f, nil
+}
+
+// DialAndRegister connects to an SMB share like Dial and registers its
+// file system, so that fs.File URIs with its prefix use it.
+// It returns an error wrapping fs.ErrAlreadyRegistered if another
+// file system is registered with the same prefix.
+// Close the file system with fs.GetFileSystemByPrefixOrNil(prefix).Close()
+// or use EnsureRegistered, which returns a free function.
+func DialAndRegister(ctx context.Context, address string, opts *Options) error {
+	f, err := Dial(ctx, address, opts)
+	if err != nil {
+		return err
+	}
+	if err := fs.Register(f); err != nil {
+		return errors.Join(err, f.Close())
+	}
+	return nil
+}
+
+// EnsureRegistered makes sure that a file system for the address is
+// registered, see Dial for the address. The first call dials and registers
+// it, later calls for the same URI prefix share it; concurrent calls dial
+// only once. Every call increases a reference count. The returned free
+// function decreases it and closes and unregisters the file system after
+// the last reference. free is never nil and can be called more than once.
+// The options are only used if the file system is dialed.
+func EnsureRegistered(ctx context.Context, address string, opts *Options) (free func() error, err error) {
+	cfg, err := parseAddress(address, opts)
+	if err != nil {
+		return nop, err
+	}
+	_, free, err = fs.EnsureRegistered(ctx, cfg.prefix, func(ctx context.Context) (fs.FileSystem, error) {
+		return dialFileSystem(ctx, cfg)
+	})
+	if err != nil {
+		return nop, err
+	}
+	return free, nil
+}
+
+func nop() error { return nil }
+
+// opContext returns a context for an operation that is canceled with
+// the cause fs.ErrFileSystemClosed when the file system is closed.
+func (f *fileSystem) opContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	stop := context.AfterFunc(f.closing, func() { cancel(fs.ErrFileSystemClosed) })
+	return ctx, func() {
+		stop()
+		cancel(context.Canceled)
+	}
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
@@ -165,36 +169,31 @@ func (f *fileSystem) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
+// ID returns the URI prefix without the scheme: user@host/share.
 func (f *fileSystem) ID() string {
 	return strings.TrimPrefix(f.URIPrefix, Prefix)
 }
 
 func (f *fileSystem) Name() string {
-	return "SMB file system"
+	return "SMB"
 }
 
+// String returns the name and the URI prefix, which never contains a password.
 func (f *fileSystem) String() string {
-	return f.Name() + " with prefix " + f.URIPrefix
+	return f.Name() + " " + f.URIPrefix
 }
 
 func (f *fileSystem) file(filePath string) fs.File {
 	return fs.File(f.JoinCleanURI(filePath))
 }
 
-func (f *fileSystem) checkClosed() error {
-	if f.closed.Load() {
-		return fs.ErrFileSystemClosed
-	}
-	return nil
-}
-
 // sharePath returns the share relative path of a file system path,
 // the empty string for the root.
 func sharePath(filePath string) string {
-	return strings.Trim(filePath, Separator)
+	return strings.Trim(path.Clean("/"+filePath), Separator)
 }
 
-// wrapErr maps the os errors of go-smb2 to the fs error types for filePath.
+// wrapErr maps the errors of go-smb2 to the fs error types for filePath.
 func (f *fileSystem) wrapErr(filePath string, err error) error {
 	switch {
 	case err == nil:
@@ -205,6 +204,27 @@ func (f *fileSystem) wrapErr(filePath string, err error) error {
 		return fs.NewErrAlreadyExists(f.file(filePath))
 	case errors.Is(err, os.ErrPermission):
 		return fs.NewErrPermission(f.file(filePath))
+	case ntStatus(err) == statusDirectoryNotEmpty:
+		return fs.NewErrDirectoryNotEmpty(f.file(filePath))
+	case ntStatus(err) == statusNotADirectory:
+		return fs.NewErrIsNotDirectory(f.file(filePath))
+	case ntStatus(err) == statusFileIsADirectory:
+		return fs.NewErrIsDirectory(f.file(filePath))
+	}
+	return err
+}
+
+// dirErr maps the error of reading or writing filePath to fs.ErrIsDirectory
+// if filePath is a directory. Servers report that in different ways,
+// Samba for example with STATUS_INVALID_PARAMETER for opening a directory
+// for writing and STATUS_INVALID_DEVICE_REQUEST for reading it.
+func (f *fileSystem) dirErr(share *smb2.Share, filePath string, err error) error {
+	err = f.wrapErr(filePath, err)
+	if err == nil || isConnectionError(err) || errors.Is(err, os.ErrNotExist) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if info, statErr := share.Stat(sharePath(filePath)); statErr == nil && info.IsDir() {
+		return fs.NewErrIsDirectory(f.file(filePath))
 	}
 	return err
 }
@@ -225,45 +245,53 @@ func (f *fileSystem) rootInfo() *fs.FileInfo {
 // Stat returns the FileInfo with the symlink flag from Lstat
 // and the other fields from Stat like os does.
 func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
-	if err := f.checkClosed(); err != nil {
-		return nil, err
-	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	p := sharePath(filePath)
-	if p == "" {
-		return f.rootInfo(), nil
-	}
-	linkInfo, err := f.share.Lstat(p)
-	if err != nil {
-		return nil, f.wrapErr(filePath, err)
-	}
-	info := linkInfo
-	if linkInfo.Mode()&os.ModeSymlink != 0 {
-		info, err = f.share.Stat(p)
-		if err != nil {
-			return nil, f.wrapErr(filePath, err)
+	var fileInfo *fs.FileInfo
+	err := f.do(context.Background(), true, func(share *smb2.Share) error {
+		p := sharePath(filePath)
+		if p == "" {
+			fileInfo = f.rootInfo()
+			return nil
 		}
-	}
-	fileInfo := fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
-	fileInfo.IsSymlink = linkInfo.Mode()&os.ModeSymlink != 0
-	return fileInfo, nil
+		linkInfo, err := share.Lstat(p)
+		if err != nil {
+			return f.wrapErr(filePath, err)
+		}
+		info := linkInfo
+		if linkInfo.Mode()&os.ModeSymlink != 0 {
+			info, err = share.Stat(p)
+			if err != nil {
+				return f.wrapErr(filePath, err)
+			}
+		}
+		fileInfo = fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
+		fileInfo.IsSymlink = linkInfo.Mode()&os.ModeSymlink != 0
+		return nil
+	})
+	return fileInfo, err
 }
 
+// ListDir lists the directory. The FileInfo of a symbolic link describes
+// the link itself. The callbacks are called after the listing completed.
 func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
-	infos, err := f.share.WithContext(ctx).ReadDir(sharePath(dirPath))
-	if err != nil {
-		if info, statErr := f.Stat(dirPath); statErr == nil && !info.IsDir {
-			return fs.NewErrIsNotDirectory(info.File)
+	var infos []os.FileInfo
+	err := f.do(ctx, true, func(share *smb2.Share) (err error) {
+		infos, err = share.ReadDir(sharePath(dirPath))
+		if err != nil {
+			if info, statErr := share.Stat(sharePath(dirPath)); statErr == nil && !info.IsDir() {
+				return fs.NewErrIsNotDirectory(f.file(dirPath))
+			}
+			return f.wrapErr(dirPath, err)
 		}
-		return f.wrapErr(dirPath, err)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	for _, info := range infos {
 		if err := ctx.Err(); err != nil {
@@ -276,68 +304,75 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 		if !match {
 			continue
 		}
-		err = callback(fs.NewFileInfo(f.file(f.CleanPath(dirPath, info.Name())), info, strings.HasPrefix(info.Name(), ".")))
-		if err != nil {
+		fileInfo := fs.NewFileInfo(f.file(f.CleanPath(dirPath, info.Name())), info, strings.HasPrefix(info.Name(), "."))
+		fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
+		if err = callback(fileInfo); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// openFile opens a file with the flags. A created file gets
+// openFile opens a file handle with the flags. A created file gets
 // the permissions perm if perm is not zero.
-func (f *fileSystem) openFile(filePath string, flag int, perm fs.Permissions) (*smb2.File, error) {
-	if err := f.checkClosed(); err != nil {
-		return nil, err
-	}
+func (f *fileSystem) openFile(filePath string, flag int, perm fs.Permissions) (*file, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	file, err := f.share.OpenFile(sharePath(filePath), flag, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
-	if err != nil {
-		return nil, f.wrapErr(filePath, err)
-	}
-	return file, nil
+	var handle *file
+	err := f.doHandle(true, func(share *smb2.Share) error {
+		smbFile, err := share.OpenFile(sharePath(filePath), flag, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
+		if err != nil {
+			if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
+				return f.dirErr(share, filePath, err)
+			}
+			return f.wrapErr(filePath, err)
+		}
+		handle = &file{File: smbFile, fsys: f}
+		return nil
+	})
+	return handle, err
 }
 
 // OpenReader returns the SMB file handle, which supports Seek and ReadAt.
 func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
-	file, err := f.openFile(filePath, os.O_RDONLY, 0)
+	handle, err := f.openFile(filePath, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
+	info, err := handle.Stat()
 	if err != nil {
-		return nil, errors.Join(f.wrapErr(filePath, err), file.Close())
+		return nil, errors.Join(f.wrapErr(filePath, err), handle.Close())
 	}
 	if info.IsDir() {
-		return nil, errors.Join(fs.NewErrIsDirectory(f.file(filePath)), file.Close())
+		return nil, errors.Join(fs.NewErrIsDirectory(f.file(filePath)), handle.Close())
 	}
-	return file, nil
+	return handle, nil
 }
 
 func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	if err := f.checkClosed(); err != nil {
-		return nil, err
-	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	data, err := f.share.WithContext(ctx).ReadFile(sharePath(filePath))
-	return data, f.wrapErr(filePath, err)
+	var data []byte
+	err := f.do(ctx, true, func(share *smb2.Share) (err error) {
+		data, err = share.ReadFile(sharePath(filePath))
+		return f.dirErr(share, filePath, err)
+	})
+	return data, err
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // Writing
 
 func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	return f.wrapErr(filePath, f.share.WithContext(ctx).WriteFile(sharePath(filePath), data, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false)))
+	return f.do(ctx, true, func(share *smb2.Share) error {
+		err := share.WriteFile(sharePath(filePath), data, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
+		return f.dirErr(share, filePath, err)
+	})
 }
 
 func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
@@ -353,201 +388,245 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 }
 
 func (f *fileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	return f.wrapErr(filePath, f.share.Truncate(sharePath(filePath), size))
+	return f.do(ctx, true, func(share *smb2.Share) error {
+		return f.dirErr(share, filePath, share.Truncate(sharePath(filePath), size))
+	})
 }
 
 // Touch updates the modification time of an existing file
 // and creates an empty file with the permissions perm otherwise.
 func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	p := sharePath(filePath)
-	_, err := f.share.Stat(p)
-	if errors.Is(err, os.ErrNotExist) {
-		file, err := f.openFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
-		if err != nil {
-			return err
+	return f.do(context.Background(), true, func(share *smb2.Share) error {
+		p := sharePath(filePath)
+		_, err := share.Stat(p)
+		if errors.Is(err, os.ErrNotExist) {
+			created, err := share.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
+			if err != nil {
+				return f.wrapErr(filePath, err)
+			}
+			return f.wrapErr(filePath, created.Close())
 		}
-		return file.Close()
-	}
-	if err != nil {
-		return f.wrapErr(filePath, err)
-	}
-	now := time.Now()
-	return f.wrapErr(filePath, f.share.Chtimes(p, now, now))
+		if err != nil {
+			return f.wrapErr(filePath, err)
+		}
+		now := time.Now()
+		return f.wrapErr(filePath, share.Chtimes(p, now, now))
+	})
 }
 
+// MakeDir creates a directory.
+// It returns an error wrapping os.ErrExist if the path exists.
 func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if dirPath == "" {
 		return fs.ErrEmptyPath
+	}
+	if f.closed.Load() {
+		return fs.ErrFileSystemClosed
 	}
 	p := sharePath(dirPath)
 	if p == "" {
 		return fs.NewErrAlreadyExists(f.RootDir())
 	}
-	err := f.share.Mkdir(p, perm.OrDefault(fs.AllReadWrite|fs.AllExecute).FileMode(true))
-	if err != nil && !errors.Is(err, os.ErrExist) {
-		// Some servers report a generic error for an existing path
-		if _, statErr := f.share.Lstat(p); statErr == nil {
-			return fs.NewErrAlreadyExists(f.file(dirPath))
+	return f.do(context.Background(), false, func(share *smb2.Share) error {
+		err := share.Mkdir(p, perm.OrDefault(fs.AllReadWrite|fs.AllExecute).FileMode(true))
+		if err != nil && !errors.Is(err, os.ErrExist) && !isConnectionError(err) {
+			// Some servers report a generic error for an existing path
+			if _, statErr := share.Lstat(p); statErr == nil {
+				return fs.NewErrAlreadyExists(f.file(dirPath))
+			}
 		}
-	}
-	return f.wrapErr(dirPath, err)
+		return f.wrapErr(dirPath, err)
+	})
 }
 
 func (f *fileSystem) MakeAllDirs(dirPath string, perm fs.Permissions) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
-	p := sharePath(dirPath)
-	if p == "" {
-		return nil
-	}
-	if info, err := f.share.Stat(p); err == nil {
-		if !info.IsDir() {
-			return fs.NewErrIsNotDirectory(f.file(dirPath))
+	return f.do(context.Background(), true, func(share *smb2.Share) error {
+		p := sharePath(dirPath)
+		if p == "" {
+			return nil
 		}
-		return nil
-	}
-	return f.wrapErr(dirPath, f.share.MkdirAll(p, perm.OrDefault(fs.AllReadWrite|fs.AllExecute).FileMode(true)))
+		if info, err := share.Stat(p); err == nil {
+			if !info.IsDir() {
+				return fs.NewErrIsNotDirectory(f.file(dirPath))
+			}
+			return nil
+		}
+		return f.wrapErr(dirPath, share.MkdirAll(p, perm.OrDefault(fs.AllReadWrite|fs.AllExecute).FileMode(true)))
+	})
 }
 
 // SetPermissions sets the read-only attribute of a file when perm has no
 // user write bit and clears it otherwise. SMB has no POSIX permission bits.
 func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	return f.wrapErr(filePath, f.share.Chmod(sharePath(filePath), perm.FileMode(false)))
+	return f.do(context.Background(), true, func(share *smb2.Share) error {
+		return f.wrapErr(filePath, share.Chmod(sharePath(filePath), perm.FileMode(false)))
+	})
 }
 
 // Move renames a file or directory server-side.
+//
+// The SMB rename replaces any existing destination, also an empty
+// directory, so Move checks the destination first: an existing directory
+// is an error wrapping os.ErrExist, an existing file is replaced if the
+// source is a file and an fs.ErrIsNotDirectory if it is a directory.
+// Moving a directory into itself is an error wrapping os.ErrInvalid.
+// The checks and the rename are not atomic.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if filePath == "" || destPath == "" {
 		return fs.ErrEmptyPath
 	}
 	src, dest := sharePath(filePath), sharePath(destPath)
 	if src == dest {
-		return nil
+		if f.closed.Load() {
+			return fs.ErrFileSystemClosed
+		}
+		return ctx.Err()
 	}
-	return f.wrapErr(filePath, f.share.Rename(src, dest))
+	return f.do(ctx, false, func(share *smb2.Share) error {
+		srcInfo, err := share.Lstat(src)
+		if err != nil {
+			return f.wrapErr(filePath, err)
+		}
+		if srcInfo.IsDir() && (src == "" || strings.HasPrefix(dest, src+Separator)) {
+			return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, f.file(filePath), f.file(destPath))
+		}
+		destInfo, err := share.Lstat(dest)
+		switch {
+		case err == nil && destInfo.IsDir():
+			return fs.NewErrAlreadyExists(f.file(destPath))
+		case err == nil && srcInfo.IsDir():
+			return fs.NewErrIsNotDirectory(f.file(destPath))
+		case err != nil && !errors.Is(err, os.ErrNotExist):
+			return f.wrapErr(destPath, err)
+		}
+		return f.wrapErr(filePath, share.Rename(src, dest))
+	})
 }
 
 // Remove removes a file or an empty directory.
+// A non-empty directory is an fs.ErrDirectoryNotEmpty.
 func (f *fileSystem) Remove(filePath string) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
 	p := sharePath(filePath)
 	if p == "" {
-		return fmt.Errorf("can't remove root directory of %s", f)
+		return fmt.Errorf("smbfs: can't remove the root directory of %s", f)
 	}
-	return f.wrapErr(filePath, f.share.Remove(p))
+	return f.do(context.Background(), false, func(share *smb2.Share) error {
+		return f.wrapErr(filePath, share.Remove(p))
+	})
 }
 
 // RemoveAll removes a file or directory tree. A missing path is not an error.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
 	p := sharePath(filePath)
 	if p == "" {
-		return fmt.Errorf("can't remove root directory of %s", f)
+		return fmt.Errorf("smbfs: can't remove the root directory of %s", f)
 	}
-	err := f.share.WithContext(ctx).RemoveAll(p)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return f.wrapErr(filePath, err)
+	return f.do(ctx, true, func(share *smb2.Share) error {
+		err := share.RemoveAll(p)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return f.wrapErr(filePath, err)
+	})
 }
 
 // Lstat returns the FileInfo of the file without following a symbolic link.
 func (f *fileSystem) Lstat(filePath string) (*fs.FileInfo, error) {
-	if err := f.checkClosed(); err != nil {
-		return nil, err
-	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	info, err := f.share.Lstat(sharePath(filePath))
-	if err != nil {
-		return nil, f.wrapErr(filePath, err)
-	}
-	fileInfo := fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
-	fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
-	return fileInfo, nil
+	var fileInfo *fs.FileInfo
+	err := f.do(context.Background(), true, func(share *smb2.Share) error {
+		p := sharePath(filePath)
+		if p == "" {
+			fileInfo = f.rootInfo()
+			return nil
+		}
+		info, err := share.Lstat(p)
+		if err != nil {
+			return f.wrapErr(filePath, err)
+		}
+		fileInfo = fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
+		fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
+		return nil
+	})
+	return fileInfo, err
 }
 
+// CreateSymbolicLink creates a symbolic link at linkPath to targetPath,
+// which is stored as given, with the separator of SMB. Most servers
+// reject symbolic links over SMB (Samba without unix extensions, Windows
+// without privileges), which is an fs.ErrUnsupported.
 func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
-	if err := f.checkClosed(); err != nil {
-		return err
-	}
-	if linkPath == "" {
+	if targetPath == "" || linkPath == "" {
 		return fs.ErrEmptyPath
 	}
-	err := f.share.Symlink(sharePath(targetPath), sharePath(linkPath))
-	if err != nil {
-		err = f.wrapErr(linkPath, err)
-		if errors.Is(err, os.ErrNotExist) {
+	return f.do(context.Background(), false, func(share *smb2.Share) error {
+		err := share.Symlink(targetPath, sharePath(linkPath))
+		if err == nil || isConnectionError(err) {
 			return err
 		}
-		// Most servers reject symbolic links over SMB
-		// (Samba without unix extensions, Windows without privileges)
+		err = f.wrapErr(linkPath, err)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrExist) {
+			return err
+		}
 		return fmt.Errorf("%w: %w", fs.NewErrUnsupported(f, "CreateSymbolicLink"), err)
-	}
-	return nil
+	})
 }
 
+// ReadSymbolicLink returns the target of the symbolic link
+// at linkPath as stored, with the separator "/".
 func (f *fileSystem) ReadSymbolicLink(linkPath string) (targetPath string, err error) {
-	if err := f.checkClosed(); err != nil {
-		return "", err
-	}
 	if linkPath == "" {
 		return "", fs.ErrEmptyPath
 	}
-	target, err := f.share.Readlink(sharePath(linkPath))
-	if err != nil {
-		return "", f.wrapErr(linkPath, err)
-	}
-	return f.CleanPath(strings.ReplaceAll(target, `\`, "/")), nil
+	err = f.do(context.Background(), true, func(share *smb2.Share) error {
+		target, err := share.Readlink(sharePath(linkPath))
+		if err != nil {
+			return f.wrapErr(linkPath, err)
+		}
+		targetPath = strings.ReplaceAll(target, `\`, Separator)
+		return nil
+	})
+	return targetPath, err
 }
 
-// Close unmounts the share, logs off, closes the connection
-// and unregisters the file system. Close is idempotent.
+// Close unregisters the file system, aborts running operations, unmounts
+// the share, logs off and closes the connection. Afterwards every method
+// returns fs.ErrFileSystemClosed. Calling Close more than once is a no-op.
 func (f *fileSystem) Close() error {
 	if f.closed.Swap(true) {
 		return nil
 	}
 	fs.Unregister(f)
-	err := errors.Join(f.share.Umount(), f.session.Logoff())
-	_ = f.conn.Close() // Logoff already closes the connection
-	return err
+	f.cancel(fs.ErrFileSystemClosed)
+
+	f.mtx.Lock()
+	s := f.sess
+	f.sess = nil
+	f.mtx.Unlock()
+	if s == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), f.cfg.timeout())
+	defer cancel()
+	return s.close(ctx)
 }
