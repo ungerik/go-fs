@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"errors"
 	"io"
 	iofs "io/fs"
 	"os"
@@ -28,6 +27,9 @@ var (
 //   - io/fs.StatFS
 //   - io/fs.ReadDirFS
 //   - io/fs.ReadFileFS
+//
+// Every method validates the name like io/fs.ValidPath,
+// so no name can address a file outside of File.
 type StdFS struct {
 	File File
 }
@@ -36,6 +38,9 @@ type StdFS struct {
 //
 // This method implements the io/fs.StatFS interface.
 func (f StdFS) Stat(name string) (iofs.FileInfo, error) {
+	if err := f.checkName("stat", name); err != nil {
+		return nil, err
+	}
 	return f.File.Join(name).Stat()
 }
 
@@ -43,6 +48,9 @@ func (f StdFS) Stat(name string) (iofs.FileInfo, error) {
 //
 // This method implements the io/fs.SubFS interface.
 func (f StdFS) Sub(dir string) (iofs.FS, error) {
+	if err := f.checkName("sub", dir); err != nil {
+		return nil, err
+	}
 	return f.File.Join(dir).StdFS(), nil
 }
 
@@ -50,7 +58,7 @@ func (f StdFS) Sub(dir string) (iofs.FS, error) {
 //
 // This method implements the io/fs.FS interface.
 func (f StdFS) Open(name string) (iofs.File, error) {
-	if err := checkStdFSName(name); err != nil {
+	if err := f.checkName("open", name); err != nil {
 		return nil, err
 	}
 	file := f.File.Join(name)
@@ -128,7 +136,7 @@ func (d *stdDirFile) ReadDir(n int) ([]iofs.DirEntry, error) {
 //
 // This method implements the io/fs.ReadFileFS interface.
 func (f StdFS) ReadFile(name string) ([]byte, error) {
-	if err := checkStdFSName(name); err != nil {
+	if err := f.checkName("open", name); err != nil {
 		return nil, err
 	}
 	return f.File.Join(name).ReadAll(context.Background())
@@ -136,20 +144,25 @@ func (f StdFS) ReadFile(name string) ([]byte, error) {
 
 // ReadDir reads the named directory
 // and returns a list of directory entries sorted by filename.
+// The entries describe symbolic links themselves like os.ReadDir.
 //
 // This method implements the io/fs.ReadDirFS interface.
 func (f StdFS) ReadDir(name string) ([]iofs.DirEntry, error) {
-	if err := checkStdFSName(name); err != nil {
+	if err := f.checkName("readdir", name); err != nil {
 		return nil, err
 	}
 	return stdReadDir(f.File.Join(name))
 }
 
 // stdReadDir lists the entries of dir sorted by name like io/fs.ReadDir.
+// The entries answer from the FileInfo of the listing, which describes
+// a symbolic link itself, without accessing the file system again.
 func stdReadDir(dir File) ([]iofs.DirEntry, error) {
 	var entries []iofs.DirEntry
-	err := dir.ListDir(context.Background(), func(file File) error {
-		entries = append(entries, file.StdDirEntry())
+	err := dir.ListDirInfo(context.Background(), func(info *FileInfo) error {
+		// Copied, because the entry outlives the callback
+		entry := *info
+		entries = append(entries, NewStdDirEntry(&entry))
 		return nil
 	})
 	if err != nil {
@@ -159,17 +172,20 @@ func stdReadDir(dir File) ([]iofs.DirEntry, error) {
 	return entries, nil
 }
 
-// checkStdFSName validates name like the io/fs package does,
+// checkName validates name like the io/fs package does,
 // so files like "dir/.gitignore" are accepted.
 // Like os.DirFS it rejects backslashes and colons on Windows,
-// because io/fs names are always slash separated and must not
-// be reinterpreted by the underlying file system.
-func checkStdFSName(name string) error {
-	if name == "" {
-		return errors.New("empty filename")
-	}
+// and on every platform it rejects names containing the separator
+// of the file system of f.File if that is not a slash,
+// because io/fs names are always slash separated and an element
+// like `..\x` must not be split by the underlying file system.
+// op is the operation reported by the *io/fs.PathError.
+func (f StdFS) checkName(op, name string) error {
 	if !iofs.ValidPath(name) || runtime.GOOS == "windows" && strings.ContainsAny(name, `\:`) {
-		return &iofs.PathError{Op: "open", Path: name, Err: iofs.ErrInvalid}
+		return &iofs.PathError{Op: op, Path: name, Err: iofs.ErrInvalid}
+	}
+	if sep := f.File.FileSystem().Separator(); sep != "/" && strings.Contains(name, sep) {
+		return &iofs.PathError{Op: op, Path: name, Err: iofs.ErrInvalid}
 	}
 	return nil
 }

@@ -2,11 +2,15 @@ package fs
 
 import (
 	"context"
+	iofs "io/fs"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,6 +48,170 @@ func TestStdFS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestStdFS_TestFS runs the io/fs test suite over trees of the
+// memory and the local file system, including hidden files and,
+// where the platform allows it, symbolic links.
+func TestStdFS_TestFS(t *testing.T) {
+	t.Run("Mem", func(t *testing.T) {
+		ctx := t.Context()
+		memFS, err := RegisteredTestMemFileSystem(nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = memFS.Close() })
+		require.NoError(t, memFS.MakeAllDirs("/a/b", 0))
+		require.NoError(t, memFS.WriteAll(ctx, "/a/b/c.txt", []byte("c"), 0))
+		require.NoError(t, memFS.WriteAll(ctx, "/x.txt", []byte("x"), 0))
+		require.NoError(t, memFS.WriteAll(ctx, "/.hidden", []byte("h"), 0))
+		require.NoError(t, fstest.TestFS(memFS.RootDir().StdFS(), "a/b/c.txt", "x.txt", ".hidden"))
+	})
+
+	t.Run("Local", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "a", "b"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a", "b", "c.txt"), []byte("c"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "x.txt"), []byte("x"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".hidden"), []byte("h"), 0o600))
+		expected := []string{"a/b/c.txt", "x.txt", ".hidden"}
+		if os.Symlink("a", filepath.Join(dir, "dirlink")) == nil && os.Symlink("x.txt", filepath.Join(dir, "filelink")) == nil {
+			expected = append(expected, "dirlink", "filelink")
+		}
+		require.NoError(t, fstest.TestFS(File(dir).StdFS(), expected...))
+	})
+}
+
+// TestStdFS_InvalidNames verifies that no name can address a file
+// outside of the File of the StdFS. Stat and Sub skipped the validation
+// that Open does, so Stat("../secret.txt") and Sub("..") escaped,
+// and a name containing the separator `\` of the file system,
+// like `..\secret.txt`, was split by it into ".." and "secret.txt".
+func TestStdFS_InvalidNames(t *testing.T) {
+	ctx := t.Context()
+	for _, sep := range []string{`/`, `\`} {
+		t.Run("separator "+sep, func(t *testing.T) {
+			memFS, err := RegisteredTestMemFileSystem(&MemFileSystemOptions{Separator: sep})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = memFS.Close() })
+			require.NoError(t, memFS.MakeAllDirs(sep+"root"+sep+"sub", 0))
+			require.NoError(t, memFS.WriteAll(ctx, sep+"root"+sep+"a.txt", []byte("a"), 0))
+			require.NoError(t, memFS.WriteAll(ctx, sep+"secret.txt", []byte("secret"), 0))
+			stdFS := memFS.RootDir().Join("root").StdFS()
+
+			invalid := []string{"", "/", "..", "../secret.txt", "sub/../../secret.txt", "/secret.txt", "a.txt/"}
+			if sep == `\` {
+				invalid = append(invalid, `..\secret.txt`, `sub\..\..\secret.txt`)
+			}
+			for _, name := range invalid {
+				_, err := stdFS.Stat(name)
+				assert.ErrorIs(t, err, iofs.ErrInvalid, "Stat(%q)", name)
+				_, err = stdFS.Sub(name)
+				assert.ErrorIs(t, err, iofs.ErrInvalid, "Sub(%q)", name)
+				_, err = stdFS.Open(name)
+				assert.ErrorIs(t, err, iofs.ErrInvalid, "Open(%q)", name)
+				_, err = stdFS.ReadFile(name)
+				assert.ErrorIs(t, err, iofs.ErrInvalid, "ReadFile(%q)", name)
+				_, err = stdFS.ReadDir(name)
+				assert.ErrorIs(t, err, iofs.ErrInvalid, "ReadDir(%q)", name)
+				var pathErr *iofs.PathError
+				assert.ErrorAs(t, err, &pathErr, "ReadDir(%q)", name)
+			}
+
+			// Valid names work
+			info, err := stdFS.Stat("a.txt")
+			require.NoError(t, err)
+			assert.Equal(t, "a.txt", info.Name())
+			sub, err := stdFS.Sub("sub")
+			require.NoError(t, err)
+			_, err = iofs.Stat(sub, ".")
+			require.NoError(t, err)
+			_, err = iofs.ReadFile(sub, "../a.txt")
+			assert.ErrorIs(t, err, iofs.ErrInvalid, "the sub tree can't be left either")
+		})
+	}
+}
+
+// statCountingFS is a MemFileSystem that counts the calls of Stat and Lstat.
+type statCountingFS struct {
+	*MemFileSystem
+	stats atomic.Int32
+}
+
+func (c *statCountingFS) Stat(filePath string) (*FileInfo, error) {
+	c.stats.Add(1)
+	return c.MemFileSystem.Stat(filePath)
+}
+
+func (c *statCountingFS) Lstat(filePath string) (*FileInfo, error) {
+	c.stats.Add(1)
+	return c.MemFileSystem.Lstat(filePath)
+}
+
+// TestStdFS_ReadDirWithoutStat verifies that the entries of ReadDir
+// answer from the FileInfo of the directory listing. They used to call
+// Lstat in each of IsDir, Type and Info, three times per entry.
+func TestStdFS_ReadDirWithoutStat(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := NewMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memFS.Close() })
+	require.NoError(t, memFS.MakeDir("/dir", 0))
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		require.NoError(t, memFS.WriteAll(ctx, "/"+name, []byte(name), 0))
+	}
+	counting := &statCountingFS{MemFileSystem: memFS}
+	require.NoError(t, Register(counting))
+	t.Cleanup(func() { Unregister(counting) })
+
+	for _, readDir := range map[string]func() ([]iofs.DirEntry, error){
+		"StdFS.ReadDir": func() ([]iofs.DirEntry, error) {
+			return iofs.ReadDir(counting.RootDir().StdFS(), ".")
+		},
+		"ReadDirFile.ReadDir": func() ([]iofs.DirEntry, error) {
+			dir, err := counting.RootDir().StdFS().Open(".")
+			if err != nil {
+				return nil, err
+			}
+			defer dir.Close()
+			return dir.(iofs.ReadDirFile).ReadDir(-1)
+		},
+	} {
+		counting.stats.Store(0)
+		entries, err := readDir()
+		require.NoError(t, err)
+		require.Len(t, entries, 4)
+		listingStats := counting.stats.Load()
+		for _, entry := range entries {
+			info, err := entry.Info()
+			require.NoError(t, err)
+			assert.Equal(t, entry.Name(), info.Name())
+			assert.Equal(t, entry.Name() == "dir", entry.IsDir(), "IsDir of %s", entry.Name())
+			assert.Equal(t, entry.IsDir(), entry.Type().IsDir(), "Type of %s", entry.Name())
+		}
+		assert.Equal(t, listingStats, counting.stats.Load(), "the entries must not call Stat or Lstat")
+	}
+}
+
+// TestStdFS_ReadDirSymlink verifies that ReadDir describes symbolic links
+// themselves like os.ReadDir, so io/fs.WalkDir doesn't follow them.
+func TestStdFS_ReadDirSymlink(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "target"), 0o700))
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symbolic links not available: %v", err)
+	}
+
+	entries, err := iofs.ReadDir(File(dir).StdFS(), ".")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	link := entries[0]
+	require.Equal(t, "link", link.Name())
+	assert.False(t, link.IsDir(), "a link to a directory is no directory entry")
+	assert.Equal(t, iofs.ModeSymlink, link.Type())
+	info, err := link.Info()
+	require.NoError(t, err)
+	assert.Equal(t, iofs.ModeSymlink, info.Mode().Type(), "Info describes the link itself")
+	assert.False(t, info.IsDir())
+	assert.True(t, entries[1].IsDir(), "the target directory")
 }
 
 // TestStdFSDirFileClose verifies that Close makes a directory opened
