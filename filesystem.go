@@ -363,6 +363,10 @@ type WatchFileSystem interface {
 	// It is valid to watch a file with multiple
 	// callbacks, calling the returned cancel function
 	// will cancel a particular watch.
+	//
+	// The callback of one watch is called serially in the order
+	// of the events on a goroutine of the file system, so a slow
+	// callback only delays the later events of the same watch.
 	Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error)
 }
 

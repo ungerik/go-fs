@@ -330,7 +330,7 @@ func TestMockFileSystem_NilHooks(t *testing.T) {
 	checkEqual(t, "MockFileSystem", m.Name(), "default Name")
 	checkEqual(t, "MockFileSystem", m.String(), "default String")
 	checkEqual(t, "/", m.Separator(), "default Separator")
-	checkEqual(t, fs.File("mock://"), m.RootDir(), "default RootDir")
+	checkEqual(t, fs.File("mock:///"), m.RootDir(), "default RootDir: the scheme-only prefix is followed by the rooted path")
 	checkEqual(t, "/a/c", m.CleanPath("mock://a", "b", "..", "c"), "default CleanPath")
 	readable, writable := m.ReadableWritable()
 	checkTrue(t, readable && writable, "default ReadableWritable")
