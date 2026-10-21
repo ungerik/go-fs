@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -373,6 +376,61 @@ func TestNewAndRegister(t *testing.T) {
 	assert.Same(t, first, fs.File(Prefix+bucket+"/x.txt").FileSystem())
 
 	assert.Error(t, NewAndRegister(nil, bucket, nil), "nil client")
+}
+
+// TestWriteWithoutListPermission checks that credentials without the
+// s3:ListBucket permission can still upload: the directory check of the
+// writes gets 403 from ListObjectsV2 and passes. An httptest server stands
+// in for S3 and denies listings, so the test runs offline.
+func TestWriteWithoutListPermission(t *testing.T) {
+	var mtx sync.Mutex
+	objects := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Query().Has("list-type"):
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>`)
+		case r.Method == http.MethodPut:
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			mtx.Lock()
+			objects[r.URL.Path] = string(data)
+			mtx.Unlock()
+			w.Header().Set("ETag", `"etag"`)
+		default:
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := s3.New(s3.Options{
+		Region:                     testRegion,
+		Credentials:                credentials.NewStaticCredentialsProvider(testAccessKey, testSecretKey, ""),
+		BaseEndpoint:               aws.String(server.URL),
+		UsePathStyle:               true,
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+		RetryMaxAttempts:           1,
+	})
+	f, err := New(client, "bucket", nil)
+	require.NoError(t, err)
+	ctx := t.Context()
+
+	require.NoError(t, f.(fs.WriteAllFileSystem).WriteAll(ctx, "/dir/a.txt", []byte("a"), 0), "WriteAll")
+	w, err := f.(fs.WriteFileSystem).OpenWriter("/dir/b.txt", 0)
+	require.NoError(t, err, "OpenWriter")
+	_, err = io.WriteString(w, "b")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	mtx.Lock()
+	assert.Equal(t, map[string]string{"/bucket/dir/a.txt": "a", "/bucket/dir/b.txt": "b"}, objects)
+	mtx.Unlock()
+
+	// Other errors of the check are not ignored
+	_, err = f.Stat("/dir")
+	assert.Error(t, err)
+	assert.False(t, isAccessDenied(err))
 }
 
 // TestCopySource checks the escaping of the CopySource

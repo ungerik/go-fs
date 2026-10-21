@@ -369,6 +369,17 @@ func isNotFound(err error) bool {
 	return hasErrorCode(err, "NotFound", "NoSuchKey")
 }
 
+// isAccessDenied reports whether err is a 403 Forbidden response.
+func isAccessDenied(err error) bool {
+	if respErr, ok := errors.AsType[interface {
+		error
+		HTTPStatusCode() int
+	}](err); ok {
+		return respErr.HTTPStatusCode() == http.StatusForbidden
+	}
+	return false
+}
+
 // hasErrorCode reports whether err is an S3 API error with one of codes.
 func hasErrorCode(err error, codes ...string) bool {
 	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
@@ -460,8 +471,13 @@ func (s *fileSystem) dirExists(ctx context.Context, client *s3.Client, k string)
 
 // checkNotDir returns an fs.ErrIsDirectory error if k is a directory,
 // so that writing an object k doesn't turn a directory into a file.
+// Credentials without the s3:ListBucket permission, like an upload-only
+// IAM policy, can't see directories, for them the check passes.
 func (s *fileSystem) checkNotDir(ctx context.Context, client *s3.Client, k string) error {
 	isDir, _, err := s.dirExists(ctx, client, k)
+	if isAccessDenied(err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
