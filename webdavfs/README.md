@@ -26,7 +26,7 @@ import (
 func main() {
     ctx := context.Background()
 
-    davFS, err := webdavfs.NewAndRegister(
+    davFS, err := webdavfs.New(
         ctx,
         "https://cloud.example.com/remote.php/dav/files/alice",
         &webdavfs.Options{Username: "alice", Password: "app-password"},
@@ -34,7 +34,11 @@ func main() {
     if err != nil {
         panic(err)
     }
-    defer davFS.Close()
+    // Register it so that fs.File values with its prefix work
+    if err := fs.Register(davFS); err != nil {
+        panic(err)
+    }
+    defer davFS.Close() // also unregisters it
 
     // Use it like any other go-fs file system
     file := davFS.RootDir().Join("Documents", "notes.txt")
@@ -45,20 +49,28 @@ func main() {
 }
 ```
 
-`New` returns a file system without registering it, `NewAndRegister`
-registers it so `fs.File` values with its prefix work.
+`New` returns a file system without registering it. `NewAndRegister`
+registers it and returns only an error, for callers that work with file
+URIs; `fs.GetFileSystem(uri)` returns the registered file system.
 
-File URIs have the form `webdav://<host><base path>/<path>`, so the example
-above is reachable as
-`webdav://cloud.example.com/remote.php/dav/files/alice/Documents/notes.txt`.
-`davFS.ID()` is that prefix without the scheme.
+File URIs have the form `webdav://<user>@<host><base path>/<path>`, so the
+example above is reachable as
+`webdav://alice@cloud.example.com/remote.php/dav/files/alice/Documents/notes.txt`.
+The username is part of the prefix because endpoints like Nextcloud's
+`/remote.php/webdav` show every user their own files under the same URL, so
+the same server can be registered once per user. Without a username the
+form is `webdav://<host><base path>/<path>`. The password never appears in
+the prefix, in `String()` or in error messages. `davFS.ID()` is the prefix
+without the scheme.
 
 ### Authentication
 
 `Options.Username` and `Options.Password` are sent as HTTP basic auth and
 override credentials embedded in the base URL. `Options.Header` is added to
-every request, for bearer tokens for example, and `Options.Client` replaces
-the `*http.Client` used for all requests:
+every request, for bearer tokens for example. An `Authorization` header in
+`Options.Header` takes precedence over basic auth: the username and password
+are not sent then, a username only becomes part of the prefix.
+`Options.Client` replaces the `*http.Client` used for all requests:
 
 ```go
 &webdavfs.Options{
@@ -66,6 +78,9 @@ the `*http.Client` used for all requests:
     Client: &http.Client{Timeout: 30 * time.Second},
 }
 ```
+
+The file system uses a copy of `Options.Client` with its own
+`CheckRedirect`, see below.
 
 ## How WebDAV concepts map to the file system
 
@@ -76,18 +91,49 @@ the `*http.Client` used for all requests:
 - **Native operations.** `ReadAll`, `WriteAll`, `CopyFile`, `Move` and
   `RemoveAll` are native, and readers seek with `Range` requests; everything
   else uses the generic emulation of the `fs` package.
+- **Writers.** `OpenWriter` buffers the file in memory and uploads it with
+  one `PUT` on `Close`. The writer implements `fs.WriteAborter`: `Abort`
+  discards the data, so a failed copy never replaces a file with partial
+  content. Uploads are not streamed, because servers store the body of an
+  interrupted `PUT` as the file.
+- **Move and copy.** `MOVE` and `COPY` are sent with `Overwrite: F`, so the
+  server never deletes a destination. If the destination exists, an existing
+  file is replaced with a second request with `Overwrite: T`; an existing
+  collection is an error wrapping `os.ErrExist` for `Move` and an
+  `fs.ErrIsDirectory` for `CopyFile`, and a collection moved onto a file is an
+  `fs.ErrIsNotDirectory`. Moving a collection into itself is an error wrapping
+  `os.ErrInvalid` without asking the server.
+- **Trailing slashes.** Servers differ in how they treat the trailing slash
+  of collection URLs: nginx answers `DELETE` or `MKCOL` of a collection
+  without it with `409 Conflict` and a file URL with it with `404`, Apache
+  redirects a collection URL without it. The file system asks for the type of
+  a path (`PROPFIND` with depth 0) before it deletes, moves or copies it, and
+  sends collection URLs with and file URLs without the slash.
+- **Redirects.** Go's HTTP client follows a `301`, `302` or `303` redirect of
+  `PROPFIND`, `PUT`, `DELETE`, `MKCOL`, `MOVE` or `COPY` with a `GET`. The file
+  system doesn't follow such redirects and redirects to the same URL with a
+  trailing slash: a `PROPFIND` is repeated for the collection URL, a `GET` or
+  `PUT` of a collection is an `fs.ErrIsDirectory`, every other one a
+  `*webdavfs.StatusError`. Redirects that keep the method are followed.
 - **Permissions.** WebDAV has no permission model. The reported permissions
-  are `webdavfs.DefaultPermissions` / `webdavfs.DefaultDirPermissions`.
-- **Errors.** 404 wraps `os.ErrNotExist`, 405 on `MKCOL` wraps
-  `os.ErrExist`, 401 and 403 wrap `os.ErrPermission`, and every other error
-  status becomes a `*webdavfs.StatusError` with the method, file and status.
+  are the constants `webdavfs.DefaultPermissions` /
+  `webdavfs.DefaultDirPermissions`.
+- **Errors.** 404 and 410 wrap `os.ErrNotExist`, 409 of `PUT`, `MKCOL`,
+  `MOVE` and `COPY` wraps `os.ErrNotExist` for the missing parent
+  collection, 405 on `MKCOL` wraps `os.ErrExist`, 401 and 403 wrap
+  `os.ErrPermission`. Reading or writing a collection is an
+  `fs.ErrIsDirectory`, `Remove` of a collection with members an
+  `fs.ErrDirectoryNotEmpty`. A `207 Multi-Status` answer of `DELETE`, `MOVE`
+  or `COPY` reports members that failed and every other error status becomes
+  a `*webdavfs.StatusError` with the method, file and status.
   After `Close` every method returns `fs.ErrFileSystemClosed`.
 
 ## Testing
 
 The tests run the go-fs conformance suite against an in-process
-`golang.org/x/net/webdav` handler served by `httptest`, so they need
-neither Docker nor a network.
+`golang.org/x/net/webdav` handler served by `httptest`, once as it is and
+once each with the trailing slash rules and redirects of nginx and Apache
+added, so they need neither Docker nor a network.
 
 ```bash
 go test ./...

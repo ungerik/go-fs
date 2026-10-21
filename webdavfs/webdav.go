@@ -7,6 +7,13 @@
 // COPY methods. One module covers every WebDAV server: Nextcloud,
 // ownCloud, Apache, nginx, SharePoint, or the golang.org/x/net/webdav
 // handler.
+//
+// Servers differ in how strictly they treat the trailing slash of
+// collection URLs: nginx answers a DELETE or MKCOL of a collection
+// without it with 409 Conflict and a file URL with it with 404, Apache
+// redirects a collection URL without it. The file system therefore
+// asks for the type of a path before it deletes, moves or copies it
+// and sends collection URLs with and file URLs without the slash.
 package webdavfs
 
 import (
@@ -19,6 +26,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -29,21 +37,22 @@ import (
 )
 
 const (
-	// Prefix of webdavfs URIs, followed by the host and base path of the server
+	// Prefix of webdavfs URIs, followed by the user, host
+	// and base path of the server, see New
 	Prefix = "webdav://"
 
 	// Separator used in webdavfs paths
 	Separator = "/"
-)
 
-var (
 	// DefaultPermissions reported for files
 	DefaultPermissions = fs.UserAndGroupReadWrite
 
 	// DefaultDirPermissions reported for directories
 	DefaultDirPermissions = fs.UserAndGroupReadWrite | fs.AllExecute
+)
 
-	// Compile-time interface checks
+// Compile-time interface checks
+var (
 	_ fs.FileSystem          = new(fileSystem)
 	_ fs.WriteFileSystem     = new(fileSystem)
 	_ fs.ReadAllFileSystem   = new(fileSystem)
@@ -57,25 +66,39 @@ var (
 type Options struct {
 	// Username and Password for HTTP basic authentication.
 	// They override credentials in the base URL.
+	// A username, from the options or the base URL,
+	// is part of the URI prefix, see New.
 	Username string
 	Password string
 
 	// Header is added to every request, for bearer tokens for example.
+	// An Authorization header in Header takes precedence over
+	// basic authentication: Username and Password and the credentials
+	// of the base URL are not sent then, a username only
+	// becomes part of the URI prefix.
 	Header http.Header
 
 	// Client is used for all requests, nil uses http.DefaultClient.
+	//
+	// The file system uses a copy of Client with its own CheckRedirect:
+	// it refuses redirects that would change the method, because Go turns
+	// PROPFIND, PUT, DELETE, MKCOL, MOVE and COPY into GET when following
+	// a 301, 302 or 303, and redirects to the same URL with a trailing slash,
+	// which tell that the path is a collection. Other redirects are passed
+	// to the CheckRedirect of Client, if it has one.
 	Client *http.Client
 }
 
 type fileSystem struct {
 	fsimpl.PathHelper
 
-	client   *http.Client
-	baseURL  url.URL // scheme, host and base path without trailing slash
-	username string
-	password string
-	header   http.Header
-	closed   atomic.Bool
+	client    *http.Client
+	baseURL   url.URL // scheme, host and base path without trailing slash
+	username  string
+	password  string
+	basicAuth bool // send username and password, false if header has an Authorization
+	header    http.Header
+	closed    atomic.Bool
 }
 
 // New returns a file system for the WebDAV server at baseURL
@@ -83,22 +106,30 @@ type fileSystem struct {
 // URL is the root of the file system. ctx is used for a PROPFIND
 // request that verifies the server and the credentials.
 //
-// The URI prefix is "webdav://" + host + base path, so a file
-// below "https://cloud.example.com/remote.php/dav/files/alice" is
-// "webdav://cloud.example.com/remote.php/dav/files/alice/notes.txt".
+// The URI prefix is "webdav://" + user + "@" + host + base path, so a file
+// below "https://cloud.example.com/remote.php/dav/files/alice" with the
+// username alice is
+// "webdav://alice@cloud.example.com/remote.php/dav/files/alice/notes.txt".
+// The user is part of the prefix because endpoints like Nextcloud's
+// "/remote.php/webdav" show every user their own files at the same URL.
+// Without a username the prefix is "webdav://" + host + base path.
+// The password is never part of the prefix or of error messages.
 func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
-		return nil, err
+		// The error of url.Parse quotes the URL with its password
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
+			err = urlErr.Err
+		}
+		return nil, fmt.Errorf("webdavfs: invalid base URL: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("webdavfs: base URL must use http or https: %s", baseURL)
+		return nil, fmt.Errorf("webdavfs: base URL must use http or https: %s", u.Redacted())
 	}
 	if u.Host == "" {
-		return nil, fmt.Errorf("webdavfs: base URL without host: %s", baseURL)
+		return nil, fmt.Errorf("webdavfs: base URL without host: %s", u.Redacted())
 	}
 	f := &fileSystem{
-		client: http.DefaultClient,
 		baseURL: url.URL{
 			Scheme: u.Scheme,
 			Host:   u.Host,
@@ -109,38 +140,82 @@ func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, err
 		f.username = u.User.Username()
 		f.password, _ = u.User.Password()
 	}
+	var client *http.Client
 	if opts != nil {
 		if opts.Username != "" {
 			f.username, f.password = opts.Username, opts.Password
 		}
-		if opts.Client != nil {
-			f.client = opts.Client
-		}
+		client = opts.Client
 		f.header = opts.Header
 	}
-	f.PathHelper = fsimpl.PathHelper{URIPrefix: Prefix + u.Host + f.baseURL.Path, Rooted: true}
-
-	info, err := f.propfind(ctx, "/", "0")
-	if err != nil {
-		return nil, fmt.Errorf("webdavfs: %s: %w", baseURL, err)
+	f.client = newClient(client)
+	f.basicAuth = (f.username != "" || f.password != "") && !hasAuthorization(f.header)
+	prefix := Prefix
+	if f.username != "" {
+		prefix += url.User(f.username).String() + "@"
 	}
-	if len(info) == 0 || !info[0].IsDir {
-		return nil, fmt.Errorf("webdavfs: %s is not a WebDAV collection", baseURL)
+	f.PathHelper = fsimpl.PathHelper{URIPrefix: prefix + u.Host + f.baseURL.Path, Rooted: true}
+
+	info, err := f.stat(ctx, "/")
+	if err != nil {
+		return nil, fmt.Errorf("webdavfs: %s: %w", u.Redacted(), err)
+	}
+	if !info.IsDir {
+		return nil, fmt.Errorf("webdavfs: %s is not a WebDAV collection", u.Redacted())
 	}
 	return f, nil
 }
 
-// NewAndRegister returns a registered file system
-// for the WebDAV server at baseURL, see New.
-func NewAndRegister(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, error) {
+// NewAndRegister creates a file system for the WebDAV server at
+// baseURL like New and registers it, so that fs.File values with its
+// prefix work. fs.GetFileSystem returns it for the prefix,
+// closing it unregisters it again.
+func NewAndRegister(ctx context.Context, baseURL string, opts *Options) error {
 	f, err := New(ctx, baseURL, opts)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := fs.Register(f); err != nil {
-		return nil, errors.Join(err, f.Close())
+		return errors.Join(err, f.Close())
 	}
-	return f, nil
+	return nil
+}
+
+// newClient returns a copy of client, or of http.DefaultClient
+// if client is nil, with the CheckRedirect described at Options.Client.
+func newClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	c := *client
+	next := client.CheckRedirect
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		last := via[len(via)-1]
+		if req.Method != last.Method || req.URL.Path == last.URL.Path+"/" {
+			// The response of last is returned
+			// and handled as *StatusError by do
+			return http.ErrUseLastResponse
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &c
+}
+
+// hasAuthorization reports whether header has an Authorization header,
+// also under a key that is not in canonical form.
+func hasAuthorization(header http.Header) bool {
+	for key, values := range header {
+		if strings.EqualFold(key, "Authorization") && len(values) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
@@ -151,16 +226,19 @@ func (f *fileSystem) RootDir() fs.File {
 	return fs.File(f.URIPrefix + Separator)
 }
 
+// ID returns the prefix without the scheme:
+// the user, host and base path of the server.
 func (f *fileSystem) ID() string {
 	return strings.TrimPrefix(f.URIPrefix, Prefix)
 }
 
 func (f *fileSystem) Name() string {
-	return "WebDAV file system"
+	return "WebDAV"
 }
 
+// String returns the name and the prefix, which never contains a password.
 func (f *fileSystem) String() string {
-	return f.Name() + " with prefix " + f.URIPrefix
+	return f.Name() + " " + f.URIPrefix
 }
 
 func (f *fileSystem) file(filePath string) fs.File {
@@ -174,31 +252,54 @@ func (f *fileSystem) checkClosed() error {
 	return nil
 }
 
+// check returns the first error of the closed check and the context.
+func (f *fileSystem) check(ctx context.Context) error {
+	if err := f.checkClosed(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// cleanPath returns filePath as rooted clean path.
+func cleanPath(filePath string) string {
+	return path.Clean("/" + filePath)
+}
+
+// isInside reports whether the clean path p is
+// below the clean directory path dir.
+func isInside(dir, p string) bool {
+	return dir == "/" || strings.HasPrefix(p, dir+"/")
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // HTTP
 
 // urlOf returns the URL of a file system path,
-// with a trailing slash for directories.
+// with a trailing slash for directories and the root.
 func (f *fileSystem) urlOf(filePath string, dir bool) string {
 	u := f.baseURL
-	u.Path = path.Join(f.baseURL.Path, "/", path.Clean("/"+filePath))
-	if dir && u.Path != "/" {
+	clean := cleanPath(filePath)
+	u.Path = path.Join(f.baseURL.Path, clean)
+	if (dir || clean == "/") && !strings.HasSuffix(u.Path, "/") {
 		u.Path += "/"
 	}
 	return u.String()
 }
 
-// request sends a request and returns the response for a 2xx or 207
-// status. Other statuses are returned as error, with 404 wrapping
-// os.ErrNotExist and 401/403 wrapping os.ErrPermission for filePath.
-func (f *fileSystem) request(ctx context.Context, method, filePath string, dir bool, body io.Reader, header map[string]string) (*http.Response, error) {
-	if err := f.checkClosed(); err != nil {
+// do sends a request for the URL of filePath, a collection URL if dir is true,
+// and returns the response for a 2xx status. A 207 Multi-Status is only
+// a success for PROPFIND, for DELETE, MOVE and COPY it reports members
+// that failed. For every other status the response is closed and a
+// *StatusError returned, see fsError for its mapping to the fs errors.
+func (f *fileSystem) do(ctx context.Context, method, filePath string, dir bool, body []byte, header map[string]string) (*http.Response, error) {
+	if err := f.check(ctx); err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewReader(body)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, f.urlOf(filePath, dir), body)
+	request, err := http.NewRequestWithContext(ctx, method, f.urlOf(filePath, dir), bodyReader)
 	if err != nil {
 		return nil, err
 	}
@@ -206,46 +307,85 @@ func (f *fileSystem) request(ctx context.Context, method, filePath string, dir b
 	for name, value := range header {
 		request.Header.Set(name, value)
 	}
-	if f.username != "" || f.password != "" {
+	if f.basicAuth {
 		request.SetBasicAuth(f.username, f.password)
 	}
 	response, err := f.client.Do(request) //#nosec G704 -- the WebDAV file system intentionally requests user-provided URLs
 	if err != nil {
 		return nil, err
 	}
-	if response.StatusCode >= 200 && response.StatusCode < 300 {
+	code := response.StatusCode
+	if code >= 200 && code < 300 && (code != http.StatusMultiStatus || method == "PROPFIND") {
 		return response, nil
 	}
-	_ = response.Body.Close()
-	return nil, f.statusError(method, filePath, response.StatusCode, response.Status)
+	statusErr := &StatusError{
+		Method:     method,
+		File:       f.file(filePath),
+		StatusCode: code,
+		Status:     response.Status,
+		location:   response.Header.Get("Location"),
+	}
+	if code >= 300 && code < 400 && statusErr.location != "" {
+		if loc, err := request.URL.Parse(statusErr.location); err == nil {
+			statusErr.slashRedirect = loc.Host == request.URL.Host && loc.Path == request.URL.Path+"/"
+		}
+	}
+	_ = discard(response)
+	return nil, statusErr
 }
 
-// statusError maps an HTTP error status to the fs error types,
-// other statuses are returned as *StatusError.
-func (f *fileSystem) statusError(method, filePath string, statusCode int, status string) error {
-	switch statusCode {
+// fsError maps a *StatusError for filePath to the fs error types:
+// 404 and 410 to ErrDoesNotExist, 401 and 403 to ErrPermission.
+// Other errors are returned unchanged.
+//
+// A 409 Conflict is not mapped, because it means a missing parent
+// collection only for PUT, MKCOL, MOVE and COPY, and those methods
+// map it themselves. nginx for example answers a DELETE of a
+// collection URL without trailing slash with 409.
+func (f *fileSystem) fsError(err error, filePath string) error {
+	switch statusCode(err) {
 	case http.StatusNotFound, http.StatusGone:
 		return fs.NewErrDoesNotExist(f.file(filePath))
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fs.NewErrPermission(f.file(filePath))
-	case http.StatusConflict:
-		// The parent collection does not exist
-		return fs.NewErrDoesNotExist(f.file(path.Dir(filePath)))
 	}
-	return &StatusError{Method: method, File: f.file(filePath), StatusCode: statusCode, Status: status}
+	return err
+}
+
+// statusCode returns the status code of a *StatusError err, else 0.
+func statusCode(err error) int {
+	if statusErr, ok := errors.AsType[*StatusError](err); ok {
+		return statusErr.StatusCode
+	}
+	return 0
+}
+
+// isSlashRedirect reports whether err is a *StatusError
+// for a redirect to the URL with a trailing slash appended,
+// the answer of servers like Apache for a collection URL without it.
+func isSlashRedirect(err error) bool {
+	statusErr, ok := errors.AsType[*StatusError](err)
+	return ok && statusErr.slashRedirect
 }
 
 // StatusError is returned for HTTP error statuses
-// that don't map to an fs error type.
+// that don't map to an fs error type,
+// and for redirects that the file system doesn't follow.
 type StatusError struct {
 	Method     string
 	File       fs.File
 	StatusCode int
 	Status     string
+
+	location      string // Location header of a redirect
+	slashRedirect bool   // redirect to the URL with a trailing slash appended
 }
 
 // Error implements the error interface
 func (e *StatusError) Error() string {
+	if e.location != "" {
+		return fmt.Sprintf("webdavfs: %s %s: %s, redirect to %s not followed", e.Method, e.File, e.Status, e.location)
+	}
 	return fmt.Sprintf("webdavfs: %s %s: %s", e.Method, e.File, e.Status)
 }
 
@@ -258,8 +398,8 @@ func discard(response *http.Response) error {
 ///////////////////////////////////////////////////////////////////////////////
 // PROPFIND
 
-const propfindBody = `<?xml version="1.0" encoding="utf-8"?>
-<D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/><D:getlastmodified/></D:prop></D:propfind>`
+var propfindBody = []byte(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/><D:getlastmodified/></D:prop></D:propfind>`)
 
 type multistatus struct {
 	Responses []propfindResponse `xml:"DAV: response"`
@@ -283,14 +423,21 @@ type propstat struct {
 
 // propfind returns the FileInfos of a PROPFIND request with depth "0"
 // (the path itself) or "1" (the path and its children). The first
-// FileInfo is the path itself.
-func (f *fileSystem) propfind(ctx context.Context, filePath string, depth string) ([]*fs.FileInfo, error) {
-	response, err := f.request(ctx, "PROPFIND", filePath, depth == "1", strings.NewReader(propfindBody), map[string]string{
+// FileInfo is the path itself. The request goes to the collection URL
+// if dir is true, else to the file URL, and is repeated for the
+// collection URL if the server redirects to it.
+func (f *fileSystem) propfind(ctx context.Context, filePath string, depth string, dir bool) ([]*fs.FileInfo, error) {
+	filePath = cleanPath(filePath)
+	header := map[string]string{
 		"Depth":        depth,
 		"Content-Type": "application/xml; charset=utf-8",
-	})
+	}
+	response, err := f.do(ctx, "PROPFIND", filePath, dir, propfindBody, header)
+	if !dir && isSlashRedirect(err) {
+		response, err = f.do(ctx, "PROPFIND", filePath, true, propfindBody, header)
+	}
 	if err != nil {
-		return nil, err
+		return nil, f.fsError(err, filePath)
 	}
 	defer response.Body.Close()
 
@@ -299,7 +446,6 @@ func (f *fileSystem) propfind(ctx context.Context, filePath string, depth string
 	if err != nil {
 		return nil, fmt.Errorf("webdavfs: PROPFIND %s: %w", f.file(filePath), err)
 	}
-	self := filePath
 	var (
 		infos    []*fs.FileInfo
 		selfSeen bool
@@ -309,17 +455,39 @@ func (f *fileSystem) propfind(ctx context.Context, filePath string, depth string
 		if !ok {
 			continue
 		}
-		if infoPath == self {
+		if infoPath == filePath && !selfSeen {
 			infos = append([]*fs.FileInfo{info}, infos...)
 			selfSeen = true
 		} else {
 			infos = append(infos, info)
 		}
 	}
+	if !selfSeen && depth == "0" && len(infos) == 1 {
+		// The only response of depth 0 is the path itself,
+		// even if the server wrote its href in another form
+		info := *infos[0]
+		info.File = f.file(filePath)
+		info.Name = path.Base(filePath)
+		if filePath == "/" {
+			info.File = f.RootDir()
+			info.Name = Separator
+		}
+		return []*fs.FileInfo{&info}, nil
+	}
 	if !selfSeen {
 		return nil, fs.NewErrDoesNotExist(f.file(filePath))
 	}
 	return infos, nil
+}
+
+// stat returns the FileInfo of filePath with a PROPFIND of depth 0
+// to the file URL, which the server may redirect to the collection URL.
+func (f *fileSystem) stat(ctx context.Context, filePath string) (*fs.FileInfo, error) {
+	infos, err := f.propfind(ctx, filePath, "0", false)
+	if err != nil {
+		return nil, err
+	}
+	return infos[0], nil
 }
 
 // responseInfo converts a PROPFIND response to a FileInfo and its
@@ -332,7 +500,7 @@ func (f *fileSystem) responseInfo(r propfindResponse) (*fs.FileInfo, string, boo
 	if u, err := url.Parse(href); err == nil {
 		href = u.Path
 	}
-	filePath := path.Clean("/" + strings.TrimPrefix(href, f.baseURL.Path))
+	filePath := cleanPath(strings.TrimPrefix(href, f.baseURL.Path))
 	for _, ps := range r.Propstats {
 		if !strings.Contains(ps.Status, " 200 ") {
 			continue
@@ -371,11 +539,7 @@ func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	infos, err := f.propfind(context.Background(), filePath, "0")
-	if err != nil {
-		return nil, err
-	}
-	return infos[0], nil
+	return f.stat(context.Background(), filePath)
 }
 
 // ListDir lists the children of a collection with a PROPFIND of depth 1.
@@ -383,8 +547,20 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
-	infos, err := f.propfind(ctx, dirPath, "1")
+	infos, err := f.propfind(ctx, dirPath, "1", true)
 	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, fs.ErrFileSystemClosed) {
+			return err
+		}
+		// Servers like nginx answer the collection URL
+		// of a file with 404, a Stat tells if it is one
+		info, statErr := f.stat(ctx, dirPath)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.IsDir {
+			return fs.NewErrIsNotDirectory(info.File)
+		}
 		return err
 	}
 	if !infos[0].IsDir {
@@ -430,6 +606,7 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 // from offset, limited to count bytes if count is not negative.
 // If the server ignores the Range header the body is skipped to offset.
 func (f *fileSystem) getRange(filePath string, offset, count int64) (io.ReadCloser, error) {
+	ctx := context.Background()
 	header := map[string]string{}
 	switch {
 	case count >= 0:
@@ -437,9 +614,9 @@ func (f *fileSystem) getRange(filePath string, offset, count int64) (io.ReadClos
 	case offset > 0:
 		header["Range"] = fmt.Sprintf("bytes=%d-", offset)
 	}
-	response, err := f.request(context.Background(), http.MethodGet, filePath, false, nil, header)
+	response, err := f.do(ctx, http.MethodGet, filePath, false, nil, header)
 	if err != nil {
-		return nil, err
+		return nil, f.readError(ctx, err, filePath)
 	}
 	if offset > 0 && response.StatusCode != http.StatusPartialContent {
 		_, err = io.CopyN(io.Discard, response.Body, offset)
@@ -455,12 +632,31 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	response, err := f.request(ctx, http.MethodGet, filePath, false, nil, nil)
+	response, err := f.do(ctx, http.MethodGet, filePath, false, nil, nil)
 	if err != nil {
-		return nil, err
+		return nil, f.readError(ctx, err, filePath)
 	}
 	defer response.Body.Close()
 	return fs.ReadAll(ctx, response.Body)
+}
+
+// readError maps an error of a GET request for filePath. Servers answer
+// a GET of a collection with a redirect to the collection URL (Apache,
+// nginx) or an error status like 405 (golang.org/x/net/webdav), which
+// become an fs.ErrIsDirectory. The redirect is not followed, because
+// its target would be an HTML index of the collection.
+func (f *fileSystem) readError(ctx context.Context, err error, filePath string) error {
+	if isSlashRedirect(err) {
+		return fs.NewErrIsDirectory(f.file(filePath))
+	}
+	switch statusCode(err) {
+	case 0, http.StatusNotFound, http.StatusGone, http.StatusUnauthorized:
+	default:
+		if info, statErr := f.stat(ctx, filePath); statErr == nil && info.IsDir {
+			return fs.NewErrIsDirectory(info.File)
+		}
+	}
+	return f.fsError(err, filePath)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -471,17 +667,46 @@ func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	response, err := f.request(ctx, http.MethodPut, filePath, false, bytes.NewReader(data), map[string]string{
+	if data == nil {
+		data = []byte{} // PUT with a Content-Length of zero
+	}
+	response, err := f.do(ctx, http.MethodPut, filePath, false, data, map[string]string{
 		"Content-Type": "application/octet-stream",
 	})
 	if err != nil {
-		return err
+		return f.writeError(ctx, err, filePath)
 	}
 	return discard(response)
 }
 
+// writeError maps an error of a PUT request for filePath.
+// Servers answer a PUT to a collection with an error status like 405
+// or 409, or with a redirect to the collection URL, which become an
+// fs.ErrIsDirectory. Else 409 means that the parent collection is missing.
+func (f *fileSystem) writeError(ctx context.Context, err error, filePath string) error {
+	if isSlashRedirect(err) {
+		return fs.NewErrIsDirectory(f.file(filePath))
+	}
+	code := statusCode(err)
+	if code == 0 || code == http.StatusUnauthorized {
+		return f.fsError(err, filePath)
+	}
+	if info, statErr := f.stat(ctx, filePath); statErr == nil && info.IsDir {
+		return fs.NewErrIsDirectory(info.File)
+	}
+	if code == http.StatusConflict {
+		return fs.NewErrDoesNotExist(f.file(path.Dir(cleanPath(filePath))))
+	}
+	return f.fsError(err, filePath)
+}
+
 // OpenWriter returns a writer that buffers the data in memory
 // and uploads it with a PUT request on Close.
+//
+// The writer implements fs.WriteAborter, Abort discards the data.
+// It doesn't stream the upload, because servers write the body of
+// an interrupted PUT as file, which would replace an existing file
+// with partial content.
 func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	if err := f.checkClosed(); err != nil {
 		return nil, err
@@ -499,45 +724,60 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	if dirPath == "" {
 		return fs.ErrEmptyPath
 	}
+	if err := f.checkClosed(); err != nil {
+		return err
+	}
+	dirPath = cleanPath(dirPath)
 	if dirPath == "/" {
 		return fs.NewErrAlreadyExists(f.RootDir())
 	}
-	response, err := f.request(context.Background(), "MKCOL", dirPath, true, nil, nil)
+	ctx := context.Background()
+	response, err := f.do(ctx, "MKCOL", dirPath, true, nil, nil)
 	if err != nil {
-		// MKCOL on an existing path is 405 Method Not Allowed
-		var statusErr *StatusError
-		if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusMethodNotAllowed {
-			return err
+		code := statusCode(err)
+		if code == 0 || code == http.StatusUnauthorized {
+			return f.fsError(err, dirPath)
 		}
-		if _, statErr := f.Stat(dirPath); statErr == nil {
+		// An existing path is 405 Method Not Allowed, but servers
+		// like nginx answer the collection URL of a file with 404 or 409
+		if _, statErr := f.stat(ctx, dirPath); statErr == nil {
 			return fs.NewErrAlreadyExists(f.file(dirPath))
 		}
-		return err
+		if code == http.StatusConflict {
+			return fs.NewErrDoesNotExist(f.file(path.Dir(dirPath)))
+		}
+		return f.fsError(err, dirPath)
 	}
 	return discard(response)
 }
 
 // Remove deletes a file or an empty collection.
+// It returns an fs.ErrDirectoryNotEmpty for a collection with members.
 func (f *fileSystem) Remove(filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
 	ctx := context.Background()
-	infos, err := f.propfind(ctx, filePath, "1")
+	filePath = cleanPath(filePath)
+	info, err := f.stat(ctx, filePath)
 	if err != nil {
 		return err
 	}
-	if infos[0].IsDir {
+	if info.IsDir {
 		if filePath == "/" {
 			return fmt.Errorf("can't remove root directory of %s", f)
 		}
+		infos, err := f.propfind(ctx, filePath, "1", true)
+		if err != nil {
+			return err
+		}
 		if len(infos) > 1 {
-			return fmt.Errorf("directory not empty: %s", infos[0].File)
+			return fs.NewErrDirectoryNotEmpty(info.File)
 		}
 	}
-	response, err := f.request(ctx, http.MethodDelete, filePath, infos[0].IsDir, nil, nil)
+	response, err := f.do(ctx, http.MethodDelete, filePath, info.IsDir, nil, nil)
 	if err != nil {
-		return err
+		return f.fsError(err, filePath)
 	}
 	return discard(response)
 }
@@ -548,51 +788,119 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
+	if err := f.check(ctx); err != nil {
+		return err
+	}
+	filePath = cleanPath(filePath)
 	if filePath == "/" {
 		return fmt.Errorf("can't remove root directory of %s", f)
 	}
-	response, err := f.request(ctx, http.MethodDelete, filePath, false, nil, nil)
+	info, err := f.stat(ctx, filePath)
 	if err != nil {
 		return fs.RemoveErrDoesNotExist(err)
+	}
+	response, err := f.do(ctx, http.MethodDelete, filePath, info.IsDir, nil, nil)
+	if err != nil {
+		return fs.RemoveErrDoesNotExist(f.fsError(err, filePath))
 	}
 	return discard(response)
 }
 
-// Move moves or renames a file or collection with the MOVE method,
-// overwriting an existing destination.
+// Move moves or renames a file or collection with the MOVE method.
+//
+// An existing file at destPath is replaced (an fs.ErrIsNotDirectory
+// if filePath is a collection), an existing collection is an error
+// wrapping os.ErrExist and is neither deleted nor merged.
+// Moving a collection into itself is an error wrapping os.ErrInvalid.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return fs.ErrEmptyPath
 	}
-	if filePath == destPath {
+	if err := f.check(ctx); err != nil {
+		return err
+	}
+	src, dest := cleanPath(filePath), cleanPath(destPath)
+	if src == dest {
 		return nil
 	}
-	response, err := f.request(context.Background(), "MOVE", filePath, false, nil, map[string]string{
-		"Destination": f.urlOf(destPath, false),
-		"Overwrite":   "T",
-	})
+	srcInfo, err := f.stat(ctx, src)
 	if err != nil {
 		return err
 	}
-	return discard(response)
+	if srcInfo.IsDir && isInside(src, dest) {
+		return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, srcInfo.File, f.file(dest))
+	}
+	return f.relocate(ctx, "MOVE", srcInfo, src, dest)
 }
 
-// CopyFile copies a file server-side with the COPY method,
-// overwriting an existing destination.
+// CopyFile copies a file server-side with the COPY method.
+// An existing file at destFile is replaced,
+// an existing collection is an fs.ErrIsDirectory.
 func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if srcFile == "" || destFile == "" {
 		return fs.ErrEmptyPath
 	}
-	if srcFile == destFile {
+	if err := f.check(ctx); err != nil {
+		return err
+	}
+	src, dest := cleanPath(srcFile), cleanPath(destFile)
+	if src == dest {
 		return nil
 	}
-	response, err := f.request(ctx, "COPY", srcFile, false, nil, map[string]string{
-		"Destination": f.urlOf(destFile, false),
-		"Overwrite":   "T",
-		"Depth":       "0",
-	})
+	srcInfo, err := f.stat(ctx, src)
 	if err != nil {
 		return err
+	}
+	if srcInfo.IsDir {
+		return fs.NewErrIsDirectory(srcInfo.File)
+	}
+	return f.relocate(ctx, "COPY", srcInfo, src, dest)
+}
+
+// relocate sends a MOVE or COPY request for src with Overwrite F,
+// so that the server never deletes an existing destination.
+// If the destination exists (412 Precondition Failed), an existing
+// file is replaced by a second request with Overwrite T,
+// an existing collection is an error.
+func (f *fileSystem) relocate(ctx context.Context, method string, srcInfo *fs.FileInfo, src, dest string) error {
+	header := map[string]string{
+		// nginx wants both URLs of a collection with trailing slash
+		"Destination": f.urlOf(dest, srcInfo.IsDir),
+		"Overwrite":   "F",
+	}
+	if method == "COPY" {
+		header["Depth"] = "0"
+	}
+	response, err := f.do(ctx, method, src, srcInfo.IsDir, nil, header)
+	if statusCode(err) == http.StatusPreconditionFailed {
+		destInfo, statErr := f.stat(ctx, dest)
+		if statErr != nil {
+			return statErr
+		}
+		switch {
+		case destInfo.IsDir && method == "COPY":
+			return fs.NewErrIsDirectory(destInfo.File)
+		case destInfo.IsDir:
+			return fs.NewErrAlreadyExists(destInfo.File)
+		case srcInfo.IsDir:
+			return fs.NewErrIsNotDirectory(destInfo.File)
+		}
+		header["Overwrite"] = "T"
+		response, err = f.do(ctx, method, src, srcInfo.IsDir, nil, header)
+	}
+	if err != nil {
+		switch statusCode(err) {
+		case http.StatusConflict:
+			// The parent collection of the destination is missing
+			return fs.NewErrDoesNotExist(f.file(path.Dir(dest)))
+		case http.StatusForbidden:
+			// golang.org/x/net/webdav answers a MOVE
+			// into a missing collection with 403
+			if _, statErr := f.stat(ctx, path.Dir(dest)); errors.Is(statErr, os.ErrNotExist) {
+				return statErr
+			}
+		}
+		return f.fsError(err, src)
 	}
 	return discard(response)
 }
