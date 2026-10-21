@@ -28,19 +28,21 @@ const (
 	// pulled. S3Mock is Adobe's Apache-2.0 S3 test double; it keeps its
 	// objects in a temporary directory inside the container and accepts
 	// any credentials. Pinned like in github.com/domonda/go-docdb.
-	s3MockImage         = "adobe/s3mock:5.2.3"
-	s3MockContainerName = "s3fs-test-s3mock"
-	s3MockPort          = "9090/tcp"
-	testRegion          = "us-east-1"
-	testAccessKey       = "test"
-	testSecretKey       = "test"
-	testBucketName      = "testbucket"
-	testDataDir         = "testdata"
+	s3MockImage    = "adobe/s3mock:5.2.3"
+	s3MockPort     = "9090/tcp"
+	testRegion     = "us-east-1"
+	testAccessKey  = "test"
+	testSecretKey  = "test"
+	testBucketName = "testbucket"
+	testDataDir    = "testdata"
 )
 
 var (
 	dockerS3Available bool
 	testS3Endpoint    string
+	// s3MockContainerName is unique for every test run, so that
+	// test runs in other worktrees don't stop the container.
+	s3MockContainerName = dockertest.ContainerName("s3fs-test-s3mock")
 )
 
 func TestMain(m *testing.M) {
@@ -75,15 +77,11 @@ func TestMain(m *testing.M) {
 // removeContainer stops and removes a container together with its
 // anonymous volumes, ignoring errors for a container that doesn't exist.
 func removeContainer(name string) {
-	_ = exec.Command("docker", "stop", name).Run()
-	_ = exec.Command("docker", "rm", "-v", name).Run()
+	_ = exec.Command("docker", "rm", "--force", "--volumes", name).Run()
 }
 
 func setupS3MockServer(ctx context.Context) bool {
 	containerName := s3MockContainerName
-
-	// Stop and remove any existing container with the same name
-	removeContainer(containerName)
 
 	// Docker picks a free host port, the default port 9090 is often
 	// taken by the S3Mock of another project on a development machine

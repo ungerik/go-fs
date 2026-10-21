@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,18 +23,27 @@ import (
 	"github.com/ungerik/go-fs/internal/dockertest"
 )
 
-const (
-	testContainerName = "azurite-test-server"
-	testBlobPort      = "10000"
-	testContainer     = "testcontainer"
+const testContainer = "testcontainer"
 
-	// The well-known Azurite development storage account
-	testConnectionString = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;" +
-		"AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;" +
-		"BlobEndpoint=http://127.0.0.1:" + testBlobPort + "/devstoreaccount1;"
+var (
+	dockerAzuriteAvailable bool
+	// testContainerName is unique for every test run and testBlobPort
+	// is the host port that Docker assigned, so that test runs in other
+	// worktrees don't stop the container or take the port.
+	testContainerName string
+	testBlobPort      string
+	// testConnectionString connects to the well-known Azurite
+	// development storage account on testBlobPort
+	testConnectionString string
 )
 
-var dockerAzuriteAvailable bool
+// azuriteConnectionString returns the connection string of the
+// well-known Azurite development storage account at port.
+func azuriteConnectionString(port string) string {
+	return "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;" +
+		"AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;" +
+		"BlobEndpoint=http://127.0.0.1:" + port + "/devstoreaccount1;"
+}
 
 // TestMain starts an Azurite container (the Azure Storage emulator).
 // Tests are skipped when Docker is not available and fail when it is
@@ -46,23 +57,32 @@ func TestMain(m *testing.M) {
 	// available — context.Background() is the right choice here.
 	ctx := context.Background()
 
-	exec.Command("docker", "stop", testContainerName).Run()
-	exec.Command("docker", "rm", testContainerName).Run()
+	testContainerName = dockertest.ContainerName("azureblobfs-test")
 
+	// Start Azurite on a host port that Docker picks
 	log.Println("Starting Docker Azurite test server...")
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", testContainerName,
-		"-p", fmt.Sprintf("127.0.0.1:%s:10000", testBlobPort),
+		"-p", "127.0.0.1::10000",
 		"mcr.microsoft.com/azure-storage/azurite",
 		"azurite-blob", "--blobHost", "0.0.0.0", "--skipApiVersionCheck", "--loose",
 	)
 	output, err := runCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to start Docker container: %v\nOutput: %s", err, output)
+		removeContainer(testContainerName)
 		dockertest.SetupFailed("Azurite")
 		os.Exit(m.Run())
 	}
+	testBlobPort, err = dockerHostPort(ctx, testContainerName, "10000/tcp")
+	if err != nil {
+		log.Printf("Failed to get the host port of the Azurite container: %v", err)
+		removeContainer(testContainerName)
+		dockertest.SetupFailed("Azurite")
+		os.Exit(m.Run())
+	}
+	testConnectionString = azuriteConnectionString(testBlobPort)
 
 	for i := range 20 {
 		client, err := container.NewClientFromConnectionString(testConnectionString, testContainer, nil)
@@ -83,8 +103,7 @@ func TestMain(m *testing.M) {
 		time.Sleep(time.Second)
 	}
 	if !dockerAzuriteAvailable {
-		exec.Command("docker", "stop", testContainerName).Run()
-		exec.Command("docker", "rm", testContainerName).Run()
+		removeContainer(testContainerName)
 		dockertest.SetupFailed("Azurite")
 		os.Exit(m.Run())
 	}
@@ -92,9 +111,30 @@ func TestMain(m *testing.M) {
 	exitCode := m.Run()
 
 	log.Println("Stopping and removing Docker Azurite test server...")
-	exec.Command("docker", "stop", testContainerName).Run()
-	exec.Command("docker", "rm", testContainerName).Run()
+	removeContainer(testContainerName)
 	os.Exit(exitCode)
+}
+
+// removeContainer stops and removes a container together with its
+// anonymous volumes, ignoring errors for a container that doesn't exist.
+func removeContainer(name string) {
+	_ = exec.Command("docker", "rm", "--force", "--volumes", name).Run()
+}
+
+// dockerHostPort returns the host port that Docker assigned to the
+// port of a container that was published with "-p 127.0.0.1::port".
+func dockerHostPort(ctx context.Context, name, port string) (string, error) {
+	output, err := exec.CommandContext(ctx, "docker", "port", name, port).Output()
+	if err != nil {
+		return "", fmt.Errorf("docker port %s %s: %w", name, port, err)
+	}
+	// The first line is the host address, like "127.0.0.1:55001"
+	hostAddr, _, _ := strings.Cut(strings.TrimSpace(string(output)), "\n")
+	_, hostPort, err := net.SplitHostPort(hostAddr)
+	if err != nil {
+		return "", fmt.Errorf("docker port %s %s: %w", name, port, err)
+	}
+	return hostPort, nil
 }
 
 func Test_fileSystem(t *testing.T) {

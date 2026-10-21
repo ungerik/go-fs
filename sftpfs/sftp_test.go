@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,16 +20,20 @@ import (
 )
 
 const (
-	testContainerName = "sftp-test-server"
-	testSFTPPort      = "2222"
-	testUsername      = "testuser"
-	testPassword      = "testpass"
-	testDataDir       = "/home/testuser/testdata"
+	testImage    = "sftp-test-server"
+	testUsername = "testuser"
+	testPassword = "testpass"
+	testDataDir  = "/home/testuser/testdata"
 )
 
 var (
 	dockerSFTPAvailable bool
-	testSFTPAddress     string
+	// testContainerName is unique for every test run and testSFTPPort
+	// is the host port that Docker assigned, so that test runs in other
+	// worktrees don't stop the container or take the port.
+	testContainerName string
+	testSFTPPort      string
+	testSFTPAddress   string
 )
 
 func TestMain(m *testing.M) {
@@ -43,15 +49,13 @@ func TestMain(m *testing.M) {
 	// available — context.Background() is the right choice here.
 	ctx := context.Background()
 
-	// Stop and remove any existing container with the same name
-	exec.Command("docker", "stop", testContainerName).Run()
-	exec.Command("docker", "rm", testContainerName).Run()
+	testContainerName = dockertest.ContainerName("sftpfs-test")
 
 	// Build the Docker image
 	log.Println("Building Docker SFTP test server image...")
 	buildCmd := exec.CommandContext(ctx, "docker", "build",
 		"-f", "Dockerfile.sftp-test",
-		"-t", "sftp-test-server",
+		"-t", testImage,
 		".",
 	)
 	output, err := buildCmd.CombinedOutput()
@@ -63,23 +67,31 @@ func TestMain(m *testing.M) {
 	}
 	log.Println("Docker image built successfully")
 
-	// Start the SFTP server container
+	// Start the SFTP server container on a host port that Docker picks
 	log.Println("Starting Docker SFTP test server...")
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", testContainerName,
-		"-p", fmt.Sprintf("127.0.0.1:%s:22", testSFTPPort),
-		"sftp-test-server",
+		"-p", "127.0.0.1::22",
+		testImage,
 	)
 	output, err = runCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to start Docker container: %v\nOutput: %s", err, output)
+		removeContainer(testContainerName)
 		dockertest.SetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}
-	containerID := string(output)
-	log.Printf("Started Docker container: %s", containerID)
+	log.Printf("Started Docker container: %s", testContainerName)
+	testSFTPPort, err = dockerHostPort(ctx, testContainerName, "22/tcp")
+	if err != nil {
+		log.Printf("Failed to get the host port of the SFTP container: %v", err)
+		removeContainer(testContainerName)
+		dockertest.SetupFailed("SFTP")
+		os.Exit(m.Run())
+		return
+	}
 
 	// Wait for SSH server to be ready with retry logic
 	log.Println("Waiting for SFTP server to be ready...")
@@ -105,9 +117,7 @@ func TestMain(m *testing.M) {
 
 	if !dockerSFTPAvailable {
 		log.Printf("Failed to connect to SFTP server after retries: %v", testErr)
-		// Cleanup before exit
-		exec.Command("docker", "stop", testContainerName).Run()
-		exec.Command("docker", "rm", testContainerName).Run()
+		removeContainer(testContainerName)
 		dockertest.SetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
@@ -116,15 +126,33 @@ func TestMain(m *testing.M) {
 	// Run tests
 	exitCode := m.Run()
 
-	// Cleanup
 	log.Println("Stopping and removing Docker SFTP test server...")
-	stopCmd := exec.Command("docker", "stop", testContainerName)
-	stopCmd.Run()
-	rmCmd := exec.Command("docker", "rm", testContainerName)
-	rmCmd.Run()
+	removeContainer(testContainerName)
 	log.Println("Docker container cleanup complete")
 
 	os.Exit(exitCode)
+}
+
+// removeContainer stops and removes a container together with its
+// anonymous volumes, ignoring errors for a container that doesn't exist.
+func removeContainer(name string) {
+	_ = exec.Command("docker", "rm", "--force", "--volumes", name).Run()
+}
+
+// dockerHostPort returns the host port that Docker assigned to the
+// port of a container that was published with "-p 127.0.0.1::port".
+func dockerHostPort(ctx context.Context, name, port string) (string, error) {
+	output, err := exec.CommandContext(ctx, "docker", "port", name, port).Output()
+	if err != nil {
+		return "", fmt.Errorf("docker port %s %s: %w", name, port, err)
+	}
+	// The first line is the host address, like "127.0.0.1:55001"
+	hostAddr, _, _ := strings.Cut(strings.TrimSpace(string(output)), "\n")
+	_, hostPort, err := net.SplitHostPort(hostAddr)
+	if err != nil {
+		return "", fmt.Errorf("docker port %s %s: %w", name, port, err)
+	}
+	return hostPort, nil
 }
 
 func checkAndReadFile(t *testing.T, f fs.File) []byte {

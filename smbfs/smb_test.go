@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,16 +21,19 @@ import (
 )
 
 const (
-	testContainerName = "smb-test-server"
-	testSMBPort       = "1445"
-	testUsername      = "testuser"
-	testPassword      = "testpass"
-	testShare         = "share"
+	testUsername = "testuser"
+	testPassword = "testpass"
+	testShare    = "share"
 )
 
 var (
 	dockerSMBAvailable bool
-	testSMBAddress     string
+	// testContainerName is unique for every test run and testSMBPort
+	// is the host port that Docker assigned, so that test runs in other
+	// worktrees don't stop the container or take the port.
+	testContainerName string
+	testSMBPort       string
+	testSMBAddress    string
 )
 
 // TestMain starts a Samba container (dperson/samba) with one share
@@ -43,14 +48,14 @@ func TestMain(m *testing.M) {
 	// available — context.Background() is the right choice here.
 	ctx := context.Background()
 
-	exec.Command("docker", "stop", testContainerName).Run()
-	exec.Command("docker", "rm", testContainerName).Run()
+	testContainerName = dockertest.ContainerName("smbfs-test")
 
+	// Start the Samba container on a host port that Docker picks
 	log.Println("Starting Docker Samba test server...")
 	runCmd := exec.CommandContext(ctx, "docker", "run",
 		"-d",
 		"--name", testContainerName,
-		"-p", fmt.Sprintf("127.0.0.1:%s:445", testSMBPort),
+		"-p", "127.0.0.1::445",
 		"dperson/samba",
 		"-p",
 		"-u", fmt.Sprintf("%s;%s", testUsername, testPassword),
@@ -59,6 +64,14 @@ func TestMain(m *testing.M) {
 	output, err := runCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to start Docker container: %v\nOutput: %s", err, output)
+		removeContainer(testContainerName)
+		dockertest.SetupFailed("Samba")
+		os.Exit(m.Run())
+	}
+	testSMBPort, err = dockerHostPort(ctx, testContainerName, "445/tcp")
+	if err != nil {
+		log.Printf("Failed to get the host port of the Samba container: %v", err)
+		removeContainer(testContainerName)
 		dockertest.SetupFailed("Samba")
 		os.Exit(m.Run())
 	}
@@ -78,8 +91,7 @@ func TestMain(m *testing.M) {
 		time.Sleep(time.Second)
 	}
 	if !dockerSMBAvailable {
-		exec.Command("docker", "stop", testContainerName).Run()
-		exec.Command("docker", "rm", testContainerName).Run()
+		removeContainer(testContainerName)
 		dockertest.SetupFailed("Samba")
 		os.Exit(m.Run())
 	}
@@ -87,9 +99,30 @@ func TestMain(m *testing.M) {
 	exitCode := m.Run()
 
 	log.Println("Stopping and removing Docker Samba test server...")
-	exec.Command("docker", "stop", testContainerName).Run()
-	exec.Command("docker", "rm", testContainerName).Run()
+	removeContainer(testContainerName)
 	os.Exit(exitCode)
+}
+
+// removeContainer stops and removes a container together with its
+// anonymous volumes, ignoring errors for a container that doesn't exist.
+func removeContainer(name string) {
+	_ = exec.Command("docker", "rm", "--force", "--volumes", name).Run()
+}
+
+// dockerHostPort returns the host port that Docker assigned to the
+// port of a container that was published with "-p 127.0.0.1::port".
+func dockerHostPort(ctx context.Context, name, port string) (string, error) {
+	output, err := exec.CommandContext(ctx, "docker", "port", name, port).Output()
+	if err != nil {
+		return "", fmt.Errorf("docker port %s %s: %w", name, port, err)
+	}
+	// The first line is the host address, like "127.0.0.1:55001"
+	hostAddr, _, _ := strings.Cut(strings.TrimSpace(string(output)), "\n")
+	_, hostPort, err := net.SplitHostPort(hostAddr)
+	if err != nil {
+		return "", fmt.Errorf("docker port %s %s: %w", name, port, err)
+	}
+	return hostPort, nil
 }
 
 func Test_fileSystem(t *testing.T) {
