@@ -129,11 +129,17 @@ func (h PathHelper) CleanPath(uriParts ...string) string {
 }
 
 // URL returns the URI of a file system path: URIPrefix followed by
-// cleanPath escaped with EscapeURIPath, without doubling the separator
-// if URIPrefix ends with one.
+// cleanPath escaped with EscapeURIPath.
+//
+// If URIPrefix ends with the separator after a host, like "mem://id/",
+// the separator is not doubled. A prefix that is only a scheme
+// like "file://" is followed by the whole rooted path,
+// so the URI of "/a" is "file:///a".
 func (h PathHelper) URL(cleanPath string) string {
 	sep := h.Separator()
-	if strings.HasSuffix(h.URIPrefix, sep) && strings.HasPrefix(cleanPath, sep) {
+	if strings.HasSuffix(h.URIPrefix, sep) &&
+		!strings.HasSuffix(h.URIPrefix, "://") &&
+		strings.HasPrefix(cleanPath, sep) {
 		cleanPath = cleanPath[len(sep):]
 	}
 	return h.URIPrefix + EscapeURIPath(cleanPath)
@@ -152,7 +158,10 @@ func (h PathHelper) SplitPath(filePath string) []string {
 }
 
 // SplitDirAndName returns the parent directory of filePath
-// and the name of the last path element.
+// and the name of the last path element, see the function SplitDirAndName.
+// Like SplitPath it accepts a filePath with prefix, the returned dir
+// has no prefix.
 func (h PathHelper) SplitDirAndName(filePath string) (dir, name string) {
+	filePath = h.TrimPrefix(filePath)
 	return SplitDirAndName(filePath, h.volumeLen(filePath), h.Separator())
 }

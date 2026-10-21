@@ -69,10 +69,18 @@ func TestPathHelper_URL(t *testing.T) {
 	assert.Equal(t, "s3://bucket/100%2525%2520a.txt", rooted.URL("/100%25%20a.txt"), "the URI escapes every %")
 	assert.Equal(t, "s3://bucket/100%2525%2520a.txt", rooted.JoinCleanURI("100%25%20a.txt"), "URI parts are joined as path elements")
 
-	slashPrefix := PathHelper{URIPrefix: "sftp://", Rooted: true}
-	assert.Equal(t, "sftp://host/a", slashPrefix.URL("/host/a"), "no doubled separator after a prefix ending with a separator")
-	assert.Equal(t, "/host/a", slashPrefix.CleanPath("sftp://host/a"))
-	assert.Equal(t, "sftp://host/a%25b", slashPrefix.URL("/host/a%b"))
+	// A prefix that is only a scheme is followed by the whole rooted path,
+	// the URI of "/a" used to be "file://a" with the host "a".
+	schemePrefix := PathHelper{URIPrefix: "file://", Rooted: true}
+	assert.Equal(t, "file:///a", schemePrefix.URL("/a"))
+	assert.Equal(t, "file:///a", schemePrefix.JoinCleanURI("a"))
+	assert.Equal(t, "/a", schemePrefix.CleanPath(schemePrefix.URL("/a")), "CleanPath(URL(p)) == p")
+	assert.Equal(t, "file:///", schemePrefix.URL("/"))
+
+	slashPrefix := PathHelper{URIPrefix: "mem://id/", Rooted: true}
+	assert.Equal(t, "mem://id/a", slashPrefix.URL("/a"), "no doubled separator after a host prefix ending with a separator")
+	assert.Equal(t, "/a", slashPrefix.CleanPath(slashPrefix.URL("/a")), "CleanPath(URL(p)) == p")
+	assert.Equal(t, "mem://id/a%25b", slashPrefix.URL("/a%b"))
 
 	unrooted := PathHelper{URIPrefix: "http://"}
 	assert.Equal(t, "http://example.com/a", unrooted.URL("example.com/a"))
@@ -97,6 +105,45 @@ func TestPathHelper_Split(t *testing.T) {
 	dir, name = volume.SplitDirAndName(`C:\a\b`)
 	assert.Equal(t, `C:\a`, dir)
 	assert.Equal(t, "b", name)
+	dir, name = volume.SplitDirAndName(`C:\a`)
+	assert.Equal(t, `C:\`, dir, "the parent of a name below the volume root is the volume root")
+	assert.Equal(t, "a", name)
+	dir, name = volume.SplitDirAndName(`C:\`)
+	assert.Equal(t, `C:\`, dir)
+	assert.Equal(t, "", name, "the volume root has no name")
+}
+
+// TestPathHelper_SplitWithPrefix verifies that SplitDirAndName strips the
+// URI prefix like SplitPath does. It used to keep the prefix, so the
+// volume of the path was not found and the prefix ended up in the dir.
+func TestPathHelper_SplitWithPrefix(t *testing.T) {
+	rooted := PathHelper{URIPrefix: "s3://bucket", Rooted: true}
+	assert.Equal(t, []string{"a", "b.txt"}, rooted.SplitPath("s3://bucket/a/b.txt"))
+	dir, name := rooted.SplitDirAndName("s3://bucket/a/b.txt")
+	assert.Equal(t, "/a", dir)
+	assert.Equal(t, "b.txt", name)
+	dir, name = rooted.SplitDirAndName("s3://bucket/")
+	assert.Equal(t, "/", dir)
+	assert.Equal(t, "", name)
+
+	volume := PathHelper{
+		URIPrefix: "mem://x",
+		PathSep:   `\`,
+		Rooted:    true,
+		VolumeLen: func(p string) int {
+			if len(p) >= 2 && p[1] == ':' {
+				return 2
+			}
+			return 0
+		},
+	}
+	assert.Equal(t, []string{"a", "b"}, volume.SplitPath(`mem://xC:\a\b`))
+	dir, name = volume.SplitDirAndName(`mem://xC:\a\b`)
+	assert.Equal(t, `C:\a`, dir)
+	assert.Equal(t, "b", name)
+	dir, name = volume.SplitDirAndName(`mem://xC:\a`)
+	assert.Equal(t, `C:\`, dir)
+	assert.Equal(t, "a", name)
 }
 
 func TestPathHelper_Defaults(t *testing.T) {

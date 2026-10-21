@@ -5,6 +5,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -157,17 +158,15 @@ func TestFileBuffer(t *testing.T) {
 	})
 
 	t.Run("CloseWithCallback", func(t *testing.T) {
-		closeCalled := false
-		closeFunc := func() error {
-			closeCalled = true
+		var written []byte
+		buf := NewWriteOnCloseFileBuffer([]byte("Test"), func(data []byte) error {
+			written = data
 			return nil
-		}
-
-		buf := NewFileBufferWithClose([]byte("Test"), closeFunc)
+		})
 
 		err := buf.Close()
 		require.NoError(t, err)
-		assert.True(t, closeCalled)
+		assert.Equal(t, []byte("Test"), written)
 		assert.Nil(t, buf.data)
 	})
 
@@ -533,20 +532,17 @@ func TestReadonlyFileBuffer(t *testing.T) {
 		assert.Equal(t, int64(0), buf.pos)
 	})
 
-	t.Run("CloseWithCallback", func(t *testing.T) {
-		closeCalled := false
-		closeFunc := func() error {
-			closeCalled = true
-			return nil
-		}
+	t.Run("ReadsAfterClose", func(t *testing.T) {
+		buf := NewReadonlyFileBuffer([]byte("Test data"), nil)
+		require.NoError(t, buf.Close())
+		require.NoError(t, buf.Close(), "Close is idempotent")
 
-		data := []byte("Test data")
-		buf := NewFileBufferWithClose(data, closeFunc)
-
-		// Close should call the callback
-		err := buf.Close()
-		require.NoError(t, err)
-		assert.True(t, closeCalled)
+		_, err := buf.Read(make([]byte, 1))
+		assert.ErrorIs(t, err, os.ErrClosed)
+		_, err = buf.ReadAt(make([]byte, 1), 0)
+		assert.ErrorIs(t, err, os.ErrClosed)
+		_, err = buf.Seek(0, io.SeekStart)
+		assert.ErrorIs(t, err, os.ErrClosed)
 	})
 
 	t.Run("Stat", func(t *testing.T) {
@@ -646,4 +642,69 @@ func TestFileBufferWriteAtOffsetOverflow(t *testing.T) {
 	n, err = buf.Write([]byte("x"))
 	require.Error(t, err)
 	assert.Zero(t, n)
+}
+
+// TestFileBuffer_WriteAfterClose verifies that writes to a closed buffer
+// fail with os.ErrClosed instead of being accepted and silently dropped,
+// and that the write function of a write-on-close buffer runs once.
+func TestFileBuffer_WriteAfterClose(t *testing.T) {
+	var commits []string
+	buf := NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+		commits = append(commits, string(data))
+		return nil
+	})
+	_, err := buf.Write([]byte("abc"))
+	require.NoError(t, err)
+	require.NoError(t, buf.Close())
+
+	n, err := buf.Write([]byte("lost"))
+	assert.ErrorIs(t, err, os.ErrClosed, "Write after Close")
+	assert.Zero(t, n)
+	_, err = buf.WriteAt([]byte("lost"), 0)
+	assert.ErrorIs(t, err, os.ErrClosed, "WriteAt after Close")
+	assert.ErrorIs(t, buf.Truncate(0), os.ErrClosed, "Truncate after Close")
+	require.NoError(t, buf.Close(), "Close is idempotent")
+	assert.Equal(t, []string{"abc"}, commits, "the data is committed exactly once")
+
+	plain := NewFileBuffer(nil)
+	require.NoError(t, plain.Close())
+	_, err = plain.Write([]byte("x"))
+	assert.ErrorIs(t, err, os.ErrClosed, "Write after Close of a plain FileBuffer")
+}
+
+// TestFileBuffer_Abort verifies that Abort discards the data of a
+// write-on-close buffer without committing it, and that Close
+// after Abort is a no-op returning nil.
+func TestFileBuffer_Abort(t *testing.T) {
+	var _ interface {
+		io.WriteCloser
+		Abort() error
+	} = NewWriteOnCloseFileBuffer(nil, nil) // the method set of fs.WriteAborter
+
+	committed := false
+	buf := NewWriteOnCloseFileBuffer([]byte("old"), func([]byte) error {
+		committed = true
+		return nil
+	})
+	_, err := buf.Write([]byte("partial"))
+	require.NoError(t, err)
+
+	require.NoError(t, buf.Abort())
+	require.NoError(t, buf.Close(), "Close after Abort is a no-op")
+	require.NoError(t, buf.Abort(), "Abort after Abort is a no-op")
+	assert.False(t, committed, "an aborted buffer must not be committed")
+	assert.Nil(t, buf.Bytes(), "Abort frees the buffer")
+
+	_, err = buf.Write([]byte("x"))
+	assert.ErrorIs(t, err, os.ErrClosed, "Write after Abort")
+
+	// Abort after a successful Close changes nothing
+	committed = false
+	buf = NewWriteOnCloseFileBuffer(nil, func([]byte) error {
+		committed = true
+		return nil
+	})
+	require.NoError(t, buf.Close())
+	require.NoError(t, buf.Abort())
+	assert.True(t, committed)
 }
