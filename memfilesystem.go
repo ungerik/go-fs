@@ -1,11 +1,13 @@
 package fs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	iofs "io/fs"
+	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -37,19 +39,26 @@ var (
 	_ ListDirRecursiveFileSystem = new(MemFileSystem)
 	_ XAttrFileSystem            = new(MemFileSystem)
 	_ SymbolicLinkFileSystem     = new(MemFileSystem)
-
-	// memFileNode implements io/fs.FileInfo
-	_ iofs.FileInfo = new(memFileNode)
 )
 
 var memFileSystemDefaultPermissions = UserAndGroupReadWrite
 
-// memFileNode implements io/fs.FileInfo.
+// memMaxSymlinks is the maximum number of symbolic links
+// followed while resolving one path, like the limit of Linux.
+const memMaxSymlinks = 40
+
+// memFileNode is a file, directory or symbolic link of a MemFileSystem.
 //
 // A node is one of three kinds:
 //   - regular file: Dir == nil && SymlinkTarget == ""
 //   - directory:    Dir != nil
 //   - symbolic link: SymlinkTarget != "" (Dir is always nil, FileData unused)
+//
+// The bytes of FileData up to its length are never modified in place,
+// readers share them without copying. A change stores a new slice,
+// appends behind the length into capacity that no other slice covers,
+// or shrinks the slice with its capacity limited to the new length,
+// so that a later append can't overwrite bytes that a reader still sees.
 type memFileNode struct {
 	MemFile
 	Modified      time.Time
@@ -61,27 +70,29 @@ type memFileNode struct {
 	Dir           map[string]*memFileNode
 }
 
+// IsDir reports if the node is a directory, false for a nil node.
 func (n *memFileNode) IsDir() bool {
 	return n != nil && n.Dir != nil
 }
 
+// IsSymlink reports if the node is a symbolic link, false for a nil node.
 func (n *memFileNode) IsSymlink() bool {
 	return n != nil && n.SymlinkTarget != ""
 }
 
-func (n *memFileNode) Mode() iofs.FileMode {
-	m := n.Permissions.FileMode(n.Dir != nil)
+// isRegular reports if the node is a regular file, false for a nil node.
+func (n *memFileNode) isRegular() bool {
+	return n != nil && n.Dir == nil && n.SymlinkTarget == ""
+}
+
+// size returns the size of a file, the length of the target
+// of a symbolic link like os.Lstat, or zero for a directory.
+func (n *memFileNode) size() int64 {
 	if n.IsSymlink() {
-		m |= iofs.ModeSymlink
+		return int64(len(n.SymlinkTarget))
 	}
-	return m
+	return int64(len(n.FileData))
 }
-
-func (n *memFileNode) ModTime() time.Time {
-	return n.Modified
-}
-
-func (n *memFileNode) Sys() any { return nil }
 
 // MemFileSystem is a fully featured thread-safe file system implementation
 // that stores all files and directories in random access memory.
@@ -89,24 +100,39 @@ func (n *memFileNode) Sys() any { return nil }
 // # Inner Workings
 //
 // The file system is organized as a tree structure where each node (memFileNode)
-// represents either a file or directory. Directory nodes contain a map of child
-// nodes indexed by name. Files store their content as byte slices ([]byte) in
-// the MemFile.FileData field.
+// represents a file, a directory or a symbolic link. Directory nodes contain
+// a map of child nodes indexed by name. Files store their content as byte slices
+// ([]byte) in the MemFile.FileData field.
 //
 // All operations are protected by a read-write mutex (sync.RWMutex) to ensure
-// thread-safety. Read operations (Stat, OpenReader, ListDirInfo) acquire read
+// thread-safety. Read operations (Stat, OpenReader, ListDir) acquire read
 // locks, while write operations (OpenWriter, MakeDir, Remove) acquire write locks.
 //
-// File I/O is implemented using custom reader/writer types that operate directly
-// on the in-memory byte slices:
-//   - OpenReader returns a fsimpl.ReadonlyFileBuffer wrapping the file's data
-//   - OpenWriter returns a memFileWriter that appends or overwrites data
-//   - OpenReadWriter returns a memFileReadWriter with full seek support
+// The stored content of a file is never modified in place: a change stores
+// new bytes or appends behind the bytes that readers can see. So readers
+// share the content without copying it, and callers never share a slice
+// with the file system:
+//   - OpenReader returns a fsimpl.ReadonlyFileBuffer with a snapshot of the
+//     content at the time of the call, later changes don't affect it
+//   - ReadAll returns a copy of the content, WriteAll and CopyFile store a copy
+//   - OpenWriter and OpenAppendWriter return a writer whose writes are
+//     visible to every reader that is opened after them
+//   - OpenReadWriter returns a reader-writer with full seek support
+//     that works on a copy of the content and stores it on Close
+//
+// Symbolic links are resolved like by an operating system: links in the
+// directories of a path are always followed, a link as last element of a path
+// is followed by the operations that work with the content or the attributes
+// of a file (Stat, Exists, OpenReader, WriteAll, SetPermissions and so on)
+// and not by the operations that work with the directory entry
+// (Lstat, Remove, Move, MakeDir, CreateSymbolicLink, ReadSymbolicLink).
+// Writing through a link writes the target, or creates it if it doesn't exist.
 //
 // The file system supports configurable path separators ("/" or "\") and optional
 // volume names (e.g., "C:") for Windows-style paths, see MemFileSystemOptions.
 // After registering it with Register, its files can be accessed via
-// URIs like "mem://<id>/path/to/file".
+// URIs like "mem://<id>/path/to/file", or "mem://<id>/C:/path/to/file"
+// for a file system with the volume "C:".
 //
 // # Use Cases
 //
@@ -118,18 +144,12 @@ type MemFileSystem struct {
 	id       string       // Unique identifier for this file system instance
 	volume   string       // Optional volume name (e.g., "C:")
 	readOnly bool         // If true, write operations return ErrReadOnlyFileSystem
+	closed   bool         // Set by Close, every method returns ErrFileSystemClosed then
 	root     memFileNode  // Root directory node
-	mtx      sync.RWMutex // Protects all file system operations
+	mtx      sync.RWMutex // Protects all fields except paths, id and volume, and all nodes
 
-	watchMtx    sync.Mutex                     // Protects the watches map only
-	watches     map[string]map[uint64]memWatch // keyed by clean watch path
+	watches     map[string]map[uint64]*memWatch // keyed by the clean watch path without volume
 	lastWatchID uint64
-}
-
-// memWatch is a single Watch subscription registered with a MemFileSystem.
-type memWatch struct {
-	callback func(File, Event)
-	isDir    bool
 }
 
 // MemFileSystemOptions are the options for NewMemFileSystem.
@@ -144,8 +164,10 @@ type MemFileSystemOptions struct {
 	// Defaults to "/" if empty.
 	Separator string
 
-	// Volume is an optional volume name that is prepended
-	// to all paths to emulate a Windows drive letter like "C:".
+	// Volume is an optional volume name like "C:" to emulate
+	// a Windows drive letter. It is part of the URI prefix
+	// "mem://<ID>/<Volume>", and the paths of the file system
+	// may start with it: "C:\dir" and "\dir" are the same directory.
 	Volume string
 
 	// ReadOnly makes the file system reject every write operation
@@ -155,7 +177,7 @@ type MemFileSystemOptions struct {
 
 // NewMemFileSystem creates a new MemFileSystem with the passed options,
 // nil options use the defaults of MemFileSystemOptions,
-// and adds the initialFiles with the current time as modification time.
+// and adds copies of the initialFiles with the current time as modification time.
 // The FileName of an initial file can be a path with the separator,
 // in which case all directories of the path are created.
 //
@@ -186,6 +208,9 @@ func NewMemFileSystem(opts *MemFileSystemOptions, initialFiles ...MemFile) (*Mem
 	if strings.ContainsAny(o.ID, `/\`) {
 		return nil, fmt.Errorf("invalid MemFileSystem ID %q", o.ID)
 	}
+	if strings.ContainsAny(o.Volume, `/\`) {
+		return nil, fmt.Errorf("invalid MemFileSystem volume %q", o.Volume)
+	}
 	for i, f := range initialFiles {
 		if f.FileName == "" {
 			return nil, fmt.Errorf("empty initialFiles[%d].FileName", i)
@@ -203,9 +228,10 @@ func NewMemFileSystem(opts *MemFileSystemOptions, initialFiles ...MemFile) (*Mem
 		volume:   o.Volume,
 		readOnly: o.ReadOnly,
 		root: memFileNode{
-			MemFile:  MemFile{FileName: o.Separator},
-			Modified: now,
-			Dir:      make(map[string]*memFileNode, len(initialFiles)),
+			MemFile:     MemFile{FileName: o.Separator},
+			Modified:    now,
+			Permissions: memFileSystemDefaultPermissions,
+			Dir:         make(map[string]*memFileNode, len(initialFiles)),
 		},
 	}
 	memFS.updatePrefix()
@@ -262,13 +288,16 @@ func newMemFileNode(f MemFile, modified time.Time, perm Permissions) *memFileNod
 // with ErrReadOnlyFileSystem, or allow writes again.
 func (fs *MemFileSystem) SetReadOnly(readOnly bool) {
 	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
 	fs.readOnly = readOnly
-	fs.mtx.Unlock()
 }
 
-// AddMemFile adds a MemFile to the file system with the given modified time.
+// AddMemFile adds a copy of a MemFile to the file system with the given modified time.
 // The MemFile.FileName can be a path with the path separator of the MemFileSystem,
 // in which case all directories of the path are created.
+// An existing file or symbolic link with that path is replaced,
+// an existing directory is an ErrIsDirectory.
 func (fs *MemFileSystem) AddMemFile(f MemFile, modified time.Time) (File, error) {
 	if f.FileName == "" {
 		return "", errors.New("empty filename")
@@ -276,193 +305,302 @@ func (fs *MemFileSystem) AddMemFile(f MemFile, modified time.Time) (File, error)
 	fs.mtx.Lock()
 	defer fs.mtx.Unlock()
 
-	if err := fs.closedErr(); err != nil {
+	if err := fs.writableErr(); err != nil {
 		return "", err
-	}
-	if fs.readOnly {
-		return "", ErrReadOnlyFileSystem
 	}
 	return fs.addMemFile(f, modified)
 }
 
-// addMemFile adds a MemFile without checking if the file system
-// is read-only. Must be called with fs.mtx held.
+// addMemFile adds a copy of a MemFile without checking if the file system
+// is closed or read-only. Must be called with fs.mtx held for writing.
 func (fs *MemFileSystem) addMemFile(f MemFile, modified time.Time) (File, error) {
-	if f.FileName == "" {
-		return "", errors.New("empty filename")
-	}
-	pathParts := fs.paths.SplitPath(f.FileName)
-	if len(pathParts) == 0 {
+	elems := fs.elems(f.FileName)
+	if len(elems) == 0 {
 		return "", errors.New("invalid filename")
 	}
-
-	// Create all parent directories if path has multiple parts
-	if len(pathParts) > 1 {
-		parentPath := fs.CleanPath(pathParts[:len(pathParts)-1]...)
-		err := fs.makeAllDirs(parentPath, 0)
-		if err != nil {
+	if len(elems) > 1 {
+		if _, err := fs.makeAllDirs(elems[:len(elems)-1], 0); err != nil {
 			return "", err
 		}
 	}
-
-	// Get parent directory node
-	var parentDir *memFileNode
-	if len(pathParts) == 1 {
-		parentDir = &fs.root
-	} else {
-		parentDir, _ = fs.pathNodeOrNil(fs.CleanPath(pathParts[:len(pathParts)-1]...))
-		if parentDir == nil || !parentDir.IsDir() {
-			return "", errors.New("parent directory does not exist")
-		}
+	r, err := fs.resolveElems(elems, false)
+	if err != nil {
+		return "", err
 	}
-
-	// Add file to parent directory
-	fileName := pathParts[len(pathParts)-1]
-	fileNode := newMemFileNode(f, modified, 0)
-	fileNode.FileName = fileName
-	parentDir.Dir[fileName] = fileNode
-
-	return fs.JoinCleanFile(pathParts...), nil
+	if r.node.IsDir() {
+		return "", NewErrIsDirectory(fs.elemsFile(elems))
+	}
+	if err := fs.checkParent(r, elems); err != nil {
+		return "", err
+	}
+	r.parent.Dir[r.name] = newMemFileNode(MemFile{FileName: r.name, FileData: bytes.Clone(f.FileData)}, modified, 0)
+	return fs.elemsFile(elems), nil
 }
 
 // closedErr returns an ErrFileSystemClosed error if the file system was closed.
 // Must be called with fs.mtx held.
 func (fs *MemFileSystem) closedErr() error {
-	if fs.root.Dir == nil {
-		return fmt.Errorf("%s: %w", fs.Name(), ErrFileSystemClosed)
+	if fs.closed {
+		return fmt.Errorf("%s: %w", fs, ErrFileSystemClosed)
 	}
 	return nil
 }
 
-func (fs *MemFileSystem) pathNodeOrNil(filePath string) (node, parent *memFileNode) {
-	if filePath == "" {
-		return nil, nil
-	}
-	node = &fs.root
-	parent = nil
-	for _, name := range fs.paths.SplitPath(filePath) {
-		parent = node
-		subNode, ok := node.Dir[name]
-		if !ok {
-			return nil, parent
-		}
-		node = subNode
-	}
-	return node, parent
-}
-
-// resolveSymlinks follows symbolic links starting at node,
-// which was found at filePath, and returns the target node
-// or nil if a link target does not exist. Link targets are
-// interpreted as absolute paths or relative to the directory of the link.
-// Must be called with fs.mtx held.
-func (fs *MemFileSystem) resolveSymlinks(node *memFileNode, filePath string) *memFileNode {
-	for depth := 0; node != nil && node.IsSymlink(); depth++ {
-		if depth > 40 {
-			return nil // too many levels of symbolic links
-		}
-		target := node.SymlinkTarget
-		if !fs.isAbsPath(target) {
-			dir, _ := fs.paths.SplitDirAndName(filePath)
-			target = fs.CleanPath(dir, target)
-		}
-		node, _ = fs.pathNodeOrNil(target)
-		filePath = target
-	}
-	return node
-}
-
-// pathParentDirNode returns the directory node that filePath should live
-// under (as dictated by its path) along with the leaf name. Unlike the
-// "parent" returned by pathNodeOrNil — which is only the deepest
-// existing ancestor — this lookup fails when any intermediate component
-// is missing, so callers can refuse to create a file at the wrong depth.
-func (fs *MemFileSystem) pathParentDirNode(filePath string) (parent *memFileNode, parentDir, name string, err error) {
-	parentDir, name = fs.paths.SplitDirAndName(filePath)
-	parent, _ = fs.pathNodeOrNil(parentDir)
-	if parent == nil {
-		return nil, parentDir, name, NewErrDoesNotExist(fs.RootDir().Join(parentDir))
-	}
-	if !parent.IsDir() {
-		return nil, parentDir, name, NewErrIsNotDirectory(fs.RootDir().Join(parentDir))
-	}
-	return parent, parentDir, name, nil
-}
-
-// MakeDir creates a directory. Returns ErrAlreadyExists if dirPath
-// exists and ErrDoesNotExist if the parent directory does not.
-func (fs *MemFileSystem) MakeDir(dirPath string, perm Permissions) error {
-	fs.mtx.Lock()
-	err := fs.makeDir(dirPath, perm)
-	fs.mtx.Unlock()
-	if err == nil {
-		fs.emitEvent(dirPath, EventCreate)
-	}
-	return err
-}
-
-func (fs *MemFileSystem) makeDir(dirPath string, _ Permissions) error {
-	if dirPath == "" {
-		return ErrEmptyPath
+// writableErr returns an ErrFileSystemClosed error if the file system was closed
+// or ErrReadOnlyFileSystem if it is read-only. Must be called with fs.mtx held.
+func (fs *MemFileSystem) writableErr() error {
+	if err := fs.closedErr(); err != nil {
+		return err
 	}
 	if fs.readOnly {
 		return ErrReadOnlyFileSystem
 	}
-
-	if node, _ := fs.pathNodeOrNil(dirPath); node != nil {
-		return NewErrAlreadyExists(fs.RootDir().Join(dirPath))
-	}
-	parent, _, name, err := fs.pathParentDirNode(dirPath)
-	if err != nil {
-		return err
-	}
-	parent.Dir[name] = newMemDirNode(name, time.Now(), 0)
 	return nil
 }
 
-// MakeAllDirs creates a directory and all missing parent directories.
-// It does nothing if dirPath is an existing directory and returns
-// ErrIsNotDirectory if any path component is an existing file.
-func (fs *MemFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
-	fs.mtx.Lock()
-	created, err := fs.makeAllDirsCollect(dirPath, perm)
-	fs.mtx.Unlock()
-	for _, p := range created {
-		fs.emitEvent(p, EventCreate)
-	}
-	return err
+// elems returns the elements of the cleaned filePath
+// without prefix and volume, nil for the root.
+func (fs *MemFileSystem) elems(filePath string) []string {
+	return fs.paths.SplitPath(fs.CleanPath(filePath))
 }
 
-func (fs *MemFileSystem) makeAllDirs(dirPath string, perm Permissions) error {
-	_, err := fs.makeAllDirsCollect(dirPath, perm)
-	return err
+// elemsPath returns the clean path without volume of path elements.
+func (fs *MemFileSystem) elemsPath(elems []string) string {
+	return fs.Separator() + strings.Join(elems, fs.Separator())
 }
 
-// makeAllDirsCollect creates any missing directory components along
-// dirPath and returns the paths of the directories it actually created.
-// Caller must hold fs.mtx.Lock().
-func (fs *MemFileSystem) makeAllDirsCollect(dirPath string, perm Permissions) ([]string, error) {
-	if dirPath == "" {
-		return nil, ErrEmptyPath
-	}
-	if fs.readOnly {
-		return nil, ErrReadOnlyFileSystem
-	}
+// elemsFile returns the File of path elements, built from the prefix of the
+// file system, so it is valid even if the file system is not registered.
+func (fs *MemFileSystem) elemsFile(elems []string) File {
+	return File(fs.paths.URL(fs.elemsPath(elems)))
+}
 
-	pathParts := fs.paths.SplitPath(dirPath)
-	currentNode := &fs.root
-	var created []string
+// fileOf returns the File of filePath, see elemsFile.
+func (fs *MemFileSystem) fileOf(filePath string) File {
+	return fs.elemsFile(fs.elems(filePath))
+}
 
-	for i, name := range pathParts {
-		childNode, exists := currentNode.Dir[name]
-		if !exists {
-			childNode = newMemDirNode(name, time.Now(), perm.OrDefault(memFileSystemDefaultPermissions))
-			currentNode.Dir[name] = childNode
-			created = append(created, fs.CleanPath(pathParts[:i+1]...))
-		} else if !childNode.IsDir() {
-			return created, NewErrIsNotDirectory(fs.RootDir().Join(fs.CleanPath(pathParts...)))
+// parentElems returns the elements of the parent directory of elems.
+func parentElems(elems []string) []string {
+	if len(elems) == 0 {
+		return nil
+	}
+	return elems[:len(elems)-1]
+}
+
+// lastElem returns the last of elems, or "" for the root.
+func lastElem(elems []string) string {
+	if len(elems) == 0 {
+		return ""
+	}
+	return elems[len(elems)-1]
+}
+
+// hasElemsPrefix reports if elems starts with prefix.
+func hasElemsPrefix(elems, prefix []string) bool {
+	return len(elems) >= len(prefix) && slices.Equal(elems[:len(prefix)], prefix)
+}
+
+// memResolved is a path of a MemFileSystem resolved by resolveElems.
+type memResolved struct {
+	node   *memFileNode // the node at the path, nil if it does not exist
+	parent *memFileNode // the node at the parent path if it exists (it may not be a directory), nil for the root
+	dir    []string     // the elements of the parent directory with all symbolic links resolved, if it exists
+	name   string       // the last element, "" for the root
+}
+
+// path returns the elements of the resolved path without symbolic links.
+func (r memResolved) path() []string {
+	if r.name == "" {
+		return nil
+	}
+	return append(slices.Clone(r.dir), r.name)
+}
+
+// resolve resolves filePath like resolveElems.
+func (fs *MemFileSystem) resolve(filePath string, followLast bool) (memResolved, error) {
+	return fs.resolveElems(fs.elems(filePath), followLast)
+}
+
+// resolveElems walks the path elements from the root. Symbolic links
+// in the directory elements are always followed, a link as last element
+// only if followLast is true. A link target is an absolute path
+// or relative to the directory of the link.
+// If the path does not exist, the result has a nil node, and a parent
+// if the parent directory exists. Following more than memMaxSymlinks
+// links is an error. Must be called with fs.mtx held.
+func (fs *MemFileSystem) resolveElems(elems []string, followLast bool) (memResolved, error) {
+	var (
+		pending = elems
+		dir     = &fs.root
+		dirPath []string
+		links   int
+	)
+	for len(pending) > 0 {
+		name := pending[0]
+		pending = pending[1:]
+		node := dir.Dir[name]
+		if node.IsSymlink() && (len(pending) > 0 || followLast) {
+			links++
+			if links > memMaxSymlinks {
+				return memResolved{}, fmt.Errorf("too many levels of symbolic links: %s", fs.elemsFile(elems))
+			}
+			pending = append(fs.linkTargetElems(dirPath, node.SymlinkTarget), pending...)
+			dir, dirPath = &fs.root, nil
+			continue
 		}
-		currentNode = childNode
+		if len(pending) == 0 {
+			return memResolved{node: node, parent: dir, dir: dirPath, name: name}, nil
+		}
+		if !node.IsDir() {
+			// A directory of the path is missing or not a directory
+			r := memResolved{name: pending[len(pending)-1]}
+			if node != nil && len(pending) == 1 {
+				r.parent = node // The parent of the last element is not a directory
+			}
+			return r, nil
+		}
+		dir = node
+		dirPath = append(dirPath, name)
+	}
+	return memResolved{node: &fs.root}, nil
+}
+
+// linkTargetElems returns the path elements of the target of a symbolic
+// link that is in the directory with the elements dir.
+func (fs *MemFileSystem) linkTargetElems(dir []string, target string) []string {
+	if !fs.isAbsPath(target) {
+		target = fs.elemsPath(dir) + fs.Separator() + target
+	}
+	return fs.elems(target)
+}
+
+// checkParent returns an error if the parent directory of the
+// path with the elements elems, resolved as r, does not exist
+// or is not a directory.
+func (fs *MemFileSystem) checkParent(r memResolved, elems []string) error {
+	switch {
+	case r.parent == nil:
+		return NewErrDoesNotExist(fs.elemsFile(parentElems(elems)))
+	case !r.parent.IsDir():
+		return NewErrIsNotDirectory(fs.elemsFile(parentElems(elems)))
+	}
+	return nil
+}
+
+// fileForWrite returns the node of the regular file at filePath for
+// writing its content, following symbolic links. If the file does not
+// exist and create is true, an empty file with perm is created in its
+// existing parent directory, else an ErrDoesNotExist is returned.
+// A directory is an ErrIsDirectory. Must be called with fs.mtx held
+// for writing and after the checks of writableErr.
+func (fs *MemFileSystem) fileForWrite(filePath string, perm Permissions, create bool) (node *memFileNode, created bool, err error) {
+	elems := fs.elems(filePath)
+	r, err := fs.resolveElems(elems, true)
+	if err != nil {
+		return nil, false, err
+	}
+	switch {
+	case r.node.IsDir():
+		return nil, false, NewErrIsDirectory(fs.elemsFile(elems))
+	case r.node != nil:
+		return r.node, false, nil
+	case !create:
+		return nil, false, NewErrDoesNotExist(fs.elemsFile(elems))
+	}
+	if err := fs.checkParent(r, elems); err != nil {
+		return nil, false, err
+	}
+	node = newMemFileNode(MemFile{FileName: r.name}, time.Now(), perm)
+	r.parent.Dir[r.name] = node
+	return node, true, nil
+}
+
+// writeEvent returns the event of a write to a file
+// that was created by the write or existed before.
+func writeEvent(created bool) Event {
+	if created {
+		return EventCreate | EventWrite
+	}
+	return EventWrite
+}
+
+// MakeDir creates a directory with perm, or the default permissions
+// if perm is zero. Returns ErrAlreadyExists if dirPath exists
+// and ErrDoesNotExist if the parent directory does not.
+func (fs *MemFileSystem) MakeDir(dirPath string, perm Permissions) error {
+	if dirPath == "" {
+		return ErrEmptyPath
+	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
+	if err := fs.writableErr(); err != nil {
+		return err
+	}
+	elems := fs.elems(dirPath)
+	r, err := fs.resolveElems(elems, false)
+	if err != nil {
+		return err
+	}
+	if r.node != nil {
+		return NewErrAlreadyExists(fs.elemsFile(elems))
+	}
+	if err := fs.checkParent(r, elems); err != nil {
+		return err
+	}
+	r.parent.Dir[r.name] = newMemDirNode(r.name, time.Now(), perm)
+	fs.emitEvent(dirPath, EventCreate)
+	return nil
+}
+
+// MakeAllDirs creates a directory and all missing parent directories
+// with perm, or the default permissions if perm is zero.
+// It does nothing if dirPath is an existing directory and returns
+// ErrIsNotDirectory if any path element is an existing file.
+// Symbolic links to directories are followed.
+func (fs *MemFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
+	if dirPath == "" {
+		return ErrEmptyPath
+	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
+	if err := fs.writableErr(); err != nil {
+		return err
+	}
+	created, err := fs.makeAllDirs(fs.elems(dirPath), perm)
+	for _, elems := range created {
+		fs.emitEvent(fs.elemsPath(elems), EventCreate)
+	}
+	return err
+}
+
+// makeAllDirs creates the missing directories of the path elements
+// and returns the elements of the directories it created.
+// Must be called with fs.mtx held for writing.
+func (fs *MemFileSystem) makeAllDirs(elems []string, perm Permissions) (created [][]string, err error) {
+	for i := range elems {
+		dirElems := elems[:i+1]
+		r, err := fs.resolveElems(dirElems, true)
+		if err != nil {
+			return created, err
+		}
+		switch {
+		case r.node.IsDir():
+			continue
+		case r.node != nil:
+			return created, NewErrIsNotDirectory(fs.elemsFile(dirElems))
+		}
+		if link, _ := fs.resolveElems(dirElems, false); link.node.IsSymlink() {
+			// A symbolic link to a missing target is not a directory
+			return created, NewErrIsNotDirectory(fs.elemsFile(dirElems))
+		}
+		if err := fs.checkParent(r, dirElems); err != nil {
+			return created, err
+		}
+		r.parent.Dir[r.name] = newMemDirNode(r.name, time.Now(), perm)
+		created = append(created, dirElems)
 	}
 	return created, nil
 }
@@ -470,15 +608,15 @@ func (fs *MemFileSystem) makeAllDirsCollect(dirPath string, perm Permissions) ([
 // ReadableWritable returns true for readable and true for writable
 // unless SetReadOnly(true) was called.
 func (fs *MemFileSystem) ReadableWritable() (readable, writable bool) {
-	fs.mtx.Lock()
-	defer fs.mtx.Unlock()
+	fs.mtx.RLock()
+	defer fs.mtx.RUnlock()
 
 	return true, !fs.readOnly
 }
 
 // RootDir returns the root directory of the file system.
 func (fs *MemFileSystem) RootDir() File {
-	return File(fs.paths.URIPrefix + fs.Separator())
+	return fs.elemsFile(nil)
 }
 
 // ID returns the id of the file system, which is part of its URI prefix.
@@ -487,7 +625,8 @@ func (fs *MemFileSystem) ID() string {
 	return fs.id
 }
 
-// Prefix returns the URI prefix "mem://<ID>" of the file system.
+// Prefix returns the URI prefix "mem://<ID>" of the file system,
+// or "mem://<ID>/<Volume>" if it has a volume.
 func (fs *MemFileSystem) Prefix() string {
 	return fs.paths.URIPrefix
 }
@@ -499,13 +638,16 @@ func (fs *MemFileSystem) Separator() string {
 
 // CleanPath joins the uriParts with the separator and returns
 // the cleaned absolute path of the file system without the prefix.
+// A volume at the beginning of the path is kept.
 func (fs *MemFileSystem) CleanPath(uriParts ...string) string {
 	return fs.paths.CleanPath(uriParts...)
 }
 
-// isAbsPath reports if filePath starts with the separator or the volume.
+// isAbsPath reports if filePath starts with a slash, the separator or the volume.
 func (fs *MemFileSystem) isAbsPath(filePath string) bool {
-	return strings.HasPrefix(filePath, fs.Separator()) || (fs.volume != "" && strings.HasPrefix(filePath, fs.volume))
+	return strings.HasPrefix(filePath, "/") ||
+		strings.HasPrefix(filePath, fs.Separator()) ||
+		fs.VolumeName(filePath) != ""
 }
 
 func (fs *MemFileSystem) updatePrefix() {
@@ -518,10 +660,7 @@ func (fs *MemFileSystem) updatePrefix() {
 		PathSep:   fs.paths.Separator(),
 		Rooted:    true,
 		VolumeLen: func(filePath string) int {
-			if fs.volume != "" && strings.HasPrefix(filePath, fs.volume) {
-				return len(fs.volume)
-			}
-			return 0
+			return len(fs.VolumeName(filePath))
 		},
 	}
 }
@@ -538,25 +677,65 @@ func (fs *MemFileSystem) String() string {
 
 // JoinCleanFile joins the URI parts and returns a File
 // with the cleaned path and the prefix of this file system.
+// A volume at the beginning of the path is part of the prefix of the File.
 func (fs *MemFileSystem) JoinCleanFile(uri ...string) File {
-	return File(fs.paths.JoinCleanURI(uri...))
+	return fs.fileOf(fs.CleanPath(uri...))
 }
 
-// VolumeName returns the volume prefix of filePath,
-// or an empty string if the file system has no volume, see WithVolume.
+// VolumeName returns the volume of the file system if filePath starts with it,
+// else an empty string, see MemFileSystemOptions.Volume.
 func (fs *MemFileSystem) VolumeName(filePath string) string {
-	if len(filePath) < len(fs.volume) {
-		return ""
+	if fs.volume != "" && strings.HasPrefix(filePath, fs.volume) {
+		return fs.volume
 	}
-	return filePath[:len(fs.volume)]
+	return ""
 }
 
-// Volume returns the volume name of the file system, see WithVolume.
+// Volume returns the volume name of the file system, see MemFileSystemOptions.Volume.
 func (fs *MemFileSystem) Volume() string {
 	return fs.volume
 }
 
+// memNodeInfo returns the FileInfo of node, the entry named name at file.
+// For a symbolic link node, target is the node the link resolves to
+// or nil if it is dangling: IsDir and IsRegular describe the target,
+// the other fields the link itself. Must be called with fs.mtx held.
+func memNodeInfo(file File, name string, node, target *memFileNode) *FileInfo {
+	info := &FileInfo{
+		File:        file,
+		Name:        name,
+		Exists:      true,
+		IsDir:       node.IsDir(),
+		IsRegular:   node.isRegular(),
+		IsSymlink:   node.IsSymlink(),
+		IsHidden:    strings.HasPrefix(name, "."),
+		Size:        node.size(),
+		Modified:    node.Modified,
+		Permissions: node.Permissions,
+	}
+	if node.IsSymlink() {
+		info.IsDir = target.IsDir()
+		info.IsRegular = target.isRegular()
+	}
+	return info
+}
+
+// linkTarget returns the node that the symbolic link node at the
+// resolved path r points to, or nil if it is dangling or r is no link.
+// Must be called with fs.mtx held.
+func (fs *MemFileSystem) linkTarget(r memResolved) *memFileNode {
+	if !r.node.IsSymlink() {
+		return nil
+	}
+	target, err := fs.resolveElems(r.path(), true)
+	if err != nil {
+		return nil
+	}
+	return target.node
+}
+
 // Stat returns the FileInfo of the file, following symbolic links.
+// For a symbolic link IsSymlink is set and the other fields describe the target.
 func (fs *MemFileSystem) Stat(filePath string) (*FileInfo, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -567,37 +746,23 @@ func (fs *MemFileSystem) Stat(filePath string) (*FileInfo, error) {
 	if err := fs.closedErr(); err != nil {
 		return nil, err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	target := fs.resolveSymlinks(node, filePath)
-	if target == nil {
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	elems := fs.elems(filePath)
+	r, err := fs.resolveElems(elems, true)
+	if err != nil {
+		return nil, err
 	}
-	info := fs.nodeInfo(fs.JoinCleanFile(filePath), target)
-	info.IsSymlink = node.IsSymlink()
+	if r.node == nil {
+		return nil, NewErrDoesNotExist(fs.elemsFile(elems))
+	}
+	info := memNodeInfo(fs.elemsFile(elems), lastElem(elems), r.node, nil)
+	if link, _ := fs.resolveElems(elems, false); link.node.IsSymlink() {
+		info.IsSymlink = true
+	}
 	return info, nil
 }
 
-// nodeInfo returns the FileInfo of a node. Must be called with fs.mtx held.
-func (fs *MemFileSystem) nodeInfo(file File, node *memFileNode) *FileInfo {
-	name := node.FileName
-	if node == &fs.root {
-		name = ""
-	}
-	return &FileInfo{
-		File:        file,
-		Name:        name,
-		Exists:      true,
-		IsDir:       node.IsDir(),
-		IsRegular:   !node.IsDir() && !node.IsSymlink(),
-		IsSymlink:   node.IsSymlink(),
-		IsHidden:    strings.HasPrefix(name, "."),
-		Size:        int64(len(node.FileData)),
-		Modified:    node.Modified,
-		Permissions: node.Permissions,
-	}
-}
-
-// Exists reports if the file exists.
+// Exists reports if the file exists. Like Stat it follows symbolic links,
+// so a symbolic link to a missing target does not exist.
 func (fs *MemFileSystem) Exists(filePath string) (bool, error) {
 	if filePath == "" {
 		return false, nil
@@ -608,13 +773,17 @@ func (fs *MemFileSystem) Exists(filePath string) (bool, error) {
 	if err := fs.closedErr(); err != nil {
 		return false, err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	return node != nil, nil
+	r, err := fs.resolve(filePath, true)
+	if err != nil {
+		return false, err
+	}
+	return r.node != nil, nil
 }
 
 // Lstat returns the FileInfo of the file without following
 // a symbolic link: for a symbolic link the FileInfo
-// describes the link itself with IsSymlink set.
+// describes the link itself with IsSymlink set,
+// IsDir and IsRegular describe its target.
 func (fs *MemFileSystem) Lstat(filePath string) (*FileInfo, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -625,75 +794,93 @@ func (fs *MemFileSystem) Lstat(filePath string) (*FileInfo, error) {
 	if err := fs.closedErr(); err != nil {
 		return nil, err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	elems := fs.elems(filePath)
+	r, err := fs.resolveElems(elems, false)
+	if err != nil {
+		return nil, err
 	}
-	info := fs.nodeInfo(fs.JoinCleanFile(filePath), node)
-	info.IsSymlink = node.IsSymlink()
-	return info, nil
+	if r.node == nil {
+		return nil, NewErrDoesNotExist(fs.elemsFile(elems))
+	}
+	return memNodeInfo(fs.elemsFile(elems), lastElem(elems), r.node, fs.linkTarget(r)), nil
 }
 
 // CreateSymbolicLink creates a symbolic link at linkPath pointing to
 // targetPath. targetPath is stored verbatim, so it may be relative to
-// linkPath's directory or absolute.
+// linkPath's directory or absolute, and it doesn't need to exist.
 func (fs *MemFileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
 	if targetPath == "" || linkPath == "" {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
-	}
+	defer fs.mtx.Unlock()
 
-	if existing, _ := fs.pathNodeOrNil(linkPath); existing != nil {
-		fs.mtx.Unlock()
-		return NewErrAlreadyExists(fs.RootDir().Join(linkPath))
+	if err := fs.writableErr(); err != nil {
+		return err
 	}
-	parentDir, name := fs.paths.SplitDirAndName(linkPath)
-	parent, _ := fs.pathNodeOrNil(parentDir)
-	if parent == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(parentDir))
+	elems := fs.elems(linkPath)
+	r, err := fs.resolveElems(elems, false)
+	if err != nil {
+		return err
 	}
-	if !parent.IsDir() {
-		fs.mtx.Unlock()
-		return NewErrIsNotDirectory(fs.RootDir().Join(parentDir))
+	if r.node != nil {
+		return NewErrAlreadyExists(fs.elemsFile(elems))
 	}
-	parent.Dir[name] = &memFileNode{
-		MemFile:       MemFile{FileName: name},
+	if err := fs.checkParent(r, elems); err != nil {
+		return err
+	}
+	r.parent.Dir[r.name] = &memFileNode{
+		MemFile:       MemFile{FileName: r.name},
 		Modified:      time.Now(),
 		Permissions:   memFileSystemDefaultPermissions,
 		SymlinkTarget: targetPath,
 	}
-	fs.mtx.Unlock()
-
 	fs.emitEvent(linkPath, EventCreate)
 	return nil
 }
 
 // ReadSymbolicLink returns the target of the symbolic link at linkPath
-// as stored on the node. An error is returned if the path is missing or
-// is not a symbolic link.
+// as stored on the node. An error is returned if the path is missing,
+// and an error wrapping os.ErrInvalid if it is not a symbolic link.
 func (fs *MemFileSystem) ReadSymbolicLink(linkPath string) (string, error) {
 	if linkPath == "" {
 		return "", ErrEmptyPath
 	}
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
-	node, _ := fs.pathNodeOrNil(linkPath)
-	if node == nil {
-		return "", NewErrDoesNotExist(fs.RootDir().Join(linkPath))
+
+	if err := fs.closedErr(); err != nil {
+		return "", err
 	}
-	if !node.IsSymlink() {
-		return "", fmt.Errorf("%s is not a symbolic link", fs.RootDir().Join(linkPath))
+	elems := fs.elems(linkPath)
+	r, err := fs.resolveElems(elems, false)
+	if err != nil {
+		return "", err
 	}
-	return node.SymlinkTarget, nil
+	if r.node == nil {
+		return "", NewErrDoesNotExist(fs.elemsFile(elems))
+	}
+	if !r.node.IsSymlink() {
+		return "", fmt.Errorf("%w: %s is not a symbolic link", os.ErrInvalid, fs.elemsFile(elems))
+	}
+	return r.node.SymlinkTarget, nil
+}
+
+// sortedNames returns the names of the entries of the directory node in sorted order.
+func sortedNames(dir *memFileNode) []string {
+	names := make([]string, 0, len(dir.Dir))
+	for name := range dir.Dir {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ListDir calls the callback for every file in the directory that
-// matches any of the patterns, or for all files if no patterns are passed.
+// matches any of the patterns, or for all files if no patterns are passed,
+// in the order of the names. A symbolic link to a directory is listed
+// like the directory. The FileInfo of a symbolic link in the directory
+// describes the link itself, see Lstat.
 // The directory is snapshotted before the first callback, so the callback
 // may modify the file system.
 func (fs *MemFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -724,6 +911,27 @@ func (fs *MemFileSystem) ListDir(ctx context.Context, dirPath string, patterns [
 	return nil
 }
 
+// resolveDir resolves dirPath following symbolic links
+// and returns an error if it is not an existing directory.
+// Must be called with fs.mtx held.
+func (fs *MemFileSystem) resolveDir(dirPath string) (elems []string, r memResolved, err error) {
+	if err := fs.closedErr(); err != nil {
+		return nil, r, err
+	}
+	elems = fs.elems(dirPath)
+	r, err = fs.resolveElems(elems, true)
+	if err != nil {
+		return nil, r, err
+	}
+	if r.node == nil {
+		return nil, r, NewErrDoesNotExist(fs.elemsFile(elems))
+	}
+	if !r.node.IsDir() {
+		return nil, r, NewErrIsNotDirectory(fs.elemsFile(elems))
+	}
+	return elems, r, nil
+}
+
 // dirInfoSnapshot returns FileInfo values for the direct children of dirPath
 // that match patterns. It acquires the read lock only for the duration of the
 // snapshot so that callers can invoke callbacks without holding the lock.
@@ -731,19 +939,13 @@ func (fs *MemFileSystem) dirInfoSnapshot(dirPath string, patterns []string) ([]*
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
-	if err := fs.closedErr(); err != nil {
+	elems, dir, err := fs.resolveDir(dirPath)
+	if err != nil {
 		return nil, err
 	}
-	node, _ := fs.pathNodeOrNil(dirPath)
-	if node == nil {
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(dirPath))
-	}
-	if !node.IsDir() {
-		return nil, NewErrIsNotDirectory(fs.RootDir().Join(dirPath))
-	}
-
-	infos := make([]*FileInfo, 0, len(node.Dir))
-	for name, childNode := range node.Dir {
+	dirResolved := dir.path()
+	infos := make([]*FileInfo, 0, len(dir.node.Dir))
+	for _, name := range sortedNames(dir.node) {
 		matched, err := fsimpl.MatchAnyPattern(name, patterns)
 		if err != nil {
 			return nil, err
@@ -751,15 +953,18 @@ func (fs *MemFileSystem) dirInfoSnapshot(dirPath string, patterns []string) ([]*
 		if !matched {
 			continue
 		}
-		infos = append(infos, fs.nodeInfo(fs.JoinCleanFile(dirPath, name), childNode))
+		child := memResolved{node: dir.node.Dir[name], parent: dir.node, dir: dirResolved, name: name}
+		file := fs.elemsFile(append(slices.Clone(elems), name))
+		infos = append(infos, memNodeInfo(file, name, child.node, fs.linkTarget(child)))
 	}
 	return infos, nil
 }
 
-// ListDirInfoRecursive calls callback for every file (not directory) in
+// ListDirRecursive calls callback for every file (not directory) in
 // dirPath and its sub-directories. Pattern matching applies only to
-// files; sub-directories are always descended into. Entries are visited
-// in sorted name order for determinism.
+// files; sub-directories are always descended into, also through symbolic
+// links to directories unless that would list a directory twice
+// on one path. Entries are visited in sorted name order for determinism.
 func (fs *MemFileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -770,7 +975,7 @@ func (fs *MemFileSystem) ListDirRecursive(ctx context.Context, dirPath string, p
 
 	// Snapshot the whole sub-tree while holding the read lock, then release
 	// it before invoking the callback so the callback may read from or write
-	// to this file system without deadlocking. See ListDirInfo for details.
+	// to this file system without deadlocking. See ListDir for details.
 	infos, err := fs.dirInfoSnapshotRecursive(dirPath, patterns)
 	if err != nil {
 		return err
@@ -790,34 +995,44 @@ func (fs *MemFileSystem) dirInfoSnapshotRecursive(dirPath string, patterns []str
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
-	node, _ := fs.pathNodeOrNil(dirPath)
-	if node == nil {
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(dirPath))
-	}
-	if !node.IsDir() {
-		return nil, NewErrIsNotDirectory(fs.RootDir().Join(dirPath))
+	elems, dir, err := fs.resolveDir(dirPath)
+	if err != nil {
+		return nil, err
 	}
 	var infos []*FileInfo
-	if err := fs.walkDirInfoRecursive(node, dirPath, patterns, &infos); err != nil {
+	visiting := make(map[*memFileNode]bool)
+	if err := fs.walkDirInfoRecursive(dir.node, elems, dir.path(), patterns, visiting, &infos); err != nil {
 		return nil, err
 	}
 	return infos, nil
 }
 
 // walkDirInfoRecursive appends a FileInfo for every file (not directory) in
-// node and its sub-directories to infos, visiting names in sorted order. It
-// must be called with fs.mtx held for reading.
-func (fs *MemFileSystem) walkDirInfoRecursive(node *memFileNode, dirPath string, patterns []string, infos *[]*FileInfo) error {
-	names := make([]string, 0, len(node.Dir))
-	for name := range node.Dir {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		child := node.Dir[name]
-		childPath := fs.CleanPath(dirPath, name)
-		if child.IsDir() {
-			if err := fs.walkDirInfoRecursive(child, childPath, patterns, infos); err != nil {
+// the directory node and its sub-directories to infos, visiting names in
+// sorted order. elems are the elements of the path of the directory as listed,
+// resolved its elements without symbolic links. Directories in visiting are
+// on the path that is walked, a symbolic link to one of them is skipped.
+// Must be called with fs.mtx held for reading.
+func (fs *MemFileSystem) walkDirInfoRecursive(dir *memFileNode, elems, resolved, patterns []string, visiting map[*memFileNode]bool, infos *[]*FileInfo) error {
+	visiting[dir] = true
+	defer delete(visiting, dir)
+
+	for _, name := range sortedNames(dir) {
+		child := memResolved{node: dir.Dir[name], parent: dir, dir: resolved, name: name}
+		childElems := append(slices.Clone(elems), name)
+		target, targetResolved := child.node, child.path()
+		if child.node.IsSymlink() {
+			if t, err := fs.resolveElems(targetResolved, true); err == nil {
+				target, targetResolved = t.node, t.path()
+			} else {
+				target = nil
+			}
+		}
+		if target.IsDir() {
+			if visiting[target] {
+				continue // A symbolic link to a directory of the walked path
+			}
+			if err := fs.walkDirInfoRecursive(target, childElems, targetResolved, patterns, visiting, infos); err != nil {
 				return err
 			}
 			continue
@@ -829,125 +1044,147 @@ func (fs *MemFileSystem) walkDirInfoRecursive(node *memFileNode, dirPath string,
 		if !matched {
 			continue
 		}
-		*infos = append(*infos, fs.nodeInfo(fs.JoinCleanFile(childPath), child))
+		*infos = append(*infos, memNodeInfo(fs.elemsFile(childElems), name, child.node, target))
 	}
 	return nil
 }
 
-// SetPermissions sets the permissions of the file.
+// nodeForAttrs returns the node at filePath for reading or writing
+// its attributes, following a symbolic link as last element if follow is true.
+// Must be called with fs.mtx held and after the closed check.
+func (fs *MemFileSystem) nodeForAttrs(filePath string, follow bool) (*memFileNode, error) {
+	elems := fs.elems(filePath)
+	r, err := fs.resolveElems(elems, follow)
+	if err != nil {
+		return nil, err
+	}
+	if r.node == nil {
+		return nil, NewErrDoesNotExist(fs.elemsFile(elems))
+	}
+	return r.node, nil
+}
+
+// SetPermissions sets the permissions of the file,
+// following symbolic links.
 func (fs *MemFileSystem) SetPermissions(filePath string, perm Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	defer fs.mtx.Unlock()
+
+	if err := fs.writableErr(); err != nil {
+		return err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	node, err := fs.nodeForAttrs(filePath, true)
+	if err != nil {
+		return err
 	}
 	node.Permissions = perm
 	node.Modified = time.Now()
-	fs.mtx.Unlock()
-
 	fs.emitEvent(filePath, EventChmod)
 	return nil
 }
 
 // User returns the per-node user string previously set via SetUser, or
 // the empty string if none was set. MemFileSystem does not consult any
-// OS user database.
+// OS user database. Symbolic links are followed.
 func (fs *MemFileSystem) User(filePath string) (string, error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
 	}
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		return "", NewErrDoesNotExist(fs.RootDir().Join(filePath))
+
+	if err := fs.closedErr(); err != nil {
+		return "", err
+	}
+	node, err := fs.nodeForAttrs(filePath, true)
+	if err != nil {
+		return "", err
 	}
 	return node.User, nil
 }
 
 // SetUser sets the user owning the file. The user is a free-form string
-// that is only stored, not interpreted.
+// that is only stored, not interpreted. Symbolic links are followed.
 func (fs *MemFileSystem) SetUser(filePath string, user string) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	defer fs.mtx.Unlock()
+
+	if err := fs.writableErr(); err != nil {
+		return err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	node, err := fs.nodeForAttrs(filePath, true)
+	if err != nil {
+		return err
 	}
 	node.User = user
 	node.Modified = time.Now()
-	fs.mtx.Unlock()
-
 	fs.emitEvent(filePath, EventChmod)
 	return nil
 }
 
 // Group returns the per-node group string previously set via SetGroup,
-// or the empty string if none was set.
+// or the empty string if none was set. Symbolic links are followed.
 func (fs *MemFileSystem) Group(filePath string) (string, error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
 	}
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		return "", NewErrDoesNotExist(fs.RootDir().Join(filePath))
+
+	if err := fs.closedErr(); err != nil {
+		return "", err
+	}
+	node, err := fs.nodeForAttrs(filePath, true)
+	if err != nil {
+		return "", err
 	}
 	return node.Group, nil
 }
 
 // SetGroup sets the group owning the file. The group is a free-form string
-// that is only stored, not interpreted.
+// that is only stored, not interpreted. Symbolic links are followed.
 func (fs *MemFileSystem) SetGroup(filePath string, group string) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	defer fs.mtx.Unlock()
+
+	if err := fs.writableErr(); err != nil {
+		return err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	node, err := fs.nodeForAttrs(filePath, true)
+	if err != nil {
+		return err
 	}
 	node.Group = group
 	node.Modified = time.Now()
-	fs.mtx.Unlock()
-
 	fs.emitEvent(filePath, EventChmod)
 	return nil
 }
 
-// ListXAttr returns the names of all extended attributes set on the
-// node at filePath. MemFileSystem does not support symbolic links to
-// other nodes, so the followSymlinks argument is ignored.
-func (fs *MemFileSystem) ListXAttr(filePath string, _ bool) ([]string, error) {
+// ListXAttr returns the sorted names of all extended attributes set on the
+// node at filePath. If followSymlinks is true, a symbolic link is resolved
+// to its target, else the attributes of the link itself are listed.
+func (fs *MemFileSystem) ListXAttr(filePath string, followSymlinks bool) ([]string, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
+
+	if err := fs.closedErr(); err != nil {
+		return nil, err
+	}
+	node, err := fs.nodeForAttrs(filePath, followSymlinks)
+	if err != nil {
+		return nil, err
 	}
 	if len(node.XAttrs) == 0 {
 		return nil, nil
@@ -960,126 +1197,123 @@ func (fs *MemFileSystem) ListXAttr(filePath string, _ bool) ([]string, error) {
 	return names, nil
 }
 
-// GetXAttr returns the bytes stored for the named extended attribute.
+// GetXAttr returns a copy of the bytes stored for the named extended attribute.
 // If the attribute is not set, an error is returned.
-func (fs *MemFileSystem) GetXAttr(filePath string, name string, _ bool) ([]byte, error) {
+// If followSymlinks is true, a symbolic link is resolved to its target.
+func (fs *MemFileSystem) GetXAttr(filePath string, name string, followSymlinks bool) ([]byte, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
+
+	if err := fs.closedErr(); err != nil {
+		return nil, err
+	}
+	node, err := fs.nodeForAttrs(filePath, followSymlinks)
+	if err != nil {
+		return nil, err
 	}
 	value, ok := node.XAttrs[name]
 	if !ok {
-		return nil, fmt.Errorf("xattr %q not found on %s", name, fs.RootDir().Join(filePath))
+		return nil, fmt.Errorf("xattr %q not found on %s", name, fs.fileOf(filePath))
 	}
-	return value, nil
+	return bytes.Clone(value), nil
 }
 
-// SetXAttr stores data under the named extended attribute. The flags
-// argument honors XAttrCreate (fail if the attribute already
+// SetXAttr stores a copy of data under the named extended attribute.
+// The flags argument honors XAttrCreate (fail if the attribute already
 // exists) and XAttrReplace (fail if it does not).
-func (fs *MemFileSystem) SetXAttr(filePath string, name string, data []byte, flags XAttrFlags, _ bool) error {
+// If followSymlinks is true, a symbolic link is resolved to its target.
+func (fs *MemFileSystem) SetXAttr(filePath string, name string, data []byte, flags XAttrFlags, followSymlinks bool) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	defer fs.mtx.Unlock()
+
+	if err := fs.writableErr(); err != nil {
+		return err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	node, err := fs.nodeForAttrs(filePath, followSymlinks)
+	if err != nil {
+		return err
 	}
 	_, exists := node.XAttrs[name]
 	if flags&XAttrCreate != 0 && exists {
-		fs.mtx.Unlock()
-		return fmt.Errorf("xattr %q already exists on %s", name, fs.RootDir().Join(filePath))
+		return fmt.Errorf("xattr %q already exists on %s", name, fs.fileOf(filePath))
 	}
 	if flags&XAttrReplace != 0 && !exists {
-		fs.mtx.Unlock()
-		return fmt.Errorf("xattr %q not found on %s", name, fs.RootDir().Join(filePath))
+		return fmt.Errorf("xattr %q not found on %s", name, fs.fileOf(filePath))
 	}
 	if node.XAttrs == nil {
 		node.XAttrs = make(map[string][]byte, 1)
 	}
-	node.XAttrs[name] = data
+	node.XAttrs[name] = bytes.Clone(data)
 	node.Modified = time.Now()
-	fs.mtx.Unlock()
-
 	fs.emitEvent(filePath, EventChmod)
 	return nil
 }
 
 // RemoveXAttr removes the named extended attribute from the node. It
 // returns an error if the attribute is not set.
-func (fs *MemFileSystem) RemoveXAttr(filePath string, name string, _ bool) error {
+// If followSymlinks is true, a symbolic link is resolved to its target.
+func (fs *MemFileSystem) RemoveXAttr(filePath string, name string, followSymlinks bool) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	defer fs.mtx.Unlock()
+
+	if err := fs.writableErr(); err != nil {
+		return err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	node, err := fs.nodeForAttrs(filePath, followSymlinks)
+	if err != nil {
+		return err
 	}
 	if _, exists := node.XAttrs[name]; !exists {
-		fs.mtx.Unlock()
-		return fmt.Errorf("xattr %q not found on %s", name, fs.RootDir().Join(filePath))
+		return fmt.Errorf("xattr %q not found on %s", name, fs.fileOf(filePath))
 	}
 	delete(node.XAttrs, name)
 	node.Modified = time.Now()
-	fs.mtx.Unlock()
-
 	fs.emitEvent(filePath, EventChmod)
 	return nil
 }
 
 // Touch creates an empty file if it does not exist,
 // else it updates the modification time to the current time.
+// Symbolic links are followed.
 func (fs *MemFileSystem) Touch(filePath string, perm Permissions) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
 
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	if err := fs.writableErr(); err != nil {
+		return err
 	}
-
-	if node, _ := fs.pathNodeOrNil(filePath); node != nil {
-		node.Modified = time.Now()
-		fs.mtx.Unlock()
+	elems := fs.elems(filePath)
+	r, err := fs.resolveElems(elems, true)
+	if err != nil {
+		return err
+	}
+	if r.node != nil {
+		r.node.Modified = time.Now()
 		fs.emitEvent(filePath, EventChmod)
 		return nil
 	}
-
-	parent, _, name, err := fs.pathParentDirNode(filePath)
-	if err != nil {
-		fs.mtx.Unlock()
+	if err := fs.checkParent(r, elems); err != nil {
 		return err
 	}
-	parent.Dir[name] = newMemFileNode(
-		MemFile{FileName: name},
-		time.Now(),
-		perm.OrDefault(memFileSystemDefaultPermissions),
-	)
-	fs.mtx.Unlock()
+	r.parent.Dir[r.name] = newMemFileNode(MemFile{FileName: r.name}, time.Now(), perm)
 	fs.emitEvent(filePath, EventCreate)
 	return nil
 }
 
-// ReadAll returns a copy of the file's content.
+// ReadAll returns a copy of the file's content
+// that the caller may modify. Symbolic links are followed.
 func (fs *MemFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -1090,22 +1324,36 @@ func (fs *MemFileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, 
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
+	node, err := fs.nodeForRead(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.Clone(node.FileData), nil
+}
+
+// nodeForRead returns the node of the file at filePath for reading its
+// content, following symbolic links. Must be called with fs.mtx held.
+func (fs *MemFileSystem) nodeForRead(filePath string) (*memFileNode, error) {
 	if err := fs.closedErr(); err != nil {
 		return nil, err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	node = fs.resolveSymlinks(node, filePath)
-	if node == nil {
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	elems := fs.elems(filePath)
+	r, err := fs.resolveElems(elems, true)
+	if err != nil {
+		return nil, err
 	}
-	if node.IsDir() {
-		return nil, NewErrIsDirectory(fs.RootDir().Join(filePath))
+	if r.node == nil {
+		return nil, NewErrDoesNotExist(fs.elemsFile(elems))
 	}
-	return node.FileData, nil
+	if r.node.IsDir() {
+		return nil, NewErrIsDirectory(fs.elemsFile(elems))
+	}
+	return r.node, nil
 }
 
-// WriteAll writes data to the file, creating it if it does not exist
-// and replacing its content if it does.
+// WriteAll writes a copy of data to the file, creating it if it does not exist
+// and replacing its content if it does. A directory is an ErrIsDirectory.
+// Symbolic links are followed.
 func (fs *MemFileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1114,36 +1362,23 @@ func (fs *MemFileSystem) WriteAll(ctx context.Context, filePath string, data []b
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
 
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
-	}
-
-	if node, _ := fs.pathNodeOrNil(filePath); node != nil {
-		node.FileData = data
-		node.Modified = time.Now()
-		fs.mtx.Unlock()
-		fs.emitEvent(filePath, EventWrite)
-		return nil
-	}
-
-	parent, _, name, err := fs.pathParentDirNode(filePath)
-	if err != nil {
-		fs.mtx.Unlock()
+	if err := fs.writableErr(); err != nil {
 		return err
 	}
-	parent.Dir[name] = newMemFileNode(
-		MemFile{FileName: name, FileData: data},
-		time.Now(),
-		perm.OrDefault(memFileSystemDefaultPermissions),
-	)
-	fs.mtx.Unlock()
-	fs.emitEvent(filePath, EventCreate|EventWrite)
+	node, created, err := fs.fileForWrite(filePath, perm, true)
+	if err != nil {
+		return err
+	}
+	node.FileData = bytes.Clone(data)
+	node.Modified = time.Now()
+	fs.emitEvent(filePath, writeEvent(created))
 	return nil
 }
 
 // Append appends data to the file, creating it if it does not exist.
+// A directory is an ErrIsDirectory. Symbolic links are followed.
 func (fs *MemFileSystem) Append(ctx context.Context, filePath string, data []byte, perm Permissions) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1152,38 +1387,25 @@ func (fs *MemFileSystem) Append(ctx context.Context, filePath string, data []byt
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
 
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
-	}
-
-	if node, _ := fs.pathNodeOrNil(filePath); node != nil {
-		node.FileData = append(node.FileData, data...)
-		node.Modified = time.Now()
-		fs.mtx.Unlock()
-		fs.emitEvent(filePath, EventWrite)
-		return nil
-	}
-
-	parent, _, name, err := fs.pathParentDirNode(filePath)
-	if err != nil {
-		fs.mtx.Unlock()
+	if err := fs.writableErr(); err != nil {
 		return err
 	}
-	parent.Dir[name] = newMemFileNode(
-		MemFile{FileName: name, FileData: data},
-		time.Now(),
-		perm.OrDefault(memFileSystemDefaultPermissions),
-	)
-	fs.mtx.Unlock()
-	fs.emitEvent(filePath, EventCreate|EventWrite)
+	node, created, err := fs.fileForWrite(filePath, perm, true)
+	if err != nil {
+		return err
+	}
+	// Appends behind the bytes that readers see, see memFileNode
+	node.FileData = append(node.FileData, data...)
+	node.Modified = time.Now()
+	fs.emitEvent(filePath, writeEvent(created))
 	return nil
 }
 
-// OpenReader opens the file for reading. The returned reader sees the
-// content as of the time the file was opened; a later WriteAll or
-// OpenWriter replaces the content and does not affect it.
+// OpenReader opens the file for reading, following symbolic links.
+// The returned reader reads a snapshot of the content at the time
+// the file was opened, later changes of the file don't affect it.
 func (fs *MemFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1191,23 +1413,22 @@ func (fs *MemFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	fs.mtx.RLock()
 	defer fs.mtx.RUnlock()
 
-	if err := fs.closedErr(); err != nil {
+	node, err := fs.nodeForRead(filePath)
+	if err != nil {
 		return nil, err
 	}
-	node, _ := fs.pathNodeOrNil(filePath)
-	node = fs.resolveSymlinks(node, filePath)
-	if node == nil {
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
-	}
-	if node.IsDir() {
-		return nil, NewErrIsDirectory(fs.RootDir().Join(filePath))
-	}
-	return fsimpl.NewReadonlyFileBuffer(node.FileData, node), nil
+	elems := fs.elems(filePath)
+	info := memNodeInfo(fs.elemsFile(elems), lastElem(elems), node, nil)
+	// Limit the capacity, so the snapshot can't be extended
+	// into bytes that a later append stores behind it
+	snapshot := node.FileData[:len(node.FileData):len(node.FileData)]
+	return fsimpl.NewReadonlyFileBuffer(snapshot, info.StdFileInfo()), nil
 }
 
 // OpenWriter opens the file for writing, creating it if it does not exist
-// and truncating it if it does. Every Write is immediately visible to
-// readers of the file.
+// and truncating it if it does. A directory is an ErrIsDirectory.
+// Symbolic links are followed. Every Write is visible to the readers
+// that are opened after it, readers opened before keep their snapshot.
 func (fs *MemFileSystem) OpenWriter(filePath string, perm Permissions) (WriteCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1215,36 +1436,22 @@ func (fs *MemFileSystem) OpenWriter(filePath string, perm Permissions) (WriteClo
 	fs.mtx.Lock()
 	defer fs.mtx.Unlock()
 
-	if fs.readOnly {
-		return nil, ErrReadOnlyFileSystem
+	if err := fs.writableErr(); err != nil {
+		return nil, err
 	}
-
-	if node, _ := fs.pathNodeOrNil(filePath); node != nil {
-		if node.IsDir() {
-			return nil, NewErrIsDirectory(fs.RootDir().Join(filePath))
-		}
-		// File exists, truncate and write
-		node.FileData = nil
-		node.Modified = time.Now()
-		return &memFileWriter{fs: fs, node: node, path: filePath, closeEvent: EventWrite}, nil
-	}
-
-	// Create new file
-	parent, _, name, err := fs.pathParentDirNode(filePath)
+	node, created, err := fs.fileForWrite(filePath, perm, true)
 	if err != nil {
 		return nil, err
 	}
-	newNode := newMemFileNode(
-		MemFile{FileName: name},
-		time.Now(),
-		perm.OrDefault(memFileSystemDefaultPermissions),
-	)
-	parent.Dir[name] = newNode
-	return &memFileWriter{fs: fs, node: newNode, path: filePath, closeEvent: EventCreate | EventWrite}, nil
+	node.FileData = nil
+	node.Modified = time.Now()
+	return &memFileWriter{fs: fs, node: node, path: filePath, closeEvent: writeEvent(created)}, nil
 }
 
-// OpenAppendWriter opens the file for appending,
-// creating it if it does not exist.
+// OpenAppendWriter opens the file for appending, creating it if it does not exist.
+// A directory is an ErrIsDirectory. Symbolic links are followed.
+// Every Write is visible to the readers that are opened after it,
+// readers opened before keep their snapshot.
 func (fs *MemFileSystem) OpenAppendWriter(filePath string, perm Permissions) (WriteCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1252,33 +1459,22 @@ func (fs *MemFileSystem) OpenAppendWriter(filePath string, perm Permissions) (Wr
 	fs.mtx.Lock()
 	defer fs.mtx.Unlock()
 
-	if fs.readOnly {
-		return nil, ErrReadOnlyFileSystem
+	if err := fs.writableErr(); err != nil {
+		return nil, err
 	}
-
-	if node, _ := fs.pathNodeOrNil(filePath); node != nil {
-		if node.IsDir() {
-			return nil, NewErrIsDirectory(fs.RootDir().Join(filePath))
-		}
-		return &memFileWriter{fs: fs, node: node, append: true, path: filePath, closeEvent: EventWrite}, nil
-	}
-
-	// Create new file
-	parent, _, name, err := fs.pathParentDirNode(filePath)
+	node, created, err := fs.fileForWrite(filePath, perm, true)
 	if err != nil {
 		return nil, err
 	}
-	newNode := newMemFileNode(
-		MemFile{FileName: name},
-		time.Now(),
-		perm.OrDefault(memFileSystemDefaultPermissions),
-	)
-	parent.Dir[name] = newNode
-	return &memFileWriter{fs: fs, node: newNode, append: true, path: filePath, closeEvent: EventCreate | EventWrite}, nil
+	return &memFileWriter{fs: fs, node: node, path: filePath, closeEvent: writeEvent(created)}, nil
 }
 
 // OpenReadWriter opens the file for reading and writing at any offset,
 // creating it if it does not exist without truncating existing content.
+// A directory is an ErrIsDirectory. Symbolic links are followed.
+//
+// The returned ReadWriteSeekCloser works on a copy of the content,
+// its writes are stored in the file system when it is closed.
 func (fs *MemFileSystem) OpenReadWriter(filePath string, perm Permissions) (ReadWriteSeekCloser, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1286,51 +1482,41 @@ func (fs *MemFileSystem) OpenReadWriter(filePath string, perm Permissions) (Read
 	fs.mtx.Lock()
 	defer fs.mtx.Unlock()
 
-	if fs.readOnly {
-		return nil, ErrReadOnlyFileSystem
+	if err := fs.writableErr(); err != nil {
+		return nil, err
 	}
-
-	if node, _ := fs.pathNodeOrNil(filePath); node != nil {
-		if node.IsDir() {
-			return nil, NewErrIsDirectory(fs.RootDir().Join(filePath))
-		}
-		return &memFileReadWriter{fs: fs, node: node, buf: fsimpl.NewFileBuffer(node.FileData), path: filePath, closeEvent: EventWrite}, nil
-	}
-
-	// Create new file
-	parent, _, name, err := fs.pathParentDirNode(filePath)
+	node, created, err := fs.fileForWrite(filePath, perm, true)
 	if err != nil {
 		return nil, err
 	}
-	newNode := newMemFileNode(
-		MemFile{FileName: name},
-		time.Now(),
-		perm.OrDefault(memFileSystemDefaultPermissions),
-	)
-	parent.Dir[name] = newNode
-	return &memFileReadWriter{fs: fs, node: newNode, buf: fsimpl.NewFileBuffer(nil), path: filePath, closeEvent: EventCreate | EventWrite}, nil
+	return &memFileReadWriter{
+		fs:      fs,
+		node:    node,
+		buf:     fsimpl.NewFileBuffer(bytes.Clone(node.FileData)),
+		path:    filePath,
+		created: created,
+	}, nil
 }
 
 // Watch registers onEvent for changes to filePath. Events are synthesized
 // from every mutation that goes through the MemFileSystem API
 // (Touch, WriteAll, OpenWriter close, Append, Truncate, Rename, Move,
 // Remove, MakeDir, SetPermissions, SetUser, SetGroup, SetXAttr,
-// RemoveXAttr, CreateSymbolicLink). Direct mutation of a MemFile.FileData
-// byte slice obtained outside the API is not observable and emits no
-// event.
+// RemoveXAttr, CreateSymbolicLink), for the path that was passed
+// to the mutating method. Direct mutation of a MemFile.FileData
+// byte slice obtained outside the API is not observable and emits no event.
 //
 // When filePath is a directory the callback fires for events on its
 // direct children (not deeper sub-directories), matching the
 // WatchFileSystem contract.
 //
-// Callbacks are invoked from a new goroutine per event so a slow consumer
-// can never block the mutation that produced it. Panics inside the
-// callback are recovered and silently discarded.
-//
-// Because each event is dispatched in its own goroutine, the delivery
-// order of events to a given callback is not guaranteed. Tests
-// should assert on the set of events received rather than on a strict
-// sequence.
+// The callbacks of one watch are called serially, in the order of the
+// changes, on a goroutine of the file system, so a slow callback delays
+// the later events of its watch but never blocks the mutation that
+// produced an event or the callbacks of other watches.
+// Panics inside the callback are recovered and silently discarded.
+// The events that are not delivered yet are dropped when the watch
+// is canceled or the file system is closed.
 func (fs *MemFileSystem) Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1338,35 +1524,40 @@ func (fs *MemFileSystem) Watch(filePath string, onEvent func(File, Event)) (canc
 	if onEvent == nil {
 		return nil, errors.New("nil callback")
 	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
 
-	fs.mtx.RLock()
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.RUnlock()
-		return nil, NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	if err := fs.closedErr(); err != nil {
+		return nil, err
 	}
-	isDir := node.IsDir()
-	fs.mtx.RUnlock()
-
-	key := fs.CleanPath(filePath)
-
-	fs.watchMtx.Lock()
-	if fs.watches == nil {
-		fs.watches = make(map[string]map[uint64]memWatch, 1)
+	elems := fs.elems(filePath)
+	r, err := fs.resolveElems(elems, true)
+	if err != nil {
+		return nil, err
 	}
-	id := fs.lastWatchID
+	if r.node == nil {
+		return nil, NewErrDoesNotExist(fs.elemsFile(elems))
+	}
+
+	key := fs.elemsPath(elems)
+	w := &memWatch{callback: onEvent, isDir: r.node.IsDir()}
 	fs.lastWatchID++
+	id := fs.lastWatchID
+	if fs.watches == nil {
+		fs.watches = make(map[string]map[uint64]*memWatch, 1)
+	}
 	subs := fs.watches[key]
 	if subs == nil {
-		subs = make(map[uint64]memWatch, 1)
+		subs = make(map[uint64]*memWatch, 1)
 		fs.watches[key] = subs
 	}
-	subs[id] = memWatch{callback: onEvent, isDir: isDir}
-	fs.watchMtx.Unlock()
+	subs[id] = w
 
 	cancel = func() error {
-		fs.watchMtx.Lock()
-		defer fs.watchMtx.Unlock()
+		fs.mtx.Lock()
+		defer fs.mtx.Unlock()
+
+		w.cancel()
 		if subs, ok := fs.watches[key]; ok {
 			delete(subs, id)
 			if len(subs) == 0 {
@@ -1378,57 +1569,105 @@ func (fs *MemFileSystem) Watch(filePath string, onEvent func(File, Event)) (canc
 	return cancel, nil
 }
 
-// emitEvent dispatches an event for path to every registered watch
-// that targets path itself, or whose target is the parent directory of
-// path (so callers watching a directory see events for direct children).
-// Each callback runs in its own goroutine so dispatch never blocks the
-// mutation under fs.mtx that produced the event.
-//
-// path is interpreted as a raw filesystem path; emitEvent cleans it
-// before matching.
-func (fs *MemFileSystem) emitEvent(path string, op Event) {
-	cleanPath := fs.CleanPath(path)
-	parentPath, _ := fs.paths.SplitDirAndName(cleanPath)
-	if parentPath == "" {
-		parentPath = fs.Separator()
-	}
-
-	fs.watchMtx.Lock()
-	if fs.watches == nil {
-		fs.watchMtx.Unlock()
+// emitEvent queues an event for filePath with every watch that targets
+// filePath itself, or whose target is the parent directory of filePath
+// (so callers watching a directory see events for direct children).
+// Queueing never blocks, every watch delivers its events on its own goroutine.
+// Must be called with fs.mtx held for writing, so that the events
+// of a watch are queued in the order of the changes.
+func (fs *MemFileSystem) emitEvent(filePath string, event Event) {
+	if len(fs.watches) == 0 {
 		return
 	}
-	var callbacks []func(File, Event)
-	for _, w := range fs.watches[cleanPath] {
-		callbacks = append(callbacks, w.callback)
+	elems := fs.elems(filePath)
+	file := fs.elemsFile(elems)
+	for _, w := range fs.watches[fs.elemsPath(elems)] {
+		w.enqueue(file, event)
 	}
-	// Skip the parent-dir loop when the event path equals its parent
-	// (only happens for the root): otherwise a directory watch on root
-	// would receive the event twice.
-	if cleanPath != parentPath {
-		for _, w := range fs.watches[parentPath] {
-			if w.isDir {
-				callbacks = append(callbacks, w.callback)
-			}
+	// The root has no parent: a directory watch on the root
+	// must not receive its own events twice
+	if len(elems) == 0 {
+		return
+	}
+	for _, w := range fs.watches[fs.elemsPath(parentElems(elems))] {
+		if w.isDir {
+			w.enqueue(file, event)
 		}
 	}
-	fs.watchMtx.Unlock()
+}
 
-	if len(callbacks) == 0 {
+// memWatch is a single Watch subscription of a MemFileSystem.
+// Its events are queued and delivered in order by at most one
+// goroutine at a time, which exits when the queue is empty.
+type memWatch struct {
+	callback func(File, Event)
+	isDir    bool
+
+	mtx      sync.Mutex
+	queue    []memEvent
+	running  bool // a goroutine delivers the queue
+	canceled bool
+}
+
+// memEvent is an event queued for a memWatch.
+type memEvent struct {
+	file  File
+	event Event
+}
+
+// enqueue queues an event and starts a goroutine
+// that delivers the queue if none is running.
+func (w *memWatch) enqueue(file File, event Event) {
+	w.mtx.Lock()
+	defer w.mtx.Unlock()
+
+	if w.canceled {
 		return
 	}
-	eventFile := fs.JoinCleanFile(cleanPath)
-	event := Event(op)
-	for _, cb := range callbacks {
-		go func(cb func(File, Event)) {
-			defer func() { _ = recover() }()
-			cb(eventFile, event)
-		}(cb)
+	w.queue = append(w.queue, memEvent{file: file, event: event})
+	if !w.running {
+		w.running = true
+		go w.deliver()
 	}
+}
+
+// deliver calls the callback for the queued events in order
+// until the queue is empty or the watch is canceled.
+func (w *memWatch) deliver() {
+	for {
+		w.mtx.Lock()
+		if w.canceled || len(w.queue) == 0 {
+			w.queue = nil
+			w.running = false
+			w.mtx.Unlock()
+			return
+		}
+		e := w.queue[0]
+		w.queue = w.queue[1:]
+		w.mtx.Unlock()
+
+		w.call(e)
+	}
+}
+
+// call calls the callback and discards a panic of it.
+func (w *memWatch) call(e memEvent) {
+	defer func() { _ = recover() }()
+	w.callback(e.file, e.event)
+}
+
+// cancel drops the queued events and stops the delivery.
+func (w *memWatch) cancel() {
+	w.mtx.Lock()
+	defer w.mtx.Unlock()
+
+	w.canceled = true
+	w.queue = nil
 }
 
 // Truncate changes the size of the file,
 // padding with zero bytes when growing it.
+// A directory is an ErrIsDirectory. Symbolic links are followed.
 func (fs *MemFileSystem) Truncate(ctx context.Context, filePath string, newSize int64) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -1436,37 +1675,43 @@ func (fs *MemFileSystem) Truncate(ctx context.Context, filePath string, newSize 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fs.mtx.Lock()
-
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	if newSize < 0 {
+		return fmt.Errorf("%w: negative file size %d", os.ErrInvalid, newSize)
 	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
 
-	node, _ := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	if err := fs.writableErr(); err != nil {
+		return err
+	}
+	node, _, err := fs.fileForWrite(filePath, 0, false)
+	if err != nil {
+		return err
 	}
 	currentSize := int64(len(node.FileData))
-	if currentSize == newSize {
-		fs.mtx.Unlock()
+	switch {
+	case newSize == currentSize:
 		return nil
-	}
-	if currentSize > newSize {
-		node.FileData = node.FileData[:newSize]
-	} else {
-		node.FileData = append(node.FileData, make([]byte, newSize-currentSize)...)
+	case newSize < currentSize:
+		// Limit the capacity, so that a later append doesn't
+		// overwrite the truncated bytes that readers still see
+		node.FileData = node.FileData[:newSize:newSize]
+	default:
+		grown := make([]byte, newSize)
+		copy(grown, node.FileData)
+		node.FileData = grown
 	}
 	node.Modified = time.Now()
-	fs.mtx.Unlock()
-
 	fs.emitEvent(filePath, EventWrite)
 	return nil
 }
 
-// CopyFile copies a file within the file system
-// by copying its content and permissions.
+// CopyFile copies a file within the file system, following symbolic links.
+// destFile is the final path of the copy: an existing file is replaced,
+// an existing directory is an ErrIsDirectory, copying a file onto itself
+// is a no-op. The copy gets a copy of the content, a new file also
+// the permissions of the source, a replaced file keeps its permissions
+// like with LocalFileSystem.CopyFile.
 func (fs *MemFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1474,28 +1719,58 @@ func (fs *MemFileSystem) CopyFile(ctx context.Context, srcFile string, destFile 
 	if srcFile == "" || destFile == "" {
 		return ErrEmptyPath
 	}
-	if fs.CleanPath(srcFile) == fs.CleanPath(destFile) {
-		return nil
-	}
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
 
-	// Read source file
-	srcData, err := fs.ReadAll(ctx, srcFile)
+	if err := fs.writableErr(); err != nil {
+		return err
+	}
+	src, err := fs.nodeForRead(srcFile)
 	if err != nil {
 		return err
 	}
-
-	// Write to destination file
-	return fs.WriteAll(ctx, destFile, srcData, 0)
+	destElems := fs.elems(destFile)
+	dest, err := fs.resolveElems(destElems, true)
+	if err != nil {
+		return err
+	}
+	switch {
+	case dest.node == src:
+		return nil // Copying a file onto itself is a no-op
+	case dest.node.IsDir():
+		return NewErrIsDirectory(fs.elemsFile(destElems))
+	case dest.node != nil:
+		dest.node.FileData = bytes.Clone(src.FileData)
+		dest.node.Modified = time.Now()
+		fs.emitEvent(destFile, EventWrite)
+		return nil
+	}
+	if err := fs.checkParent(dest, destElems); err != nil {
+		return err
+	}
+	dest.parent.Dir[dest.name] = newMemFileNode(
+		MemFile{FileName: dest.name, FileData: bytes.Clone(src.FileData)},
+		time.Now(),
+		src.Permissions,
+	)
+	fs.emitEvent(destFile, EventCreate|EventWrite)
+	return nil
 }
 
-// Move moves the node at filePath to destPath. If destPath resolves to
-// an existing directory the source is moved *into* it using its base
-// name; otherwise destPath is treated as the new full path. The
-// destination must not already exist as a file or non-directory node.
+// Move moves the file, directory or symbolic link (not its target)
+// at filePath to destPath, which is always the final path of the moved node,
+// never a directory to move into (File.MoveTo resolves that before calling Move).
 //
-// When filePath and destPath resolve to the same location after cleaning,
+// Like os.Rename, an existing file or symbolic link at destPath is replaced,
+// which is an ErrIsNotDirectory if filePath is a directory.
+// An existing directory at destPath is an ErrAlreadyExists, wrapping os.ErrExist,
+// and it is never merged or deleted. Moving a directory (including the root)
+// into itself or one of its descendants is an error wrapping os.ErrInvalid,
+// also if destPath reaches the descendant through a symbolic link.
+//
+// When filePath and destPath are the same file after cleaning,
 // Move returns nil without touching the node, matching the no-op behavior
-// of [os.Rename] required by the [MoveFileSystem] contract.
+// of os.Rename required by the MoveFileSystem contract.
 func (fs *MemFileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return ErrEmptyPath
@@ -1503,100 +1778,88 @@ func (fs *MemFileSystem) Move(ctx context.Context, filePath string, destPath str
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	filePath = fs.CleanPath(filePath)
-	destPath = fs.CleanPath(destPath)
-	if filePath == destPath {
+	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
+
+	if err := fs.writableErr(); err != nil {
+		return err
+	}
+	srcElems, destElems := fs.elems(filePath), fs.elems(destPath)
+	src, err := fs.resolveElems(srcElems, false)
+	if err != nil {
+		return err
+	}
+	if src.node == nil {
+		return NewErrDoesNotExist(fs.elemsFile(srcElems))
+	}
+	if slices.Equal(srcElems, destElems) {
 		return nil
 	}
-	fs.mtx.Lock()
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	intoItself := fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, fs.elemsFile(srcElems), fs.elemsFile(destElems))
+	if src.node.IsDir() && hasElemsPrefix(destElems, srcElems) {
+		return intoItself
+	}
+	dest, err := fs.resolveElems(destElems, false)
+	if err != nil {
+		return err
+	}
+	switch {
+	case dest.node == src.node:
+		return nil // The same node reached through symbolic links
+	case src.node.IsDir() && dest.parent.IsDir() && hasElemsPrefix(dest.dir, src.path()):
+		return intoItself // Through a symbolic link into a descendant
+	case dest.node.IsDir():
+		return NewErrAlreadyExists(fs.elemsFile(destElems))
+	case dest.node != nil && src.node.IsDir():
+		return NewErrIsNotDirectory(fs.elemsFile(destElems))
+	case dest.node == nil:
+		if err := fs.checkParent(dest, destElems); err != nil {
+			return err
+		}
 	}
 
-	srcNode, srcParent := fs.pathNodeOrNil(filePath)
-	if srcNode == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
-	}
-	if srcParent == nil {
-		fs.mtx.Unlock()
-		return errors.New("cannot move root directory")
-	}
-
-	// Refuse moves that would put a directory inside one of its
-	// descendants. Without this, the moved subtree would be orphaned and
-	// self-referential.
-	if srcNode.IsDir() && strings.HasPrefix(destPath, filePath+fs.Separator()) {
-		fs.mtx.Unlock()
-		return fmt.Errorf("cannot move %s into a descendant (%s)", fs.RootDir().Join(filePath), fs.RootDir().Join(destPath))
-	}
-
-	if existing, _ := fs.pathNodeOrNil(destPath); existing != nil {
-		fs.mtx.Unlock()
-		return NewErrAlreadyExists(fs.RootDir().Join(destPath))
-	}
-
-	destDir, destName := fs.paths.SplitDirAndName(destPath)
-	destParent, _ := fs.pathNodeOrNil(destDir)
-	if destParent == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(destDir))
-	}
-	if !destParent.IsDir() {
-		fs.mtx.Unlock()
-		return NewErrIsNotDirectory(fs.RootDir().Join(destDir))
-	}
-
-	_, srcName := fs.paths.SplitDirAndName(filePath)
-	delete(srcParent.Dir, srcName)
-	srcNode.FileName = destName
-	srcNode.Modified = time.Now()
-	destParent.Dir[destName] = srcNode
-	fs.mtx.Unlock()
-
+	delete(src.parent.Dir, src.name)
+	src.node.FileName = dest.name
+	src.node.Modified = time.Now()
+	dest.parent.Dir[dest.name] = src.node
 	fs.emitEvent(filePath, EventRename)
 	fs.emitEvent(destPath, EventCreate)
 	return nil
 }
 
-// Remove removes a file or an empty directory,
+// Remove removes a file, a symbolic link (not its target) or an empty
+// directory. A non-empty directory is an ErrDirectoryNotEmpty,
 // use File.RemoveRecursive for a directory with content.
 func (fs *MemFileSystem) Remove(filePath string) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
+	defer fs.mtx.Unlock()
 
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
+	if err := fs.writableErr(); err != nil {
+		return err
 	}
-
-	node, parent := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.Unlock()
-		return NewErrDoesNotExist(fs.RootDir().Join(filePath))
+	elems := fs.elems(filePath)
+	r, err := fs.resolveElems(elems, false)
+	if err != nil {
+		return err
 	}
-	if parent == nil {
-		fs.mtx.Unlock()
-		return errors.New("cannot remove root directory")
+	switch {
+	case r.node == nil:
+		return NewErrDoesNotExist(fs.elemsFile(elems))
+	case r.node == &fs.root:
+		return fmt.Errorf("%w: can't remove the root directory %s", os.ErrInvalid, fs.RootDir())
+	case r.node.IsDir() && len(r.node.Dir) > 0:
+		return NewErrDirectoryNotEmpty(fs.elemsFile(elems))
 	}
-	if node.IsDir() && len(node.Dir) > 0 {
-		fs.mtx.Unlock()
-		return fmt.Errorf("directory not empty: %s", fs.RootDir().Join(filePath))
-	}
-
-	// Remove from parent directory
-	_, name := fs.paths.SplitDirAndName(filePath)
-	delete(parent.Dir, name)
-	fs.mtx.Unlock()
-
+	delete(r.parent.Dir, r.name)
 	fs.emitEvent(filePath, EventRemove)
 	return nil
 }
 
 // RemoveAll removes filePath and any children it contains.
+// A symbolic link is removed, not its target.
 // No error is returned if the path does not exist.
 func (fs *MemFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if ctx.Err() != nil {
@@ -1606,42 +1869,46 @@ func (fs *MemFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		return ErrEmptyPath
 	}
 	fs.mtx.Lock()
-	if fs.readOnly {
-		fs.mtx.Unlock()
-		return ErrReadOnlyFileSystem
-	}
-	node, parent := fs.pathNodeOrNil(filePath)
-	if node == nil {
-		fs.mtx.Unlock()
-		return nil
-	}
-	if parent == nil {
-		fs.mtx.Unlock()
-		return errors.New("cannot remove root directory")
-	}
-	_, name := fs.paths.SplitDirAndName(filePath)
-	delete(parent.Dir, name)
-	fs.mtx.Unlock()
+	defer fs.mtx.Unlock()
 
+	if err := fs.writableErr(); err != nil {
+		return err
+	}
+	r, err := fs.resolve(filePath, false)
+	if err != nil {
+		return err
+	}
+	switch {
+	case r.node == nil:
+		return nil
+	case r.node == &fs.root:
+		return fmt.Errorf("%w: can't remove the root directory %s", os.ErrInvalid, fs.RootDir())
+	}
+	delete(r.parent.Dir, r.name)
 	fs.emitEvent(filePath, EventRemove)
 	return nil
 }
 
 // Close unregisters the file system and discards all its files.
-// Every following operation returns ErrFileSystemClosed.
+// Every following operation returns an error wrapping ErrFileSystemClosed,
+// and the events of watches that are not delivered yet are dropped.
+// Readers opened before Close can still read their snapshot.
 // Closing an already closed file system is a no-op.
 func (fs *MemFileSystem) Close() error {
 	fs.mtx.Lock()
-	if fs.root.Dir == nil {
+	if fs.closed {
 		fs.mtx.Unlock()
-		return nil // already closed
+		return nil
 	}
+	fs.closed = true
 	fs.root.Dir = nil
-	fs.mtx.Unlock() // Unlock before Unregister to avoid deadlock
-
-	fs.watchMtx.Lock()
+	for _, subs := range fs.watches {
+		for _, w := range subs {
+			w.cancel()
+		}
+	}
 	fs.watches = nil
-	fs.watchMtx.Unlock()
+	fs.mtx.Unlock() // Unlock before Unregister, which may call methods of the file system
 
 	Unregister(fs)
 	return nil
@@ -1649,111 +1916,138 @@ func (fs *MemFileSystem) Close() error {
 
 // Clear removes all files and directories
 // but keeps the file system usable.
+// Clear does nothing after Close.
 func (fs *MemFileSystem) Clear() {
 	fs.mtx.Lock()
 	defer fs.mtx.Unlock()
 
+	if fs.closed {
+		return
+	}
 	clear(fs.root.Dir)
 	fs.root.Modified = time.Now()
 }
 
-// memFileWriter implements WriteCloser for MemFileSystem
+// memFileWriter implements WriteCloser for MemFileSystem.
+// Every Write appends to the content of the node.
 type memFileWriter struct {
 	fs         *MemFileSystem
 	node       *memFileNode
-	append     bool
 	path       string
 	closeEvent Event
-	closed     bool
+	closed     bool // protected by fs.mtx
 }
 
 func (w *memFileWriter) Write(p []byte) (n int, err error) {
-	if w.closed {
-		return 0, errors.New("write to closed file")
-	}
 	w.fs.mtx.Lock()
 	defer w.fs.mtx.Unlock()
 
+	if w.closed {
+		return 0, os.ErrClosed
+	}
+	if err := w.fs.closedErr(); err != nil {
+		return 0, err
+	}
+	// Appends behind the bytes that readers see, see memFileNode
 	w.node.FileData = append(w.node.FileData, p...)
 	w.node.Modified = time.Now()
 	return len(p), nil
 }
 
 func (w *memFileWriter) Close() error {
+	w.fs.mtx.Lock()
+	defer w.fs.mtx.Unlock()
+
 	if w.closed {
 		return nil
 	}
 	w.closed = true
-	if w.closeEvent != 0 {
-		w.fs.emitEvent(w.path, w.closeEvent)
+	if err := w.fs.closedErr(); err != nil {
+		return err
 	}
+	w.fs.emitEvent(w.path, w.closeEvent)
 	return nil
 }
 
 // memFileReadWriter implements ReadWriteSeekCloser for MemFileSystem
+// on a copy of the content of the node, that is stored in the node
+// by Close if anything was written.
 type memFileReadWriter struct {
-	fs         *MemFileSystem
-	node       *memFileNode
-	buf        *fsimpl.FileBuffer
-	path       string
-	closeEvent Event
-	closed     bool
+	fs      *MemFileSystem
+	node    *memFileNode
+	path    string
+	created bool // the file was created by OpenReadWriter
+
+	mtx     sync.Mutex // protects the fields below
+	buf     *fsimpl.FileBuffer
+	written bool
+	closed  bool
 }
 
 func (rw *memFileReadWriter) Read(p []byte) (n int, err error) {
-	rw.fs.mtx.RLock()
-	defer rw.fs.mtx.RUnlock()
+	rw.mtx.Lock()
+	defer rw.mtx.Unlock()
+
 	return rw.buf.Read(p)
 }
 
 func (rw *memFileReadWriter) ReadAt(p []byte, off int64) (n int, err error) {
-	rw.fs.mtx.RLock()
-	defer rw.fs.mtx.RUnlock()
+	rw.mtx.Lock()
+	defer rw.mtx.Unlock()
+
 	return rw.buf.ReadAt(p, off)
 }
 
 func (rw *memFileReadWriter) Write(p []byte) (n int, err error) {
-	rw.fs.mtx.Lock()
-	defer rw.fs.mtx.Unlock()
+	rw.mtx.Lock()
+	defer rw.mtx.Unlock()
+
 	n, err = rw.buf.Write(p)
-	if err == nil {
-		rw.node.FileData = rw.buf.Bytes()
-		rw.node.Modified = time.Now()
-	}
+	rw.written = rw.written || n > 0
 	return n, err
 }
 
 func (rw *memFileReadWriter) WriteAt(p []byte, off int64) (n int, err error) {
-	rw.fs.mtx.Lock()
-	defer rw.fs.mtx.Unlock()
+	rw.mtx.Lock()
+	defer rw.mtx.Unlock()
+
 	n, err = rw.buf.WriteAt(p, off)
-	if err == nil {
-		rw.node.FileData = rw.buf.Bytes()
-		rw.node.Modified = time.Now()
-	}
+	rw.written = rw.written || n > 0
 	return n, err
 }
 
 func (rw *memFileReadWriter) Seek(offset int64, whence int) (int64, error) {
-	rw.fs.mtx.Lock()
-	defer rw.fs.mtx.Unlock()
+	rw.mtx.Lock()
+	defer rw.mtx.Unlock()
+
 	return rw.buf.Seek(offset, whence)
 }
 
 func (rw *memFileReadWriter) Close() error {
-	rw.fs.mtx.Lock()
+	rw.mtx.Lock()
 	if rw.closed {
-		rw.fs.mtx.Unlock()
+		rw.mtx.Unlock()
 		return nil
 	}
-	rw.node.FileData = rw.buf.Bytes()
-	rw.node.Modified = time.Now()
-	err := rw.buf.Close()
 	rw.closed = true
-	rw.fs.mtx.Unlock()
+	data, written := rw.buf.Bytes(), rw.written
+	err := rw.buf.Close()
+	rw.mtx.Unlock()
 
-	if rw.closeEvent != 0 {
-		rw.fs.emitEvent(rw.path, rw.closeEvent)
+	rw.fs.mtx.Lock()
+	defer rw.fs.mtx.Unlock()
+
+	if closedErr := rw.fs.closedErr(); closedErr != nil {
+		return errors.Join(err, closedErr)
+	}
+	switch {
+	case written:
+		// The buffer is not used anymore, so the node can own it
+		rw.node.FileData = data
+		rw.node.Modified = time.Now()
+		rw.fs.emitEvent(rw.path, writeEvent(rw.created))
+	case rw.created:
+		rw.fs.emitEvent(rw.path, EventCreate)
 	}
 	return err
 }
