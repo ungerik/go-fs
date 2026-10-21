@@ -158,8 +158,13 @@ Repository policy: **unit tests must run offline.** A test needing a Docker
 server skips when Docker is unavailable, and one needing credentials or a
 public server is gated behind an environment variable.
 
-The go-fs backends do this with a small internal package; the shape for your
-own backend:
+The go-fs backends do this with the package `internal/dockertest` of the root
+module: `Available` reports whether the Docker daemon answers, `SetupFailed`
+fails the run when Docker is there but the server can't start, and
+`ContainerName` adds a random suffix to a container name. It is internal
+because it encodes the test policy of this repository; Go doesn't let
+packages outside of `github.com/ungerik/go-fs/...` import it. The shape for
+your own backend:
 
 ```go
 func TestMain(m *testing.M) {

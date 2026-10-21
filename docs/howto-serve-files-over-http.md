@@ -11,34 +11,39 @@ Serve a single file, a whole directory, or embedded assets through
 ## Serve a single file
 
 ```go
-http.Handle("/report.pdf", fs.ServeFileHTTPHandler(fs.File("/srv/data/report.pdf")))
+http.Handle("/report.pdf", fs.ServeFileHTTPHandler(fs.File("/srv/data/report.pdf"), ""))
 ```
 
 Or inside a handler you already have:
 
 ```go
 func handler(w http.ResponseWriter, r *http.Request) {
-    fs.ServeFileHTTP(w, r, fs.File("/srv/data/report.pdf"))
+    fs.ServeFileHTTP(w, r, fs.File("/srv/data/report.pdf"), "")
 }
 ```
 
 Both use `http.ServeContent` underneath, so you get range requests,
-`If-Modified-Since` and `ETag` handling for free. The `Content-Type` is deduced
-from the file name, and from the content if the name is not enough. Pass it
-explicitly to override:
+`If-Modified-Since` and `HEAD` handling for free. The last argument is the
+`Content-Type`; with `""` a `Content-Type` header that is already set is
+used, or else the type is deduced from the file name, and from the content if
+the name is not enough. Pass it explicitly to override:
 
 ```go
 fs.ServeFileHTTP(w, r, file, "application/pdf")
 ```
 
-Status codes are handled for you: `404` when the file does not exist, `500` for
-any other read error. The 500 body is a generic status text, never the
-underlying error string.
+Status codes are handled for you: `404` when the file does not exist or is a
+directory, `403` when reading it is not permitted, `500` for any other error.
+The error bodies are generic status texts, never the underlying error string.
+
+The content is streamed from `OpenReader`, never read into memory, and the
+size and modification time come from `Stat`, so a `HEAD` request doesn't read
+the content unless it is needed to deduce the type.
 
 Both functions take a `fs.FileReader`, so an in-memory file works too:
 
 ```go
-fs.ServeFileHTTP(w, r, fs.NewMemFile("report.csv", csvBytes))
+fs.ServeFileHTTP(w, r, fs.NewMemFile("report.csv", csvBytes), "text/csv")
 ```
 
 Modification time is only sent for a real `fs.File`; a `MemFile` has none, so
@@ -70,11 +75,15 @@ This works for **any** backend, not just local. The same three lines serve an
 S3 bucket, an SFTP directory or a ZIP archive:
 
 ```go
-bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-assets", true) // read-only
+bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-assets", &s3fs.Options{ReadOnly: true})
 if err != nil {
     return err
 }
 defer bucket.Close()
+err = fs.Register(bucket)
+if err != nil {
+    return err
+}
 
 stdFS := bucket.RootDir().StdFS()
 http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(stdFS))))
@@ -88,11 +97,12 @@ library file system.
 ## Map errors to status codes
 
 `ErrDoesNotExist` and `ErrPermission` implement `http.Handler`, so you can
-serve them directly:
+serve them directly. This handler reads the file named in the request from a
+`SubFileSystem` registered as `sub://data`, see below:
 
 ```go
 func handler(w http.ResponseWriter, r *http.Request) {
-    data, err := fs.File("/srv/data").Join(r.PathValue("name")).ReadAll(r.Context())
+    data, err := fs.File("sub://data/").Join(r.PathValue("name")).ReadAll(r.Context())
     if err != nil {
         var notExist fs.ErrDoesNotExist
         if errors.As(err, &notExist) {
@@ -115,16 +125,16 @@ func handler(w http.ResponseWriter, r *http.Request) {
 Log the real error, send an abstract description. Never put the underlying
 error string in a 500 response — it leaks paths and internal structure.
 
-Joining a user-supplied name is only safe because `Join` cleans the path and a
-`SubFileSystem` cannot escape its directory. If the name comes from the client,
-serve from a `SubFileSystem` or `StdFS` rather than joining onto a local path:
+Don't join a name that comes from the client onto a local path: `Join` cleans
+the path, so `../../etc/passwd` below `/srv/data` is `/etc/passwd`. A
+`SubFileSystem` has the directory as its root, and `..` can't leave it, so
+serve such names from one, or from a `StdFS`:
 
 ```go
-subFS, err := fs.NewSubFileSystemAndRegister(fs.Local, "/srv/data", "data")
+err := fs.NewSubFileSystemAndRegister(fs.Local, "/srv/data", "data")
 if err != nil {
     return err
 }
-defer subFS.Close()
 // paths under sub://data/ can't escape /srv/data
 ```
 
@@ -134,8 +144,10 @@ defer subFS.Close()
 //go:embed templates/*
 var templates embed.FS
 
-tmplFS := fs.NewStdFileSystemAndRegister(templates, "templates")
-defer tmplFS.Close()
+err := fs.NewStdFileSystemAndRegister(templates, "templates")
+if err != nil {
+    return err
+}
 
 html, err := fs.File("stdfs://templates/templates/index.html").ReadAllString(ctx)
 ```
@@ -145,19 +157,27 @@ go-fs file system, so `embed.FS`, `os.DirFS`, a `zip.Reader` or a
 `testing/fstest.MapFS` all work with the `File` API.
 
 To serve embedded defaults that the running program can override, stack a
-writable layer on top:
+writable layer on top. Both layers must stay registered while the overlay is
+used:
 
 ```go
-defaults := fs.NewStdFileSystemAndRegister(embeddedConfig, "defaults")
-scratch, err := fs.NewMemFileSystem("/")
+defaults := fs.NewStdFileSystem(embeddedConfig, "defaults")
+err := fs.Register(defaults)
 if err != nil {
     return err
 }
-overlay, err := fs.NewOverlayFileSystemAndRegister(defaults, scratch, "config")
+scratch, err := fs.NewMemFileSystem(nil)
 if err != nil {
     return err
 }
-defer overlay.Close()
+err = fs.Register(scratch)
+if err != nil {
+    return err
+}
+err = fs.NewOverlayFileSystemAndRegister(defaults, scratch, "config")
+if err != nil {
+    return err
+}
 
 // reads fall through to the embedded defaults, writes land in memory
 err = fs.File("overlay://config/app.json").WriteAllString(ctx, "...")
@@ -195,21 +215,25 @@ curl -r 0-99 http://localhost:8080/report.pdf -o - | wc -c   # 100
 ```
 
 The range request is the interesting one: it confirms the file was served
-through `http.ServeContent` with a working seeker.
+through `http.ServeContent`.
 
 ## Troubleshooting
 
-**Range requests download the whole file first** — `ServeFileHTTP` calls
-`OpenReadSeeker`, and on a backend without native seeking that buffers the
-whole file. Check the "Seeking reads" row of the support matrix in
-[FileSystem interfaces](reference-filesystem-interfaces.md); `azureblobfs`,
-`sftpfs`, `smbfs` and `webdavfs` seek natively.
+**Range requests far into a large file are slow** — on a backend whose readers
+can't seek, `ServeFileHTTP` reaches the requested offset by reading and
+discarding the bytes before it. Check the "Seeking reads" row of the support
+matrix in [FileSystem interfaces](reference-filesystem-interfaces.md);
+`azureblobfs`, `sftpfs`, `smbfs` and `webdavfs` seek natively, like the local
+and the memory file systems.
 
 **`http.FS` will not accept my file system** — it takes an `io/fs.FS`. Call
 `.StdFS()` on a `File` first; do not pass the `fs.FileSystem` itself.
 
 **404 for a file that exists** — `http.FileServer` paths are relative to the
 `StdFS` root. Check your `http.StripPrefix` prefix matches the mount path.
+
+**404 for a directory** — `ServeFileHTTP` serves files only; serve a directory
+with `http.FileServer` and `StdFS` as above.
 
 **Wrong `Content-Type`** — detection uses the file extension first. Pass the
 type explicitly as the last argument to `ServeFileHTTP`.

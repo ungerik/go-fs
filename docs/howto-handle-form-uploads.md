@@ -25,12 +25,12 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "could not parse upload", http.StatusBadRequest)
         return
     }
+    defer formFS.Close() // removes the temporary files and unregisters it
     // The fs.File values of the uploads resolve through the registry
     if err := fs.Register(formFS); err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
+        http.Error(w, "could not handle upload", http.StatusInternalServerError)
         return
     }
-    defer formFS.Close()
     ...
 }
 ```
@@ -137,10 +137,10 @@ formFS, err := multipartfs.New(r.MultipartForm, "")
 if err != nil {
     return err
 }
+defer formFS.Close()
 if err := fs.Register(formFS); err != nil {
     return err
 }
-defer formFS.Close()
 ```
 
 ## Without a file system: ParseRequestMultipartFormMemFiles

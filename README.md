@@ -25,7 +25,7 @@ design rationale and the implementer reference see **[docs/](docs/README.md)**.
 - [Getting started](docs/tutorial-getting-started.md) — read and write files
   against local disk, memory and HTTP with the same code
 - [Implement a file system](docs/tutorial-implement-a-filesystem.md) — a
-  complete backend in ~120 lines that passes the conformance suite
+  complete backend in about 170 lines that passes the conformance suite
 
 *How-to*
 
@@ -41,7 +41,7 @@ design rationale and the implementer reference see **[docs/](docs/README.md)**.
 
 *Reference*
 
-- [FileSystem interfaces](docs/reference-filesystem-interfaces.md) — all 28
+- [FileSystem interfaces](docs/reference-filesystem-interfaces.md) — all 27
   interfaces, every fallback, the backend support matrix
 - [Errors](docs/reference-errors.md) · [fsimpl](docs/reference-fsimpl.md) ·
   [fstest](docs/reference-fstest.md) · [uuiddir](docs/reference-uuiddir.md)
@@ -57,12 +57,12 @@ design rationale and the implementer reference see **[docs/](docs/README.md)**.
 Introduction
 ------------
 
-`FileSystem` implementations can be registered with their
-URI qualifiers like `file://` or `http://`.
+`FileSystem` implementations are registered with their
+URI prefixes like `file://` or `http://`.
 
-The methods of `File` parse their string value for a qualifier
-and look up a `FileSystem` in the `Registry`.
-The only special rule is, that if no qualifier is present,
+The methods of `File` parse their string value for a prefix
+and look up the `FileSystem` in the registry.
+The only special rule is, that if no prefix is present,
 then the string value is interpreted as a local file path.
 
 The `LocalFileSystem` is registered by default.
@@ -70,20 +70,24 @@ The `LocalFileSystem` is registered by default.
 Work with `Local` directly:
 
 ```go
-fs.Local.Separator() // Either `/` or `\`
-
-fs.Local.IsSymbolicLink("~/file") // Tilde expands to user home dir
+fs.Local.Separator()         // Either `/` or `\`
+fs.Local.CleanPath("~/file") // A leading "~/" expands to the home directory
 ```
 
 For example, create a `FileSystem` from a multi-part
-HTTP form request that contains an uploaded file: 
+HTTP form request that contains an uploaded file:
 
 ```go
 import "github.com/ungerik/go-fs/multipartfs"
 
-multipartFS, err := multipartfs.FromRequestForm(request, MaxUploadSize)
+multipartFS, err := multipartfs.NewFromRequest(request, maxUploadMemory, "") // "" = random id
+if err != nil {
+    return err
+}
+defer multipartFS.Close() // unregisters it and removes the temporary files
 
-defer multipartFS.Close()
+// Register it, so that the fs.File values of the uploads resolve
+err = fs.Register(multipartFS)
 
 // Access form values as string
 multipartFS.FormValue("email")
@@ -153,13 +157,21 @@ mustLocal := file.MustLocalPath() // panics if not on Local
 file2 := file.Dir().Join("a", "b", "c").Joinf("file%d.txt", 2)
 path2 := file2.Path() // "/tmp/a/b/c/file2.txt"
 
-abs := fs.File("~/some-dir/../file").AbsPath() // "/home/erik/file"
-isAbs := abs.HasAbsPath()                      // true
+abs := fs.File("~/some-dir/../file").AbsPath()  // "/home/erik/file"
+isAbs := fs.File("relative/path").HasAbsPath()  // false
 absFile := fs.File("relative/path").ToAbsPath() // File with an absolute path
 
 // Relative path between two files on the same FileSystem
 base := fs.File("/tmp/project")
 rel, err := base.RelPathOf(base.Join("a", "b", "c")) // "a/b/c"
+```
+
+Temporary files:
+
+```go
+tmpFile := fs.TempFile(".json")             // random name in the temp dir, not created yet
+created, err := fs.CreateTempFile(".json")  // created atomically, like os.CreateTemp
+tmpDir, err := fs.MakeTempDir()             // a new directory in the temp dir
 ```
 
 Access and existence checks:
@@ -170,7 +182,7 @@ file.IsWritable() // file (or its parent dir) is writable
 file.IsEmptyDir() // directory exists and contains no entries
 ```
 
-Ownership (where the file system supports it, e.g. `LocalFileSystem`):
+Ownership (where the file system supports it, e.g. `LocalFileSystem` on Unix):
 
 ```go
 user, err := file.User()
@@ -180,7 +192,7 @@ group, err := file.Group()
 err = file.SetGroup("staff")
 ```
 
-Resizing existing files (where supported):
+Resizing existing files (native where supported, emulated elsewhere):
 
 ```go
 err := file.Truncate(ctx, 1024) // resize to exactly 1024 bytes
@@ -196,7 +208,7 @@ fileIsDir := file.IsDir() // false
 modTime := file.Modified()
 hash, err := file.ContentHash(ctx)  // Dropbox hash algo
 regular := file.Info().IsRegular // true
-info := file.Info().FSFileInfo() // io/fs.FileInfo
+info := file.Info().StdFileInfo() // io/fs.FileInfo
 ```
 
 Reading and writing files
@@ -212,9 +224,8 @@ str, err := file.ReadAllString(ctx)
 var w io.Writer
 n, err := file.WriteTo(w)
 
-f, err := file.OpenReader()     // io/fs.File 
-r, err := file.OpenReadSeeker() // fs.ReadSeekCloser
-
+f, err := file.OpenReader()     // io/fs.File
+r, err := file.OpenReadSeeker() // fs.ReadAtSeekCloser
 ```
 
 Writing:
@@ -222,20 +233,58 @@ Writing:
 ```go
 err := file.WriteAll(ctx, []byte("Hello"))
 
-err := file.WriteAllString(ctx, "Hello")
+err = file.WriteAllString(ctx, "Hello")
 
-err := file.Append(ctx, []byte("Hello"))
+err = file.Append(ctx, []byte("Hello"))
 
-err := file.AppendString(ctx, "Hello")
+err = file.AppendString(ctx, "Hello")
 
 var r io.Reader
 n, err := file.ReadFrom(r)
 
-w, err := file.OpenWriter()       // io.WriteCloser
-w, err := file.OpenAppendWriter() // io.WriteCloser
+w, err := file.OpenWriter()      // io.WriteCloser
+w, err = file.OpenAppendWriter() // io.WriteCloser
 
 rw, err := file.OpenReadWriter() // fs.ReadWriteSeekCloser
 ```
+
+Writers that commit the data only in `Close`, like the uploads of the object
+store backends, implement `fs.WriteAborter`. `Abort` discards the written data
+instead of committing it, and `fs.CopyFile`, `File.ReadFrom` and the package's
+own copies call it when a copy fails or the context is canceled, so no partial
+upload replaces a file.
+
+Copying, moving and renaming
+----------------------------
+
+```go
+err := fs.CopyFile(ctx, src, dest)         // src is any FileReader, dest a File
+err = fs.Move(ctx, source, destination)    // files and directories
+err = source.MoveTo(ctx, destination)      // the same as a method
+renamed, err := file.Rename(ctx, "new-name.txt") // within the directory
+```
+
+All of them work across file systems. Within one file system the native copy
+or move of the backend is used if it has one, else the data is copied, and a
+move removes the source only after the copy succeeded.
+
+The destination rules are the same on every file system:
+
+| Destination        | Move, MoveTo and Rename                                      | CopyFile                |
+| ------------------ | ------------------------------------------------------------ | ----------------------- |
+| missing            | proceeds                                                     | proceeds                |
+| existing file      | replaced, like by `os.Rename` (`ErrIsNotDirectory` for a directory source) | replaced  |
+| existing directory | an error wrapping `os.ErrExist`, never merged or deleted     | `ErrIsDirectory`        |
+
+`fs.Move`, `File.MoveTo` and `fs.CopyFile` first resolve a destination that is
+an existing directory to the source's name inside it, so the last row only
+applies to `Rename` and to a directory that is already there under the
+source's name. A destination equal to the source is a no-op, and moving a
+directory into itself or one of its sub-directories is an error wrapping
+`os.ErrInvalid`. `Rename` rejects a name that is empty, `.` or `..`, or that
+contains a slash or the separator of the file system, with an error wrapping
+`os.ErrInvalid`. [Copy, move and compare](docs/howto-copy-move-and-compare.md)
+has the details.
 
 fs.FileReader
 -------------
@@ -291,7 +340,7 @@ memFile, err := fs.ReadMemFile(ctx, fs.File("../my-local-file.txt"))
 
 // Read all data similar to io.ReadAll from an io.Reader
 var r io.Reader
-memFile, err := fs.ReadAllMemFile(ctx, r, "in-mem-file.txt")
+memFile, err = fs.ReadAllMemFile(ctx, r, "in-mem-file.txt")
 ```
 
 Note that `MemFile` is not a `File` because it has no backing file system:
@@ -351,10 +400,10 @@ dir.ListDirRecursive(ctx, func(f fs.File) error {
 files, err := dir.ListDirMax(ctx, -1)
 
 // Get the first 100 JPEGs in dir
-files, err := dir.ListDirMax(ctx, 100, "*.jpg", "*.jpeg")
+files, err = dir.ListDirMax(ctx, 100, "*.jpg", "*.jpeg")
 
 // Recursive variant with a hard cap
-files, err := dir.ListDirRecursiveMax(ctx, 1000, "*.go")
+files, err = dir.ListDirRecursiveMax(ctx, 1000, "*.go")
 ```
 
 Go 1.23+ iterator methods (`iter.Seq2[fs.File, error]`):
@@ -377,27 +426,34 @@ for file, err := range dir.ListDirRecursiveIter(ctx, "*.go") {
 }
 ```
 
-Glob with wildcard substitution (Go 1.23+ iterator, the second yielded
-value is the list of substituted wildcard segments):
+Glob yields the files that match a path pattern, also as
+`iter.Seq2[fs.File, error]`:
 
 ```go
-// All Go files under any "cmd/*" sub-directory
-for file, segments := range fs.MustGlob(ctx, "cmd/*/*.go") {
-	fmt.Println(segments, file.Path()) // segments == ["mytool", "main.go"]
+// All Go files in the sub-directories of "cmd"
+for file, err := range fs.Glob(ctx, "cmd/*/*.go") {
+	if err != nil {
+		return err
+	}
+	fmt.Println(file.Path())
 }
 
 // Relative to a specific base directory
-iter, err := dir.Glob(ctx, "**/*.png")
-if err != nil {
-	return err
-}
-for file := range iter {
+for file, err := range dir.Glob(ctx, "*/*.png") {
+	if err != nil {
+		return err
+	}
 	fmt.Println(file.Path())
 }
 ```
 
-A pattern ending with a slash (`/`) only matches directories. Glob
-ignores I/O errors and only fails on a malformed pattern.
+The pattern syntax is that of `path.Match`, with `/` as separator on every
+file system; every pattern segment matches one path element, `..` segments
+are not allowed. A pattern ending with a slash (`/`) only matches
+directories. A malformed pattern, an error listing a directory and the
+error of a canceled context are yielded together with `fs.InvalidFile`; the
+iteration stops after a pattern or context error and continues after a
+listing error if the loop does.
 
 Standard library compatibility (`io/fs`)
 ----------------------------------------
@@ -433,17 +489,18 @@ type Config struct { Name string `json:"name"` }
 
 var cfg Config
 err := fs.File("config.json").ReadJSON(ctx, &cfg)
-err = fs.File("config.json").WriteJSON(ctx, &cfg, "  ") // indented
+err = fs.File("config.json").WriteJSON(ctx, &cfg)
+err = fs.File("config.json").WriteJSONIndent(ctx, &cfg, "  ") // indented
 
 err = fs.File("config.xml").ReadXML(ctx, &cfg)
-err = fs.File("config.xml").WriteXML(ctx, &cfg, "  ")
+err = fs.File("config.xml").WriteXMLIndent(ctx, &cfg, "  ")
 ```
 
 The same helpers are also available as `MemFile` constructors:
 
 ```go
-m, err := fs.NewMemFileWriteJSON("config.json", &cfg, "  ")
-m, err  = fs.NewMemFileWriteXML("config.xml", &cfg, "  ")
+m, err := fs.NewMemFileWriteJSONIndent("config.json", &cfg, "  ")
+m, err = fs.NewMemFileWriteXML("config.xml", &cfg)
 ```
 
 Symbolic links
@@ -451,9 +508,10 @@ Symbolic links
 
 File systems opt into symbolic link support by implementing the
 `SymbolicLinkFileSystem` interface. `LocalFileSystem`, `MemFileSystem`,
-`sftpfs` and `smbfs` opt in; the other backends do not, so calling these
-methods on files from those backends returns an `ErrUnsupported` error, and
-`IsSymbolicLink` is false.
+`SubFileSystem` (forwarding to its parent), `sftpfs` and `smbfs` opt in.
+On the other backends `CreateSymbolicLink` and `ReadSymbolicLink` return an
+`ErrUnsupported` error, `IsSymbolicLink` is false, and `Lstat` returns the
+same as `Stat`.
 
 ```go
 target := fs.File("/etc/hosts")
@@ -462,24 +520,50 @@ link := fs.File("/tmp/hosts-link")
 // Create link as a symbolic link pointing to target
 err := link.CreateSymbolicLink(target)
 
-// Check whether a file is a symbolic link
-if link.IsSymbolicLink() {
-    // Read the link target as stored on disk (may be relative)
-    resolved, err := link.ReadSymbolicLink()
-    _ = resolved
-}
+// Lstat describes the link itself, Stat and Info follow it to the target
+info, err := link.Lstat() // info.IsSymlink == true
+isLink := link.IsSymbolicLink() // true
+
+// Read the link target as stored on disk (may be relative)
+resolved, err := link.ReadSymbolicLink()
 ```
 
-Both files must live on the same `FileSystem`; passing a target from a
-different file system returns an error. The target path is stored verbatim,
-so pass an absolute path if you want the link to resolve the same way
-regardless of where it is read from.
+Both files must live on the same `FileSystem`; a target from a different
+file system is an error wrapping `fs.ErrFileSystemsDoNotMatch`. The target
+path is stored verbatim, so pass an absolute path if you want the link to
+resolve the same way regardless of where it is read from.
 
-Watching the local file system
-------------------------------
+The `FileInfo` of a directory listing describes the entry itself, like
+`Lstat`: for a link `IsSymlink` is true and `IsDir` and `IsRegular` describe
+the target as far as the file system knows it cheaply.
+
+Extended attributes
+-------------------
+
+`LocalFileSystem` and `MemFileSystem` implement the `XAttrFileSystem`
+interface; other file systems return an `ErrUnsupported` error.
+
+```go
+err := file.SetXAttr("user.origin", []byte("upload"))                 // create or replace
+err = file.SetXAttr("user.origin", []byte("upload"), fs.XAttrCreate)  // fails if it exists
+err = file.SetXAttr("user.origin", []byte("import"), fs.XAttrReplace) // fails if it doesn't
+
+value, err := file.GetXAttr("user.origin")
+names, err := file.ListXAttr()
+err = file.RemoveXAttr("user.origin")
+```
+
+These methods follow symbolic links; `LSetXAttr`, `LGetXAttr`, `LListXAttr`
+and `LRemoveXAttr` act on the link itself. On Linux the names need a namespace
+like `user.`.
+
+Watching files
+--------------
 
 The local file system supports watching files and directories for changes using the `fsnotify` package.
 This functionality is available through the `WatchFileSystem` interface and the `File.Watch` method.
+`MemFileSystem` implements it too, and `SubFileSystem` forwards it to its parent;
+on other file systems `Watch` returns an `ErrUnsupported` error.
 
 ```go
 // Watch a directory for changes
@@ -512,21 +596,25 @@ defer cancel()
 ```
 
 **Event Types:**
+
+`fs.Event` is a bitmask of the constants `fs.EventCreate`, `fs.EventWrite`,
+`fs.EventRemove`, `fs.EventRename` and `fs.EventChmod`, because one event can
+report several operations. `String` joins their names, like `CREATE|WRITE`.
 - `HasCreate()` - File or directory was created
 - `HasWrite()` - File was written to
 - `HasRemove()` - File or directory was removed
 - `HasRename()` - File or directory was renamed
-- `HasChmod()` - File permissions were changed
+- `HasChmod()` - File permissions or attributes were changed
 
 **Important Notes:**
-- Watching a directory only reports changes directly within it, not in recursive sub-directories
+- Watching a directory reports changes of the directory and of the entries directly within it, not in recursive sub-directories
 - Multiple watches can be set on the same file/directory
-- The returned `cancel` function stops a specific watch
-- Events are delivered asynchronously via goroutines
-- The local filesystem supports watching; other filesystems may not
+- The returned `cancel` function stops a specific watch; queued events of that watch are dropped
+- The callbacks of one watch are called serially, in the order of the events, on a goroutine of the file system, so a slow callback only delays the later events of its own watch
 
 **Logging:**
-You can enable logging for watch events and errors:
+You can enable logging for watch events and errors.
+Set the loggers before calling `Watch`: a change applies with the next `Watch` call.
 
 ```go
 fs.Local.WatchEventLogger = fs.LoggerFunc(func(format string, args ...any) {
@@ -545,28 +633,59 @@ File system implementations
 backends. The network backends (`s3fs`, `azureblobfs`, `sftpfs`, `ftpfs`,
 `smbfs`, `dropboxfs`, `webdavfs`) are independent Go modules under their own
 sub-directory with their own dependencies; the lighter ones (`httpfs`,
-`zipfs`, `tarfs`, `multipartfs`) are packages in the root module. Importing
-the package registers a `FileSystem` for its URI prefix, after which `File`
-values with that prefix transparently route to the right backend.
+`zipfs`, `tarfs`, `multipartfs`) are packages in the root module.
 
-| Package       | URI prefix              | Constructor                                        | Read | Write  |
+`File` values route to the file system that is registered for their URI
+prefix. The constructors follow one rule:
+
+- `New…` and `Dial…` return the file system and an error, and never register
+  it.
+- `…AndRegister` registers the file system and returns only an error. It
+  exists where the prefix follows from the arguments, so the caller can use
+  the URIs without the instance.
+- A temporary file system is created with `New…`, registered with
+  `fs.Register` and closed with `defer Close()`, which also unregisters it.
+
+Only `httpfs` registers file systems when it is imported.
+
+| Package       | URI prefix              | Constructors                                       | Read | Write  |
 | ------------- | ----------------------- | -------------------------------------------------- | :--: | :----: |
 | (built-in)    | `file://` or none       | `fs.Local` (registered by default)                 | yes  | yes    |
-| `httpfs`      | `http://`, `https://`   | side-effect import: `import _ ".../httpfs"`        | yes  | no     |
-| `s3fs`        | `s3://<bucket>`         | `s3fs.NewAndRegister`, `s3fs.NewLoadDefaultConfig` | yes  | yes/ro |
+| `httpfs`      | `http://`, `https://`   | side-effect import: `import _ ".../httpfs"`; `httpfs.New`, `httpfs.NewAndRegister` for a prefix with its own client | yes  | no     |
+| `s3fs`        | `s3://<bucket>`         | `s3fs.New`, `s3fs.NewLoadDefaultConfig`, `s3fs.NewAndRegister` | yes  | yes/ro |
 | `sftpfs`      | `sftp://<user>@<host>`  | `sftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes  |
-| `ftpfs`       | `ftp://`, `ftps://`     | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
-| `dropboxfs`   | `dropbox://<account>`   | `dropboxfs.NewAndRegister`                         | yes  | yes    |
-| `webdavfs`    | `webdav://<host>/<base>` | `webdavfs.New`, `webdavfs.NewAndRegister`         | yes  | yes    |
-| `smbfs`       | `smb://<user>@<host>/<share>` | `smbfs.Dial`, `smbfs.DialAndRegister`         | yes  | yes    |
-| `azureblobfs` | `azblob://<host>/<container>` | `azureblobfs.NewAndRegister`, `NewFromConnectionString` | yes | yes/ro |
-| `zipfs`       | `zip://`                | `zipfs.NewReader`, `zipfs.NewWriter`               | reader | writer |
-| `tarfs`       | `tar://`                | `tarfs.NewReader`, `tarfs.NewWriter`               | reader | writer |
-| `multipartfs` | `multipart://`          | `multipartfs.FromRequestForm`                      | yes  | no     |
-| (built-in)    | `mem://`                | `fs.NewMemFileSystem`                              | yes  | yes    |
-| (built-in)    | `stdfs://<id>`          | `fs.NewStdFileSystem(iofs.FS)`: embed.FS, os.DirFS, zip.Reader, MapFS | yes | no |
-| (built-in)    | `sub://<id>`            | `fs.NewSubFileSystem(parent, dir)`: view rooted at a directory | as parent | as parent |
-| (built-in)    | `overlay://<id>`        | `fs.NewOverlayFileSystem(base, upper)`: writable layer over a read-only base | yes | yes |
+| `ftpfs`       | `ftp://<user>@<host>`, `ftps://<user>@<host>` | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
+| `dropboxfs`   | `dropbox://<account id>` | `dropboxfs.New`, `dropboxfs.NewAndRegister`       | yes  | yes    |
+| `webdavfs`    | `webdav://[<user>@]<host><base path>` | `webdavfs.New`, `webdavfs.NewAndRegister` | yes  | yes    |
+| `smbfs`       | `smb://[<user>@]<host>/<share>` | `smbfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes  | yes    |
+| `azureblobfs` | `azblob://<host>/<container>` | `azureblobfs.New`, `NewFromConnectionString`, `NewAndRegister` | yes | yes/ro |
+| `zipfs`       | `zip://<id>`            | `zipfs.NewReader`, `zipfs.NewWriter`               | reader | writer |
+| `tarfs`       | `tar://<id>`            | `tarfs.NewReader`, `tarfs.NewWriter`               | reader | writer |
+| `multipartfs` | `multipart://<id>`      | `multipartfs.NewFromRequest`, `multipartfs.New`    | yes  | no     |
+| (built-in)    | `mem://<id>`            | `fs.NewMemFileSystem`, `fs.NewMemFileSystemAndRegister` | yes  | yes    |
+| (built-in)    | `stdfs://<id>`          | `fs.NewStdFileSystem(fsys, id)`, `fs.NewStdFileSystemAndRegister`: embed.FS, os.DirFS, zip.Reader, MapFS | yes | no |
+| (built-in)    | `sub://<id>`            | `fs.NewSubFileSystem(parent, dir, id)`, `fs.NewSubFileSystemAndRegister`: view rooted at a directory | as parent | as parent |
+| (built-in)    | `overlay://<id>`        | `fs.NewOverlayFileSystem(base, upper, id)`, `fs.NewOverlayFileSystemAndRegister`: writable layer over a read-only base | yes | yes |
+
+The prefixes of `sftpfs`, `ftpfs` and `smbfs` add `:<port>` for a port other
+than the default of the protocol, and a `MemFileSystem` with a volume has the
+prefix `mem://<id>/<volume>`. An empty id of the archive, form, memory,
+standard library, sub and overlay file systems means a random one; the
+`…AndRegister` variants need an id.
+
+A URI matches a registered prefix only at a boundary: the URI ends after the
+prefix, the prefix ends with a slash, or the prefix is followed by a slash or
+the separator of the file system. So the prefix `s3://logs` matches
+`s3://logs/key` but not `s3://logs-archive/key`. The longest matching prefix
+or prefix alias wins.
+
+`fs.Register` returns an error wrapping `fs.ErrAlreadyRegistered` if another
+file system holds the prefix; registering the same instance again is a no-op.
+`fs.Unregister` removes exactly the passed instance. `fs.EnsureRegistered`
+returns the file system registered for a prefix or creates it, shares one
+creation between concurrent callers, and returns a `free` function that
+closes a file system it created when the last caller freed it. The
+`EnsureRegistered` functions of `sftpfs`, `ftpfs` and `smbfs` are built on it.
 
 Every registered file system has an `ID()`: a string that identifies it
 uniquely among the registered file systems and stays the same for its whole
@@ -579,16 +698,16 @@ expose one, so those use the coordinates that identify the store instead.
 
 | File system                                        | `ID()`                                             |
 | -------------------------------------------------- | -------------------------------------------------- |
-| `fs.Local`                                         | File system id of the root volume: the `statfs` `f_fsid` on Unix, the volume serial number on Windows |
-| `MemFileSystem`                                    | Random id, or the one passed to `WithID`           |
+| `fs.Local`                                         | File system id of the root volume: the `statfs` `f_fsid` on Unix, the volume serial number on Windows, `local` on js and wasip1 |
+| `MemFileSystem`                                    | `MemFileSystemOptions.ID`, random if empty         |
 | `StdFileSystem`, `SubFileSystem`, `OverlayFileSystem` | The id part of the prefix, random if none was passed |
-| `httpfs`                                           | `http` / `https`                                   |
+| `httpfs`                                           | The prefix without a trailing `://`: `http` / `https` for `httpfs.Default` / `httpfs.DefaultTLS` |
 | `zipfs`, `tarfs`, `multipartfs`                    | The prefix of the archive or form: `zip://<id>`, `tar://<id>`, `multipart://<id>` |
-| `s3fs`                                             | Bucket name                                        |
+| `s3fs`                                             | Bucket name, or `Options.Prefix` if it was set     |
 | `azureblobfs`                                      | `<host>/<container>`                               |
 | `sftpfs`, `ftpfs`                                  | The connection prefix, `sftp://user@host` / `ftp://user@host` |
-| `smbfs`                                            | `<user>@<host>/<share>`                            |
-| `webdavfs`                                         | `<host>/<base path>`                               |
+| `smbfs`                                            | `[<user>@]<host>/<share>`                          |
+| `webdavfs`                                         | `[<user>@]<host><base path>`                       |
 | `dropboxfs`                                        | Dropbox account id                                 |
 
 The format is specific to the implementation and promises nothing beyond
@@ -606,11 +725,11 @@ only implements an optional interface when doing so is more efficient or more
 capable than that emulation.
 
 `LocalFileSystem` and `MemFileSystem` implement almost every optional
-interface natively; what they leave to the emulation is what the emulation
-already does best (`Exists` is a `Stat`, and the local file system has no
-recursive listing faster than the generic walk). `MemFileSystem` additionally
-implements `User`/`Group`, which the local file system only exposes on Unix.
-For the remote backends, as verified by the conformance suite in `fstest`:
+interface natively. `LocalFileSystem` leaves `Exists` (a `Stat`) and
+`ListDirRecursive` (no faster than the generic walk) to the emulation and
+implements `User`/`Group` only on Unix. `MemFileSystem` implements `Exists`,
+`ListDirRecursive` and `User`/`Group` too, and leaves out `IsHidden` and the
+absolute path methods, whose defaults fit it. For the remote backends:
 
 | Capability             | s3  | azblob | sftp | ftp | smb | dropbox | webdav | http |
 | ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
@@ -636,18 +755,28 @@ same, just not specialized) · `r/o` read-only backend, so the write operation
 does not apply.
 
 The archive and request-scoped backends implement a mode-dependent subset:
-`zipfs.Reader` is a `StdFileSystem` and provides `ReadAll` and
-`ListDirRecursive`, `tarfs.Reader` provides `Exists` and `ListDirRecursive`,
-the writers provide `Touch` (`tarfs.Writer` also `WriteAll`), and
-`multipartfs` is read-only and provides `Exists` and `ReadAll`.
+`zipfs.Reader` and `tarfs.Reader` provide `Exists`, `ReadAll` and
+`ListDirRecursive`, the writers provide `Touch` and `MakeAllDirs`
+(`tarfs.Writer` also `WriteAll`), and `multipartfs` is read-only and provides
+`Exists` and `ReadAll`. `httpfs` implements `URIFileSystem`, because its paths
+are URLs in their escaped form.
 
-Every backend follows the same error contract: `errors.Is(err, os.ErrNotExist)`
-for missing files, `os.ErrExist` for `MakeDir` on an existing path,
+Every backend follows the same error contract, checked by the conformance
+suite in `fstest`: `errors.Is(err, os.ErrNotExist)` for missing files,
+`os.ErrExist` for `MakeDir` on an existing path,
+`errors.Is(err, fs.ErrIsDirectory{})`, `fs.ErrIsNotDirectory{}` and
+`fs.ErrDirectoryNotEmpty{}` for the directory cases,
 `fs.ErrReadOnlyFileSystem` / `fs.ErrWriteOnlyFileSystem` for the wrong
 direction, `fs.ErrFileSystemClosed` after `Close`, and the context error when
-a context is cancelled. Methods only take a `context.Context` when they can
-take long: reading or writing content, listing directories and dialing
-connections.
+a context is cancelled. A URI with a scheme that no file system is registered
+for resolves to the invalid file system, whose operations return an error
+wrapping `fs.ErrInvalidFileSystem` that names the URI with its password
+redacted. An empty path is `fs.ErrEmptyPath`.
+[docs/reference-errors.md](docs/reference-errors.md) has the full list.
+
+Methods only take a `context.Context` when they can take long: reading or
+writing content, listing directories, copying, moving and renaming,
+truncating, and dialing connections.
 
 ### httpfs
 
@@ -658,8 +787,18 @@ data, err := fs.File("https://example.com/file.txt").ReadAll(ctx)
 ```
 
 Read-only. Useful for treating remote files uniformly with local ones.
-`httpfs.Client` is the `*http.Client` used for all requests.
-[httpfs/README.md](httpfs/README.md) has the details.
+Importing the package registers `httpfs.Default` and `httpfs.DefaultTLS`,
+which use `http.DefaultClient`. To use another `*http.Client`, register a file
+system for a more specific prefix; URLs with that prefix then use it:
+
+```go
+err := httpfs.NewAndRegister("https://api.example.com/", &httpfs.Options{
+    Client: &http.Client{Timeout: 30 * time.Second},
+})
+```
+
+URLs are used verbatim: the query and escapes in the path are passed to the
+server unchanged. [httpfs/README.md](httpfs/README.md) has the details.
 
 ### s3fs
 
@@ -667,42 +806,62 @@ Read-only. Useful for treating remote files uniformly with local ones.
 import "github.com/ungerik/go-fs/s3fs"
 
 // Using the default AWS credential chain
-bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-bucket", false)
+bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-bucket", nil)
+if err != nil {
+    return err
+}
+defer bucket.Close()
+err = fs.Register(bucket)
 
-// Or with an existing aws-sdk-go-v2 client
-bucket = s3fs.NewAndRegister(client, "my-bucket", false)
+// Or registered for the lifetime of the program with an existing aws-sdk-go-v2 client
+err = s3fs.NewAndRegister(client, "other-bucket", &s3fs.Options{ReadOnly: true})
 
 err = fs.File("s3://my-bucket/path/file.txt").WriteAllString(ctx, "Hello")
 ```
 
-Multipart upload/download is used automatically for files larger than
-`s3fs.MultipartUploadThreshold` / `s3fs.MultipartDownloadThreshold`
-(5 MB / 10 MB). Directories are object key prefixes; `MakeDir` creates a
-zero-byte marker object so empty directories exist too.
+Uploads from `Options.MultipartUploadThreshold` (16 MiB) on are multipart
+uploads with parts of `Options.PartSize` (8 MiB), `ReadAll` downloads objects
+from `Options.MultipartDownloadThreshold` (16 MiB) on with concurrent range
+requests, and writers from `OpenWriter` upload the parts while they are
+written. Directories are object key prefixes; `MakeDir` creates a zero-byte
+marker object so empty directories exist too.
 [s3fs/README.md](s3fs/README.md) has the credential setup, the
 S3-compatible service configuration and the full concept mapping.
 
 ### sftpfs
 
 ```go
-import "github.com/ungerik/go-fs/sftpfs"
-
-sftpFS, err := sftpfs.DialAndRegister(
-    ctx,
-    "sftp://user@host",
-    sftpfs.Password("secret"),
-    knownhosts.New("~/.ssh/known_hosts"), // ssh.HostKeyCallback, or sftpfs.AcceptAnyHostKey
-    nil,                                  // optional fs.Logger for connection events
+import (
+    "github.com/ungerik/go-fs/sftpfs"
+    "golang.org/x/crypto/ssh/knownhosts"
 )
-defer sftpFS.Close()
+
+// knownhosts.New does not expand "~"
+home, err := os.UserHomeDir()
+if err != nil {
+    return err
+}
+hostKeys, err := knownhosts.New(filepath.Join(home, ".ssh", "known_hosts"))
+if err != nil {
+    return err
+}
+
+err = sftpfs.DialAndRegister(ctx, "sftp://user@host", &sftpfs.Options{
+    Password:        "secret",
+    HostKeyCallback: hostKeys, // required; sftpfs.AcceptAnyHostKey only for tests
+})
+if err != nil {
+    return err
+}
 
 data, err := fs.File("sftp://user@host/etc/hostname").ReadAll(ctx)
 ```
 
-A lost connection is re-dialed transparently. `EnsureRegistered` shares one
-connection per address between callers with reference counting. URIs with
-embedded credentials (`sftp://user:password@host/path`) dial a connection per
-operation and require `sftpfs.URLHostKeyCallback` to be set.
+A lost connection is reconnected; operations that can't be repeated are only
+retried if the connection was lost before their request. `EnsureRegistered`
+shares one connection per address between callers with reference counting.
+Pass URIs with credentials, like `sftp://user:password@host`, to
+`EnsureRegistered`; the password is not part of the prefix.
 [sftpfs/README.md](sftpfs/README.md) has the host key setup and the full
 concept mapping.
 
@@ -711,13 +870,16 @@ concept mapping.
 ```go
 import "github.com/ungerik/go-fs/ftpfs"
 
-ftpFS, err := ftpfs.DialAndRegister(
-    ctx,
-    "ftps://example.com",
-    ftpfs.UsernameAndPassword("user", "secret"),
-    nil, // *ftpfs.Options: TLS config, InsecureSkipVerify, protocol debug output
-)
-defer ftpFS.Close()
+err := ftpfs.DialAndRegister(ctx, "ftps://example.com", &ftpfs.Options{
+    Username: "user",
+    Password: "secret",
+    // TLSConfig, InsecureSkipVerify, DebugOut for the protocol log
+})
+if err != nil {
+    return err
+}
+
+data, err := fs.File("ftps://user@example.com/pub/notes.txt").ReadAll(ctx)
 ```
 
 `ftp://` is plain FTP, `ftps://` is explicit TLS on port 21 (implicit TLS
@@ -732,15 +894,22 @@ mapping.
 ```go
 import "github.com/ungerik/go-fs/dropboxfs"
 
-dbxFS, err := dropboxfs.NewAndRegister(ctx, accessToken, 5*time.Minute, false)
+dbxFS, err := dropboxfs.New(ctx, accessToken, &dropboxfs.Options{CacheTimeout: 5 * time.Minute})
+if err != nil {
+    return err
+}
 defer dbxFS.Close()
+err = fs.Register(dbxFS)
 
 // The prefix is dropbox://<account id>, so it is stable per account
 err = dbxFS.RootDir().Join("Apps", "MyApp", "notes.md").WriteAllString(ctx, "...")
 ```
 
-The second argument is the metadata cache timeout (zero disables the cache),
-the third mutes the notifications Dropbox sends for changed files.
+`Options.CacheTimeout` is the metadata cache timeout (zero disables the
+cache), `Options.Mute` mutes the notifications Dropbox sends for changed
+files, and `Options.HTTPClient` takes a client that refreshes short-lived
+access tokens. The prefix depends on the account, so `New` and `fs.Register`
+are the usual pair; `NewAndRegister` is for callers that know the account id.
 [dropboxfs/README.md](dropboxfs/README.md) has the app and access token
 setup and how to run the tests against a real account.
 
@@ -749,16 +918,22 @@ setup and how to run the tests against a real account.
 ```go
 import "github.com/ungerik/go-fs/webdavfs"
 
-davFS, err := webdavfs.NewAndRegister(ctx, "https://cloud.example.com/remote.php/dav/files/alice",
+davFS, err := webdavfs.New(ctx, "https://cloud.example.com/remote.php/dav/files/alice",
     &webdavfs.Options{Username: "alice", Password: "app-password"})
+if err != nil {
+    return err
+}
 defer davFS.Close()
+err = fs.Register(davFS)
 
-notes, err := fs.File("webdav://cloud.example.com/remote.php/dav/files/alice/notes.txt").ReadAllString(ctx)
+notes, err := fs.File("webdav://alice@cloud.example.com/remote.php/dav/files/alice/notes.txt").ReadAllString(ctx)
 ```
 
 Standard library only, so one module covers every WebDAV server. Paths map
-to URL paths below the base URL, `PROPFIND` backs `Stat` and `ListDir`,
-`MOVE` and `COPY` are native, and readers seek with `Range` requests.
+to URL paths below the base URL, and the username is part of the prefix,
+because some servers show every user their own files at the same URL.
+`PROPFIND` backs `Stat` and `ListDir`, `MOVE` and `COPY` are native, and
+readers seek with `Range` requests.
 [webdavfs/README.md](webdavfs/README.md) has the authentication options and
 the full concept mapping.
 
@@ -767,15 +942,22 @@ the full concept mapping.
 ```go
 import "github.com/ungerik/go-fs/smbfs"
 
-smbFS, err := smbfs.DialAndRegister(ctx, "smb://alice@nas.local/documents",
-    &smbfs.Options{Password: "secret", Domain: "WORKGROUP"})
+smbFS, err := smbfs.Dial(ctx, "smb://nas.local/documents", &smbfs.Options{
+    Username: "alice",
+    Password: "secret",
+    Domain:   "WORKGROUP",
+})
+if err != nil {
+    return err
+}
 defer smbFS.Close()
+err = fs.Register(smbFS)
 
 files, err := fs.File("smb://alice@nas.local/documents/").ListDirMax(ctx, -1, "*.pdf")
 ```
 
 SMB2/3 for Windows shares, Samba and NAS devices with the pure Go
-[go-smb2](https://github.com/hirochachacha/go-smb2). Real directories and
+[go-smb2](https://github.com/cloudsoda/go-smb2). Real directories and
 random access file handles, so nearly every optional interface is native:
 append and read-write handles, `Truncate`, `Touch`, `MakeAllDirs`,
 `RemoveAll`, server-side `Move`, symbolic links. Permissions are the SMB
@@ -788,16 +970,21 @@ full concept mapping.
 ```go
 import "github.com/ungerik/go-fs/azureblobfs"
 
-blobFS, err := azureblobfs.NewFromConnectionString(ctx, os.Getenv("AZURE_STORAGE_CONNECTION_STRING"), "assets", false)
+blobFS, err := azureblobfs.NewFromConnectionString(ctx, os.Getenv("AZURE_STORAGE_CONNECTION_STRING"), "assets", nil)
+if err != nil {
+    return err
+}
 defer blobFS.Close()
+err = fs.Register(blobFS)
 
 err = blobFS.RootDir().Join("images", "logo.png").WriteAll(ctx, logo)
 ```
 
-Azure Blob Storage with the Azure SDK for Go; `azureblobfs.NewAndRegister`
-takes a configured `container.Client` for other credential types.
-Directories are blob name prefixes with marker blobs like in s3fs, reads
-seek with range requests, `CopyFile` is a server-side copy and `Touch`
+Azure Blob Storage with the Azure SDK for Go; `azureblobfs.New` and
+`azureblobfs.NewAndRegister` take a configured `container.Client` for other
+credential types. Directories are blob name prefixes with marker blobs like
+in s3fs, reads seek with range requests, writers from `OpenWriter` upload
+blocks while they are written, `CopyFile` is a server-side copy and `Touch`
 updates the modification time by setting the blob metadata.
 [azureblobfs/README.md](azureblobfs/README.md) has the credential setup and
 the full concept mapping.
@@ -808,8 +995,12 @@ the full concept mapping.
 import "github.com/ungerik/go-fs/zipfs"
 
 // Read a ZIP archive as a file system
-zipFS, err := zipfs.NewReader(fs.File("archive.zip"))
+zipFS, err := zipfs.NewReader(fs.File("archive.zip"), "") // "" = random id
+if err != nil {
+    return err
+}
 defer zipFS.Close()
+err = fs.Register(zipFS)
 
 err = zipFS.RootDir().ListDir(ctx, func(f fs.File) error {
     fmt.Println(f.Path())
@@ -817,13 +1008,20 @@ err = zipFS.RootDir().ListDir(ctx, func(f fs.File) error {
 })
 
 // Write a new ZIP archive
-out, err := zipfs.NewWriter(fs.File("out.zip"))
-defer out.Close()
+out, err := zipfs.NewWriter(fs.File("out.zip"), "")
+if err != nil {
+    return err
+}
+err = fs.Register(out)
+err = out.RootDir().Join("notes.txt").WriteAllString(ctx, "...")
+err = out.Close() // writes the central directory
 ```
 
-`Reader` is a `StdFileSystem` over the `io/fs.FS` of `archive/zip.Reader`;
-`Writer` writes entries sequentially.
-[zipfs/README.md](zipfs/README.md) has the details.
+`Reader` reads the entries at their offsets in the archive, in place if the
+file system of the archive has seekable readers, and decompresses them on
+demand. `Writer` buffers each file in memory until its writer is closed;
+several files can be written at the same time, and `Abort` of a writer
+discards the file. [zipfs/README.md](zipfs/README.md) has the details.
 
 ### tarfs
 
@@ -832,10 +1030,18 @@ The same for tar archives, optionally gzip compressed (`.tar.gz`, `.tgz`):
 ```go
 import "github.com/ungerik/go-fs/tarfs"
 
-tarFS, err := tarfs.NewReader(fs.File("backup.tar.gz"))
+tarFS, err := tarfs.NewReader(fs.File("backup.tar.gz"), "")
+if err != nil {
+    return err
+}
 defer tarFS.Close()
+err = fs.Register(tarFS)
 
-out, err := tarfs.NewWriter(fs.File("out.tgz"))
+out, err := tarfs.NewWriter(fs.File("out.tgz"), "")
+if err != nil {
+    return err
+}
+err = fs.Register(out)
 err = out.RootDir().Join("notes.txt").WriteAllString(ctx, "...")
 err = out.Close() // finishes the archive
 ```
@@ -847,10 +1053,10 @@ content. [tarfs/README.md](tarfs/README.md) has the details.
 
 ### multipartfs
 
-See the introduction for `multipartfs.FromRequestForm` — it wraps an
+See the introduction for `multipartfs.NewFromRequest` — it wraps an
 uploaded HTML form so files can be consumed using the regular `fs.File`
 API. `multipartfs.New` does the same for a `*multipart.Form` that was
-parsed by the caller.
+parsed by the caller. Neither registers the file system.
 
 The form fields with uploaded files are the directories of the file system,
 so it has exactly two levels. Because a path has to identify exactly one
@@ -867,25 +1073,32 @@ A fully-featured, thread-safe, in-memory file system useful for tests
 or as a cache for slower backends:
 
 ```go
-memFS, err := fs.NewMemFileSystem("/", fs.NewMemFile("hello.txt", []byte("hi")))
+memFS, err := fs.NewMemFileSystem(nil, fs.NewMemFile("hello.txt", []byte("hi")))
+if err != nil {
+    return err
+}
 defer memFS.Close()
+err = fs.Register(memFS) // a random mem://<id> prefix, isolated from other instances
 
-// Access through the global Registry using the URI prefix
-data, err := fs.File(memFS.Prefix() + "/hello.txt").ReadAll(ctx)
+data, err := memFS.RootDir().Join("hello.txt").ReadAll(ctx)
 
-// Or create a one-shot single-file FS that gives you a ready-to-use File
-ms, file, err := fs.NewSingleMemFileSystem(fs.NewMemFile("a.txt", []byte("a")))
-defer ms.Close()
+// With a fixed id, registered for the lifetime of the program
+err = fs.NewMemFileSystemAndRegister(&fs.MemFileSystemOptions{ID: "fixtures"},
+    fs.NewMemFile("a.txt", []byte("a")),
+)
+data, err = fs.File("mem://fixtures/a.txt").ReadAll(ctx)
 ```
 
-`MemFileSystem` implements nearly every optional `FileSystem`
-interface — including `RenameFileSystem`, `MoveFileSystem`,
-`WatchFileSystem`, `PermissionsFileSystem`, `UserFileSystem`,
-`GroupFileSystem`, `ListDirMaxFileSystem`, `ListDirRecursiveFileSystem`,
-`XAttrFileSystem`, and `SymbolicLinkFileSystem` — so it can stand in
-for any other backend in tests. Watch events are synthesized from
-every mutation that goes through the FS API; direct mutation of a
-`MemFile.FileData` byte slice obtained outside the API is not observable.
+`MemFileSystemOptions` sets the `ID`, the `Separator` (`/` or `\`), an
+optional `Volume` like `C:` and `ReadOnly`; nil options use a random id and
+`/`. `MemFileSystem` implements nearly every optional `FileSystem` interface
+— including `MoveFileSystem`, `CopyFileSystem`, `WatchFileSystem`,
+`PermissionsFileSystem`, `UserFileSystem`, `GroupFileSystem`,
+`ListDirRecursiveFileSystem`, `XAttrFileSystem`, and
+`SymbolicLinkFileSystem` — so it can stand in for any other backend in tests.
+The file system stores copies of the data it is given and `ReadAll` returns
+a copy, so watch events are synthesized from every mutation that goes through
+the FS API, and changing a byte slice outside of it changes nothing.
 
 Standard library file systems and sub views
 --------------------------------------------
@@ -899,8 +1112,7 @@ API:
 //go:embed templates/*
 var templates embed.FS
 
-tmplFS := fs.NewStdFileSystemAndRegister(templates, "templates")
-defer tmplFS.Close()
+err := fs.NewStdFileSystemAndRegister(templates, "templates")
 
 html, err := fs.File("stdfs://templates/templates/index.html").ReadAllString(ctx)
 ```
@@ -908,11 +1120,11 @@ html, err := fs.File("stdfs://templates/templates/index.html").ReadAllString(ctx
 `SubFileSystem` is a view of a directory of another file system as a file
 system of its own. Every operation is forwarded to the parent with
 translated paths, so the parent's native implementations are used and
-paths can't escape the directory:
+paths can't escape the directory. The parent must stay registered while the
+view is used:
 
 ```go
-subFS, err := fs.NewSubFileSystemAndRegister(fs.Local, "/srv/data", "data")
-defer subFS.Close()
+err := fs.NewSubFileSystemAndRegister(fs.Local, "/srv/data", "data")
 
 files, err := fs.File("sub://data/").ListDirMax(ctx, -1)
 err = fs.File("sub://data/report.txt").WriteAllString(ctx, "...") // writes /srv/data/report.txt
@@ -923,13 +1135,19 @@ reads fall through to the base, listings are the union, every write goes
 to the upper layer, base files modified in place are copied up first, and
 removed base entries are hidden by in-memory whiteouts. Typical uses are
 a scratch copy of embedded defaults, or tests that must not modify a
-fixture:
+fixture. Both layers must stay registered while the overlay is used:
 
 ```go
-defaults := fs.NewStdFileSystemAndRegister(embeddedConfig, "defaults")
-scratch, err := fs.NewMemFileSystem("/")
-overlay, err := fs.NewOverlayFileSystemAndRegister(defaults, scratch, "config")
-defer overlay.Close()
+defaults := fs.NewStdFileSystem(embeddedConfig, "defaults")
+err := fs.Register(defaults)
+
+scratch, err := fs.NewMemFileSystem(nil)
+if err != nil {
+    return err
+}
+err = fs.Register(scratch)
+
+err = fs.NewOverlayFileSystemAndRegister(defaults, scratch, "config")
 
 err = fs.File("overlay://config/app.json").WriteAllString(ctx, "...") // lands in scratch
 data, err := fs.File("overlay://config/schema.json").ReadAll(ctx)   // read from defaults
@@ -944,11 +1162,10 @@ A backend implements `FileSystem` (metadata, paths, `Stat`, `ListDir`,
 generic emulation in this package, to be implemented only when the backend
 can do it more efficiently. `fsimpl.PathHelper` provides the path methods
 for a URI prefix, `fsimpl.NewWriteOnCloseFileBuffer` a writer for backends
-without random access, `fsimpl.RangeReader` a seekable reader for backends
-that read with byte range requests (`webdavfs`, `azureblobfs`),
-`fsimpl.NewDirTree` a directory index for archives that have none (`tarfs`),
-and `fstest.RunConformance` verifies a backend against the contract of every
-method:
+without random access that implements `fs.WriteAborter`,
+`fsimpl.RangeReader` a seekable reader for backends that read with byte
+range requests (`webdavfs`, `azureblobfs`), and `fstest.RunConformance`
+verifies a backend against the contract of every method:
 
 ```go
 func TestMyFS(t *testing.T) {

@@ -89,12 +89,17 @@ Replace the body of `main` with this:
 func main() {
 	ctx := context.Background()
 
-	// An in-memory file system, registered under a random mem:// prefix
-	memFS, err := fs.NewMemFileSystem("/")
+	// An in-memory file system with a random mem:// prefix
+	memFS, err := fs.NewMemFileSystem(nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer memFS.Close()
+	// Register it, so that Files with its prefix resolve to it
+	err = fs.Register(memFS)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	for _, file := range []fs.File{
 		"hello.txt",                       // local disk
@@ -125,9 +130,12 @@ mem://Xk3p9QwLm2nRtY7vZbCd/hello.txt     Hello, go-fs!
 Same `WriteAllString`, same `ReadAllString`, two completely different storage
 backends. The URI prefix decided which one ran.
 
-`NewMemFileSystem` registers itself under a random `mem://<id>` prefix, so
-every instance is isolated. That is what makes it a drop-in substitute in tests
-— see [Test with MemFileSystem](howto-test-with-memfilesystem.md).
+`NewMemFileSystem` creates a file system with a random `mem://<id>` prefix,
+and `fs.Register` adds it to the registry, so that the `File` values with that
+prefix resolve to it. Every instance is isolated from every other one. That is
+what makes it a drop-in substitute in tests — see
+[Test with MemFileSystem](howto-test-with-memfilesystem.md). `Close` removes it
+from the registry again.
 
 ## Step 3: Read from an HTTP server
 
@@ -173,9 +181,10 @@ for `http://` and `https://`. Nothing else in your code changed.
 
 This is also the moment to learn the library's most important safety rule.
 Comment the import out and run it again — you do not get a mysterious local
-file named `https:/example.com`. You get an error, because **a string with a
-`://` scheme that matches no registered file system resolves to the invalid
-file system, never to a local path.**
+file named `https:/example.com`. You get an error,
+`invalid file system: no file system registered for "https://example.com/"`,
+because **a string with a `://` scheme that matches no registered file system
+resolves to the invalid file system, never to a local path.**
 
 ## Step 4: List a directory
 
@@ -237,7 +246,7 @@ err = dir.ListDir(ctx, func(f fs.File) error {
 }, "*.txt")
 
 // Slice with a hard cap; -1 means all
-files, err := dir.ListDirMax(ctx, 100, "*.txt")
+files, err = dir.ListDirMax(ctx, 100, "*.txt")
 
 // Recursive, into every sub-directory
 err = dir.ListDirRecursive(ctx, func(f fs.File) error {
@@ -245,9 +254,12 @@ err = dir.ListDirRecursive(ctx, func(f fs.File) error {
 	return nil
 })
 
-// Glob with wildcard segments
-for file, segments := range fs.MustGlob(ctx, "data/*.txt") {
-	fmt.Println(segments, file.Path())
+// Glob with a path pattern, also an iterator
+for file, err := range fs.Glob(ctx, "data/*.txt") {
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(file.Path())
 }
 ```
 
@@ -321,7 +333,7 @@ type Config struct {
 
 	cfg := Config{Name: "tutorial", Debug: true}
 
-	err = fs.File("config.json").WriteJSON(ctx, &cfg, "  ") // indented
+	err = fs.File("config.json").WriteJSONIndent(ctx, &cfg, "  ") // indented
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -338,7 +350,8 @@ type Config struct {
 {Name:tutorial Debug:true}
 ```
 
-`ReadXML` and `WriteXML` are the same for XML. Because `File` is a string type,
+`WriteJSON` writes the compact form. `ReadXML`, `WriteXML` and
+`WriteXMLIndent` are the same for XML. Because `File` is a string type,
 it also marshals as a plain string inside your own structs with no extra code:
 
 ```go
@@ -358,15 +371,15 @@ That works in JSON, XML, YAML and SQL drivers, because reflection sees
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = fs.Remove("hello.txt", "config.json") // skips missing files
+	err = fs.RemoveFiles("hello.txt", "config.json") // skips missing files
 	if err != nil {
 		log.Fatal(err)
 	}
 ```
 
-`fs.Remove` takes URIs and ignores files that are already gone, which is
-usually what cleanup wants. `file.Remove()` reports a missing file as an error;
-wrap it in `fs.RemoveErrDoesNotExist` if you would rather not care.
+`fs.RemoveFiles` ignores files that are already gone, which is usually what
+cleanup wants. `file.Remove()` reports a missing file as an error; wrap it in
+`fs.RemoveErrDoesNotExist` if you would rather not care.
 
 ## What you built
 
@@ -387,7 +400,7 @@ What you actually learned:
 
 ## Next steps
 
-- [Connect a remote backend](howto-connect-a-remote-backend.md) — S3, SFTP, SMB, WebDAV, Azure, Dropbox
+- [Connect a remote backend](howto-connect-a-remote-backend.md) — S3, SFTP, FTP, SMB, WebDAV, Azure, Dropbox
 - [Test with MemFileSystem](howto-test-with-memfilesystem.md) — make your own code testable
 - [Serve files over HTTP](howto-serve-files-over-http.md)
 - [Work with archives](howto-work-with-archives.md) — ZIP and tar as file systems

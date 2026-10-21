@@ -27,11 +27,11 @@ zipFS, err := zipfs.NewReader(fs.File("archive.zip"), "") // "" = random id
 if err != nil {
     return err
 }
+defer zipFS.Close() // also unregisters the file system
 // The File values of the archive resolve through the registry
 if err := fs.Register(zipFS); err != nil {
     return err
 }
-defer zipFS.Close() // unregisters the file system
 
 err = zipFS.RootDir().ListDirRecursive(ctx, func(f fs.File) error {
     fmt.Println(f.Path(), f.Size())
@@ -45,7 +45,8 @@ data, err := zipFS.RootDir().Join("docs", "readme.md").ReadAll(ctx)
 ```
 
 `NewReader` and `NewWriter` don't register the file system. Register it before
-you use the `fs.File` values of the archive, and `Close` it afterwards.
+you use the `fs.File` values of the archive, and `Close` it afterwards; the
+`defer` before `fs.Register` also closes it when the registration fails.
 
 `NewReader` takes a `fs.FileReader`, so the archive itself can live on any
 backend:
@@ -72,10 +73,10 @@ out, err := zipfs.NewWriter(fs.File("out.zip"), "")
 if err != nil {
     return err
 }
+defer out.Close()
 if err := fs.Register(out); err != nil {
     return err
 }
-defer out.Close()
 
 err = out.RootDir().Join("notes.txt").WriteAllString(ctx, "hello")
 if err != nil {
@@ -109,15 +110,16 @@ tarFS, err := tarfs.NewReader(fs.File("backup.tar.gz"), "")
 if err != nil {
     return err
 }
+defer tarFS.Close()
 if err := fs.Register(tarFS); err != nil {
     return err
 }
-defer tarFS.Close()
 
 out, err := tarfs.NewWriter(fs.File("out.tgz"), "")
 if err != nil {
     return err
 }
+defer out.Close()
 if err := fs.Register(out); err != nil {
     return err
 }
@@ -240,10 +242,10 @@ zipFS, err := zipfs.NewReader(fs.File("archive.zip"), "")
 if err != nil {
     return err
 }
+defer zipFS.Close()
 if err := fs.Register(zipFS); err != nil {
     return err
 }
-defer zipFS.Close()
 
 err = fs.CopyRecursive(ctx, zipFS.RootDir(), fs.File("/srv/extracted"))
 ```
@@ -258,10 +260,10 @@ zipFS, err := zipfs.NewReader(fs.File("out.zip"), "")
 if err != nil {
     return err
 }
+defer zipFS.Close()
 if err := fs.Register(zipFS); err != nil {
     return err
 }
-defer zipFS.Close()
 
 count := 0
 err = zipFS.RootDir().ListDirRecursive(ctx, func(f fs.File) error {

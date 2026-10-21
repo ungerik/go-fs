@@ -34,22 +34,28 @@ listing, plus dialing a connection.** Concretely:
 
 | Category          | Methods                                            |
 | ----------------- | -------------------------------------------------- |
-| Content transfer  | `ReadAll`, `ReadAllString`, `ReadAllContentHash`, `ReadJSON`, `ReadXML`, `WriteAll`, `WriteAllString`, `WriteJSON`, `WriteXML`, `Append`, `AppendString`, `Truncate`, `ContentHash` |
-| Directory listing | `ListDir`, `ListDirInfo`, `ListDirRecursive`, `ListDirInfoRecursive`, `ListDirMax`, `ListDirRecursiveMax`, `ListDirIter`, `ListDirRecursiveIter`, `Glob`, `MustGlob` |
+| Content transfer  | `ReadAll`, `ReadAllString`, `ReadAllContentHash`, `ReadJSON`, `ReadXML`, `WriteAll`, `WriteAllString`, `WriteJSON`, `WriteJSONIndent`, `WriteXML`, `WriteXMLIndent`, `Append`, `AppendString`, `Truncate`, `ContentHash`, `fs.ReadAll`, `fs.WriteAll` |
+| Directory listing | `ListDir`, `ListDirInfo`, `ListDirRecursive`, `ListDirInfoRecursive`, `ListDirMax`, `ListDirRecursiveMax`, `ListDirIter`, `ListDirRecursiveIter`, `Glob`, `fs.Glob` |
 | Recursive removal | `RemoveRecursive`, `RemoveDirContents`, `RemoveDirContentsRecursive` |
-| Cross-file work   | `MoveTo`, `fs.Move`, `fs.CopyFile`, `fs.CopyFileBuf`, `fs.CopyRecursive`, `fs.IdenticalFileContents`, `fs.IdenticalDirContents` |
-| Dialing           | `sftpfs.Dial`, `ftpfs.Dial`, `smbfs.Dial`, `webdavfs.New`, `s3fs.NewLoadDefaultConfig`, `dropboxfs.NewAndRegister`, … |
+| Moves and copies  | `MoveTo`, `Rename`, `Renamef`, `fs.Move`, `fs.CopyFile`, `fs.CopyFileBuf`, `fs.CopyRecursive`, `fs.IdenticalFileContents`, `fs.IdenticalDirContents` |
+| Dialing           | `sftpfs.Dial`, `ftpfs.Dial`, `smbfs.Dial`, `webdavfs.New`, `azureblobfs.New`, `dropboxfs.New`, `s3fs.NewLoadDefaultConfig`, the `EnsureRegistered` functions, … |
 
 **Does not take a context:**
 
 | Category                        | Methods                                            |
 | ------------------------------- | -------------------------------------------------- |
 | Paths                           | `Name`, `Dir`, `DirAndName`, `Path`, `URL`, `RawURI`, `Ext`, `Join`, `Joinf`, `AbsPath`, `RelPathOf`, `VolumeName`, … |
-| Metadata                        | `Stat`, `Info`, `Size`, `Exists`, `IsDir`, `IsHidden`, `Modified`, `Permissions`, `CheckExists`, `CheckIsDir` |
+| Metadata                        | `Stat`, `Lstat`, `Info`, `Size`, `Exists`, `IsDir`, `IsHidden`, `Modified`, `Permissions`, `CheckExists`, `CheckIsDir` |
 | Open                            | `OpenReader`, `OpenWriter`, `OpenAppendWriter`, `OpenReadWriter`, `OpenReadSeeker` |
 | Streaming                       | `ReadFrom`, `WriteTo` — these are `io.ReaderFrom` / `io.WriterTo`, whose signatures the standard library fixes |
-| Single-entry ops                | `Remove`, `MakeDir`, `MakeAllDirs`, `Rename`, `Renamef`, `Touch` |
+| Single-entry ops                | `Remove`, `MakeDir`, `MakeAllDirs`, `Touch`        |
 | Ownership, links, xattrs, watch | `User`, `SetUser`, `Group`, `SetGroup`, `SetPermissions`, `CreateSymbolicLink`, `ReadSymbolicLink`, `GetXAttr`, `SetXAttr`, `Watch` |
+
+`Rename` is on the context side although it renames a single entry: on a
+backend without a native move it copies the data and removes the original,
+and that copy scales with the file size. For the same reason the implementer
+interfaces `MoveFileSystem.Move` and `TruncateFileSystem.Truncate` take a
+context.
 
 ## Why open methods don't take a context
 
@@ -98,7 +104,8 @@ loop.
 
 **A stalled `Stat` cannot be cancelled.** On an unresponsive SFTP server,
 `file.Size()` blocks for the connection's timeout. Mitigation: backends set
-their own dial and operation timeouts, and `sftpfs` re-dials transparently.
+their own dial and operation timeouts, and `sftpfs` detects a dead connection
+with keep-alive requests and reconnects.
 
 **You have to know which side of the line a method is on.** The rule is
 learnable but not derivable from the method name alone — `Remove` takes no

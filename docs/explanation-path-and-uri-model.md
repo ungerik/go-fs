@@ -15,28 +15,39 @@ local file system and a program that forgot an import silently writes a local
 file named `s3:/bucket/key` instead of uploading. Hand a backend a path that
 still carries its own prefix and every path comparison inside it breaks.
 
-## Resolution: longest prefix wins
+## Resolution: the longest prefix at a boundary wins
 
-The registry maps a URI prefix to a `FileSystem`. `ParseRawURI` walks the
-registered file systems **sorted by prefix, in reverse**, so the longest
-matching prefix wins.
+The registry maps a URI prefix to a `FileSystem`. `ParseRawURI` checks the
+prefix of every registered file system, and the **longest prefix that
+matches at a boundary** wins.
+
+A URI matches a prefix only at a boundary: the URI ends after the prefix, the
+prefix ends with a slash (like `scheme://`), or the prefix is followed by a
+slash or the separator of the file system.
 
 ```
-registry sorted:  file://  invalid://  s3://bucket-a  s3://bucket-b
-scanned in reverse: s3://bucket-b, s3://bucket-a, invalid://, file://
-lookup "s3://bucket-b/key" → first prefix that matches is s3://bucket-b
+registered:          s3://logs   s3://logs-archive
+"s3://logs/key"          → s3://logs           ("/" follows the prefix)
+"s3://logs-archive/key"  → s3://logs-archive   (s3://logs is followed by "-")
+"s3://logs"              → s3://logs           (the URI ends after the prefix)
 ```
 
-That ordering is what lets two S3 buckets be registered as separate file
-systems. `s3fs` registers with the prefix `"s3://" + bucketName`, so the two
-buckets are `s3://bucket-a` and `s3://bucket-b` — different prefixes,
-different `ID()`s, and a lookup can never confuse them. If a shorter prefix
-were also registered, the longer one would still win.
+That rule is what lets two S3 buckets be registered as separate file systems.
+`s3fs` registers with the prefix `"s3://" + bucketName`, so the two buckets
+are `s3://logs` and `s3://logs-archive` — different prefixes, different
+`ID()`s, and a lookup can never confuse them, although one prefix is a string
+prefix of the other. If a shorter prefix at a boundary were also registered,
+like `s3://` alone, the longer one would still win.
 
-If no prefix matches, the *aliases* are tried. A `PrefixAliasFileSystem`
-declares extra prefixes it also answers to — typically the same prefix with the
-protocol's default port spelled out. The alias is rewritten to the canonical
+A `PrefixAliasFileSystem` declares extra prefixes it also answers to —
+typically the same prefix with the protocol's default port spelled out, like
+`sftp://user@host:22`. The aliases count in the same pass as the prefixes, so
+the longest match of either wins. The alias is rewritten to the canonical
 prefix before cleaning.
+
+Every file system must produce URIs that satisfy the boundary rule. A
+`MemFileSystem` with a volume, for example, writes a separator between its
+prefix and the volume: `mem://id/C:`.
 
 ## The rule that prevents silent local writes
 
@@ -56,35 +67,33 @@ failure it prevents is silent. Without it:
 
 ```go
 // s3fs never imported
-fs.File("s3://bucket/key.txt").WriteAllString(ctx, data)
+fs.File("s3://bucket/key.txt").WriteAll(ctx, data)
 // would create a local file "s3:/bucket/key.txt"
 ```
 
 ### What the error actually looks like
 
-The `Invalid` file system reports `ReadableWritable() = (false, false)`. The
-dispatch layer checks direction before it calls the method, so the sentinel you
-get is about direction, not about invalidity:
+Every operation of the `Invalid` file system returns an error wrapping
+`fs.ErrInvalidFileSystem` that names the URI, with a password in it replaced
+by `xxxxx`:
 
 ```go
-f := fs.File("s3://bucket/key.txt") // s3fs not imported
+f := fs.File("s3://bucket/key.txt") // s3fs not registered
 
 _, err := f.ReadAll(ctx)
-// "invalid file system: file system is write-only"
-// errors.Is(err, fs.ErrWriteOnlyFileSystem) == true
-// errors.Is(err, fs.ErrInvalidFileSystem)   == false
+// `invalid file system: no file system registered for "s3://bucket/key.txt"`
+// errors.Is(err, fs.ErrInvalidFileSystem) == true
+// errors.Is(err, os.ErrNotExist)          == false
 
 err = f.WriteAllString(ctx, "x")
-// "invalid file system: file system is read-only"
-// errors.Is(err, fs.ErrReadOnlyFileSystem) == true
+// the same error
 
-f.Exists() // false
+exists := f.Exists() // false
 ```
 
-The message text names the invalid file system, which is what you see in a log.
-The sentinel does not, so do not write `errors.Is(err, fs.ErrInvalidFileSystem)`
-against a `File` method result and expect it to fire. Check `err != nil`, or
-check the file system directly:
+The error does not wrap `os.ErrNotExist`: the file isn't missing, it can't be
+reached at all, and treating it as missing would hide the configuration error.
+Check for it before the first operation if you want a message of your own:
 
 ```go
 if _, ok := f.FileSystem().(fs.InvalidFileSystem); ok {
@@ -116,11 +125,18 @@ else:
 - absolute for the file system, starting with the separator or a volume
 
 The exception is file systems whose paths start with a host name rather than a
-root, like `httpfs`. Those set `PathHelper.Rooted = false`.
+root, like the `http://` and `https://` file systems of `httpfs`. A backend
+built on `fsimpl.PathHelper` sets `Rooted = false` for that.
 
-`Prefix() + path` is always the URI of a path. That identity is what lets
-`File` round-trip: parse to `(fileSystem, path)`, and rebuild with
-`fileSystem.Prefix() + path`.
+The URI of a path is `Prefix()` followed by the path with every `%` escaped
+as `%25` (`fsimpl.EscapeURIPath`). That is what lets `File` round-trip: parse
+to `(fileSystem, path)`, decoding the escapes, and rebuild with the prefix and
+the escaped path, so a file literally named `a%20b` keeps its name.
+
+File systems whose paths are URIs in escaped form, like the URLs of `httpfs`
+with their query strings, implement `URIFileSystem` instead. The package then
+decodes nothing and lets the file system convert between URIs and paths with
+`PathFromURI` and `URIFromPath`.
 
 A backend gets all of this for free by embedding `fsimpl.PathHelper`; see the
 [fsimpl reference](reference-fsimpl.md).
@@ -143,26 +159,32 @@ literal, which is the whole reason `File` is a string. `URL()` produces the
 `file://` form when you need a real URI; `Path()` gives the file system path;
 `RawURI()` gives the string as stored.
 
-## Registration is reference counted
+## Registration
 
-`Register` increments a count if the prefix is already registered, and
-`Unregister` decrements it and only removes the file system at zero.
+`Register` adds a file system under its prefix and its prefix aliases.
+Registering the same instance again is a no-op; a *different* instance for a
+prefix that is already held is an error wrapping `fs.ErrAlreadyRegistered`, so
+two parts of a program can't silently replace each other's file system.
+`Unregister` removes exactly the passed instance, and `Close` of a file system
+unregisters it. An empty prefix is an error, because it could never be
+resolved.
 
-This exists because several callers can independently want the same connection.
-`sftpfs.EnsureRegistered` builds directly on it: the first caller dials, the
-rest attach to the existing connection, and each gets a `free` function. The
-connection closes when the last one calls it.
+Several callers can independently want the same connection. That is what
+`fs.EnsureRegistered` is for: it returns the file system registered for a
+prefix, or creates and registers it, and counts the references. Concurrent
+calls for the same prefix share one creation, which runs without blocking the
+resolution of other URIs. Every caller gets a `free` function, and the last
+`free` unregisters and closes a file system that `EnsureRegistered` created; a
+file system registered with plain `Register` is never closed by it.
+`sftpfs.EnsureRegistered` builds directly on it:
 
 ```go
-free, err := sftpfs.EnsureRegistered(ctx, "sftp://user@host", cred, hostKey, nil)
+free, err := sftpfs.EnsureRegistered(ctx, "sftp://user@host", opts)
 if err != nil {
     return err
 }
 defer free()
 ```
-
-Registering a file system with an empty prefix panics — it could never be
-resolved, so it is a programming error, not a runtime condition.
 
 ## Trade-offs
 
@@ -171,7 +193,8 @@ resolved, so it is a programming error, not a runtime condition.
 | Longest-prefix match                | Constant-time lookup; resolution scans the sorted registry under a read lock |
 | Unmatched scheme → `Invalid`        | Being able to write a local file whose name contains `://` |
 | Local files stored without a prefix | One uniform representation for all files           |
-| Reference-counted registration      | Deterministic close at the first `Close` call      |
+| `Register` rejects a held prefix    | Replacing a registered file system without closing it first |
+| Reference counts in `EnsureRegistered` only | Sharing an instance by registering it twice |
 | Escapes decoded only for URIs       | A single uniform escaping rule                     |
 
 ## Alternatives considered
