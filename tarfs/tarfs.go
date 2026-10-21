@@ -63,7 +63,7 @@ func entryName(filePath string) string {
 
 // Reader is a read-only file system for a tar archive.
 type Reader struct {
-	fsimpl.PathHelper
+	paths fsimpl.PathHelper
 
 	mtx     sync.Mutex
 	closed  bool
@@ -73,12 +73,33 @@ type Reader struct {
 	offsets map[string]int64 // data offset of file entries by tree path
 }
 
-// NewReader opens a tar archive for reading and registers
-// the file system. The archive is scanned once to index its entries;
+// Prefix returns the URI prefix of the file system.
+func (f *Reader) Prefix() string {
+	return f.paths.URIPrefix
+}
+
+// Separator returns the path separator of the file system.
+func (f *Reader) Separator() string {
+	return f.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (f *Reader) CleanPath(uriParts ...string) string {
+	return f.paths.CleanPath(uriParts...)
+}
+
+// NewReader opens a tar archive for reading with the URI prefix
+// "tar://" + id, a random id is used if id is empty.
+// The file system is not registered, pass it to fs.Register
+// to access its files via their URIs and Close it after use. The archive is scanned once to index its entries;
 // the content of a file is read from the archive on demand.
 // A gzip compressed archive (.tar.gz, .tgz) is decompressed into
 // memory, because gzip streams can't be read at an offset.
-func NewReader(file fs.FileReader) (*Reader, error) {
+func NewReader(file fs.FileReader, id string) (*Reader, error) {
+	if id == "" {
+		id = fsimpl.RandomString()
+	}
 	reader, err := file.OpenReadSeeker()
 	if err != nil {
 		return nil, err
@@ -103,17 +124,16 @@ func NewReader(file fs.FileReader) (*Reader, error) {
 		archive, closer = bytes.NewReader(data), io.NopCloser(nil)
 	}
 	tarfs := &Reader{
-		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
-		archive:    archive,
-		closer:     closer,
-		tree:       fsimpl.NewDirTree(),
-		offsets:    make(map[string]int64),
+		paths:   fsimpl.PathHelper{URIPrefix: Prefix + id, Rooted: true},
+		archive: archive,
+		closer:  closer,
+		tree:    fsimpl.NewDirTree(),
+		offsets: make(map[string]int64),
 	}
 	err = tarfs.index()
 	if err != nil {
 		return nil, errors.Join(err, closer.Close())
 	}
-	fs.Register(tarfs)
 	return tarfs, nil
 }
 
@@ -179,13 +199,13 @@ func (f *Reader) ReadableWritable() (readable, writable bool) {
 
 // RootDir returns the root directory of the archive.
 func (f *Reader) RootDir() fs.File {
-	return fs.File(f.URIPrefix + Separator)
+	return fs.File(f.paths.URIPrefix + Separator)
 }
 
 // ID returns the URI prefix of the file system,
 // which is unique per opened archive.
 func (f *Reader) ID() string {
-	return f.URIPrefix
+	return f.paths.URIPrefix
 }
 
 // Name returns "Tar reader filesystem".
@@ -195,11 +215,11 @@ func (f *Reader) Name() string {
 
 // String returns the name of the file system and its prefix.
 func (f *Reader) String() string {
-	return f.Name() + " with prefix " + f.URIPrefix
+	return f.Name() + " with prefix " + f.paths.URIPrefix
 }
 
 func (f *Reader) file(filePath string) fs.File {
-	return fs.File(f.JoinCleanURI(filePath))
+	return fs.File(f.paths.JoinCleanURI(filePath))
 }
 
 func (f *Reader) checkClosed() error {
@@ -372,7 +392,7 @@ func (f *Reader) Close() error {
 
 // Writer is a write-only file system that writes a tar archive.
 type Writer struct {
-	fsimpl.PathHelper
+	paths fsimpl.PathHelper
 
 	mtx        sync.Mutex
 	closed     bool
@@ -381,17 +401,38 @@ type Writer struct {
 	fileWriter io.WriteCloser
 }
 
-// NewWriter creates a tar archive for writing and registers
-// the file system. The archive is gzip compressed if the file name has
+// Prefix returns the URI prefix of the file system.
+func (f *Writer) Prefix() string {
+	return f.paths.URIPrefix
+}
+
+// Separator returns the path separator of the file system.
+func (f *Writer) Separator() string {
+	return f.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (f *Writer) CleanPath(uriParts ...string) string {
+	return f.paths.CleanPath(uriParts...)
+}
+
+// NewWriter creates a tar archive for writing with the URI prefix
+// "tar://" + id, a random id is used if id is empty.
+// The file system is not registered, pass it to fs.Register
+// to access its files via their URIs. Close it to finish the archive. The archive is gzip compressed if the file name has
 // a .gz or .tgz extension. Files are buffered in memory until their
 // writer is closed, because tar needs the size before the content.
-func NewWriter(file fs.File) (*Writer, error) {
+func NewWriter(file fs.File, id string) (*Writer, error) {
+	if id == "" {
+		id = fsimpl.RandomString()
+	}
 	fileWriter, err := file.OpenWriter()
 	if err != nil {
 		return nil, err
 	}
 	tarfs := &Writer{
-		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
+		paths:      fsimpl.PathHelper{URIPrefix: Prefix + id, Rooted: true},
 		fileWriter: fileWriter,
 	}
 	var w io.Writer = fileWriter
@@ -400,7 +441,6 @@ func NewWriter(file fs.File) (*Writer, error) {
 		w = tarfs.gzipWriter
 	}
 	tarfs.tarWriter = tar.NewWriter(w)
-	fs.Register(tarfs)
 	return tarfs, nil
 }
 
@@ -412,13 +452,13 @@ func (f *Writer) ReadableWritable() (readable, writable bool) {
 
 // RootDir returns the root directory of the archive.
 func (f *Writer) RootDir() fs.File {
-	return fs.File(f.URIPrefix + Separator)
+	return fs.File(f.paths.URIPrefix + Separator)
 }
 
 // ID returns the URI prefix of the file system,
 // which is unique per created archive.
 func (f *Writer) ID() string {
-	return f.URIPrefix
+	return f.paths.URIPrefix
 }
 
 // Name returns "Tar writer filesystem".
@@ -428,7 +468,7 @@ func (f *Writer) Name() string {
 
 // String returns the name of the file system and its prefix.
 func (f *Writer) String() string {
-	return f.Name() + " with prefix " + f.URIPrefix
+	return f.Name() + " with prefix " + f.paths.URIPrefix
 }
 
 func (f *Writer) checkClosed() error {

@@ -34,7 +34,7 @@ func TestClosedFileSystem(t *testing.T) {
 	_, err = f.OpenReadWriter("/file", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = f.Move("/a", "/b")
+	err = f.Move(t.Context(), "/a", "/b")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	err = f.Remove("/file")

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fstest"
+	"github.com/ungerik/go-fs/internal/dockertest"
 )
 
 const (
@@ -31,7 +32,7 @@ var (
 
 func TestMain(m *testing.M) {
 	// Check if Docker is available
-	if !fstest.DockerAvailable() {
+	if !dockertest.Available() {
 		log.Println("Docker not available, skipping Docker-based SFTP tests")
 		dockerSFTPAvailable = false
 		os.Exit(m.Run())
@@ -56,7 +57,7 @@ func TestMain(m *testing.M) {
 	output, err := buildCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to build Docker image: %v\nOutput: %s", err, output)
-		fstest.DockerSetupFailed("SFTP")
+		dockertest.SetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}
@@ -73,7 +74,7 @@ func TestMain(m *testing.M) {
 	output, err = runCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to start Docker container: %v\nOutput: %s", err, output)
-		fstest.DockerSetupFailed("SFTP")
+		dockertest.SetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}
@@ -107,7 +108,7 @@ func TestMain(m *testing.M) {
 		// Cleanup before exit
 		exec.Command("docker", "stop", testContainerName).Run()
 		exec.Command("docker", "rm", testContainerName).Run()
-		fstest.DockerSetupFailed("SFTP")
+		dockertest.SetupFailed("SFTP")
 		os.Exit(m.Run())
 		return
 	}

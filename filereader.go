@@ -65,10 +65,10 @@ type FileReader interface {
 	// OpenReader opens the file and returns a ReadCloser that has to be closed after reading
 	OpenReader() (ReadCloser, error)
 
-	// OpenReadSeeker opens the file and returns a ReadSeekCloser.
+	// OpenReadSeeker opens the file and returns a ReadAtSeekCloser.
 	// Use OpenReader if seeking is not necessary because implementations
 	// may need additional buffering to support seeking or not support it at all.
-	OpenReadSeeker() (ReadSeekCloser, error)
+	OpenReadSeeker() (ReadAtSeekCloser, error)
 
 	// ReadJSON reads and unmarshalles the JSON content of the file to output.
 	ReadJSON(ctx context.Context, output any) error

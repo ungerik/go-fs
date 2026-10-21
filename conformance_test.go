@@ -27,7 +27,7 @@ func TestLocalFileSystem_Conformance(t *testing.T) {
 func TestMemFileSystem_Conformance(t *testing.T) {
 	for _, sep := range []string{`/`, `\`} {
 		t.Run("separator "+sep, func(t *testing.T) {
-			memFS, err := fs.NewMemFileSystem(sep)
+			memFS, err := fs.RegisteredTestMemFileSystem(&fs.MemFileSystemOptions{Separator: sep})
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, memFS.Close()) })
 

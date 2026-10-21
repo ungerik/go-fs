@@ -71,13 +71,14 @@ func newFormRequest(t *testing.T, uploads []upload, values map[string]string) *h
 // that is closed at the end of the test.
 func newTestFS(t *testing.T, uploads []upload, values map[string]string) *MultipartFileSystem {
 	t.Helper()
-	multipartFS, err := FromRequestForm(newFormRequest(t, uploads, values), 1<<20)
-	require.NoError(t, err, "FromRequestForm")
+	multipartFS, err := NewFromRequest(newFormRequest(t, uploads, values), 1<<20, "")
+	require.NoError(t, err, "NewFromRequest")
+	require.NoError(t, fs.Register(multipartFS))
 	t.Cleanup(func() { _ = multipartFS.Close() })
 	return multipartFS
 }
 
-func TestFromRequestForm(t *testing.T) {
+func TestNewFromRequest(t *testing.T) {
 	uploads := []upload{
 		{field: "files", name: "hello.txt", content: "Hello, World!"},
 		{field: "files", name: "empty.txt", content: ""},
@@ -131,9 +132,9 @@ func TestFromRequestForm(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist, "a directory has no file header")
 }
 
-func TestFromRequestForm_noMultipart(t *testing.T) {
+func TestNewFromRequest_noMultipart(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/upload", bytes.NewReader([]byte("not a form")))
-	_, err := FromRequestForm(request, 1<<20)
+	_, err := NewFromRequest(request, 1<<20, "")
 	assert.Error(t, err, "parsing must fail instead of returning an empty file system")
 }
 
@@ -146,7 +147,9 @@ func TestNew(t *testing.T) {
 	form, err := multipart.NewReader(body, params["boundary"]).ReadForm(1 << 20)
 	require.NoError(t, err)
 
-	multipartFS := New(form)
+	multipartFS, err := New(form, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(multipartFS))
 	defer func() { _ = multipartFS.Close() }()
 
 	assert.Same(t, form, multipartFS.Form)
@@ -154,7 +157,8 @@ func TestNew(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "A", string(data))
 
-	assert.Panics(t, func() { New(nil) }, "a nil form would panic on every later call")
+	_, err = New(nil, "")
+	assert.Error(t, err, "a nil form would panic on every later call")
 }
 
 func TestUniqueFileNames(t *testing.T) {
@@ -268,10 +272,11 @@ func TestListDirErrors(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	multipartFS, err := FromRequestForm(newFormRequest(t, []upload{
+	multipartFS, err := NewFromRequest(newFormRequest(t, []upload{
 		{field: "files", name: "a.txt", content: "A"},
-	}, nil), 1<<20)
-	require.NoError(t, err)
+	}, nil), 1<<20, "")
+	require.NoError(t, err, "NewFromRequest")
+	require.NoError(t, fs.Register(multipartFS))
 	filePath := multipartFS.CleanPath("files", "a.txt")
 
 	require.NoError(t, multipartFS.Close())

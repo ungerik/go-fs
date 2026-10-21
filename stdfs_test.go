@@ -19,7 +19,8 @@ func TestStdFS(t *testing.T) {
 			"sub/b.txt":   {Data: []byte("b")},
 			"sub/.hidden": {Data: []byte("h")},
 		}
-		stdFS := NewStdFileSystemAndRegister(fixture, "")
+		stdFS := NewStdFileSystem(fixture, "")
+		require.NoError(t, Register(stdFS))
 		t.Cleanup(func() { _ = stdFS.Close() })
 		require.NoError(t, fstest.TestFS(stdFS.RootDir().StdFS(), "a.txt", "sub/b.txt", "sub/.hidden"))
 	})
@@ -53,7 +54,8 @@ func TestStdFSDirFileClose(t *testing.T) {
 		"dir/a.txt": &fstest.MapFile{Data: []byte("a")},
 		"dir/b.txt": &fstest.MapFile{Data: []byte("b")},
 	}
-	stdFS := NewStdFileSystemAndRegister(mapFS, "")
+	stdFS := NewStdFileSystem(mapFS, "")
+	require.NoError(t, Register(stdFS))
 	t.Cleanup(func() { _ = stdFS.Close() })
 
 	dir, err := stdFS.RootDir().StdFS().Open("dir")

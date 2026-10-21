@@ -99,29 +99,6 @@ func TestPathHelper_Split(t *testing.T) {
 	assert.Equal(t, "b", name)
 }
 
-func TestPathHelper_AbsPath(t *testing.T) {
-	rooted := PathHelper{URIPrefix: "s3://bucket", Rooted: true}
-	assert.True(t, rooted.IsAbsPath("/a"))
-	assert.False(t, rooted.IsAbsPath("a"))
-	assert.Equal(t, "/a/b", rooted.AbsPath("a/../a/b"))
-	assert.Equal(t, "/a/b", rooted.AbsPath(rooted.AbsPath("a/b")), "AbsPath must be idempotent")
-
-	unrooted := PathHelper{URIPrefix: "http://"}
-	assert.True(t, unrooted.IsAbsPath("http://example.com/a"))
-	assert.False(t, unrooted.IsAbsPath("example.com/a"))
-	assert.Equal(t, "http://example.com/a", unrooted.AbsPath("example.com/a"))
-	assert.Equal(t, "http://example.com/a", unrooted.AbsPath("http://example.com/a"))
-}
-
-func TestPathHelper_IsHidden(t *testing.T) {
-	h := PathHelper{URIPrefix: "s3://bucket", Rooted: true}
-	assert.True(t, h.IsHidden("/a/.hidden"))
-	assert.True(t, h.IsHidden(".hidden"))
-	assert.False(t, h.IsHidden("/a/visible"))
-	assert.False(t, h.IsHidden("/.a/visible"))
-	assert.False(t, h.IsHidden("/"))
-}
-
 func TestPathHelper_Defaults(t *testing.T) {
 	h := PathHelper{URIPrefix: "x://"}
 	require.Equal(t, "/", h.Separator())

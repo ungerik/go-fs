@@ -18,6 +18,7 @@ import (
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 	"github.com/ungerik/go-fs/fstest"
+	"github.com/ungerik/go-fs/internal/dockertest"
 )
 
 const (
@@ -37,7 +38,7 @@ var dockerAzuriteAvailable bool
 // Tests are skipped when Docker is not available and fail when it is
 // available but the emulator can't be started.
 func TestMain(m *testing.M) {
-	if !fstest.DockerAvailable() {
+	if !dockertest.Available() {
 		log.Println("Docker not available, skipping Docker-based Azure Blob tests")
 		os.Exit(m.Run())
 	}
@@ -59,7 +60,7 @@ func TestMain(m *testing.M) {
 	output, err := runCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to start Docker container: %v\nOutput: %s", err, output)
-		fstest.DockerSetupFailed("Azurite")
+		dockertest.SetupFailed("Azurite")
 		os.Exit(m.Run())
 	}
 
@@ -84,7 +85,7 @@ func TestMain(m *testing.M) {
 	if !dockerAzuriteAvailable {
 		exec.Command("docker", "stop", testContainerName).Run()
 		exec.Command("docker", "rm", testContainerName).Run()
-		fstest.DockerSetupFailed("Azurite")
+		dockertest.SetupFailed("Azurite")
 		os.Exit(m.Run())
 	}
 

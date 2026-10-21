@@ -15,6 +15,7 @@ import (
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 	"github.com/ungerik/go-fs/fstest"
+	"github.com/ungerik/go-fs/internal/dockertest"
 )
 
 const (
@@ -34,7 +35,7 @@ var (
 // for the test user. Tests are skipped when Docker is not available and
 // fail when it is available but the server can't be started.
 func TestMain(m *testing.M) {
-	if !fstest.DockerAvailable() {
+	if !dockertest.Available() {
 		log.Println("Docker not available, skipping Docker-based SMB tests")
 		os.Exit(m.Run())
 	}
@@ -58,7 +59,7 @@ func TestMain(m *testing.M) {
 	output, err := runCmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to start Docker container: %v\nOutput: %s", err, output)
-		fstest.DockerSetupFailed("Samba")
+		dockertest.SetupFailed("Samba")
 		os.Exit(m.Run())
 	}
 
@@ -79,7 +80,7 @@ func TestMain(m *testing.M) {
 	if !dockerSMBAvailable {
 		exec.Command("docker", "stop", testContainerName).Run()
 		exec.Command("docker", "rm", testContainerName).Run()
-		fstest.DockerSetupFailed("Samba")
+		dockertest.SetupFailed("Samba")
 		os.Exit(m.Run())
 	}
 
@@ -153,18 +154,19 @@ func TestClosedFileSystem(t *testing.T) {
 	_, err = f.ReadAll(ctx, "/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.WriteAll(ctx, "/file", []byte("x"), 0), fs.ErrFileSystemClosed)
-	assert.ErrorIs(t, f.Truncate("/file", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.Truncate(t.Context(), "/file", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.Touch("/file", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.MakeDir("/dir", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.MakeAllDirs("/dir/sub", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.SetPermissions("/file", 0), fs.ErrFileSystemClosed)
-	assert.ErrorIs(t, f.Move("/a", "/b"), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, f.Move(t.Context(), "/a", "/b"), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.Remove("/file"), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.RemoveAll(ctx, "/dir"), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.CreateSymbolicLink("/a", "/link"), fs.ErrFileSystemClosed)
 	_, err = f.ReadSymbolicLink("/link")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
-	assert.False(t, f.IsSymbolicLink("/file"), "a closed file system has no symbolic links")
+	_, err = f.Lstat("/file")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	// Close on an already-closed file system is a safe no-op
 	// that must not touch the released connection.

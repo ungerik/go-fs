@@ -62,7 +62,7 @@ func TestNew_Errors(t *testing.T) {
 }
 
 // TestRangedRead verifies that seeking issues Range requests
-// and that the reader implements fs.ReadSeekCloser.
+// and that the reader implements fs.ReadAtSeekCloser.
 func TestRangedRead(t *testing.T) {
 	ctx := t.Context()
 	srv := newTestServer(t, "")

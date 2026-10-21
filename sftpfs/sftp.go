@@ -65,7 +65,7 @@ var (
 func init() {
 	// Register with prefix sftp:// for URLs with
 	// sftp://username:password@host:port schema.
-	fs.Register(&fileSystem{PathHelper: pathHelper(Prefix)})
+	_ = fs.Register(&fileSystem{PathHelper: pathHelper(Prefix)})
 }
 
 // CredentialsCallback is called by Dial to get the username and password for a SFTP connection.
@@ -207,7 +207,9 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 	if err != nil {
 		return nil, err
 	}
-	fs.Register(fileSystem)
+	if err = fs.Register(fileSystem); err != nil {
+		return nil, errors.Join(err, fileSystem.Close())
+	}
 	return fileSystem, nil
 }
 
@@ -224,27 +226,13 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	if err != nil {
 		return nop, err
 	}
-	if f := fs.GetFileSystemByPrefixOrNil(prefix); f != nil {
-		fs.Register(f) // increase ref count
-		return func() error { return f.Close() }, nil
-	}
-
-	newFS, err := dialPrepared(ctx, u, username, password, prefix, address, credentialsCallback, hostKeyCallback, connLogger)
+	_, free, err = fs.EnsureRegistered(ctx, prefix, func(ctx context.Context) (fs.FileSystem, error) {
+		return dialPrepared(ctx, u, username, password, prefix, address, credentialsCallback, hostKeyCallback, connLogger)
+	})
 	if err != nil {
 		return nop, err
 	}
-	// Register dedups by prefix. If another caller registered a file system
-	// with the same prefix while we were dialing, our freshly dialed connection
-	// is redundant: close it and hand back a free that only drops the ref count
-	// of the file system that actually won the race. The returned free is always
-	// ref-count aware (it closes the connection only when the last reference is
-	// released), so it can never close a file system another caller still holds.
-	fs.Register(newFS)
-	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != newFS {
-		_ = newFS.(*fileSystem).closeConn()
-		return func() error { return registered.Close() }, nil
-	}
-	return func() error { return newFS.Close() }, nil
+	return free, nil
 }
 
 func nop() error { return nil }
@@ -499,7 +487,7 @@ func (f *fileSystem) stat(client *sftp.Client, clientPath, filePath string) (*fs
 			return nil, err
 		}
 	}
-	fileInfo := fs.NewFileInfo(f.JoinCleanFile(filePath), info, f.IsHidden(filePath))
+	fileInfo := fs.NewFileInfo(f.JoinCleanFile(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
 	fileInfo.IsSymlink = linkInfo.Mode()&os.ModeSymlink != 0
 	return fileInfo, nil
 }
@@ -537,7 +525,7 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 			if !match {
 				continue
 			}
-			err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, info.Name()), info, f.IsHidden(info.Name())))
+			err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, info.Name()), info, strings.HasPrefix(info.Name(), ".")))
 			if err != nil {
 				return err
 			}
@@ -574,7 +562,7 @@ func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patte
 			}
 			// The walker path is below clientPath, map it back below dirPath
 			rel := strings.TrimPrefix(walker.Path(), clientPath)
-			err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, rel), info, f.IsHidden(info.Name())))
+			err = callback(fs.NewFileInfo(f.JoinCleanFile(dirPath, rel), info, strings.HasPrefix(info.Name(), ".")))
 			if err != nil {
 				return err
 			}
@@ -636,8 +624,8 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 	return f.openFile(filePath, os.O_RDWR|os.O_CREATE, perm)
 }
 
-func (f *fileSystem) Truncate(filePath string, size int64) error {
-	return f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+func (f *fileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
+	return f.do(ctx, filePath, func(client *sftp.Client, clientPath string) error {
 		return client.Truncate(clientPath, size)
 	})
 }
@@ -718,13 +706,13 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 // cleaning, Move returns nil without contacting the server, matching the
 // no-op behavior required by the [fs.MoveFileSystem] contract. (Many SFTP
 // servers would otherwise reject the rename with a "file exists" error.)
-func (f *fileSystem) Move(filePath string, destPath string) error {
+func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	filePath = path.Clean(filePath)
 	destPath = path.Clean(destPath)
 	if filePath == destPath {
 		return nil
 	}
-	return f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
+	return f.do(ctx, filePath, func(client *sftp.Client, clientPath string) error {
 		// clientPath is the URL path for the plain prefix file system,
 		// the destination path has the same URL form and needs the
 		// same translation
@@ -802,17 +790,22 @@ func removeAll(ctx context.Context, client *sftp.Client, path string, info os.Fi
 	return client.RemoveDirectory(path)
 }
 
-func (f *fileSystem) IsSymbolicLink(filePath string) bool {
-	var isLink bool
+// Lstat returns the FileInfo of the file without following a symbolic link.
+func (f *fileSystem) Lstat(filePath string) (*fs.FileInfo, error) {
+	var fileInfo *fs.FileInfo
 	err := f.do(context.Background(), filePath, func(client *sftp.Client, clientPath string) error {
 		info, err := client.Lstat(clientPath)
 		if err != nil {
 			return err
 		}
-		isLink = info.Mode()&os.ModeSymlink != 0
+		fileInfo = fs.NewFileInfo(f.JoinCleanFile(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
+		fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
 		return nil
 	})
-	return err == nil && isLink
+	if err != nil {
+		return nil, err
+	}
+	return fileInfo, nil
 }
 
 func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
@@ -843,9 +836,7 @@ func (f *fileSystem) Close() error {
 	if alreadyClosed {
 		return nil // already closed or the plain prefix file system
 	}
-	if fs.Unregister(f) > 0 {
-		return nil // still referenced by another caller
-	}
+	fs.Unregister(f)
 	return f.closeConn()
 }
 

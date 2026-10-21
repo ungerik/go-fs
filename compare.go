@@ -25,12 +25,12 @@ func IdenticalFileContents(ctx context.Context, files ...FileReader) (identical 
 		return false, fmt.Errorf("need at least 2 files to compare, got %d", len(files))
 	}
 	if !files[0].Exists() {
-		return false, NewErrDoesNotExistFileReader(files[0])
+		return false, NewErrDoesNotExist(files[0])
 	}
 	size := files[0].Size()
 	for _, file := range files[1:] {
 		if !file.Exists() {
-			return false, NewErrDoesNotExistFileReader(file)
+			return false, NewErrDoesNotExist(file)
 		}
 		if file.Size() != size {
 			return false, nil

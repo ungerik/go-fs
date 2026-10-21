@@ -16,8 +16,9 @@ func TestConformance(t *testing.T) {
 	zipFile := tempDir.Join("conformance.zip")
 
 	t.Run("Writer", func(t *testing.T) {
-		writer, err := NewWriter(zipFile)
+		writer, err := NewWriter(zipFile, "")
 		require.NoError(t, err, "NewWriter")
+		require.NoError(t, fs.Register(writer))
 
 		// The writer is write-only: the suite writes the seed
 		// and checks that reads are rejected, then closes the archive.
@@ -32,8 +33,9 @@ func TestConformance(t *testing.T) {
 			// Running without the Writer subtest
 			writeSeedArchive(t, zipFile, "/seed")
 		}
-		reader, err := NewReader(zipFile)
+		reader, err := NewReader(zipFile, "")
 		require.NoError(t, err, "NewReader")
+		require.NoError(t, fs.Register(reader))
 
 		fstest.RunConformance(t, reader, fstest.Config{
 			Prefix:  reader.Prefix(),
@@ -45,8 +47,9 @@ func TestConformance(t *testing.T) {
 // writeSeedArchive writes the default seed below dir into a new ZIP archive.
 func writeSeedArchive(t *testing.T, zipFile fs.File, dir string) {
 	t.Helper()
-	writer, err := NewWriter(zipFile)
+	writer, err := NewWriter(zipFile, "")
 	require.NoError(t, err, "NewWriter")
+	require.NoError(t, fs.Register(writer))
 	for name, content := range fstest.DefaultSeed() {
 		w, err := writer.OpenWriter(writer.CleanPath(dir, name), 0)
 		require.NoError(t, err, "OpenWriter")

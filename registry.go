@@ -2,7 +2,9 @@ package fs
 
 import (
 	"cmp"
+	"context"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -23,73 +25,245 @@ var (
 
 	// Invalid is the file system of files with an unknown or
 	// unregistered prefix. Every operation on it returns
-	// ErrInvalidFileSystem.
+	// an error wrapping ErrInvalidFileSystem.
 	Invalid InvalidFileSystem
 )
 
-type fsCount struct {
+// registryEntry is a registered file system.
+// refs counts the references acquired with EnsureRegistered,
+// owned is true if EnsureRegistered created the file system,
+// so the last free closes it.
+type registryEntry struct {
 	fs    FileSystem
-	count int
+	refs  int
+	owned bool
+}
+
+// registryCall is an in-flight create call of EnsureRegistered
+// that concurrent callers for the same prefix wait for.
+type registryCall struct {
+	done chan struct{}
+	fs   FileSystem
+	err  error
 }
 
 var (
-	registry       = make(map[string]*fsCount, 2)
+	registry       = make(map[string]*registryEntry, 2) // key is the prefix or a prefix alias
 	registrySorted = make([]FileSystem, 0, 2)
+	registryCalls  = make(map[string]*registryCall)
 	registryMtx    sync.RWMutex
 )
 
 func init() {
-	Register(Local)
-	Register(Invalid)
+	_ = Register(Local)
+	_ = Register(Invalid)
 }
 
-// Register adds a file system or increments its reference count
-// if it is already registered.
-// The function returns the reference file system's reference count.
-func Register(fs FileSystem) int {
-	prefix := fs.Prefix()
-	if prefix == "" {
-		panic(fmt.Sprintf("file system with empty prefix: %#v", fs))
+// fsPrefixes returns the prefix and the prefix aliases of fileSystem.
+func fsPrefixes(fileSystem FileSystem) []string {
+	prefixes := []string{fileSystem.Prefix()}
+	if aliasFS, ok := fileSystem.(PrefixAliasFileSystem); ok {
+		for _, alias := range aliasFS.PrefixAliases() {
+			if alias != "" && !slices.Contains(prefixes, alias) {
+				prefixes = append(prefixes, alias)
+			}
+		}
+	}
+	return prefixes
+}
+
+// sameFileSystem compares two file systems by identity
+// without panicking for values of non-comparable types.
+func sameFileSystem(a, b FileSystem) (same bool) {
+	defer func() {
+		if recover() != nil {
+			same = false
+		}
+	}()
+	return a == b
+}
+
+// Register adds a file system to the registry under its prefix
+// and its prefix aliases (see PrefixAliasFileSystem), so that
+// Files with URIs starting with one of them use the file system.
+//
+// Registering the same file system again is a no-op.
+// An error wrapping ErrAlreadyRegistered is returned
+// if another file system is registered with the same
+// prefix or one of the prefix aliases.
+func Register(fileSystem FileSystem) error {
+	if fileSystem == nil {
+		return fmt.Errorf("can't register nil file system")
+	}
+	prefixes := fsPrefixes(fileSystem)
+	if prefixes[0] == "" {
+		return fmt.Errorf("can't register file system with empty prefix: %s", fileSystem)
 	}
 
 	registryMtx.Lock()
 	defer registryMtx.Unlock()
 
-	if regFS, ok := registry[prefix]; ok {
-		regFS.count++
-		return regFS.count
-	}
+	return registerLocked(&registryEntry{fs: fileSystem}, prefixes)
+}
 
-	registry[prefix] = &fsCount{fs, 1}
-	registrySorted = append(registrySorted, fs)
+func registerLocked(entry *registryEntry, prefixes []string) error {
+	for _, prefix := range prefixes {
+		if existing, ok := registry[prefix]; ok {
+			if sameFileSystem(existing.fs, entry.fs) {
+				return nil // Already registered
+			}
+			return fmt.Errorf("%w: %s by %s", ErrAlreadyRegistered, redactURI(prefix), existing.fs)
+		}
+	}
+	for _, prefix := range prefixes {
+		registry[prefix] = entry
+	}
+	registrySorted = append(registrySorted, entry.fs)
 	slices.SortFunc(registrySorted, func(a, b FileSystem) int { return cmp.Compare(a.Prefix(), b.Prefix()) })
-	return 1
+	return nil
 }
 
-// Unregister a file system decrements its reference count
-// and removes it when the reference count reaches 0.
-// If the file system is not registered, -1 is returned.
-func Unregister(fs FileSystem) int {
-	prefix := fs.Prefix()
-	if prefix == "" {
-		panic(fmt.Sprintf("file system with empty prefix: %#v", fs))
+// Unregister removes a file system from the registry
+// and reports if it was registered.
+//
+// Only the passed file system instance is removed,
+// another file system registered with the same prefix stays registered.
+// File systems usually unregister themselves in their Close method.
+func Unregister(fileSystem FileSystem) bool {
+	if fileSystem == nil {
+		return false
 	}
 
 	registryMtx.Lock()
 	defer registryMtx.Unlock()
 
-	regFS, ok := registry[prefix]
-	if !ok {
-		return -1
+	return unregisterLocked(fileSystem)
+}
+
+func unregisterLocked(fileSystem FileSystem) bool {
+	found := false
+	for prefix, entry := range registry {
+		if sameFileSystem(entry.fs, fileSystem) {
+			delete(registry, prefix)
+			found = true
+		}
 	}
-	if regFS.count <= 1 {
-		delete(registry, prefix)
-		registrySorted = slices.DeleteFunc(registrySorted, func(f FileSystem) bool { return f == regFS.fs })
-		return 0
+	if found {
+		registrySorted = slices.DeleteFunc(registrySorted, func(f FileSystem) bool { return sameFileSystem(f, fileSystem) })
+	}
+	return found
+}
+
+// EnsureRegistered returns the file system registered with prefix,
+// or calls create to create it and registers it.
+//
+// Concurrent calls for the same prefix share one call of create,
+// which runs without blocking the resolution of other URIs.
+// While waiting for another call of create, the passed ctx is honored.
+// The file system returned by create must have the passed prefix.
+//
+// Every successful call must be paired with a call of the returned free function,
+// which is safe to call more than once. When the last reference is freed,
+// a file system created by EnsureRegistered is unregistered and closed.
+// A file system that was registered with Register is never closed by free.
+// Closing the file system directly unregisters it,
+// later calls of free don't do anything then.
+func EnsureRegistered(ctx context.Context, prefix string, create func(context.Context) (FileSystem, error)) (fileSystem FileSystem, free func() error, err error) {
+	if prefix == "" {
+		return nil, nil, fmt.Errorf("EnsureRegistered: empty prefix")
+	}
+	for {
+		if err = ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		registryMtx.Lock()
+		if entry, ok := registry[prefix]; ok {
+			entry.refs++
+			registryMtx.Unlock()
+			return entry.fs, entryFreeFunc(entry), nil
+		}
+		call, inFlight := registryCalls[prefix]
+		if !inFlight {
+			call = &registryCall{done: make(chan struct{})}
+			registryCalls[prefix] = call
+			registryMtx.Unlock()
+			return ensureRegisteredCreate(ctx, prefix, call, create)
+		}
+		registryMtx.Unlock()
+
+		// Wait for the in-flight create call of another goroutine,
+		// then try again to get its registered file system
+		select {
+		case <-call.done:
+			if call.err != nil {
+				return nil, nil, call.err
+			}
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
+}
+
+func ensureRegisteredCreate(ctx context.Context, prefix string, call *registryCall, create func(context.Context) (FileSystem, error)) (fileSystem FileSystem, free func() error, err error) {
+	defer func() {
+		registryMtx.Lock()
+		delete(registryCalls, prefix)
+		registryMtx.Unlock()
+		call.err = err
+		close(call.done)
+	}()
+
+	fileSystem, err = create(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if fileSystem.Prefix() != prefix {
+		err = fmt.Errorf("EnsureRegistered: created file system has prefix %s instead of %s", redactURI(fileSystem.Prefix()), redactURI(prefix))
+		return nil, nil, joinCloseErr(err, fileSystem)
 	}
 
-	regFS.count--
-	return regFS.count
+	entry := &registryEntry{fs: fileSystem, refs: 1, owned: true}
+	registryMtx.Lock()
+	err = registerLocked(entry, fsPrefixes(fileSystem))
+	registryMtx.Unlock()
+	if err != nil {
+		return nil, nil, joinCloseErr(err, fileSystem)
+	}
+	call.fs = fileSystem
+	return fileSystem, entryFreeFunc(entry), nil
+}
+
+func joinCloseErr(err error, fileSystem FileSystem) error {
+	if closeErr := fileSystem.Close(); closeErr != nil {
+		return fmt.Errorf("%w (close error: %w)", err, closeErr)
+	}
+	return err
+}
+
+// entryFreeFunc returns the free function of a reference
+// to entry acquired by EnsureRegistered.
+func entryFreeFunc(entry *registryEntry) func() error {
+	var once sync.Once
+	return func() (err error) {
+		once.Do(func() {
+			registryMtx.Lock()
+			if registry[entry.fs.Prefix()] != entry {
+				// Unregistered meanwhile, for example by Close
+				registryMtx.Unlock()
+				return
+			}
+			entry.refs--
+			closeFS := entry.refs <= 0 && entry.owned
+			if closeFS {
+				unregisterLocked(entry.fs)
+			}
+			registryMtx.Unlock()
+			if closeFS {
+				err = entry.fs.Close()
+			}
+		})
+		return err
+	}
 }
 
 // RegisteredFileSystems returns the registered file systems
@@ -101,31 +275,30 @@ func RegisteredFileSystems() []FileSystem {
 	return slices.Clone(registrySorted)
 }
 
-// IsRegistered returns true if the file system is registered
-// with its prefix.
-func IsRegistered(fs FileSystem) bool {
-	if fs == nil {
+// IsRegistered returns true if the passed file system instance is registered.
+func IsRegistered(fileSystem FileSystem) bool {
+	if fileSystem == nil {
 		return false
 	}
 
 	registryMtx.RLock()
 	defer registryMtx.RUnlock()
 
-	_, ok := registry[fs.Prefix()]
-	return ok
+	entry, ok := registry[fileSystem.Prefix()]
+	return ok && sameFileSystem(entry.fs, fileSystem)
 }
 
 // GetFileSystemByPrefixOrNil returns the file system registered
-// with the passed prefix, or nil if it can't be found.
+// with the passed prefix or prefix alias, or nil if it can't be found.
 func GetFileSystemByPrefixOrNil(prefix string) FileSystem {
 	registryMtx.RLock()
 	defer registryMtx.RUnlock()
 
-	f, ok := registry[prefix]
+	entry, ok := registry[prefix]
 	if !ok {
 		return nil
 	}
-	return f.fs
+	return entry.fs
 }
 
 // GetFileSystem returns a FileSystem for the passed URI.
@@ -139,8 +312,43 @@ func GetFileSystem(uriParts ...string) FileSystem {
 	return fs
 }
 
+// prefixMatchLen returns the length of prefix if uri starts with it
+// at a boundary, or -1. The prefix matches at a boundary if uri ends after
+// the prefix, the prefix ends with a slash (like "scheme://"),
+// or the prefix is followed by a slash or the separator of the file system.
+// So "s3://logs" matches "s3://logs/key" but not "s3://logs-archive/key".
+func prefixMatchLen(uri, prefix, separator string) int {
+	if prefix == "" || !strings.HasPrefix(uri, prefix) {
+		return -1
+	}
+	rest := uri[len(prefix):]
+	switch {
+	case rest == "",
+		strings.HasSuffix(prefix, "/"),
+		strings.HasPrefix(rest, "/"),
+		separator != "" && strings.HasPrefix(rest, separator):
+		return len(prefix)
+	}
+	return -1
+}
+
+// fsPrefixMatchLen returns the length of the longest prefix
+// or prefix alias of fileSystem that uri starts with at a boundary, or -1.
+func fsPrefixMatchLen(fileSystem FileSystem, uri string) int {
+	longest := -1
+	separator := fileSystem.Separator()
+	for _, prefix := range fsPrefixes(fileSystem) {
+		longest = max(longest, prefixMatchLen(uri, prefix, separator))
+	}
+	return longest
+}
+
 // ParseRawURI returns a FileSystem for the passed URI and the clean path within that file system.
 // Returns the local file system if no other file system could be identified.
+//
+// The registered file system with the longest prefix or prefix alias
+// that the URI starts with at a boundary is used: the prefix "s3://logs"
+// matches "s3://logs/key" but not "s3://logs-archive/key".
 //
 // URL escapes in a URI that carries a scheme are decoded, a scheme-less
 // local path is used verbatim, so a local file literally named "a%20b" is reachable.
@@ -151,22 +359,17 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	registryMtx.RLock()
 	defer registryMtx.RUnlock()
 
-	// Find fs with longest matching prefix
-	// by iterating in reverse order of sorted registry
-	for _, fs = range slices.Backward(registrySorted) {
-		if strings.HasPrefix(uri, fs.Prefix()) {
-			return fs, uriPath(fs, uri)
+	var (
+		bestFS  FileSystem
+		bestLen = -1
+	)
+	for _, fs = range registrySorted {
+		if n := fsPrefixMatchLen(fs, uri); n > bestLen {
+			bestFS, bestLen = fs, n
 		}
 	}
-	// Then try the prefix aliases of the registered file systems
-	for _, fs = range slices.Backward(registrySorted) {
-		if aliasFS, ok := fs.(PrefixAliasFileSystem); ok {
-			for _, alias := range aliasFS.PrefixAliases() {
-				if strings.HasPrefix(uri, alias) {
-					return fs, uriPath(fs, uri)
-				}
-			}
-		}
+	if bestFS != nil {
+		return bestFS, uriPath(bestFS, uri)
 	}
 
 	// No registered file system matched.
@@ -191,20 +394,30 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 // or one of its prefix aliases is trimmed and the URL escapes
 // of the rest are decoded, see [fsimpl.UnescapeURIPath].
 // A uri without such a prefix is a path that is only cleaned.
+// File systems implementing URIFileSystem map the URI themselves.
 func uriPath(fileSystem FileSystem, uri string) string {
-	prefixLen := -1
-	if prefix := fileSystem.Prefix(); strings.HasPrefix(uri, prefix) {
-		prefixLen = len(prefix)
-	}
-	if aliasFS, ok := fileSystem.(PrefixAliasFileSystem); ok {
-		for _, alias := range aliasFS.PrefixAliases() {
-			if len(alias) > prefixLen && strings.HasPrefix(uri, alias) {
-				prefixLen = len(alias)
-			}
-		}
-	}
+	prefixLen := fsPrefixMatchLen(fileSystem, uri)
 	if prefixLen < 0 {
 		return fileSystem.CleanPath(uri)
 	}
+	if u, ok := fileSystem.(URIFileSystem); ok {
+		return u.PathFromURI(uri)
+	}
 	return fileSystem.CleanPath(fileSystem.Prefix() + fsimpl.UnescapeURIPath(uri[prefixLen:]))
+}
+
+// redactURI returns uri with the password of its user info replaced
+// by "xxxxx", so that the URI can be used in error messages and logs.
+func redactURI(uri string) string {
+	if !strings.Contains(uri, "@") {
+		return uri
+	}
+	u, err := url.Parse(uri)
+	if err != nil || u.User == nil {
+		return uri
+	}
+	if _, hasPassword := u.User.Password(); !hasPassword {
+		return uri
+	}
+	return u.Redacted()
 }

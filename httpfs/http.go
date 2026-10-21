@@ -1,11 +1,13 @@
 // Package httpfs implements a read only file system
 // for HTTP URLs.
-// Import it to register FileSystem and FileSystemTLS:
+// Import it to register Default and DefaultTLS
+// for all "http://" and "https://" URLs:
 //
 //	import _ "github.com/ungerik/go-fs/httpfs"
 //
-// Requests are made with Client, which can be replaced
-// to configure timeouts, proxies or transports.
+// Use NewAndRegister to register a file system with its own
+// http.Client for a more specific prefix like "https://api.example.com/",
+// URLs starting with that prefix then use it instead of DefaultTLS.
 package httpfs
 
 import (
@@ -22,53 +24,112 @@ import (
 )
 
 func init() {
-	fs.Register(FileSystem)
-	fs.Register(FileSystemTLS)
+	_ = fs.Register(Default)
+	_ = fs.Register(DefaultTLS)
 }
 
 const (
-	// Prefix is the URI prefix of FileSystem.
+	// Prefix is the URI prefix of Default.
 	Prefix = "http://"
-	// PrefixTLS is the URI prefix of FileSystemTLS.
+	// PrefixTLS is the URI prefix of DefaultTLS.
 	PrefixTLS = "https://"
 	// Separator is the path separator of the file systems.
 	Separator = "/"
 )
 
 var (
-	// FileSystem is the read-only file system for "http://" URLs.
-	FileSystem = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: Prefix}}
+	// Default is the read-only file system for "http://" URLs
+	// using http.DefaultClient. It is registered by the package.
+	Default = mustNew(Prefix, nil)
 
-	// FileSystemTLS is the read-only file system for "https://" URLs.
-	FileSystemTLS = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: PrefixTLS}}
-
-	// Client is used for all HTTP requests of the file systems.
-	Client = http.DefaultClient
+	// DefaultTLS is the read-only file system for "https://" URLs
+	// using http.DefaultClient. It is registered by the package.
+	DefaultTLS = mustNew(PrefixTLS, nil)
 )
 
-// fileSystem paths are not rooted, they start with the host name:
-// Prefix()+path is the URL.
-type fileSystem struct {
-	fsimpl.PathHelper
+// Options for New and NewAndRegister.
+type Options struct {
+	// Client is used for all HTTP requests of the file system.
+	// http.DefaultClient is used if nil.
+	Client *http.Client
 }
 
-func (*fileSystem) ReadableWritable() (readable, writable bool) {
+// FileSystem is a read-only file system for HTTP URLs.
+// Its paths are not rooted, they start with the host name.
+type FileSystem struct {
+	paths  fsimpl.PathHelper
+	client *http.Client
+}
+
+// New returns a read-only file system for URLs starting with prefix,
+// which must start with "http://" or "https://", like "https://api.example.com/".
+// The file system is not registered, see NewAndRegister.
+func New(prefix string, opts *Options) (*FileSystem, error) {
+	if !strings.HasPrefix(prefix, Prefix) && !strings.HasPrefix(prefix, PrefixTLS) {
+		return nil, fmt.Errorf("httpfs prefix must start with %s or %s: %q", Prefix, PrefixTLS, prefix)
+	}
+	client := http.DefaultClient
+	if opts != nil && opts.Client != nil {
+		client = opts.Client
+	}
+	return &FileSystem{
+		paths:  fsimpl.PathHelper{URIPrefix: prefix},
+		client: client,
+	}, nil
+}
+
+// NewAndRegister registers a read-only file system for URLs starting with prefix,
+// see New. URLs with that prefix then use this file system instead of
+// Default or DefaultTLS, for example with a client that authenticates requests.
+func NewAndRegister(prefix string, opts *Options) error {
+	f, err := New(prefix, opts)
+	if err != nil {
+		return err
+	}
+	return fs.Register(f)
+}
+
+func mustNew(prefix string, opts *Options) *FileSystem {
+	f, err := New(prefix, opts)
+	if err != nil {
+		panic(err)
+	}
+	return f
+}
+
+// Prefix returns the URI prefix of the file system.
+func (f *FileSystem) Prefix() string {
+	return f.paths.URIPrefix
+}
+
+// Separator returns "/".
+func (f *FileSystem) Separator() string {
+	return f.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned path of the file system, starting with the host name.
+func (f *FileSystem) CleanPath(uriParts ...string) string {
+	return f.paths.CleanPath(uriParts...)
+}
+
+func (*FileSystem) ReadableWritable() (readable, writable bool) {
 	return true, false
 }
 
-func (*fileSystem) RootDir() fs.File {
+func (*FileSystem) RootDir() fs.File {
 	return fs.InvalidFile
 }
 
-func (f *fileSystem) ID() string {
-	return strings.TrimSuffix(f.URIPrefix, "://")
+func (f *FileSystem) ID() string {
+	return strings.TrimSuffix(f.paths.URIPrefix, "://")
 }
 
-func (f *fileSystem) Name() string {
-	return strings.ToUpper(strings.TrimSuffix(f.URIPrefix, "://"))
+func (f *FileSystem) Name() string {
+	return strings.ToUpper(strings.TrimSuffix(f.paths.URIPrefix, "://"))
 }
 
-func (f *fileSystem) String() string {
+func (f *FileSystem) String() string {
 	return f.Name() + " read-only file system"
 }
 
@@ -83,8 +144,8 @@ func (f *fileSystem) String() string {
 //     yields a non-nil error, because existence is unknown. Such errors must
 //     not be reported as "does not exist", otherwise a flaky network or an
 //     auth failure would make existing files appear to vanish.
-func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
-	url := f.URL(filePath)
+func (f *FileSystem) info(filePath string) (fs.FileInfo, error) {
+	url := f.paths.URL(filePath)
 
 	// First try a fast HEAD request.
 	request, err := http.NewRequest(http.MethodHead, url, nil)
@@ -92,7 +153,7 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 		return fs.FileInfo{}, err
 	}
 	name := path.Base(request.URL.Path)
-	response, err := Client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	response, err := f.client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
 		return fs.FileInfo{}, err
 	}
@@ -128,7 +189,7 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 	}
 
 	// Fall back to a full GET request.
-	response, err = Client.Get(url) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	response, err = f.client.Get(url) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
 		return fs.FileInfo{}, err
 	}
@@ -187,18 +248,18 @@ func modifiedTime(response *http.Response) time.Time {
 	return modified
 }
 
-func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
+func (f *FileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	info, err := f.info(filePath)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Exists {
-		return nil, fs.NewErrDoesNotExist(fs.File(f.URL(filePath)))
+		return nil, fs.NewErrDoesNotExist(fs.File(f.paths.URL(filePath)))
 	}
 	return &info, nil
 }
 
-func (f *fileSystem) Exists(filePath string) (bool, error) {
+func (f *FileSystem) Exists(filePath string) (bool, error) {
 	info, err := f.info(filePath)
 	if err != nil {
 		return false, err
@@ -208,13 +269,13 @@ func (f *fileSystem) Exists(filePath string) (bool, error) {
 
 // get returns the response of a GET request with ctx.
 // A 404 or 410 status is reported as an error wrapping os.ErrNotExist.
-func (f *fileSystem) get(ctx context.Context, filePath string) (*http.Response, error) {
-	url := f.URL(filePath)
+func (f *FileSystem) get(ctx context.Context, filePath string) (*http.Response, error) {
+	url := f.paths.URL(filePath)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	response, err := Client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	response, err := f.client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
 		return nil, err
 	}
@@ -230,17 +291,17 @@ func (f *fileSystem) get(ctx context.Context, filePath string) (*http.Response, 
 }
 
 // ReadAll downloads the URL with a GET request using ctx.
-func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+func (f *FileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	response, err := f.get(ctx, filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
-	return fs.ReadAllContext(ctx, response.Body)
+	return fs.ReadAll(ctx, response.Body)
 }
 
 // OpenReader streams the body of a GET request.
-func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (f *FileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	response, err := f.get(context.Background(), filePath)
 	if err != nil {
 		return nil, err
@@ -248,10 +309,10 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return response.Body, nil
 }
 
-func (f *fileSystem) Close() error {
+func (f *FileSystem) Close() error {
 	return nil
 }
 
-func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+func (f *FileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	return fs.NewErrUnsupported(f, "ListDir")
 }

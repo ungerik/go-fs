@@ -44,7 +44,8 @@ func TestStdFileSystem_Conformance(t *testing.T) {
 
 // TestStdFileSystem_Embed makes an embed.FS usable through the File API.
 func TestStdFileSystem_Embed(t *testing.T) {
-	stdFS := fs.NewStdFileSystemAndRegister(embeddedDocs, "embedded-docs")
+	stdFS := fs.NewStdFileSystem(embeddedDocs, "embedded-docs")
+	require.NoError(t, fs.Register(stdFS))
 	t.Cleanup(func() { assert.NoError(t, stdFS.Close()) })
 
 	dir := fs.File("stdfs://embedded-docs/docs")
@@ -75,7 +76,8 @@ func TestStdFileSystem_DirFS(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(tempDir.LocalPath()) })
 	require.NoError(t, tempDir.Join("a.txt").WriteAllString(t.Context(), "a"))
 
-	stdFS := fs.NewStdFileSystemAndRegister(os.DirFS(tempDir.LocalPath()), "")
+	stdFS := fs.NewStdFileSystem(os.DirFS(tempDir.LocalPath()), "")
+	require.NoError(t, fs.Register(stdFS))
 	t.Cleanup(func() { assert.NoError(t, stdFS.Close()) })
 
 	root := stdFS.RootDir()

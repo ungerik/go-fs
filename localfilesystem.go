@@ -40,13 +40,11 @@ var (
 	_ TruncateFileSystem     = new(LocalFileSystem)
 	_ CopyFileSystem         = new(LocalFileSystem)
 	_ MoveFileSystem         = new(LocalFileSystem)
-	_ RenameFileSystem       = new(LocalFileSystem)
 	_ VolumeNameFileSystem   = new(LocalFileSystem)
 	_ AbsPathFileSystem      = new(LocalFileSystem)
 	_ HiddenFileSystem       = new(LocalFileSystem)
 	_ WatchFileSystem        = new(LocalFileSystem)
 	_ PermissionsFileSystem  = new(LocalFileSystem)
-	_ ListDirMaxFileSystem   = new(LocalFileSystem)
 	_ XAttrFileSystem        = new(LocalFileSystem)
 	_ SymbolicLinkFileSystem = new(LocalFileSystem)
 )
@@ -269,14 +267,20 @@ func (local *LocalFileSystem) IsHidden(filePath string) bool {
 	return hidden
 }
 
-// IsSymbolicLink reports whether filePath is a symbolic link using [os.Lstat].
-// Any stat error (including not-exist) returns false.
-func (local *LocalFileSystem) IsSymbolicLink(filePath string) bool {
+// Lstat implements [SymbolicLinkFileSystem] by calling [os.Lstat],
+// so the FileInfo of a symbolic link describes the link itself
+// with IsSymlink set. A non-existent path is returned as [ErrDoesNotExist].
+func (local *LocalFileSystem) Lstat(filePath string) (*FileInfo, error) {
+	if filePath == "" {
+		return nil, ErrEmptyPath
+	}
 	info, err := os.Lstat(filePath)
 	if err != nil {
-		return false
+		return nil, wrapOSErr(filePath, err)
 	}
-	return info.Mode()&os.ModeSymlink != 0
+	fileInfo := NewFileInfo(File(filePath), info, local.IsHidden(filePath))
+	fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
+	return fileInfo, nil
 }
 
 // CreateSymbolicLink implements [SymbolicLinkFileSystem] by creating a symbolic
@@ -382,86 +386,6 @@ func (local *LocalFileSystem) ListDir(ctx context.Context, dirPath string, patte
 		}
 	}
 	return nil
-}
-
-// ListDirMax returns up to max entries of dirPath. A negative max means
-// "all entries" and is read in 64-name batches via [os.File.Readdirnames];
-// a positive max preallocates the result slice and reads exactly enough
-// names to satisfy the cap. max == 0 returns nil without touching the disk.
-// Entries are filtered by [LocalFileSystem.MatchAnyPattern]. Cancellation
-// is checked between batches. Symbolic semantics match [LocalFileSystem.ListDirInfo]
-// (same error types for empty / not-a-directory).
-func (local *LocalFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) (files []File, err error) {
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if dirPath == "" {
-		return nil, ErrEmptyPath
-	}
-	if max == 0 {
-		return nil, nil
-	}
-
-	dirPath = filepath.Clean(dirPath)
-
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("LocalFileSystem.ListDirMax(%#v): %w", dirPath, err)
-		}
-	}()
-
-	info, err := local.Stat(dirPath)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir {
-		return nil, NewErrIsNotDirectory(File(dirPath))
-	}
-
-	f, err := os.Open(dirPath) //#nosec G304
-	if err != nil {
-		return nil, fmt.Errorf("error opening directory: %w", err)
-	}
-	defer f.Close() //#nosec G307
-
-	var numFilesToDo int
-	if max > 0 {
-		files = make([]File, 0, max)
-		numFilesToDo = max
-	} else {
-		numFilesToDo = 64
-	}
-
-	for eof := false; !eof && numFilesToDo > 0; {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		names, err := f.Readdirnames(numFilesToDo)
-		if err != nil {
-			eof = (err == io.EOF)
-			if !eof {
-				return nil, fmt.Errorf("error reading directory: %w", err)
-			}
-		}
-
-		for _, name := range names {
-			match, err := local.MatchAnyPattern(name, patterns)
-			if err != nil {
-				return nil, err
-			}
-			if !match {
-				continue
-			}
-			files = append(files, File(filepath.Join(dirPath, name)))
-		}
-
-		if max > 0 {
-			numFilesToDo = max - len(files)
-		}
-	}
-
-	return files, nil
 }
 
 // SetPermissions overwrites only the 9 [os.ModePerm] bits of filePath via
@@ -664,9 +588,12 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm Permissions) 
 // Returns [ErrDoesNotExist] if the file is missing and [ErrIsDirectory]
 // if filePath is a directory. A no-op is performed when the file already
 // has the requested size.
-func (local *LocalFileSystem) Truncate(filePath string, newSize int64) error {
+func (local *LocalFileSystem) Truncate(ctx context.Context, filePath string, newSize int64) error {
 	if filePath == "" {
 		return ErrEmptyPath
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	info, err := local.Stat(filePath)
 	if err != nil {
@@ -728,29 +655,6 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 	return nil
 }
 
-// Rename renames the file at filePath to newName within the same directory
-// using [os.Rename]. newName must be a leaf name without any [Separator]
-// (otherwise an error is returned); the new full path is built from
-// [filepath.Dir](filePath) and newName and returned to the caller.
-// A missing source file yields [ErrDoesNotExist].
-func (local *LocalFileSystem) Rename(filePath string, newName string) (newPath string, err error) {
-	if filePath == "" || newName == "" {
-		return "", ErrEmptyPath
-	}
-	if strings.ContainsAny(newName, local.Separator()) {
-		return "", fmt.Errorf("newName %#v for File.Rename contains path separator %s", newName, local.Separator())
-	}
-	if _, e := os.Stat(filePath); e != nil {
-		return "", NewErrDoesNotExist(File(filePath))
-	}
-	newPath = filepath.Join(filepath.Dir(filePath), newName)
-	err = os.Rename(filePath, newPath)
-	if err != nil {
-		return "", err
-	}
-	return newPath, nil
-}
-
 // Move moves filePath to destPath. If filePath is a directory, it is moved
 // *into* destPath using the base name of filePath as the new child name.
 //
@@ -762,8 +666,8 @@ func (local *LocalFileSystem) Rename(filePath string, newName string) (newPath s
 // same underlying filesystem. If the OS returns a cross-device error
 // (EXDEV on Unix, ERROR_NOT_SAME_DEVICE on Windows) it falls back to
 // [CopyRecursive] followed by [os.RemoveAll]. The fallback is not atomic
-// and uses [context.Background], so it is not cancelable.
-func (local *LocalFileSystem) Move(filePath string, destPath string) error {
+// but can be canceled with ctx.
+func (local *LocalFileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return ErrEmptyPath
 	}
@@ -779,7 +683,7 @@ func (local *LocalFileSystem) Move(filePath string, destPath string) error {
 	if err != nil && isCrossDeviceError(err) {
 		// os.Rename does not work across filesystem boundaries,
 		// fall back to copy + delete
-		err = CopyRecursive(context.Background(), File(filePath), File(destPath))
+		err = CopyRecursive(ctx, File(filePath), File(destPath))
 		if err != nil {
 			return err
 		}
@@ -920,7 +824,7 @@ func (local *LocalFileSystem) watchEventCallback(event fsnotify.Event, callback 
 			local.WatchErrorLogger.Printf("watch callback panic: %#v", p)
 		}
 	}()
-	callback(File(event.Name), Event(event.Op))
+	callback(File(event.Name), eventFromFSNotify(event.Op))
 }
 
 // Close stops the fsnotify watcher started by Watch, if any,
@@ -973,19 +877,31 @@ func (local *LocalFileSystem) GetXAttr(filePath string, name string, followSymli
 
 // SetXAttr sets the value of the named extended attribute via the [xattr]
 // package ([xattr.SetWithFlags] when followSymlinks is true, otherwise
-// [xattr.LSetWithFlags]). The flags parameter is passed through unchanged
-// and accepts values like xattr.XATTR_CREATE and xattr.XATTR_REPLACE.
-func (local *LocalFileSystem) SetXAttr(filePath string, name string, data []byte, flags int, followSymlinks bool) error {
+// [xattr.LSetWithFlags]). The flags are translated to the platform values
+// of XATTR_CREATE and XATTR_REPLACE, on platforms without them
+// they are emulated by checking for an existing attribute first.
+func (local *LocalFileSystem) SetXAttr(filePath string, name string, data []byte, flags XAttrFlags, followSymlinks bool) error {
 	if filePath == "" {
 		return ErrEmptyPath
 	}
 	if !xattr.XATTR_SUPPORTED {
 		return NewErrUnsupported(local, "SetXAttr")
 	}
-	if followSymlinks {
-		return xattr.SetWithFlags(filePath, name, data, flags)
+	nativeFlags, ok := xattrNativeFlags(flags)
+	if !ok && flags != 0 {
+		// Emulate the flags on platforms without native flag values
+		_, getErr := local.GetXAttr(filePath, name, followSymlinks)
+		switch exists := getErr == nil; {
+		case flags&XAttrCreate != 0 && exists:
+			return fmt.Errorf("SetXAttr %q: %w", name, os.ErrExist)
+		case flags&XAttrReplace != 0 && !exists:
+			return fmt.Errorf("SetXAttr %q: %w", name, os.ErrNotExist)
+		}
 	}
-	return xattr.LSetWithFlags(filePath, name, data, flags)
+	if followSymlinks {
+		return xattr.SetWithFlags(filePath, name, data, nativeFlags)
+	}
+	return xattr.LSetWithFlags(filePath, name, data, nativeFlags)
 }
 
 // RemoveXAttr removes the named extended attribute via the [xattr]
@@ -1001,4 +917,24 @@ func (local *LocalFileSystem) RemoveXAttr(filePath string, name string, followSy
 		return xattr.Remove(filePath, name)
 	}
 	return xattr.LRemove(filePath, name)
+}
+
+// eventFromFSNotify maps the operations of an fsnotify event to an Event.
+func eventFromFSNotify(op fsnotify.Op) Event {
+	var event Event
+	for _, m := range []struct {
+		op    fsnotify.Op
+		event Event
+	}{
+		{fsnotify.Create, EventCreate},
+		{fsnotify.Write, EventWrite},
+		{fsnotify.Remove, EventRemove},
+		{fsnotify.Rename, EventRename},
+		{fsnotify.Chmod, EventChmod},
+	} {
+		if op.Has(m.op) {
+			event |= m.event
+		}
+	}
+	return event
 }

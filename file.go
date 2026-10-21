@@ -361,7 +361,7 @@ func (file File) RelPathOf(target File) (string, error) {
 	fileSystem, basePath := file.ParseRawURI()
 	targetFileSystem, targetPath := target.ParseRawURI()
 	if targetFileSystem != fileSystem {
-		return "", fmt.Errorf("file systems do not match: %s and %s", fileSystem, targetFileSystem)
+		return "", fmt.Errorf("%w: %s and %s", ErrFileSystemsDoNotMatch, fileSystem, targetFileSystem)
 	}
 	return fsRelPath(fileSystem, basePath, targetPath)
 }
@@ -400,11 +400,18 @@ func (file File) IsHidden() bool {
 // existing or not being accessible, results in false. File systems without
 // support for symbolic links always return false.
 func (file File) IsSymbolicLink() bool {
+	info, err := file.Lstat()
+	return err == nil && info.IsSymlink
+}
+
+// Lstat returns the FileInfo of the file without following
+// a symbolic link: for a symbolic link the FileInfo describes
+// the link itself with IsSymlink set.
+// On file systems without support for symbolic links
+// Lstat returns the same as Stat would.
+func (file File) Lstat() (*FileInfo, error) {
 	fileSystem, path := file.ParseRawURI()
-	if fs, ok := fileSystem.(SymbolicLinkFileSystem); ok {
-		return fs.IsSymbolicLink(path)
-	}
-	return false
+	return fsLstat(fileSystem, path)
 }
 
 // CreateSymbolicLink creates file as a symbolic link pointing to target.
@@ -423,7 +430,7 @@ func (file File) CreateSymbolicLink(target File) error {
 	linkFS, linkPath := file.ParseRawURI()
 	targetFS, targetPath := target.ParseRawURI()
 	if linkFS != targetFS {
-		return fmt.Errorf("file systems do not match: %s and %s", linkFS, targetFS)
+		return fmt.Errorf("%w: %s and %s", ErrFileSystemsDoNotMatch, linkFS, targetFS)
 	}
 	if _, err := fsWritable(linkFS); err != nil {
 		return err
@@ -436,12 +443,12 @@ func (file File) CreateSymbolicLink(target File) error {
 }
 
 // ReadSymbolicLink returns the target of the symbolic link at file.
-// The returned [File] is the raw link target as stored on disk and may be
+// The returned target path is raw as stored by the file system and may be
 // relative to file's directory.
 //
 // Returns an [ErrUnsupported] error if file's [FileSystem] does not
 // implement [SymbolicLinkFileSystem].
-func (file File) ReadSymbolicLink() (File, error) {
+func (file File) ReadSymbolicLink() (string, error) {
 	if file == "" {
 		return "", ErrEmptyPath
 	}
@@ -450,11 +457,7 @@ func (file File) ReadSymbolicLink() (File, error) {
 	if !ok {
 		return "", NewErrUnsupported(fileSystem, "ReadSymbolicLink")
 	}
-	targetPath, err := symlinkFS.ReadSymbolicLink(linkPath)
-	if err != nil {
-		return "", err
-	}
-	return File(targetPath), nil
+	return symlinkFS.ReadSymbolicLink(linkPath)
 }
 
 // Size returns the size of the file or 0 if it does not exist or is a directory.
@@ -966,17 +969,17 @@ func (r statReadCloser) Stat() (iofs.FileInfo, error) {
 	return r.file.Stat()
 }
 
-// OpenReadSeeker opens the file and returns a ReadSeekCloser.
-// If the FileSystem implementation doesn't support ReadSeekCloser,
-// then the complete file is read into memory and wrapped with a ReadSeekCloser.
+// OpenReadSeeker opens the file and returns a ReadAtSeekCloser.
+// If the FileSystem implementation doesn't support ReadAtSeekCloser,
+// then the complete file is read into memory and wrapped with a ReadAtSeekCloser.
 // Warning: this can use up a lot of memory for big files.
-func (file File) OpenReadSeeker() (ReadSeekCloser, error) {
+func (file File) OpenReadSeeker() (ReadAtSeekCloser, error) {
 	fileSystem, path := file.ParseRawURI()
 	reader, err := fsOpenReader(fileSystem, path)
 	if err != nil {
 		return nil, err
 	}
-	if r, ok := reader.(ReadSeekCloser); ok {
+	if r, ok := reader.(ReadAtSeekCloser); ok {
 		return r, nil
 	}
 	defer reader.Close()
@@ -1090,9 +1093,14 @@ func (file File) Truncate(ctx context.Context, newSize int64) error {
 // Rename changes the name of a file where newName is the name part after file.Dir().
 // Note: this does not move the file like in other rename implementations,
 // it only changes the name of the file within its directory.
-func (file File) Rename(newName string) (renamedFile File, err error) {
+//
+// An existing file with newName is replaced, an existing directory
+// with newName is an error wrapping os.ErrExist.
+// The ctx is used for file systems without native move support
+// where the file is copied and the original removed.
+func (file File) Rename(ctx context.Context, newName string) (renamedFile File, err error) {
 	fileSystem, path := file.ParseRawURI()
-	newPath, err := fsRename(fileSystem, path, newName)
+	newPath, err := fsRename(ctx, fileSystem, path, newName)
 	if err != nil {
 		return "", err
 	}
@@ -1103,8 +1111,8 @@ func (file File) Rename(newName string) (renamedFile File, err error) {
 // is the name part after file.Dir().
 // Note: this does not move the file like in other rename implementations,
 // it only changes the name of the file within its directory.
-func (file File) Renamef(newNameFormat string, args ...any) (renamedFile File, err error) {
-	return file.Rename(fmt.Sprintf(newNameFormat, args...))
+func (file File) Renamef(ctx context.Context, newNameFormat string, args ...any) (renamedFile File, err error) {
+	return file.Rename(ctx, fmt.Sprintf(newNameFormat, args...))
 }
 
 // MoveTo moves and/or renames the file to destination.
@@ -1292,29 +1300,29 @@ func (file File) getXAttr(name string, followSymlinks bool) ([]byte, error) {
 
 // SetXAttr sets the value of the named extended attribute.
 // Symbolic links are resolved to their target.
-// The optional flags parameter controls the behavior
-// (e.g., xattr.XATTR_CREATE, xattr.XATTR_REPLACE).
+// The optional flags control the behavior for an existing
+// or missing attribute, see XAttrCreate and XAttrReplace.
 // Returns ErrUnsupported if the file system does not support extended attributes.
-func (file File) SetXAttr(name string, data []byte, flags ...int) error {
+func (file File) SetXAttr(name string, data []byte, flags ...XAttrFlags) error {
 	return file.setXAttr(name, data, flags, true)
 }
 
 // LSetXAttr sets the value of the named extended attribute.
 // Symbolic links are not resolved.
-// The optional flags parameter controls the behavior
-// (e.g., xattr.XATTR_CREATE, xattr.XATTR_REPLACE).
+// The optional flags control the behavior for an existing
+// or missing attribute, see XAttrCreate and XAttrReplace.
 // Returns ErrUnsupported if the file system does not support extended attributes.
-func (file File) LSetXAttr(name string, data []byte, flags ...int) error {
+func (file File) LSetXAttr(name string, data []byte, flags ...XAttrFlags) error {
 	return file.setXAttr(name, data, flags, false)
 }
 
-func (file File) setXAttr(name string, data []byte, flags []int, followSymlinks bool) error {
+func (file File) setXAttr(name string, data []byte, flags []XAttrFlags, followSymlinks bool) error {
 	fileSystem, path := file.ParseRawURI()
 	if _, err := fsWritable(fileSystem); err != nil {
 		return err
 	}
 	if fs, ok := fileSystem.(XAttrFileSystem); ok {
-		combinedFlags := 0
+		var combinedFlags XAttrFlags
 		for _, flag := range flags {
 			combinedFlags |= flag
 		}

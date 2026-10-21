@@ -183,7 +183,8 @@ func Test_Enum(t *testing.T) {
 	fixture := make(fstest.MapFS)
 	dirs := make(map[fs.File]bool)
 	ids := make(map[[16]byte]struct{})
-	stdFS := fs.NewStdFileSystemAndRegister(fixture, "")
+	stdFS := fs.NewStdFileSystem(fixture, "")
+	require.NoError(t, fs.Register(stdFS))
 	t.Cleanup(func() { _ = stdFS.Close() })
 	baseDir := stdFS.RootDir()
 	for _, id := range []string{

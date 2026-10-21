@@ -9,6 +9,7 @@ package multipartfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	iofs "io/fs"
@@ -67,7 +68,7 @@ var (
 // elements before the field name is unescaped, so neither a field nor a file
 // name can address an upload of another field.
 type MultipartFileSystem struct {
-	fsimpl.PathHelper
+	paths fsimpl.PathHelper
 
 	// Form of the parsed multipart message.
 	// Form.Value holds the values of the non file form fields,
@@ -78,33 +79,54 @@ type MultipartFileSystem struct {
 	closed bool
 }
 
-// New returns a MultipartFileSystem for an already parsed multipart form
-// and registers it. form must not be nil.
-// Close unregisters the file system and removes
-// the temporary files of the form.
-func New(form *multipart.Form) *MultipartFileSystem {
-	if form == nil {
-		panic("nil multipart.Form")
-	}
-	f := &MultipartFileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
-		Form:       form,
-	}
-	fs.Register(f)
-	return f
+// Prefix returns the URI prefix of the file system.
+func (f *MultipartFileSystem) Prefix() string {
+	return f.paths.URIPrefix
 }
 
-// FromRequestForm parses the multipart form of a http.Request
+// Separator returns the path separator of the file system.
+func (f *MultipartFileSystem) Separator() string {
+	return f.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (f *MultipartFileSystem) CleanPath(uriParts ...string) string {
+	return f.paths.CleanPath(uriParts...)
+}
+
+// New returns a MultipartFileSystem for an already parsed multipart form
+// with the URI prefix "multipart://" + id, a random id is used if id is empty.
+//
+// The file system is not registered, pass it to fs.Register
+// to access the uploaded files via their URIs.
+// Close unregisters the file system and removes
+// the temporary files of the form.
+func New(form *multipart.Form, id string) (*MultipartFileSystem, error) {
+	if form == nil {
+		return nil, errors.New("nil multipart.Form")
+	}
+	if id == "" {
+		id = fsimpl.RandomString()
+	}
+	f := &MultipartFileSystem{
+		paths: fsimpl.PathHelper{URIPrefix: Prefix + id, Rooted: true},
+		Form:  form,
+	}
+	return f, nil
+}
+
+// NewFromRequest parses the multipart form of a http.Request
 // with http.Request.ParseMultipartForm and returns it
-// as registered MultipartFileSystem.
+// as MultipartFileSystem, see New.
 // Files larger than maxMemory are stored in temporary
 // files which are removed by Close.
-func FromRequestForm(request *http.Request, maxMemory int64) (*MultipartFileSystem, error) {
+func NewFromRequest(request *http.Request, maxMemory int64, id string) (*MultipartFileSystem, error) {
 	err := request.ParseMultipartForm(maxMemory) //#nosec G120 -- caller bounds memory via maxMemory parameter
 	if err != nil {
 		return nil, err
 	}
-	return New(request.MultipartForm), nil
+	return New(request.MultipartForm, id)
 }
 
 // FormValue returns the first value of the form field with the passed name,
@@ -161,7 +183,7 @@ func (f *MultipartFileSystem) GetMultipartFileHeader(filePath string) (*multipar
 	if err := f.checkClosed(); err != nil {
 		return nil, err
 	}
-	parts := f.SplitPath(filePath)
+	parts := f.paths.SplitPath(filePath)
 	if len(parts) != 2 {
 		return nil, fs.NewErrDoesNotExist(f.File(filePath))
 	}
@@ -209,13 +231,13 @@ func uploadPath(field, fileName string) string {
 
 // fieldFile returns the directory of a form field.
 func (f *MultipartFileSystem) fieldFile(field string) fs.File {
-	return fs.File(f.URL(fieldPath(field)))
+	return fs.File(f.paths.URL(fieldPath(field)))
 }
 
 // uploadFile returns the uploaded file with the
 // file system name fileName under the form field.
 func (f *MultipartFileSystem) uploadFile(field, fileName string) fs.File {
-	return fs.File(f.URL(uploadPath(field, fileName)))
+	return fs.File(f.paths.URL(uploadPath(field, fileName)))
 }
 
 // fileNames returns the file system names of the passed uploaded files
@@ -267,13 +289,13 @@ func (f *MultipartFileSystem) checkClosed() error {
 // RootDir returns the root directory of the file system,
 // which lists the form fields that have uploaded files.
 func (f *MultipartFileSystem) RootDir() fs.File {
-	return fs.File(f.URIPrefix + Separator)
+	return fs.File(f.paths.URIPrefix + Separator)
 }
 
 // ID returns the URI prefix of the file system,
 // which is unique per parsed form.
 func (f *MultipartFileSystem) ID() string {
-	return f.URIPrefix
+	return f.paths.URIPrefix
 }
 
 // ReadableWritable returns true for readable and false for writable,
@@ -284,7 +306,7 @@ func (*MultipartFileSystem) ReadableWritable() (readable, writable bool) {
 
 // Name returns "multipart file system" and the id of the file system.
 func (f *MultipartFileSystem) Name() string {
-	return "multipart file system " + path.Base(f.URIPrefix)
+	return "multipart file system " + path.Base(f.paths.URIPrefix)
 }
 
 // String implements the fmt.Stringer interface.
@@ -301,12 +323,12 @@ func (f *MultipartFileSystem) File(filePath string) fs.File {
 // JoinCleanFile joins the URI parts and returns a File
 // with the cleaned path and the prefix of this file system.
 func (f *MultipartFileSystem) JoinCleanFile(uriParts ...string) fs.File {
-	return fs.File(f.JoinCleanURI(uriParts...))
+	return fs.File(f.paths.JoinCleanURI(uriParts...))
 }
 
 func (f *MultipartFileSystem) info(filePath string) *fs.FileInfo {
 	var info fs.FileInfo
-	parts := f.SplitPath(filePath)
+	parts := f.paths.SplitPath(filePath)
 	switch len(parts) {
 	case 0:
 		// The root directory always exists,
@@ -376,7 +398,7 @@ func (f *MultipartFileSystem) ListDir(ctx context.Context, dirPath string, patte
 		return err
 	}
 
-	parts := f.SplitPath(dirPath)
+	parts := f.paths.SplitPath(dirPath)
 	switch len(parts) {
 	case 0:
 		// Sorted for a deterministic listing,
@@ -438,7 +460,7 @@ func (f *MultipartFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 	}
 	defer file.Close()
 
-	return fs.ReadAllContext(ctx, file)
+	return fs.ReadAll(ctx, file)
 }
 
 // OpenReader opens an uploaded file for reading.
@@ -451,7 +473,7 @@ func (f *MultipartFileSystem) OpenReader(filePath string) (io.ReadCloser, error)
 	if err != nil {
 		return nil, err
 	}
-	_, name := f.SplitDirAndName(filePath)
+	_, name := f.paths.SplitDirAndName(filePath)
 	return multipartFile{File: file, name: name, header: header}, nil
 }
 

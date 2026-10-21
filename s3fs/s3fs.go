@@ -94,7 +94,7 @@ func NewAndRegister(client *s3.Client, bucketName string, readOnly bool) fs.File
 		bucketName: bucketName,
 		readOnly:   readOnly,
 	}
-	fs.Register(s3fs)
+	_ = fs.Register(s3fs) // replaced by the Options rework of the constructors
 	return s3fs
 }
 

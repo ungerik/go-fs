@@ -18,6 +18,7 @@ import (
 
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fstest"
+	"github.com/ungerik/go-fs/internal/dockertest"
 	"github.com/ungerik/go-fs/s3fs"
 )
 
@@ -44,7 +45,7 @@ var (
 
 func TestMain(m *testing.M) {
 	// Check if Docker is available
-	if !fstest.DockerAvailable() {
+	if !dockertest.Available() {
 		log.Println("Docker not available, skipping Docker-based S3Mock tests")
 		m.Run()
 		return
@@ -56,7 +57,7 @@ func TestMain(m *testing.M) {
 
 	dockerS3Available = setupS3MockServer(ctx)
 	if !dockerS3Available {
-		fstest.DockerSetupFailed("S3Mock")
+		dockertest.SetupFailed("S3Mock")
 	}
 
 	// Run tests

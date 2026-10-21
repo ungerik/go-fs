@@ -29,6 +29,9 @@ func fsURL(fileSystem FileSystem, cleanPath string) string {
 	if local, ok := fileSystem.(*LocalFileSystem); ok {
 		return local.URL(cleanPath)
 	}
+	if u, ok := fileSystem.(URIFileSystem); ok {
+		return u.URIFromPath(cleanPath)
+	}
 	prefix, sep := fileSystem.Prefix(), fileSystem.Separator()
 	if strings.HasSuffix(prefix, sep) && strings.HasPrefix(cleanPath, sep) {
 		cleanPath = cleanPath[len(sep):]
@@ -63,6 +66,9 @@ func fsVolumeLen(fileSystem FileSystem, filePath string) int {
 
 // fsSplitDirAndName returns the parent directory and the name of the last element of filePath.
 func fsSplitDirAndName(fileSystem FileSystem, filePath string) (dir, name string) {
+	if u, ok := fileSystem.(URIFileSystem); ok {
+		return u.SplitDirAndName(filePath)
+	}
 	return fsimpl.SplitDirAndName(filePath, fsVolumeLen(fileSystem, filePath), fileSystem.Separator())
 }
 
@@ -179,6 +185,25 @@ func fsStat(fileSystem FileSystem, filePath string) (*FileInfo, error) {
 	return completeFileInfo(fileSystem, dir, info), nil
 }
 
+func fsLstat(fileSystem FileSystem, filePath string) (*FileInfo, error) {
+	if filePath == "" {
+		return nil, ErrEmptyPath
+	}
+	if err := fsReadable(fileSystem); err != nil {
+		return nil, err
+	}
+	l, ok := fileSystem.(SymbolicLinkFileSystem)
+	if !ok {
+		return fsStat(fileSystem, filePath)
+	}
+	info, err := l.Lstat(filePath)
+	if err != nil {
+		return nil, err
+	}
+	dir, _ := fsSplitDirAndName(fileSystem, filePath)
+	return completeFileInfo(fileSystem, dir, info), nil
+}
+
 func fsListDir(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if dirPath == "" {
 		return ErrEmptyPath
@@ -273,7 +298,7 @@ func fsReadAll(ctx context.Context, fileSystem FileSystem, filePath string) ([]b
 		return nil, err
 	}
 	defer reader.Close()
-	return ReadAllContext(ctx, reader)
+	return ReadAll(ctx, reader)
 }
 
 func fsWriteAll(ctx context.Context, fileSystem FileSystem, filePath string, data []byte, perm Permissions) error {
@@ -296,7 +321,7 @@ func fsWriteAll(ctx context.Context, fileSystem FileSystem, filePath string, dat
 	if err != nil {
 		return err
 	}
-	err = WriteAllContext(ctx, writer, data)
+	err = WriteAll(ctx, writer, data)
 	return errors.Join(err, writer.Close())
 }
 
@@ -347,7 +372,7 @@ func fsAppend(ctx context.Context, fileSystem FileSystem, filePath string, data 
 		if err != nil {
 			return err
 		}
-		err = WriteAllContext(ctx, writer, data)
+		err = WriteAll(ctx, writer, data)
 		return errors.Join(err, writer.Close())
 	}
 	// Emulate append by reading the whole file
@@ -402,7 +427,7 @@ func fsTruncate(ctx context.Context, fileSystem FileSystem, filePath string, siz
 		return err
 	}
 	if t, ok := w.(TruncateFileSystem); ok {
-		return t.Truncate(filePath, size)
+		return t.Truncate(ctx, filePath, size)
 	}
 	// Emulate by rewriting the file
 	info, err := fsStat(fileSystem, filePath)
@@ -542,7 +567,7 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 		return nil
 	}
 	if m, ok := w.(MoveFileSystem); ok {
-		return m.Move(srcPath, destPath)
+		return m.Move(ctx, srcPath, destPath)
 	}
 	// Emulate by copying and removing
 	src, dest := fsFile(fileSystem, srcPath), fsFile(fileSystem, destPath)
@@ -553,23 +578,19 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 	return fsRemoveAll(ctx, fileSystem, srcPath)
 }
 
-func fsRename(fileSystem FileSystem, filePath, newName string) (newPath string, err error) {
+func fsRename(ctx context.Context, fileSystem FileSystem, filePath, newName string) (newPath string, err error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
 	}
-	if strings.ContainsAny(newName, fileSystem.Separator()) {
-		return "", fmt.Errorf("newName %#v for Rename contains path separator %s", newName, fileSystem.Separator())
-	}
-	w, err := fsWritable(fileSystem)
-	if err != nil {
-		return "", err
-	}
-	if r, ok := w.(RenameFileSystem); ok {
-		return r.Rename(filePath, newName)
+	switch {
+	case newName == "", newName == ".", newName == "..":
+		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
+	case strings.Contains(newName, fileSystem.Separator()) || strings.Contains(newName, "/"):
+		return "", fmt.Errorf("%w: new name %q for Rename contains a path separator", os.ErrInvalid, newName)
 	}
 	dir, _ := fsSplitDirAndName(fileSystem, filePath)
 	newPath = fileSystem.CleanPath(dir, newName)
-	return newPath, fsMove(context.Background(), fileSystem, filePath, newPath)
+	return newPath, fsMove(ctx, fileSystem, filePath, newPath)
 }
 
 func fsListDirMax(ctx context.Context, fileSystem FileSystem, dirPath string, max int, patterns []string) (files []File, err error) {
@@ -581,9 +602,6 @@ func fsListDirMax(ctx context.Context, fileSystem FileSystem, dirPath string, ma
 	}
 	if err := fsReadable(fileSystem); err != nil {
 		return nil, err
-	}
-	if l, ok := fileSystem.(ListDirMaxFileSystem); ok {
-		return l.ListDirMax(ctx, dirPath, max, patterns)
 	}
 	return listDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
 		return fsListDir(ctx, fileSystem, dirPath, patterns, FileInfoToFileCallback(callback))

@@ -35,8 +35,11 @@ func ExampleFile() {
 // the prefix of a registered file system. Which one it is follows from the
 // prefix, and the file system of an unregistered prefix is invalid.
 func ExampleFile_uri() {
-	memFS, err := fs.NewMemFileSystem("/")
+	memFS, err := fs.NewMemFileSystem(nil)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
 		panic(err)
 	}
 	defer memFS.Close()
@@ -62,8 +65,11 @@ func ExampleFile_uri() {
 // ExampleNewMemFileSystem writes and reads a file in memory,
 // which is how tests avoid touching the disk.
 func ExampleNewMemFileSystem() {
-	memFS, err := fs.NewMemFileSystem("/")
+	memFS, err := fs.NewMemFileSystem(nil)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
 		panic(err)
 	}
 	defer memFS.Close() // unregisters the file system
@@ -91,12 +97,15 @@ func ExampleNewMemFileSystem() {
 // ExampleFile_ListDir lists a directory. MemFileSystem does not
 // guarantee an order, so the names are sorted before printing.
 func ExampleFile_ListDir() {
-	memFS, err := fs.NewMemFileSystem("/",
+	memFS, err := fs.NewMemFileSystem(nil,
 		fs.NewMemFile("a.txt", []byte("a")),
 		fs.NewMemFile("b.txt", []byte("b")),
 		fs.NewMemFile("c.json", []byte("{}")),
 	)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
 		panic(err)
 	}
 	defer memFS.Close()
@@ -124,14 +133,20 @@ func ExampleFile_ListDir() {
 func ExampleCopyFile() {
 	ctx := context.Background()
 
-	sourceFS, err := fs.NewMemFileSystem("/", fs.NewMemFile("data.txt", []byte("payload")))
+	sourceFS, err := fs.NewMemFileSystem(nil, fs.NewMemFile("data.txt", []byte("payload")))
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(sourceFS); err != nil {
 		panic(err)
 	}
 	defer sourceFS.Close()
 
-	destFS, err := fs.NewMemFileSystem("/")
+	destFS, err := fs.NewMemFileSystem(nil)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(destFS); err != nil {
 		panic(err)
 	}
 	defer destFS.Close()
@@ -164,7 +179,9 @@ func ExampleNewStdFileSystem() {
 		},
 		"example", // id, part of the URI prefix
 	)
-	fs.Register(stdFS)
+	if err := fs.Register(stdFS); err != nil {
+		panic(err)
+	}
 	defer fs.Unregister(stdFS)
 
 	file := stdFS.RootDir().Join("config", "app.json")
@@ -185,8 +202,11 @@ func ExampleNewStdFileSystem() {
 func ExampleNewSubFileSystem() {
 	ctx := context.Background()
 
-	memFS, err := fs.NewMemFileSystem("/", fs.NewMemFile("uploads/photo.jpg", []byte("JPEG")))
+	memFS, err := fs.NewMemFileSystem(nil, fs.NewMemFile("uploads/photo.jpg", []byte("JPEG")))
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
 		panic(err)
 	}
 	defer memFS.Close()
@@ -195,7 +215,9 @@ func ExampleNewSubFileSystem() {
 	if err != nil {
 		panic(err)
 	}
-	fs.Register(subFS)
+	if err := fs.Register(subFS); err != nil {
+		panic(err)
+	}
 	defer fs.Unregister(subFS)
 
 	file := subFS.RootDir().Join("photo.jpg")
@@ -220,11 +242,16 @@ func ExampleNewOverlayFileSystem() {
 		fstest.MapFS{"defaults.conf": &fstest.MapFile{Data: []byte("timeout=30")}},
 		"overlay-base",
 	)
-	fs.Register(base)
+	if err := fs.Register(base); err != nil {
+		panic(err)
+	}
 	defer fs.Unregister(base)
 
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.NewMemFileSystem(nil)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(upper); err != nil {
 		panic(err)
 	}
 	defer upper.Close()
@@ -233,7 +260,9 @@ func ExampleNewOverlayFileSystem() {
 	if err != nil {
 		panic(err)
 	}
-	fs.Register(overlay)
+	if err := fs.Register(overlay); err != nil {
+		panic(err)
+	}
 	defer fs.Unregister(overlay)
 
 	// Writing a base file copies it up into the writable upper layer
@@ -263,8 +292,11 @@ func ExampleNewOverlayFileSystem() {
 // ExampleErrDoesNotExist shows the error contract: every file system
 // reports a missing file as an error wrapping os.ErrNotExist.
 func ExampleErrDoesNotExist() {
-	memFS, err := fs.NewMemFileSystem("/")
+	memFS, err := fs.NewMemFileSystem(nil)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
 		panic(err)
 	}
 	defer memFS.Close()

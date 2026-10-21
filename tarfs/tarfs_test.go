@@ -22,8 +22,9 @@ func TestConformance(t *testing.T) {
 			tarFile := tempDir.Join(name)
 
 			t.Run("Writer", func(t *testing.T) {
-				writer, err := NewWriter(tarFile)
+				writer, err := NewWriter(tarFile, "")
 				require.NoError(t, err, "NewWriter")
+				require.NoError(t, fs.Register(writer))
 				// A Reader and a Writer of an archive must report their
 				// id in the same form, so that neither can be mistaken
 				// for the other when file systems are compared by id.
@@ -39,8 +40,9 @@ func TestConformance(t *testing.T) {
 				if !tarFile.Exists() {
 					writeSeedArchive(t, tarFile, "/seed")
 				}
-				reader, err := NewReader(tarFile)
+				reader, err := NewReader(tarFile, "")
 				require.NoError(t, err, "NewReader")
+				require.NoError(t, fs.Register(reader))
 				require.Equal(t, reader.Prefix(), reader.ID(), "ID is the unique prefix of the archive")
 				fstest.RunConformance(t, reader, fstest.Config{
 					Name:    "Tar reader filesystem",
@@ -55,8 +57,9 @@ func TestConformance(t *testing.T) {
 // writeSeedArchive writes the default seed below dir into a new archive.
 func writeSeedArchive(t *testing.T, tarFile fs.File, dir string) {
 	t.Helper()
-	writer, err := NewWriter(tarFile)
+	writer, err := NewWriter(tarFile, "")
 	require.NoError(t, err, "NewWriter")
+	require.NoError(t, fs.Register(writer))
 	for name, content := range fstest.DefaultSeed() {
 		w, err := writer.OpenWriter(writer.CleanPath(dir, name), 0)
 		require.NoError(t, err, "OpenWriter")
@@ -75,8 +78,9 @@ func TestImplicitDirectories(t *testing.T) {
 	t.Cleanup(func() { _ = tempDir.RemoveRecursive(context.Background()) })
 	tarFile := tempDir.Join("implicit.tgz")
 
-	writer, err := NewWriter(tarFile)
+	writer, err := NewWriter(tarFile, "")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(writer))
 	readable, writable := writer.ReadableWritable()
 	assert.False(t, readable)
 	assert.True(t, writable)
@@ -89,8 +93,9 @@ func TestImplicitDirectories(t *testing.T) {
 	_, err = writer.Stat("/a")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	reader, err := NewReader(tarFile)
+	reader, err := NewReader(tarFile, "")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(reader))
 	t.Cleanup(func() { assert.NoError(t, reader.Close()) })
 	readable, writable = reader.ReadableWritable()
 	assert.True(t, readable)

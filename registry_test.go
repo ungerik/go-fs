@@ -1,10 +1,16 @@
 package fs
 
 import (
+	"context"
+	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseRawURI(t *testing.T) {
@@ -103,4 +109,141 @@ func TestParseRawURI_escapes(t *testing.T) {
 	assert.Equal(t, "a b/100%25.txt", fsPath)
 	assert.Equal(t, "100%25.txt", file.Name())
 	assert.Equal(t, fsFile(escapedFS, "a b"), file.Dir())
+}
+
+// TestParseRawURI_PrefixBoundary checks that a prefix only matches
+// at a boundary, so "s3://logs" never serves "s3://logs-archive".
+func TestParseRawURI_PrefixBoundary(t *testing.T) {
+	logs, err := NewMemFileSystem(&MemFileSystemOptions{ID: "logs"})
+	require.NoError(t, err)
+	require.NoError(t, Register(logs))
+	t.Cleanup(func() { _ = logs.Close() })
+
+	for _, uri := range []string{
+		"mem://logs-archive/key",
+		"mem://logs.example.com/key",
+		"mem://logs:2121/key",
+		"mem://logs2/key",
+	} {
+		fs, _ := ParseRawURI(uri)
+		assert.Equal(t, Invalid, fs, "%q must not match the prefix mem://logs", uri)
+	}
+	for _, uri := range []string{"mem://logs", "mem://logs/", "mem://logs/key"} {
+		fs, _ := ParseRawURI(uri)
+		assert.Equal(t, FileSystem(logs), fs, "%q must match the prefix mem://logs", uri)
+	}
+}
+
+// TestRegister_Identity checks that Register rejects a different file system
+// with the same prefix and that Unregister only removes the passed instance.
+func TestRegister_Identity(t *testing.T) {
+	a, err := NewMemFileSystem(&MemFileSystemOptions{ID: "register-identity"})
+	require.NoError(t, err)
+	b, err := NewMemFileSystem(&MemFileSystemOptions{ID: "register-identity"})
+	require.NoError(t, err)
+
+	require.NoError(t, Register(a))
+	t.Cleanup(func() { _ = a.Close() })
+	require.NoError(t, Register(a), "registering the same file system again is a no-op")
+	require.ErrorIs(t, Register(b), ErrAlreadyRegistered, "another file system with the same prefix")
+
+	assert.True(t, IsRegistered(a))
+	assert.False(t, IsRegistered(b), "b has the same prefix but is not registered")
+	assert.False(t, Unregister(b), "b was not registered")
+	assert.True(t, IsRegistered(a), "unregistering b must not unregister a")
+
+	assert.True(t, Unregister(a))
+	assert.False(t, IsRegistered(a), "Register is not reference counted")
+	assert.False(t, Unregister(a))
+
+	assert.Error(t, Register(nil))
+	assert.NotPanics(t, func() { Unregister(uncomparableFS{InvalidFileSystem: InvalidFileSystem("x")}) })
+}
+
+// uncomparableFS is a FileSystem value that can't be compared with ==.
+type uncomparableFS struct {
+	InvalidFileSystem
+	_ []byte
+}
+
+// TestEnsureRegistered checks that concurrent calls for the same prefix
+// share one created file system that is closed after the last free.
+func TestEnsureRegistered(t *testing.T) {
+	const prefix = "mem://ensure-registered"
+	var created atomic.Int32
+	create := func(ctx context.Context) (FileSystem, error) {
+		created.Add(1)
+		time.Sleep(10 * time.Millisecond) // let the other goroutines wait for this call
+		return NewMemFileSystem(&MemFileSystemOptions{ID: "ensure-registered"})
+	}
+
+	const n = 20
+	frees := make([]func() error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			fileSystem, free, err := EnsureRegistered(t.Context(), prefix, create)
+			assert.NoError(t, err)
+			assert.Equal(t, prefix, fileSystem.Prefix())
+			frees[i] = free
+		})
+	}
+	wg.Wait()
+	assert.Equal(t, int32(1), created.Load(), "concurrent calls must share one create call")
+
+	memFS := GetFileSystemByPrefixOrNil(prefix)
+	require.NotNil(t, memFS)
+	for i, free := range frees {
+		require.NoError(t, free())
+		require.NoError(t, free(), "free is idempotent")
+		if i < n-1 {
+			assert.True(t, IsRegistered(memFS), "registered while referenced")
+		}
+	}
+	assert.False(t, IsRegistered(memFS), "the last free unregisters")
+	assert.False(t, memFS.RootDir().Exists(), "the last free closes")
+
+	// A file system created with the wrong prefix is closed and rejected
+	_, _, err := EnsureRegistered(t.Context(), "mem://other-prefix", create)
+	assert.Error(t, err)
+
+	// A canceled context fails without creating
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _, err = EnsureRegistered(ctx, prefix, create)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// TestEnsureRegistered_Registered checks that a file system registered
+// with Register is shared but never closed by free.
+func TestEnsureRegistered_Registered(t *testing.T) {
+	memFS, err := NewMemFileSystem(&MemFileSystemOptions{ID: "ensure-registered-plain"})
+	require.NoError(t, err)
+	require.NoError(t, Register(memFS))
+	t.Cleanup(func() { _ = memFS.Close() })
+
+	got, free, err := EnsureRegistered(t.Context(), memFS.Prefix(), func(context.Context) (FileSystem, error) {
+		t.Fatal("must not create a registered file system")
+		return nil, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, FileSystem(memFS), got)
+	require.NoError(t, free())
+	assert.True(t, IsRegistered(memFS), "free must not unregister a file system registered with Register")
+	assert.True(t, memFS.RootDir().Exists(), "free must not close a file system registered with Register")
+}
+
+// TestInvalidFileSystem_Errors checks that files with an unregistered
+// prefix report ErrInvalidFileSystem with the URI and a redacted password.
+func TestInvalidFileSystem_Errors(t *testing.T) {
+	file := File("s3unregistered://user:secret@bucket/key.txt")
+	_, err := file.Stat()
+	require.ErrorIs(t, err, ErrInvalidFileSystem)
+	assert.NotErrorIs(t, err, os.ErrNotExist)
+	assert.NotContains(t, err.Error(), "secret", "the password must be redacted")
+	assert.Contains(t, err.Error(), "bucket/key.txt")
+
+	assert.ErrorIs(t, file.WriteAllString(t.Context(), "x"), ErrInvalidFileSystem)
+	assert.ErrorIs(t, file.Remove(), ErrInvalidFileSystem)
+	assert.ErrorIs(t, RemoveErrDoesNotExist(file.Remove()), ErrInvalidFileSystem, "must not be swallowed as not existing")
 }

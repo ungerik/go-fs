@@ -13,28 +13,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// registeredMemFileSystem creates a MemFileSystem with NewMemFileSystem
+// and registers it, like NewMemFileSystem did before v1.0.0-beta.2.
+func RegisteredTestMemFileSystem(opts *MemFileSystemOptions, initialFiles ...MemFile) (*MemFileSystem, error) {
+	memFS, err := NewMemFileSystem(opts, initialFiles...)
+	if err != nil {
+		return nil, err
+	}
+	return memFS, Register(memFS)
+}
+
 func TestNewMemFileSystem(t *testing.T) {
 	for _, sep := range []string{`/`, `\`} {
-		fs, err := NewMemFileSystem(sep)
+		fs, err := NewMemFileSystem(&MemFileSystemOptions{Separator: sep})
 		require.NoError(t, err)
+		require.False(t, IsRegistered(fs), "NewMemFileSystem must not register")
 		require.True(t, strings.HasPrefix(fs.Prefix(), "mem://"))
+		require.NoError(t, Register(fs))
 		require.True(t, fs.RootDir().Exists(), "root dir exists")
 		require.True(t, fs.RootDir().IsDir(), "root is dir")
 
-		fs = fs.WithVolume("C:")
-		require.True(t, strings.HasSuffix(fs.Prefix(), "C:"))
-		require.True(t, strings.HasSuffix(string(fs.RootDir()), "C:"+sep))
-
 		err = fs.Close()
 		require.NoError(t, err)
+		require.False(t, IsRegistered(fs), "Close unregisters")
 		require.False(t, fs.RootDir().Exists(), "root dir does not exist after close")
 		require.False(t, fs.RootDir().IsDir(), "root dir does not exist after close")
+
+		volFS, err := RegisteredTestMemFileSystem(&MemFileSystemOptions{Separator: sep, Volume: "C:"})
+		require.NoError(t, err)
+		require.Equal(t, "C:", volFS.Volume())
+		require.True(t, volFS.RootDir().IsDir(), "root of a volume file system is a dir")
+		require.NoError(t, volFS.Close())
 	}
 }
 
-func TestNewSingleMemFileSystem(t *testing.T) {
-	fs, f, err := NewSingleMemFileSystem(NewMemFile("test.txt", []byte("Hello, World!")))
-	require.NoError(t, err, "NewSingleMemFileSystem")
+func TestNewMemFileSystemAndRegister(t *testing.T) {
+	require.Error(t, NewMemFileSystemAndRegister(nil), "an ID is required")
+	err := NewMemFileSystemAndRegister(&MemFileSystemOptions{ID: "and-register-test"}, NewMemFile("a.txt", []byte("a")))
+	require.NoError(t, err)
+	memFS := GetFileSystemByPrefixOrNil("mem://and-register-test")
+	require.NotNil(t, memFS, "registered under its ID")
+	t.Cleanup(func() { _ = memFS.Close() })
+	data, err := File("mem://and-register-test/a.txt").ReadAll(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "a", string(data))
+
+	err = NewMemFileSystemAndRegister(&MemFileSystemOptions{ID: "and-register-test"})
+	require.ErrorIs(t, err, ErrAlreadyRegistered, "another file system with the same ID")
+}
+
+func TestMemFileSystem_SingleFile(t *testing.T) {
+	fs, err := RegisteredTestMemFileSystem(nil, NewMemFile("test.txt", []byte("Hello, World!")))
+	require.NoError(t, err, "NewMemFileSystem")
+	f := fs.RootDir().Join("test.txt")
 
 	t.Cleanup(func() { _ = fs.Close() })
 
@@ -70,14 +101,14 @@ func TestNewSingleMemFileSystem(t *testing.T) {
 
 func TestMemFileSystem_FullFeatures(t *testing.T) {
 	t.Run("Rename", func(t *testing.T) {
-		memFS, err := NewMemFileSystem("/", NewMemFile("a.txt", []byte("hello")))
+		memFS, err := RegisteredTestMemFileSystem(nil, NewMemFile("a.txt", []byte("hello")))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
 		src := memFS.RootDir().Join("a.txt")
 		require.True(t, src.Exists())
 
-		renamed, err := src.Rename("b.txt")
+		renamed, err := src.Rename(t.Context(), "b.txt")
 		require.NoError(t, err)
 		require.True(t, renamed.Exists(), "new path exists")
 		require.False(t, src.Exists(), "old path gone")
@@ -89,25 +120,25 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		// Renaming a directory works the same way.
 		require.NoError(t, memFS.MakeDir("/d1", 0))
 		dir := memFS.RootDir().Join("d1")
-		dir2, err := dir.Rename("d2")
+		dir2, err := dir.Rename(t.Context(), "d2")
 		require.NoError(t, err)
 		require.True(t, dir2.IsDir())
 		require.False(t, dir.Exists())
 
 		// Rejects separator in newName.
-		_, err = renamed.Rename("with/slash.txt")
+		_, err = renamed.Rename(t.Context(), "with/slash.txt")
 		require.Error(t, err)
 
 		// Rejects collision.
-		_, err = memFS.RootDir().Join("c.txt").Rename("b.txt")
+		_, err = memFS.RootDir().Join("c.txt").Rename(t.Context(), "b.txt")
 		require.Error(t, err) // source missing — also an error
 		require.NoError(t, memFS.WriteAll(t.Context(), "/c.txt", []byte("c"), 0))
-		_, err = memFS.RootDir().Join("c.txt").Rename("b.txt")
+		_, err = memFS.RootDir().Join("c.txt").Rename(t.Context(), "b.txt")
 		require.Error(t, err, "should reject existing target name")
 	})
 
 	t.Run("Move", func(t *testing.T) {
-		memFS, err := NewMemFileSystem("/", NewMemFile("a.txt", []byte("a")))
+		memFS, err := RegisteredTestMemFileSystem(nil, NewMemFile("a.txt", []byte("a")))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
@@ -115,53 +146,53 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 
 		// The destination is always the final path, an existing directory
 		// is a collision (File.MoveTo resolves "into directory" before dispatch).
-		require.ErrorIs(t, memFS.Move("/a.txt", "/sub"), os.ErrExist)
-		require.NoError(t, memFS.Move("/a.txt", "/sub/a.txt"))
+		require.ErrorIs(t, memFS.Move(t.Context(), "/a.txt", "/sub"), os.ErrExist)
+		require.NoError(t, memFS.Move(t.Context(), "/a.txt", "/sub/a.txt"))
 		require.True(t, memFS.RootDir().Join("sub", "a.txt").Exists())
 		require.False(t, memFS.RootDir().Join("a.txt").Exists())
 
 		// Move to explicit new path.
-		require.NoError(t, memFS.Move("/sub/a.txt", "/sub/nested/renamed.txt"))
+		require.NoError(t, memFS.Move(t.Context(), "/sub/a.txt", "/sub/nested/renamed.txt"))
 		require.True(t, memFS.RootDir().Join("sub", "nested", "renamed.txt").Exists())
 		require.False(t, memFS.RootDir().Join("sub", "a.txt").Exists())
 
 		// Collision is rejected.
 		require.NoError(t, memFS.WriteAll(t.Context(), "/sub/blocker.txt", []byte("x"), 0))
-		require.Error(t, memFS.Move("/sub/nested/renamed.txt", "/sub/blocker.txt"))
+		require.Error(t, memFS.Move(t.Context(), "/sub/nested/renamed.txt", "/sub/blocker.txt"))
 
 		// Missing source.
-		require.Error(t, memFS.Move("/nope.txt", "/sub"))
+		require.Error(t, memFS.Move(t.Context(), "/nope.txt", "/sub"))
 
 		// Moving a directory into a descendant is rejected and leaves the
 		// source intact (regression for an orphaning bug).
 		require.NoError(t, memFS.MakeAllDirs("/cyc/inner", 0))
-		require.Error(t, memFS.Move("/cyc", "/cyc/inner/sub"), "into descendant")
+		require.Error(t, memFS.Move(t.Context(), "/cyc", "/cyc/inner/sub"), "into descendant")
 		require.True(t, memFS.RootDir().Join("cyc").Exists(), "source survives rejected move")
 		require.True(t, memFS.RootDir().Join("cyc", "inner").Exists(), "subtree survives rejected move")
 
 		// Move(src, src) on a regular file is a no-op, matching
 		// LocalFileSystem and the MoveFileSystem contract.
 		require.NoError(t, memFS.WriteAll(t.Context(), "/same.txt", []byte("z"), 0))
-		require.NoError(t, memFS.Move("/same.txt", "/same.txt"), "Move(file, file) must be a no-op")
+		require.NoError(t, memFS.Move(t.Context(), "/same.txt", "/same.txt"), "Move(file, file) must be a no-op")
 		got, err := memFS.RootDir().Join("same.txt").ReadAllString(t.Context())
 		require.NoError(t, err)
 		require.Equal(t, "z", got, "file content preserved")
 
 		// Move(src, src) on a directory is also a no-op (the directory-
 		// append rule does not apply when src and dest are already equal).
-		require.NoError(t, memFS.Move("/cyc", "/cyc"), "Move(dir, dir) must be a no-op")
+		require.NoError(t, memFS.Move(t.Context(), "/cyc", "/cyc"), "Move(dir, dir) must be a no-op")
 		require.True(t, memFS.RootDir().Join("cyc", "inner").Exists(), "subtree preserved")
 
 		// Move(/a, /) targets the existing root directory, which is a
 		// collision under the final-destination contract (File.MoveTo
 		// resolves "into directory" before calling Move).
 		require.NoError(t, memFS.MakeDir("/movable", 0))
-		require.ErrorIs(t, memFS.Move("/movable", "/"), os.ErrExist, "Move(/a, /) collides with the root")
+		require.ErrorIs(t, memFS.Move(t.Context(), "/movable", "/"), os.ErrExist, "Move(/a, /) collides with the root")
 		require.True(t, memFS.RootDir().Join("movable").Exists(), "subject survives the rejected move")
 	})
 
 	t.Run("Permissions_User_Group", func(t *testing.T) {
-		memFS, err := NewMemFileSystem("/", NewMemFile("a.txt", []byte("a")))
+		memFS, err := RegisteredTestMemFileSystem(nil, NewMemFile("a.txt", []byte("a")))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
@@ -191,7 +222,7 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 	})
 
 	t.Run("XAttr", func(t *testing.T) {
-		memFS, err := NewMemFileSystem("/", NewMemFile("a.txt", []byte("a")))
+		memFS, err := RegisteredTestMemFileSystem(nil, NewMemFile("a.txt", []byte("a")))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
@@ -207,9 +238,9 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.Equal(t, []string{"user.other", "user.tag"}, names, "sorted keys")
 
 		// XATTR_CREATE rejects existing
-		require.Error(t, memFS.SetXAttr("/a.txt", "user.tag", []byte("new"), xattrCreate, true))
+		require.Error(t, memFS.SetXAttr("/a.txt", "user.tag", []byte("new"), XAttrCreate, true))
 		// XATTR_REPLACE rejects missing
-		require.Error(t, memFS.SetXAttr("/a.txt", "user.absent", []byte("z"), xattrReplace, true))
+		require.Error(t, memFS.SetXAttr("/a.txt", "user.absent", []byte("z"), XAttrReplace, true))
 
 		// Remove and verify
 		require.NoError(t, memFS.RemoveXAttr("/a.txt", "user.tag", true))
@@ -219,7 +250,7 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 	})
 
 	t.Run("ListDirMax", func(t *testing.T) {
-		memFS, err := NewMemFileSystem("/",
+		memFS, err := RegisteredTestMemFileSystem(nil,
 			NewMemFile("a.txt", []byte("a")),
 			NewMemFile("b.txt", []byte("b")),
 			NewMemFile("c.log", []byte("c")),
@@ -227,25 +258,25 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
-		all, err := memFS.ListDirMax(t.Context(), "/", -1, nil)
+		all, err := memFS.JoinCleanFile("/").ListDirMax(t.Context(), -1)
 		require.NoError(t, err)
 		require.Len(t, all, 3)
 
-		two, err := memFS.ListDirMax(t.Context(), "/", 2, nil)
+		two, err := memFS.JoinCleanFile("/").ListDirMax(t.Context(), 2)
 		require.NoError(t, err)
 		require.Len(t, two, 2)
 
-		zero, err := memFS.ListDirMax(t.Context(), "/", 0, nil)
+		zero, err := memFS.JoinCleanFile("/").ListDirMax(t.Context(), 0)
 		require.NoError(t, err)
 		require.Empty(t, zero)
 
-		txt, err := memFS.ListDirMax(t.Context(), "/", -1, []string{"*.txt"})
+		txt, err := memFS.JoinCleanFile("/").ListDirMax(t.Context(), -1, "*.txt")
 		require.NoError(t, err)
 		require.Len(t, txt, 2)
 	})
 
 	t.Run("ListDirInfoRecursive", func(t *testing.T) {
-		memFS, err := NewMemFileSystem("/")
+		memFS, err := RegisteredTestMemFileSystem(nil)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
@@ -271,13 +302,13 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 	})
 
 	t.Run("Symlinks", func(t *testing.T) {
-		memFS, err := NewMemFileSystem("/", NewMemFile("real.txt", []byte("R")))
+		memFS, err := RegisteredTestMemFileSystem(nil, NewMemFile("real.txt", []byte("R")))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
 		require.NoError(t, memFS.CreateSymbolicLink("/real.txt", "/link"))
-		require.True(t, memFS.IsSymbolicLink("/link"))
-		require.False(t, memFS.IsSymbolicLink("/real.txt"))
+		require.True(t, isMemSymlink(memFS, "/link"))
+		require.False(t, isMemSymlink(memFS, "/real.txt"))
 
 		target, err := memFS.ReadSymbolicLink("/link")
 		require.NoError(t, err)
@@ -292,12 +323,12 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 
 		// Removing the link does not touch the target
 		require.NoError(t, memFS.Remove("/link"))
-		require.False(t, memFS.IsSymbolicLink("/link"))
+		require.False(t, isMemSymlink(memFS, "/link"))
 		require.True(t, memFS.RootDir().Join("real.txt").Exists())
 	})
 
 	t.Run("Watch", func(t *testing.T) {
-		memFS, err := NewMemFileSystem("/", NewMemFile("a.txt", []byte("a")))
+		memFS, err := RegisteredTestMemFileSystem(nil, NewMemFile("a.txt", []byte("a")))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = memFS.Close() })
 
@@ -367,9 +398,15 @@ func TestMemFileSystem_FullFeatures(t *testing.T) {
 
 // newTestMemFS returns a MemFileSystem that is cleaned up at the end of the
 // test. Closing twice (here + manual Close inside the test) is a no-op.
+// isMemSymlink reports if filePath is a symbolic link in memFS.
+func isMemSymlink(memFS *MemFileSystem, filePath string) bool {
+	info, err := memFS.Lstat(filePath)
+	return err == nil && info.IsSymlink
+}
+
 func newTestMemFS(t *testing.T, initial ...MemFile) *MemFileSystem {
 	t.Helper()
-	memFS, err := NewMemFileSystem("/", initial...)
+	memFS, err := RegisteredTestMemFileSystem(nil, initial...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = memFS.Close() })
 	return memFS
@@ -377,20 +414,20 @@ func newTestMemFS(t *testing.T, initial ...MemFile) *MemFileSystem {
 
 func TestMemFileSystem_Constructor_EdgeCases(t *testing.T) {
 	t.Run("InvalidSeparator", func(t *testing.T) {
-		for _, sep := range []string{"", ":", "//", "|"} {
-			_, err := NewMemFileSystem(sep)
+		for _, sep := range []string{":", "//", "|"} {
+			_, err := NewMemFileSystem(&MemFileSystemOptions{Separator: sep})
 			require.Error(t, err, "separator %q must be rejected", sep)
 		}
 	})
 
 	t.Run("EmptyInitialFileName", func(t *testing.T) {
-		_, err := NewMemFileSystem("/", MemFile{FileName: ""})
+		_, err := RegisteredTestMemFileSystem(nil, MemFile{FileName: ""})
 		require.Error(t, err, "empty initial filename must be rejected")
 	})
 
 	t.Run("InitialFilesWithPath", func(t *testing.T) {
-		memFS, err := NewMemFileSystem(
-			"/",
+		memFS, err := RegisteredTestMemFileSystem(
+			nil,
 			NewMemFile("docs/readme.txt", []byte("R")),
 			NewMemFile("docs/sub/deep.txt", []byte("D")),
 			NewMemFile("top.txt", []byte("T")),
@@ -415,27 +452,15 @@ func TestMemFileSystem_Constructor_EdgeCases(t *testing.T) {
 	})
 }
 
-func TestMemFileSystem_WithIDVolume(t *testing.T) {
-	memFS := newTestMemFS(t)
-	origPrefix := memFS.Prefix()
-
-	// WithID(sameID) returns identity, no re-registration churn.
-	id := memFS.ID()
-	same := memFS.WithID(id)
-	require.Same(t, memFS, same)
-	require.Equal(t, origPrefix, memFS.Prefix())
-
-	// New ID changes the prefix and keeps the fs registered.
-	memFS.WithID("test-id")
-	require.NotEqual(t, origPrefix, memFS.Prefix())
-	require.True(t, strings.HasSuffix(memFS.Prefix(), "test-id"))
-	require.True(t, IsRegistered(memFS))
-
-	// WithVolume(sameVolume) is identity; WithVolume(new) updates prefix.
-	require.Same(t, memFS, memFS.WithVolume(""))
-	memFS.WithVolume("V:")
-	require.True(t, strings.HasSuffix(memFS.Prefix(), "V:"), "prefix gets volume suffix")
+func TestMemFileSystem_IDVolume(t *testing.T) {
+	memFS, err := NewMemFileSystem(&MemFileSystemOptions{ID: "test-id", Volume: "V:"})
+	require.NoError(t, err)
+	require.Equal(t, "test-id", memFS.ID())
+	require.True(t, strings.HasPrefix(memFS.Prefix(), "mem://test-id"), "prefix contains the ID")
 	require.Equal(t, "V:", memFS.Volume())
+
+	_, err = NewMemFileSystem(&MemFileSystemOptions{ID: "a/b"})
+	require.Error(t, err, "an ID with a separator must be rejected")
 }
 
 func TestMemFileSystem_AddMemFile_EdgeCases(t *testing.T) {
@@ -570,7 +595,7 @@ func TestMemFileSystem_Stat_And_Exists(t *testing.T) {
 		require.True(t, info.IsSymlink, "Stat must report that the path is a link")
 		require.True(t, info.IsRegular, "Stat must follow the link to the regular target")
 		require.Equal(t, int64(3), info.Size, "Stat must report the target size")
-		require.True(t, memFS.IsSymbolicLink("/link"))
+		require.True(t, isMemSymlink(memFS, "/link"))
 		require.Nil(t, info.Sys)
 	})
 }
@@ -712,29 +737,29 @@ func TestMemFileSystem_Truncate_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("hello")))
 
 	t.Run("EmptyPath", func(t *testing.T) {
-		require.ErrorIs(t, memFS.Truncate("", 0), ErrEmptyPath)
+		require.ErrorIs(t, memFS.Truncate(t.Context(), "", 0), ErrEmptyPath)
 	})
 
 	t.Run("Missing", func(t *testing.T) {
-		require.ErrorIs(t, memFS.Truncate("/missing", 0), os.ErrNotExist)
+		require.ErrorIs(t, memFS.Truncate(t.Context(), "/missing", 0), os.ErrNotExist)
 	})
 
 	t.Run("SameSizeNoOp", func(t *testing.T) {
-		require.NoError(t, memFS.Truncate("/a.txt", 5))
+		require.NoError(t, memFS.Truncate(t.Context(), "/a.txt", 5))
 		data, err := memFS.ReadAll(t.Context(), "/a.txt")
 		require.NoError(t, err)
 		require.Equal(t, []byte("hello"), data)
 	})
 
 	t.Run("ZeroPadsWhenExtending", func(t *testing.T) {
-		require.NoError(t, memFS.Truncate("/a.txt", 8))
+		require.NoError(t, memFS.Truncate(t.Context(), "/a.txt", 8))
 		data, err := memFS.ReadAll(t.Context(), "/a.txt")
 		require.NoError(t, err)
 		require.Equal(t, []byte("hello\x00\x00\x00"), data)
 	})
 
 	t.Run("ShrinkPreservesPrefix", func(t *testing.T) {
-		require.NoError(t, memFS.Truncate("/a.txt", 3))
+		require.NoError(t, memFS.Truncate(t.Context(), "/a.txt", 3))
 		data, err := memFS.ReadAll(t.Context(), "/a.txt")
 		require.NoError(t, err)
 		require.Equal(t, []byte("hel"), data)
@@ -743,7 +768,7 @@ func TestMemFileSystem_Truncate_EdgeCases(t *testing.T) {
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		require.ErrorIs(t, memFS.Truncate("/a.txt", 1), ErrReadOnlyFileSystem)
+		require.ErrorIs(t, memFS.Truncate(t.Context(), "/a.txt", 1), ErrReadOnlyFileSystem)
 	})
 }
 
@@ -1003,31 +1028,34 @@ func TestMemFileSystem_Rename_EdgeCases(t *testing.T) {
 	memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("a")))
 
 	t.Run("EmptyInputs", func(t *testing.T) {
-		_, err := memFS.Rename("", "x")
+		_, err := File("").Rename(t.Context(), "x")
 		require.ErrorIs(t, err, ErrEmptyPath)
-		_, err = memFS.Rename("/a.txt", "")
-		require.ErrorIs(t, err, ErrEmptyPath)
+		for _, newName := range []string{"", ".", ".."} {
+			_, err = memFS.JoinCleanFile("/a.txt").Rename(t.Context(), newName)
+			require.ErrorIs(t, err, os.ErrInvalid, "new name %q", newName)
+		}
+		require.True(t, memFS.JoinCleanFile("/a.txt").Exists(), "a failed Rename must keep the file")
 	})
 
 	t.Run("NewNameWithSeparator", func(t *testing.T) {
-		_, err := memFS.Rename("/a.txt", "sub/b.txt")
+		_, err := memFS.JoinCleanFile("/a.txt").Rename(t.Context(), "sub/b.txt")
 		require.Error(t, err)
 	})
 
 	t.Run("Root", func(t *testing.T) {
-		_, err := memFS.Rename("/", "new-root")
+		_, err := memFS.RootDir().Rename(t.Context(), "new-root")
 		require.Error(t, err, "renaming root must fail")
 	})
 
 	t.Run("Missing", func(t *testing.T) {
-		_, err := memFS.Rename("/missing", "x.txt")
+		_, err := memFS.JoinCleanFile("/missing").Rename(t.Context(), "x.txt")
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS.SetReadOnly(true)
 		defer memFS.SetReadOnly(false)
-		_, err := memFS.Rename("/a.txt", "b.txt")
+		_, err := memFS.JoinCleanFile("/a.txt").Rename(t.Context(), "b.txt")
 		require.ErrorIs(t, err, ErrReadOnlyFileSystem)
 	})
 }
@@ -1035,23 +1063,23 @@ func TestMemFileSystem_Rename_EdgeCases(t *testing.T) {
 func TestMemFileSystem_Move_EdgeCases(t *testing.T) {
 	t.Run("EmptyInputs", func(t *testing.T) {
 		memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("a")))
-		require.ErrorIs(t, memFS.Move("", "/x"), ErrEmptyPath)
-		require.ErrorIs(t, memFS.Move("/a.txt", ""), ErrEmptyPath)
+		require.ErrorIs(t, memFS.Move(t.Context(), "", "/x"), ErrEmptyPath)
+		require.ErrorIs(t, memFS.Move(t.Context(), "/a.txt", ""), ErrEmptyPath)
 	})
 
 	t.Run("Missing", func(t *testing.T) {
 		memFS := newTestMemFS(t)
-		require.ErrorIs(t, memFS.Move("/missing", "/x"), os.ErrNotExist)
+		require.ErrorIs(t, memFS.Move(t.Context(), "/missing", "/x"), os.ErrNotExist)
 	})
 
 	t.Run("Root", func(t *testing.T) {
 		memFS := newTestMemFS(t)
-		require.Error(t, memFS.Move("/", "/x"), "moving root must fail")
+		require.Error(t, memFS.Move(t.Context(), "/", "/x"), "moving root must fail")
 	})
 
 	t.Run("ParentMissing", func(t *testing.T) {
 		memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("a")))
-		err := memFS.Move("/a.txt", "/no/dir/b.txt")
+		err := memFS.Move(t.Context(), "/a.txt", "/no/dir/b.txt")
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
 
@@ -1060,7 +1088,7 @@ func TestMemFileSystem_Move_EdgeCases(t *testing.T) {
 			NewMemFile("a.txt", []byte("a")),
 			NewMemFile("blocker.txt", []byte("b")),
 		)
-		err := memFS.Move("/a.txt", "/blocker.txt/x")
+		err := memFS.Move(t.Context(), "/a.txt", "/blocker.txt/x")
 		require.Error(t, err)
 		// Either ErrIsNotDirectory or ErrAlreadyExists is acceptable; both
 		// signal that the move can't succeed. Verify that at least one
@@ -1074,7 +1102,7 @@ func TestMemFileSystem_Move_EdgeCases(t *testing.T) {
 	t.Run("ReadOnly", func(t *testing.T) {
 		memFS := newTestMemFS(t, NewMemFile("a.txt", []byte("a")))
 		memFS.SetReadOnly(true)
-		require.ErrorIs(t, memFS.Move("/a.txt", "/b.txt"), ErrReadOnlyFileSystem)
+		require.ErrorIs(t, memFS.Move(t.Context(), "/a.txt", "/b.txt"), ErrReadOnlyFileSystem)
 	})
 }
 
@@ -1138,8 +1166,8 @@ func TestMemFileSystem_Symlinks_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("IsSymbolicLinkEmptyMissing", func(t *testing.T) {
-		require.False(t, memFS.IsSymbolicLink(""))
-		require.False(t, memFS.IsSymbolicLink("/missing"))
+		require.False(t, isMemSymlink(memFS, ""))
+		require.False(t, isMemSymlink(memFS, "/missing"))
 	})
 }
 
@@ -1212,19 +1240,19 @@ func TestMemFileSystem_ListDir_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("ListDirMax_Errors", func(t *testing.T) {
-		_, err := memFS.ListDirMax(t.Context(), "", -1, nil)
+		_, err := File("").ListDirMax(t.Context(), -1)
 		require.ErrorIs(t, err, ErrEmptyPath)
 
-		_, err = memFS.ListDirMax(t.Context(), "/missing", -1, nil)
+		_, err = memFS.JoinCleanFile("/missing").ListDirMax(t.Context(), -1)
 		require.ErrorIs(t, err, os.ErrNotExist)
 
-		_, err = memFS.ListDirMax(t.Context(), "/a.txt", -1, nil)
+		_, err = memFS.JoinCleanFile("/a.txt").ListDirMax(t.Context(), -1)
 		var notDir ErrIsNotDirectory
 		require.ErrorAs(t, err, &notDir)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		_, err = memFS.ListDirMax(ctx, "/", -1, nil)
+		_, err = memFS.JoinCleanFile("/").ListDirMax(ctx, -1)
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -1404,7 +1432,7 @@ func TestMemFileSystem_Watch_EdgeCases(t *testing.T) {
 }
 
 func TestMemFileSystem_Close_Idempotent(t *testing.T) {
-	memFS, err := NewMemFileSystem("/")
+	memFS, err := RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 
 	require.True(t, IsRegistered(memFS))

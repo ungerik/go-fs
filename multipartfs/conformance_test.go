@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fstest"
 )
 
@@ -34,8 +35,9 @@ func newSeedRequest(t *testing.T, fieldName string, seed fstest.Seed) *http.Requ
 
 func TestConformance(t *testing.T) {
 	seed := fstest.FlatSeed()
-	multipartFS, err := FromRequestForm(newSeedRequest(t, "files", seed), 1<<20)
-	require.NoError(t, err, "FromRequestForm")
+	multipartFS, err := NewFromRequest(newSeedRequest(t, "files", seed), 1<<20, "")
+	require.NoError(t, err, "NewFromRequest")
+	require.NoError(t, fs.Register(multipartFS))
 
 	fstest.RunConformance(t, multipartFS, fstest.Config{
 		Prefix:  multipartFS.Prefix(),

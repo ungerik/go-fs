@@ -33,7 +33,7 @@ func newFileTestServer(t *testing.T) (addr string) {
 func TestStat(t *testing.T) {
 	addr := newFileTestServer(t)
 
-	info, err := FileSystem.Stat(addr + "/README.md")
+	info, err := Default.Stat(addr + "/README.md")
 	require.NoError(t, err)
 	assert.False(t, info.IsDir)
 	assert.True(t, info.IsRegular)
@@ -48,7 +48,7 @@ func TestStat(t *testing.T) {
 func TestReadAll(t *testing.T) {
 	addr := newFileTestServer(t)
 
-	data, err := FileSystem.ReadAll(t.Context(), addr+"/README.md")
+	data, err := Default.ReadAll(t.Context(), addr+"/README.md")
 	require.NoError(t, err)
 	assert.Equal(t, testFileContent, string(data))
 

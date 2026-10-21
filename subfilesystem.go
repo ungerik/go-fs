@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -28,8 +29,6 @@ var (
 	_ RemoveAllFileSystem        = new(SubFileSystem)
 	_ CopyFileSystem             = new(SubFileSystem)
 	_ MoveFileSystem             = new(SubFileSystem)
-	_ RenameFileSystem           = new(SubFileSystem)
-	_ ListDirMaxFileSystem       = new(SubFileSystem)
 	_ ListDirRecursiveFileSystem = new(SubFileSystem)
 	_ PermissionsFileSystem      = new(SubFileSystem)
 	_ SymbolicLinkFileSystem     = new(SubFileSystem)
@@ -46,12 +45,28 @@ var (
 // The parent must stay registered while the view is used,
 // because emulated operations go through the File API.
 type SubFileSystem struct {
-	fsimpl.PathHelper
+	paths fsimpl.PathHelper
 
 	parent FileSystem
 	dir    string // clean parent path of the root directory
 	id     string
 	closed atomic.Bool
+}
+
+// Prefix returns the URI prefix of the file system.
+func (s *SubFileSystem) Prefix() string {
+	return s.paths.URIPrefix
+}
+
+// Separator returns "/".
+func (s *SubFileSystem) Separator() string {
+	return s.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (s *SubFileSystem) CleanPath(uriParts ...string) string {
+	return s.paths.CleanPath(uriParts...)
 }
 
 // NewSubFileSystem returns a file system with the URI prefix "sub://" + id
@@ -74,22 +89,25 @@ func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSys
 		id = fsimpl.RandomString()
 	}
 	return &SubFileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: SubFileSystemPrefix + id, Rooted: true},
-		parent:     parent,
-		dir:        dir,
-		id:         id,
+		paths:  fsimpl.PathHelper{URIPrefix: SubFileSystemPrefix + id, Rooted: true},
+		parent: parent,
+		dir:    dir,
+		id:     id,
 	}, nil
 }
 
-// NewSubFileSystemAndRegister returns a registered file system
-// rooted at dirPath of the parent, see NewSubFileSystem.
-func NewSubFileSystemAndRegister(parent FileSystem, dirPath string, id string) (*SubFileSystem, error) {
+// NewSubFileSystemAndRegister registers a file system rooted at dirPath
+// of the parent with the URI prefix "sub://" + id, see NewSubFileSystem.
+// The id must not be empty.
+func NewSubFileSystemAndRegister(parent FileSystem, dirPath string, id string) error {
+	if id == "" {
+		return errors.New("NewSubFileSystemAndRegister needs an id")
+	}
 	subFS, err := NewSubFileSystem(parent, dirPath, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	Register(subFS)
-	return subFS, nil
+	return Register(subFS)
 }
 
 // Parent returns the parent file system.
@@ -154,7 +172,7 @@ func (s *SubFileSystem) ReadableWritable() (readable, writable bool) {
 // RootDir returns the root directory of the view,
 // which is the directory of the parent it was created for.
 func (s *SubFileSystem) RootDir() File {
-	return File(s.URIPrefix + "/")
+	return File(s.paths.URIPrefix + "/")
 }
 
 // ID returns the id of the file system, which is part of its URI prefix.
@@ -194,7 +212,7 @@ func (s *SubFileSystem) Stat(filePath string) (*FileInfo, error) {
 
 // subFile translates a File of the parent below the root directory.
 func (s *SubFileSystem) subFile(parentFile File) File {
-	return File(s.JoinCleanURI(s.subPath(uriPath(s.parent, string(parentFile)))))
+	return File(s.paths.JoinCleanURI(s.subPath(uriPath(s.parent, string(parentFile)))))
 }
 
 // subErr translates the file of typed parent errors to this file system.
@@ -361,14 +379,14 @@ func (s *SubFileSystem) OpenReadWriter(filePath string, perm Permissions) (ReadW
 }
 
 // Truncate changes the size of the file in the parent file system.
-func (s *SubFileSystem) Truncate(filePath string, size int64) error {
+func (s *SubFileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	return s.subErr(fsTruncate(context.Background(), s.parent, s.parentPath(filePath), size))
+	return s.subErr(fsTruncate(ctx, s.parent, s.parentPath(filePath), size))
 }
 
 // Touch creates the file in the parent file system if it does not exist,
@@ -429,50 +447,14 @@ func (s *SubFileSystem) CopyFile(ctx context.Context, srcFile string, destFile s
 
 // Move moves and/or renames a file within the view
 // using the parent file system.
-func (s *SubFileSystem) Move(filePath string, destPath string) error {
+func (s *SubFileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
 	if filePath == "" || destPath == "" {
 		return ErrEmptyPath
 	}
-	return s.subErr(fsMove(context.Background(), s.parent, s.parentPath(filePath), s.parentPath(destPath)))
-}
-
-// Rename renames a file within its directory in the parent file system
-// and returns the new path within the view.
-func (s *SubFileSystem) Rename(filePath string, newName string) (newPath string, err error) {
-	if err := s.checkClosed(); err != nil {
-		return "", err
-	}
-	if filePath == "" {
-		return "", ErrEmptyPath
-	}
-	newParentPath, err := fsRename(s.parent, s.parentPath(filePath), newName)
-	if err != nil {
-		return "", s.subErr(err)
-	}
-	return s.subPath(newParentPath), nil
-}
-
-// ListDirMax returns at most max files of the directory that match any
-// of the patterns, or all of them if max is negative.
-func (s *SubFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error) {
-	if err := s.checkClosed(); err != nil {
-		return nil, err
-	}
-	if dirPath == "" {
-		return nil, ErrEmptyPath
-	}
-	parentFiles, err := fsListDirMax(ctx, s.parent, s.parentPath(dirPath), max, patterns)
-	if err != nil {
-		return nil, s.subErr(err)
-	}
-	files := make([]File, len(parentFiles))
-	for i, f := range parentFiles {
-		files[i] = s.subFile(f)
-	}
-	return files, nil
+	return s.subErr(fsMove(ctx, s.parent, s.parentPath(filePath), s.parentPath(destPath)))
 }
 
 // ListDirRecursive calls the callback for every file below the directory
@@ -501,16 +483,20 @@ func (s *SubFileSystem) SetPermissions(filePath string, perm Permissions) error 
 	return NewErrUnsupported(s, "SetPermissions")
 }
 
-// IsSymbolicLink reports if the file is a symbolic link
-// in the parent file system.
-func (s *SubFileSystem) IsSymbolicLink(filePath string) bool {
-	if s.closed.Load() {
-		return false
+// Lstat returns the FileInfo of the file in the parent file system
+// without following a symbolic link.
+func (s *SubFileSystem) Lstat(filePath string) (*FileInfo, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
 	}
-	if p, ok := s.parent.(SymbolicLinkFileSystem); ok {
-		return p.IsSymbolicLink(s.parentPath(filePath))
+	if filePath == "" {
+		return nil, ErrEmptyPath
 	}
-	return false
+	info, err := fsLstat(s.parent, s.parentPath(filePath))
+	if err != nil {
+		return nil, s.subErr(err)
+	}
+	return s.subInfo(info), nil
 }
 
 // CreateSymbolicLink creates a link at linkPath to targetPath.

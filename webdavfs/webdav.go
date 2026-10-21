@@ -137,7 +137,9 @@ func NewAndRegister(ctx context.Context, baseURL string, opts *Options) (fs.File
 	if err != nil {
 		return nil, err
 	}
-	fs.Register(f)
+	if err := fs.Register(f); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
 	return f, nil
 }
 
@@ -458,7 +460,7 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, err
 	}
 	defer response.Body.Close()
-	return fs.ReadAllContext(ctx, response.Body)
+	return fs.ReadAll(ctx, response.Body)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -558,7 +560,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 
 // Move moves or renames a file or collection with the MOVE method,
 // overwriting an existing destination.
-func (f *fileSystem) Move(filePath string, destPath string) error {
+func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return fs.ErrEmptyPath
 	}

@@ -73,8 +73,8 @@ var (
 func init() {
 	// Register with prefix ftp:// and ftps:// for URLs with
 	// ftp(s)://username:password@host:port schema.
-	fs.Register(&fileSystem{secure: false, PathHelper: pathHelper(Prefix)})
-	fs.Register(&fileSystem{secure: true, PathHelper: pathHelper(PrefixTLS)})
+	_ = fs.Register(&fileSystem{secure: false, PathHelper: pathHelper(Prefix)})
+	_ = fs.Register(&fileSystem{secure: true, PathHelper: pathHelper(PrefixTLS)})
 }
 
 // CredentialsCallback is called by Dial to get the username and password for a FTP connection.
@@ -184,7 +184,9 @@ func DialAndRegister(ctx context.Context, address string, credentialsCallback Cr
 	if err != nil {
 		return nil, err
 	}
-	fs.Register(fileSystem)
+	if err = fs.Register(fileSystem); err != nil {
+		return nil, errors.Join(err, fileSystem.Close())
+	}
 	return fileSystem, nil
 }
 
@@ -198,27 +200,13 @@ func EnsureRegistered(ctx context.Context, address string, credentialsCallback C
 	if err != nil {
 		return nop, err
 	}
-	if f := fs.GetFileSystemByPrefixOrNil(prefix); f != nil {
-		fs.Register(f) // increase ref count
-		return func() error { return f.Close() }, nil
-	}
-
-	newFS, err := dialPrepared(ctx, u, username, password, prefix, secure, address, credentialsCallback, opts)
+	_, free, err = fs.EnsureRegistered(ctx, prefix, func(ctx context.Context) (fs.FileSystem, error) {
+		return dialPrepared(ctx, u, username, password, prefix, secure, address, credentialsCallback, opts)
+	})
 	if err != nil {
 		return nop, err
 	}
-	// Register dedups by prefix. If another caller registered a file system
-	// with the same prefix while we were dialing, our freshly dialed connection
-	// is redundant: close it and hand back a free that only drops the ref count
-	// of the file system that actually won the race. The returned free is always
-	// ref-count aware (it closes the connection only when the last reference is
-	// released), so it can never close a file system another caller still holds.
-	fs.Register(newFS)
-	if registered := fs.GetFileSystemByPrefixOrNil(prefix); registered != newFS {
-		_ = newFS.(*fileSystem).closeConn()
-		return func() error { return registered.Close() }, nil
-	}
-	return func() error { return newFS.Close() }, nil
+	return free, nil
 }
 
 func prepareDial(address string, credentialsCallback CredentialsCallback) (u *url.URL, username, password, prefix string, secure bool, err error) {
@@ -692,7 +680,7 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) (data []byte,
 		if err != nil {
 			return f.notExist(filePath, err)
 		}
-		data, err = fs.ReadAllContext(ctx, response)
+		data, err = fs.ReadAll(ctx, response)
 		return errors.Join(err, response.Close())
 	})
 	return data, err
@@ -799,7 +787,7 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 // no-op behavior required by the [fs.MoveFileSystem] contract. (Many FTP
 // servers would otherwise reject the rename with a "file unavailable"
 // reply.)
-func (f *fileSystem) Move(filePath string, destPath string) error {
+func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	filePath = path.Clean(filePath)
 	destPath = path.Clean(destPath)
 	if filePath == destPath {
@@ -903,9 +891,7 @@ func (f *fileSystem) Close() error {
 	if f.checkClosed() != nil {
 		return nil
 	}
-	if fs.Unregister(f) > 0 {
-		return nil // still referenced by another caller
-	}
+	fs.Unregister(f)
 	return f.closeConn()
 }
 

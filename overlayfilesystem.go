@@ -46,7 +46,7 @@ var (
 // to overlay a sub directory. The layers must stay registered while the
 // overlay is used, because emulated operations go through the File API.
 type OverlayFileSystem struct {
-	fsimpl.PathHelper
+	paths fsimpl.PathHelper
 
 	base   FileSystem
 	upper  WriteFileSystem
@@ -55,6 +55,22 @@ type OverlayFileSystem struct {
 
 	mtx       sync.RWMutex
 	whiteouts map[string]struct{} // overlay paths of removed base entries
+}
+
+// Prefix returns the URI prefix of the file system.
+func (o *OverlayFileSystem) Prefix() string {
+	return o.paths.URIPrefix
+}
+
+// Separator returns "/".
+func (o *OverlayFileSystem) Separator() string {
+	return o.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (o *OverlayFileSystem) CleanPath(uriParts ...string) string {
+	return o.paths.CleanPath(uriParts...)
 }
 
 // NewOverlayFileSystem returns a file system with the URI prefix
@@ -71,23 +87,26 @@ func NewOverlayFileSystem(base FileSystem, upper WriteFileSystem, id string) (*O
 		id = fsimpl.RandomString()
 	}
 	return &OverlayFileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: OverlayFileSystemPrefix + id, Rooted: true},
-		base:       base,
-		upper:      upper,
-		id:         id,
-		whiteouts:  make(map[string]struct{}),
+		paths:     fsimpl.PathHelper{URIPrefix: OverlayFileSystemPrefix + id, Rooted: true},
+		base:      base,
+		upper:     upper,
+		id:        id,
+		whiteouts: make(map[string]struct{}),
 	}, nil
 }
 
-// NewOverlayFileSystemAndRegister returns a registered overlay
-// file system, see NewOverlayFileSystem.
-func NewOverlayFileSystemAndRegister(base FileSystem, upper WriteFileSystem, id string) (*OverlayFileSystem, error) {
+// NewOverlayFileSystemAndRegister registers an overlay file system
+// with the URI prefix "overlay://" + id, see NewOverlayFileSystem.
+// The id must not be empty.
+func NewOverlayFileSystemAndRegister(base FileSystem, upper WriteFileSystem, id string) error {
+	if id == "" {
+		return errors.New("NewOverlayFileSystemAndRegister needs an id")
+	}
 	overlay, err := NewOverlayFileSystem(base, upper, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	Register(overlay)
-	return overlay, nil
+	return Register(overlay)
 }
 
 // Base returns the read-only base layer.
@@ -108,7 +127,7 @@ func (o *OverlayFileSystem) ReadableWritable() (readable, writable bool) {
 
 // RootDir returns the root directory of the overlay.
 func (o *OverlayFileSystem) RootDir() File {
-	return File(o.URIPrefix + "/")
+	return File(o.paths.URIPrefix + "/")
 }
 
 // ID returns the id of the file system, which is part of its URI prefix.
@@ -124,7 +143,7 @@ func (o *OverlayFileSystem) Name() string {
 // String returns a descriptive string of the overlay
 // including its prefix and both layers.
 func (o *OverlayFileSystem) String() string {
-	return fmt.Sprintf("%s with prefix %s of %s over %s", o.Name(), o.URIPrefix, o.upper, o.base)
+	return fmt.Sprintf("%s with prefix %s of %s over %s", o.Name(), o.paths.URIPrefix, o.upper, o.base)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -150,7 +169,7 @@ func (o *OverlayFileSystem) overlayPath(layer FileSystem, layerPath string) stri
 
 // overlayFile translates a File of a layer to the overlay.
 func (o *OverlayFileSystem) overlayFile(layer FileSystem, layerFile File) File {
-	return File(o.JoinCleanURI(o.overlayPath(layer, uriPath(layer, string(layerFile)))))
+	return File(o.paths.JoinCleanURI(o.overlayPath(layer, uriPath(layer, string(layerFile)))))
 }
 
 // overlayInfo translates a FileInfo of a layer to the overlay.
@@ -238,7 +257,7 @@ func (o *OverlayFileSystem) statLayer(filePath string) (info *FileInfo, layer Fi
 		return nil, nil, "", o.overlayErr(o.upper, err)
 	}
 	if o.hidden(filePath) {
-		return nil, nil, "", NewErrDoesNotExist(File(o.JoinCleanURI(filePath)))
+		return nil, nil, "", NewErrDoesNotExist(File(o.paths.JoinCleanURI(filePath)))
 	}
 	layerPath = o.basePath(filePath)
 	info, err = fsStat(o.base, layerPath)
@@ -478,17 +497,17 @@ func (o *OverlayFileSystem) OpenReadWriter(filePath string, perm Permissions) (R
 
 // Truncate copies a base-only file up to the upper layer
 // and changes its size there.
-func (o *OverlayFileSystem) Truncate(filePath string, size int64) error {
+func (o *OverlayFileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
 	if err := o.checkClosed(); err != nil {
 		return err
 	}
 	if filePath == "" {
 		return ErrEmptyPath
 	}
-	if _, err := o.copyUp(context.Background(), filePath); err != nil {
+	if _, err := o.copyUp(ctx, filePath); err != nil {
 		return err
 	}
-	return o.overlayErr(o.upper, fsTruncate(context.Background(), o.upper, o.upperPath(filePath), size))
+	return o.overlayErr(o.upper, fsTruncate(ctx, o.upper, o.upperPath(filePath), size))
 }
 
 // Touch creates a missing file in the upper layer, or copies a

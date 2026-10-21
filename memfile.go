@@ -142,11 +142,11 @@ func ReadMemFileRename(ctx context.Context, fileReader FileReader, name string) 
 }
 
 // ReadAllMemFile returns a new MemFile by value with the data
-// from ReadAllContext(ctx, r) and the passed name.
+// from ReadAll(ctx, r) and the passed name.
 // It reads all data from r until EOF is reached,
 // another error is returned, or the context got canceled.
 func ReadAllMemFile(ctx context.Context, r io.Reader, name string) (MemFile, error) {
-	data, err := ReadAllContext(ctx, r)
+	data, err := ReadAll(ctx, r)
 	if err != nil {
 		return MemFile{}, fmt.Errorf("ReadAllMemFile: error reading from io.Reader: %w", err)
 	}
@@ -290,7 +290,7 @@ func (f MemFile) Exists() bool {
 // if the file does not exist.
 func (f MemFile) CheckExists() error {
 	if !f.Exists() {
-		return NewErrDoesNotExistFileReader(f)
+		return NewErrDoesNotExist(f)
 	}
 	return nil
 }
@@ -416,11 +416,11 @@ func (f MemFile) OpenReader() (ReadCloser, error) {
 	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
-// OpenReadSeeker opens the file and returns a ReadSeekCloser,
+// OpenReadSeeker opens the file and returns a ReadAtSeekCloser,
 // or an ErrIsDirectory error if the MemFile is a directory.
 // Use OpenReader if seeking is not necessary because implementations
 // may need additional buffering to support seeking or not support it at all.
-func (f MemFile) OpenReadSeeker() (ReadSeekCloser, error) {
+func (f MemFile) OpenReadSeeker() (ReadAtSeekCloser, error) {
 	if f.IsDir() {
 		return nil, NewErrIsDirectory(f)
 	}

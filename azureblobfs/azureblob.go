@@ -73,7 +73,9 @@ func NewAndRegister(ctx context.Context, client *container.Client, readOnly bool
 	if err != nil {
 		return nil, err
 	}
-	fs.Register(f)
+	if err := fs.Register(f); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
 	return f, nil
 }
 
@@ -403,7 +405,7 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, err
 	}
 	defer response.Body.Close()
-	return fs.ReadAllContext(ctx, response.Body)
+	return fs.ReadAll(ctx, response.Body)
 }
 
 ///////////////////////////////////////////////////////////////////////////////

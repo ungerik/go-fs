@@ -20,14 +20,14 @@ func Test_LocalFileSystem_MoveSameSrcDest(t *testing.T) {
 
 	// File: Move(src, src) is a no-op, matching os.Rename.
 	srcPath := file.LocalPath()
-	require.NoError(t, Local.Move(srcPath, srcPath), "Move(file, file) must be a no-op")
+	require.NoError(t, Local.Move(t.Context(), srcPath, srcPath), "Move(file, file) must be a no-op")
 	got, err := file.ReadAllString(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "hello", got, "file content preserved")
 
 	// Same after cleaning (./a.txt should normalize to a.txt).
 	noisy := filepath.Join(filepath.Dir(srcPath), ".", filepath.Base(srcPath))
-	require.NoError(t, Local.Move(srcPath, noisy), "Move with redundant path components is still a no-op")
+	require.NoError(t, Local.Move(t.Context(), srcPath, noisy), "Move with redundant path components is still a no-op")
 	require.True(t, file.Exists(), "file still present after no-op move with redundant path")
 
 	// Directory: Move(dir, dir) is also a no-op (matches os.Rename, even
@@ -36,7 +36,7 @@ func Test_LocalFileSystem_MoveSameSrcDest(t *testing.T) {
 	dir := tmp.Join("subdir")
 	require.NoError(t, dir.MakeDir())
 	dirPath := dir.LocalPath()
-	require.NoError(t, Local.Move(dirPath, dirPath), "Move(dir, dir) must be a no-op")
+	require.NoError(t, Local.Move(t.Context(), dirPath, dirPath), "Move(dir, dir) must be a no-op")
 	assert.True(t, dir.IsDir(), "directory still present after no-op move")
 }
 

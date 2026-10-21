@@ -102,10 +102,6 @@ func TestFile(t *testing.T) {
 			// Default implementation that does nothing
 			return nil
 		}
-		mockFS.MockListDirMax = func(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error) {
-			// Default implementation that returns empty list
-			return []File{}, nil
-		}
 		mockFS.MockListDirRecursive = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 			// Default implementation that returns empty directory
 			return nil
@@ -128,9 +124,10 @@ func TestFile(t *testing.T) {
 			// Check if filename starts with dot
 			return strings.HasPrefix(path.Base(filePath), ".")
 		}
-		mockFS.MockIsSymbolicLink = func(filePath string) bool {
-			// Mock filesystem doesn't support symbolic links
-			return false
+		mockFS.MockLstat = func(filePath string) (*FileInfo, error) {
+			// Mock filesystem doesn't support symbolic links,
+			// so Lstat is the same as Stat
+			return mockFS.MockStat(filePath)
 		}
 		mockFS.MockSetPermissions = func(filePath string, perm Permissions) error {
 			// Default implementation that does nothing
@@ -160,15 +157,11 @@ func TestFile(t *testing.T) {
 			// Default implementation that returns a no-op cancel function
 			return func() error { return nil }, nil
 		}
-		mockFS.MockTruncate = func(filePath string, size int64) error {
+		mockFS.MockTruncate = func(ctx context.Context, filePath string, size int64) error {
 			// Default implementation that does nothing
 			return nil
 		}
-		mockFS.MockRename = func(filePath string, newName string) (newPath string, err error) {
-			// Default implementation that returns a new path
-			return path.Join(path.Dir(filePath), newName), nil
-		}
-		mockFS.MockMove = func(filePath string, destinationPath string) error {
+		mockFS.MockMove = func(ctx context.Context, filePath string, destinationPath string) error {
 			// Default implementation that does nothing
 			return nil
 		}
@@ -939,9 +932,9 @@ func TestFile(t *testing.T) {
 			// Create file with matching prefix
 			file := File("mock" + t.Name() + "://test/path/to/dir")
 
-			// Mock ListDirMax to return empty list
-			mockFS.MockListDirMax = func(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error) {
-				return nil, nil
+			// Mock ListDir to return an empty directory
+			mockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
+				return nil
 			}
 
 			isEmpty := file.IsEmptyDir()
@@ -1200,8 +1193,13 @@ func TestFile(t *testing.T) {
 				File("mock" + t.Name() + "://test/path/to/dir/file2.txt"),
 			}
 
-			testMockFS.MockListDirMax = func(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error) {
-				return expectedFiles, nil
+			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
+				for _, f := range expectedFiles {
+					if err := callback(&FileInfo{File: f, Name: f.Name(), Exists: true, IsRegular: true}); err != nil {
+						return err
+					}
+				}
+				return nil
 			}
 
 			files, err := testFile.ListDirMax(t.Context(), 10)
@@ -1521,8 +1519,8 @@ func TestFile(t *testing.T) {
 
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-			// fstest.MockFullyFeaturedFileSystem implements Rename
-			renamedFile, err := testFile.Rename("newfile.txt")
+			// Rename uses the Move of fstest.MockFullyFeaturedFileSystem
+			renamedFile, err := testFile.Rename(t.Context(), "newfile.txt")
 			require.NoError(t, err)
 			assert.True(t, strings.HasSuffix(string(renamedFile), "/test/path/to/newfile.txt"))
 		})
@@ -1535,8 +1533,8 @@ func TestFile(t *testing.T) {
 
 			testFile := File("mock" + t.Name() + "://test/path/to/file.txt")
 
-			// fstest.MockFullyFeaturedFileSystem implements Rename
-			renamedFile, err := testFile.Renamef("newfile_%d.txt", 123)
+			// Rename uses the Move of fstest.MockFullyFeaturedFileSystem
+			renamedFile, err := testFile.Renamef(t.Context(), "newfile_%d.txt", 123)
 			require.NoError(t, err)
 			assert.True(t, strings.HasSuffix(string(renamedFile), "/test/path/to/newfile_123.txt"))
 		})
@@ -1553,7 +1551,7 @@ func TestFile(t *testing.T) {
 			// fstest.MockFullyFeaturedFileSystem implements Move,
 			// the destination is a file (default MockStat) so it is the final path
 			var movedTo string
-			testMockFS.MockMove = func(filePath string, destPath string) error {
+			testMockFS.MockMove = func(ctx context.Context, filePath string, destPath string) error {
 				assert.Equal(t, "/test/path/to/file.txt", filePath)
 				movedTo = destPath
 				return nil
@@ -1577,7 +1575,7 @@ func TestFile(t *testing.T) {
 				return &FileInfo{Name: path.Base(filePath), Exists: true, IsDir: filePath == "/test/other"}, nil
 			}
 			var movedTo string
-			testMockFS.MockMove = func(filePath string, destPath string) error {
+			testMockFS.MockMove = func(ctx context.Context, filePath string, destPath string) error {
 				movedTo = destPath
 				return nil
 			}

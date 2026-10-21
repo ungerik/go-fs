@@ -22,8 +22,9 @@ func TestZipFileSystem(t *testing.T) {
 
 	// Create a zip file with test content
 	t.Run("CreateZipFile", func(t *testing.T) {
-		zipWriter, err := NewWriter(zipFile)
+		zipWriter, err := NewWriter(zipFile, "")
 		require.NoError(t, err, "NewWriter should not error")
+		require.NoError(t, fs.Register(zipWriter))
 
 		t.Cleanup(func() {
 			assert.NoError(t, zipWriter.Close(), "zipWriter.Close() should not error")
@@ -64,8 +65,9 @@ func TestZipFileSystem(t *testing.T) {
 
 	// Now test reading from the zip file
 	t.Run("ReadZipFile", func(t *testing.T) {
-		zipReader, err := NewReader(zipFile)
+		zipReader, err := NewReader(zipFile, "")
 		require.NoError(t, err, "NewReader should not error")
+		require.NoError(t, fs.Register(zipReader))
 
 		t.Cleanup(func() {
 			assert.NoError(t, zipReader.Close(), "zipReader.Close() should not error")
@@ -99,9 +101,9 @@ func TestZipFileSystem(t *testing.T) {
 		})
 
 		t.Run("Exists", func(t *testing.T) {
-			require.NoError(t, fs.File(zipReader.JoinCleanURI("test", "test-file.txt")).CheckExists(), "test-file.txt should exist")
+			require.NoError(t, zipReader.RootDir().Join("test", "test-file.txt").CheckExists(), "test-file.txt should exist")
 
-			err := fs.File(zipReader.JoinCleanURI("test", "non-existent.txt")).CheckExists()
+			err := zipReader.RootDir().Join("test", "non-existent.txt").CheckExists()
 			assert.ErrorIs(t, err, os.ErrNotExist, "non-existent.txt should not exist")
 		})
 
@@ -134,22 +136,23 @@ func TestZipFileSystem(t *testing.T) {
 			// A ZIP archive is opened either for reading or for writing,
 			// so random access read-write must be rejected as read-only
 			// by the fs package based on ReadableWritable.
-			_, err := fs.File(zipReader.JoinCleanURI("test", "test-file.txt")).OpenReadWriter()
+			_, err := zipReader.RootDir().Join("test", "test-file.txt").OpenReadWriter()
 			require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "OpenReadWriter should error on read-only ZIP")
 		})
 	})
 
 	t.Run("WriteOnlyZipFile", func(t *testing.T) {
 		writeOnlyZipFile := tempDir.Join("write-only.zip")
-		zipWriter, err := NewWriter(writeOnlyZipFile)
+		zipWriter, err := NewWriter(writeOnlyZipFile, "")
 		require.NoError(t, err, "NewWriter should not error")
+		require.NoError(t, fs.Register(zipWriter))
 
 		t.Cleanup(func() {
 			assert.NoError(t, zipWriter.Close(), "zipWriter.Close() should not error")
 		})
 
 		t.Run("OpenReadWriter_WriteOnly", func(t *testing.T) {
-			_, err := fs.File(zipWriter.JoinCleanURI("test", "test-file.txt")).OpenReadWriter()
+			_, err := zipWriter.RootDir().Join("test", "test-file.txt").OpenReadWriter()
 			require.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem, "OpenReadWriter should error on write-only ZIP")
 		})
 	})
@@ -161,8 +164,9 @@ func TestZipWriter_SequentialEnforcement(t *testing.T) {
 		assert.NoError(t, tempDir.RemoveRecursive(context.Background()))
 	})
 
-	zipWriter, err := NewWriter(tempDir.Join("seq.zip"))
+	zipWriter, err := NewWriter(tempDir.Join("seq.zip"), "")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(zipWriter))
 	t.Cleanup(func() { assert.NoError(t, zipWriter.Close()) })
 
 	assert.Contains(t, zipWriter.Name(), "Zip writer filesystem", "writer mode Name()")
@@ -207,8 +211,9 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	})
 
 	zipFile := tempDir.Join("ro.zip")
-	zipWriter, err := NewWriter(zipFile)
+	zipWriter, err := NewWriter(zipFile, "")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(zipWriter))
 	w, err := zipWriter.OpenWriter("f.txt", 0)
 	require.NoError(t, err)
 	_, err = w.Write([]byte("x"))
@@ -216,8 +221,9 @@ func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
 	require.NoError(t, w.Close())
 	require.NoError(t, zipWriter.Close())
 
-	zipReader, err := NewReader(zipFile)
+	zipReader, err := NewReader(zipFile, "")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(zipReader))
 	t.Cleanup(func() { assert.NoError(t, zipReader.Close()) })
 
 	// Writes to a read-only archive must report read-only, not silently succeed.
@@ -239,8 +245,9 @@ func TestZipWriter_ReadRejected(t *testing.T) {
 	})
 	ctx := t.Context()
 
-	zipWriter, err := NewWriter(tempDir.Join("writeonly.zip"))
+	zipWriter, err := NewWriter(tempDir.Join("writeonly.zip"), "")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(zipWriter))
 
 	// Touch writes an empty entry without handing out a writer
 	require.NoError(t, zipWriter.Touch("/empty.txt", 0))

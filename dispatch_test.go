@@ -33,7 +33,7 @@ var (
 
 func newMinimalFileSystem(t *testing.T) *minimalFileSystem {
 	t.Helper()
-	mem, err := fs.NewMemFileSystem("/")
+	mem, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mem.Close() })
 	return &minimalFileSystem{

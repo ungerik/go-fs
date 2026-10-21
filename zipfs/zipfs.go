@@ -51,9 +51,11 @@ type Reader struct {
 	closer io.Closer
 }
 
-// NewReader opens a ZIP archive for reading
-// and registers the file system.
-func NewReader(file fs.FileReader) (*Reader, error) {
+// NewReader opens a ZIP archive for reading with the URI prefix
+// "zip://" + id, a random id is used if id is empty.
+// The file system is not registered, pass it to fs.Register
+// to access its files via their URIs and Close it after use.
+func NewReader(file fs.FileReader, id string) (*Reader, error) {
 	fileReader, err := file.OpenReadSeeker()
 	if err != nil {
 		return nil, err
@@ -62,12 +64,13 @@ func NewReader(file fs.FileReader) (*Reader, error) {
 	if err != nil {
 		return nil, errors.Join(err, fileReader.Close())
 	}
-	id := fsimpl.RandomString()
+	if id == "" {
+		id = fsimpl.RandomString()
+	}
 	zipfs := &Reader{
 		StdFileSystem: fs.NewStdFileSystemWithPrefix(zipReader, Prefix+id, "Zip reader filesystem "+id),
 		closer:        fileReader,
 	}
-	fs.Register(zipfs)
 	return zipfs, nil
 }
 
@@ -78,7 +81,7 @@ func NewReader(file fs.FileReader) (*Reader, error) {
 // without the scheme, so that a Reader and a Writer of an archive
 // report their id in the same form.
 func (f *Reader) ID() string {
-	return f.URIPrefix
+	return f.Prefix()
 }
 
 // Close unregisters the file system and closes the archive file.
@@ -88,6 +91,8 @@ func (f *Reader) Close() error {
 	}
 	closer := f.closer
 	f.closer = nil
+	// The registry holds the Reader, not the embedded StdFileSystem
+	fs.Unregister(f)
 	return errors.Join(f.StdFileSystem.Close(), closer.Close())
 }
 
@@ -96,7 +101,7 @@ func (f *Reader) Close() error {
 
 // Writer is a write-only file system that writes a ZIP archive.
 type Writer struct {
-	fsimpl.PathHelper
+	paths fsimpl.PathHelper
 
 	// mtx guards the fields below. archive/zip.Writer is not safe for
 	// concurrent use and only allows writing to the most recently
@@ -107,9 +112,30 @@ type Writer struct {
 	activeWriter *zipEntryWriter
 }
 
-// NewWriter creates a ZIP archive for writing
-// and registers the file system.
-func NewWriter(file fs.File) (*Writer, error) {
+// Prefix returns the URI prefix of the file system.
+func (f *Writer) Prefix() string {
+	return f.paths.URIPrefix
+}
+
+// Separator returns the path separator of the file system.
+func (f *Writer) Separator() string {
+	return f.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (f *Writer) CleanPath(uriParts ...string) string {
+	return f.paths.CleanPath(uriParts...)
+}
+
+// NewWriter creates a ZIP archive for writing with the URI prefix
+// "zip://" + id, a random id is used if id is empty.
+// The file system is not registered, pass it to fs.Register
+// to access its files via their URIs. Close it to finish the archive.
+func NewWriter(file fs.File, id string) (*Writer, error) {
+	if id == "" {
+		id = fsimpl.RandomString()
+	}
 	fileWriter, err := file.OpenWriter()
 	if err != nil {
 		return nil, err
@@ -119,11 +145,10 @@ func NewWriter(file fs.File) (*Writer, error) {
 		return flate.NewWriter(out, flate.BestCompression)
 	})
 	zipfs := &Writer{
-		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + fsimpl.RandomString(), Rooted: true},
+		paths:      fsimpl.PathHelper{URIPrefix: Prefix + id, Rooted: true},
 		zipWriter:  zipWriter,
 		fileWriter: fileWriter,
 	}
-	fs.Register(zipfs)
 	return zipfs, nil
 }
 
@@ -135,18 +160,18 @@ func (f *Writer) ReadableWritable() (readable, writable bool) {
 
 // RootDir returns the root directory of the archive.
 func (f *Writer) RootDir() fs.File {
-	return fs.File(f.URIPrefix + Separator)
+	return fs.File(f.paths.URIPrefix + Separator)
 }
 
 // ID returns the URI prefix of the file system,
 // which is unique per created archive.
 func (f *Writer) ID() string {
-	return f.URIPrefix
+	return f.paths.URIPrefix
 }
 
 // Name returns "Zip writer filesystem" and the archive name.
 func (f *Writer) Name() string {
-	return "Zip writer filesystem " + path.Base(f.URIPrefix)
+	return "Zip writer filesystem " + path.Base(f.paths.URIPrefix)
 }
 
 // String returns the name of the file system and its prefix.

@@ -70,8 +70,19 @@ type Permissions uint32
 
 // FileMode returns an os.FileMode for the given permissions
 // together with the information if the file is a directory.
+// The setuid, setgid and sticky bits (04000, 02000, 01000)
+// are mapped to os.ModeSetuid, os.ModeSetgid and os.ModeSticky.
 func (perm Permissions) FileMode(isDir bool) os.FileMode {
-	m := os.FileMode(perm)
+	m := os.FileMode(perm & 0777)
+	if perm&0o4000 != 0 {
+		m |= os.ModeSetuid
+	}
+	if perm&0o2000 != 0 {
+		m |= os.ModeSetgid
+	}
+	if perm&0o1000 != 0 {
+		m |= os.ModeSticky
+	}
 	if isDir {
 		m |= os.ModeDir
 	}
@@ -98,60 +109,6 @@ func (perm Permissions) Can(p Permissions) bool {
 	return perm&p == p
 }
 
-// CanUserExecute reports if the owner can execute.
-func (perm Permissions) CanUserExecute() bool { return perm.Can(UserExecute) }
-
-// CanUserWrite reports if the owner can write.
-func (perm Permissions) CanUserWrite() bool { return perm.Can(UserWrite) }
-
-// CanUserRead reports if the owner can read.
-func (perm Permissions) CanUserRead() bool { return perm.Can(UserRead) }
-
-// CanUserReadWrite reports if the owner can read and write.
-func (perm Permissions) CanUserReadWrite() bool { return perm.Can(UserReadWrite) }
-
-// CanGroupExecute reports if the group can execute.
-func (perm Permissions) CanGroupExecute() bool { return perm.Can(GroupExecute) }
-
-// CanGroupWrite reports if the group can write.
-func (perm Permissions) CanGroupWrite() bool { return perm.Can(GroupWrite) }
-
-// CanGroupRead reports if the group can read.
-func (perm Permissions) CanGroupRead() bool { return perm.Can(GroupRead) }
-
-// CanGroupReadWrite reports if the group can read and write.
-func (perm Permissions) CanGroupReadWrite() bool { return perm.Can(GroupReadWrite) }
-
-// CanUserAndGroupRead reports if owner and group can read.
-func (perm Permissions) CanUserAndGroupRead() bool { return perm.Can(UserAndGroupRead) }
-
-// CanUserAndGroupReadWrite reports if owner and group can read and write.
-func (perm Permissions) CanUserAndGroupReadWrite() bool { return perm.Can(UserAndGroupReadWrite) }
-
-// CanOthersExecute reports if everyone else can execute.
-func (perm Permissions) CanOthersExecute() bool { return perm.Can(OthersExecute) }
-
-// CanOthersWrite reports if everyone else can write.
-func (perm Permissions) CanOthersWrite() bool { return perm.Can(OthersWrite) }
-
-// CanOthersRead reports if everyone else can read.
-func (perm Permissions) CanOthersRead() bool { return perm.Can(OthersRead) }
-
-// CanOthersReadWrite reports if everyone else can read and write.
-func (perm Permissions) CanOthersReadWrite() bool { return perm.Can(OthersReadWrite) }
-
-// CanAllRead reports if owner, group and others can read.
-func (perm Permissions) CanAllRead() bool { return perm.Can(AllRead) }
-
-// CanAllWrite reports if owner, group and others can write.
-func (perm Permissions) CanAllWrite() bool { return perm.Can(AllWrite) }
-
-// CanAllExecute reports if owner, group and others can execute.
-func (perm Permissions) CanAllExecute() bool { return perm.Can(AllExecute) }
-
-// CanAllReadWrite reports if owner, group and others can read and write.
-func (perm Permissions) CanAllReadWrite() bool { return perm.Can(AllReadWrite) }
-
 // JoinPermissions ORs the passed perms together,
 // or returns defaultPerm if no perms are passed.
 func JoinPermissions(perms []Permissions, defaultPerm Permissions) (result Permissions) {
@@ -176,6 +133,25 @@ func (perm Permissions) OrDefault(defaultPerm Permissions) Permissions {
 
 // PermissionsFromStdFileInfo returns the permission bits of a standard
 // library [io/fs.FileInfo], dropping the file type bits of its mode.
+// os.ModeSetuid, os.ModeSetgid and os.ModeSticky are mapped
+// to the bits 04000, 02000 and 01000.
 func PermissionsFromStdFileInfo(info iofs.FileInfo) Permissions {
-	return Permissions(info.Mode().Perm())
+	return PermissionsFromFileMode(info.Mode())
+}
+
+// PermissionsFromFileMode returns the permission bits of mode,
+// dropping the file type bits. os.ModeSetuid, os.ModeSetgid and
+// os.ModeSticky are mapped to the bits 04000, 02000 and 01000.
+func PermissionsFromFileMode(mode os.FileMode) Permissions {
+	perm := Permissions(mode.Perm())
+	if mode&os.ModeSetuid != 0 {
+		perm |= 0o4000
+	}
+	if mode&os.ModeSetgid != 0 {
+		perm |= 0o2000
+	}
+	if mode&os.ModeSticky != 0 {
+		perm |= 0o1000
+	}
+	return perm
 }

@@ -269,7 +269,7 @@ func TestFile_Watch(t *testing.T) {
 
 	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
 
-	renamedFile, err := newFile.Rename("renamedFile")
+	renamedFile, err := newFile.Rename(t.Context(), "renamedFile")
 	require.NoError(t, err, "newFile.Rename")
 
 	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
@@ -294,10 +294,10 @@ func TestFile_Watch(t *testing.T) {
 	}
 	assert.ElementsMatch(t,
 		[]fileEvent{
-			{newFile, eventCreate},
-			{newFile, eventRename},
-			{renamedFile, eventCreate},
-			{renamedFile, eventRemove},
+			{newFile, EventCreate},
+			{newFile, EventRename},
+			{renamedFile, EventCreate},
+			{renamedFile, EventRemove},
 		},
 		got,
 	)
@@ -310,7 +310,8 @@ func TestFile_Watch(t *testing.T) {
 // fixture for the test and returns its root directory.
 func mapFSDir(t *testing.T, fixture stdfstest.MapFS) File {
 	t.Helper()
-	stdFS := NewStdFileSystemAndRegister(fixture, "")
+	stdFS := NewStdFileSystem(fixture, "")
+	require.NoError(t, Register(stdFS))
 	t.Cleanup(func() { _ = stdFS.Close() })
 	return stdFS.RootDir()
 }
@@ -755,7 +756,7 @@ type noRenameMoveFS struct {
 // default Rename branch, and returns the wrapped file system's root dir.
 func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
 	t.Helper()
-	memFS, err := NewMemFileSystem("/", initialFiles...)
+	memFS, err := RegisteredTestMemFileSystem(nil, initialFiles...)
 	require.NoError(t, err)
 	// Replace the registered *MemFileSystem (which implements Rename and
 	// Move) with a wrapper that only exposes the base FileSystem interface.
@@ -768,9 +769,6 @@ func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
 	})
 	// Guard the test's premise: the wrapper must not satisfy the optional
 	// rename/move interfaces, otherwise the default branch is never reached.
-	if _, ok := any(wrapped).(RenameFileSystem); ok {
-		t.Fatal("noRenameMoveFS must not implement RenameFileSystem")
-	}
 	if _, ok := any(wrapped).(MoveFileSystem); ok {
 		t.Fatal("noRenameMoveFS must not implement MoveFileSystem")
 	}
@@ -792,7 +790,7 @@ func TestFile_Rename_DefaultBranch(t *testing.T) {
 		dir := root.Join("dir")
 		require.True(t, dir.IsDir(), "source must be a directory")
 
-		renamed, err := dir.Rename("renamed")
+		renamed, err := dir.Rename(t.Context(), "renamed")
 		require.NoError(t, err, "Rename of non-empty directory")
 
 		// Source directory must be gone, including its contents.
@@ -812,7 +810,7 @@ func TestFile_Rename_DefaultBranch(t *testing.T) {
 		src := root.Join("a.txt")
 		require.True(t, src.Exists())
 
-		renamed, err := src.Rename("b.txt")
+		renamed, err := src.Rename(t.Context(), "b.txt")
 		require.NoError(t, err, "Rename of single file")
 
 		require.False(t, src.Exists(), "source file must be removed")

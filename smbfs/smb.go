@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -149,7 +150,9 @@ func DialAndRegister(ctx context.Context, address string, opts *Options) (fs.Fil
 	if err != nil {
 		return nil, err
 	}
-	fs.Register(f)
+	if err := fs.Register(f); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
 	return f, nil
 }
 
@@ -242,7 +245,7 @@ func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 			return nil, f.wrapErr(filePath, err)
 		}
 	}
-	fileInfo := fs.NewFileInfo(f.file(filePath), info, f.IsHidden(filePath))
+	fileInfo := fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
 	fileInfo.IsSymlink = linkInfo.Mode()&os.ModeSymlink != 0
 	return fileInfo, nil
 }
@@ -272,7 +275,7 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 		if !match {
 			continue
 		}
-		err = callback(fs.NewFileInfo(f.file(f.CleanPath(dirPath, info.Name())), info, f.IsHidden(info.Name())))
+		err = callback(fs.NewFileInfo(f.file(f.CleanPath(dirPath, info.Name())), info, strings.HasPrefix(info.Name(), ".")))
 		if err != nil {
 			return err
 		}
@@ -348,7 +351,7 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 	return f.openFile(filePath, os.O_RDWR|os.O_CREATE, perm)
 }
 
-func (f *fileSystem) Truncate(filePath string, size int64) error {
+func (f *fileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
 	if err := f.checkClosed(); err != nil {
 		return err
 	}
@@ -437,7 +440,7 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 }
 
 // Move renames a file or directory server-side.
-func (f *fileSystem) Move(filePath string, destPath string) error {
+func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if err := f.checkClosed(); err != nil {
 		return err
 	}
@@ -485,12 +488,21 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return f.wrapErr(filePath, err)
 }
 
-func (f *fileSystem) IsSymbolicLink(filePath string) bool {
-	if f.closed.Load() || sharePath(filePath) == "" {
-		return false
+// Lstat returns the FileInfo of the file without following a symbolic link.
+func (f *fileSystem) Lstat(filePath string) (*fs.FileInfo, error) {
+	if err := f.checkClosed(); err != nil {
+		return nil, err
+	}
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
 	}
 	info, err := f.share.Lstat(sharePath(filePath))
-	return err == nil && info.Mode()&os.ModeSymlink != 0
+	if err != nil {
+		return nil, f.wrapErr(filePath, err)
+	}
+	fileInfo := fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
+	fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
+	return fileInfo, nil
 }
 
 func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {

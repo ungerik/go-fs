@@ -179,7 +179,7 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 	// registry from a File's URI prefix. Make sure the file system under
 	// test is registered for the duration of the tests.
 	if !fs.IsRegistered(fileSystem) {
-		fs.Register(fileSystem)
+		require.NoError(t, fs.Register(fileSystem), "Register")
 		t.Cleanup(func() { fs.Unregister(fileSystem) })
 	}
 
@@ -562,9 +562,10 @@ func (c *conformance) testListDir(t *testing.T) {
 	err = c.fs.ListDir(canceled, c.path(""), nil, func(*fs.FileInfo) error { return nil })
 	assert.Error(t, err, "ListDir with a canceled context must fail")
 
-	// ListDirMax
-	if ldmfs, ok := c.fs.(fs.ListDirMaxFileSystem); ok {
-		all, err := ldmfs.ListDirMax(c.ctx, c.path(""), -1, nil)
+	// ListDirMax through the File API
+	{
+		dir := c.file("")
+		all, err := dir.ListDirMax(c.ctx, -1)
 		require.NoError(t, err, "ListDirMax(-1)")
 		files, subDirs := seed.entriesOf("")
 		assert.Len(t, all, len(files)+len(subDirs), "ListDirMax(-1) must list all entries")
@@ -572,10 +573,10 @@ func (c *conformance) testListDir(t *testing.T) {
 			assert.True(t, strings.HasPrefix(f.URL(), c.fs.Prefix()), "ListDirMax File %q must have the prefix", f)
 			assert.True(t, f.Exists(), "ListDirMax File %q must exist", f)
 		}
-		limited, err := ldmfs.ListDirMax(c.ctx, c.path(""), 2, nil)
+		limited, err := dir.ListDirMax(c.ctx, 2)
 		require.NoError(t, err, "ListDirMax(2)")
 		assert.Len(t, limited, 2, "ListDirMax(2) must list 2 entries")
-		none, err := ldmfs.ListDirMax(c.ctx, c.path(""), 0, nil)
+		none, err := dir.ListDirMax(c.ctx, 0)
 		require.NoError(t, err, "ListDirMax(0)")
 		assert.Empty(t, none, "ListDirMax(0) must list nothing")
 	}
@@ -867,7 +868,7 @@ func (c *conformance) testReadOnly(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Remove on a read-only file system")
 	err = c.file("hello.txt").RemoveRecursive(c.ctx)
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.RemoveRecursive on a read-only file system")
-	_, err = c.file("hello.txt").Rename("renamed.txt")
+	_, err = c.file("hello.txt").Rename(c.ctx, "renamed.txt")
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.Rename on a read-only file system")
 	err = c.file("hello.txt").MoveTo(c.ctx, f)
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "File.MoveTo on a read-only file system")
@@ -1017,9 +1018,9 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 	if tfs, ok := c.fs.(fs.TruncateFileSystem); ok {
 		path := c.path("truncate.txt")
 		c.writeFile(t, path, []byte("Hello, World!"))
-		require.NoError(t, tfs.Truncate(path, 5), "Truncate to smaller size")
+		require.NoError(t, tfs.Truncate(c.ctx, path, 5), "Truncate to smaller size")
 		assert.Equal(t, []byte("Hello"), c.readAll(t, path), "Truncate to smaller size content")
-		require.NoError(t, tfs.Truncate(path, 8), "Truncate to larger size")
+		require.NoError(t, tfs.Truncate(c.ctx, path, 8), "Truncate to larger size")
 		assert.Equal(t, []byte("Hello\x00\x00\x00"), c.readAll(t, path), "Truncate to larger size must pad with zeros")
 	}
 
@@ -1098,23 +1099,12 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 		src := c.path("move-src.txt")
 		dst := c.path("move-dst.txt")
 		c.writeFile(t, src, []byte("move me"))
-		require.NoError(t, mfs.Move(src, src), "Move(src, src) must be a no-op")
+		require.NoError(t, mfs.Move(c.ctx, src, src), "Move(src, src) must be a no-op")
 		assert.Equal(t, []byte("move me"), c.readAll(t, src), "Move(src, src) must keep the content")
-		require.NoError(t, mfs.Move(src, dst), "Move")
+		require.NoError(t, mfs.Move(c.ctx, src, dst), "Move")
 		assert.Equal(t, []byte("move me"), c.readAll(t, dst), "Move destination content")
 		_, err := c.fs.Stat(src)
 		assert.ErrorIs(t, err, os.ErrNotExist, "Move source must be gone")
-	}
-
-	if rfs, ok := c.fs.(fs.RenameFileSystem); ok {
-		src := c.path("rename-src.txt")
-		c.writeFile(t, src, []byte("rename me"))
-		newPath, err := rfs.Rename(src, "rename-dst.txt")
-		require.NoError(t, err, "Rename")
-		assert.Equal(t, c.path("rename-dst.txt"), newPath, "Rename must return the new path")
-		assert.Equal(t, []byte("rename me"), c.readAll(t, newPath), "Rename destination content")
-		_, err = c.fs.Stat(src)
-		assert.ErrorIs(t, err, os.ErrNotExist, "Rename source must be gone")
 	}
 
 	if slfs, ok := c.fs.(fs.SymbolicLinkFileSystem); ok {
@@ -1125,8 +1115,12 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 			t.Logf("symbolic links not available: %v", err)
 		} else {
 			require.NoError(t, err, "CreateSymbolicLink")
-			assert.True(t, slfs.IsSymbolicLink(link), "IsSymbolicLink(link)")
-			assert.False(t, slfs.IsSymbolicLink(target), "IsSymbolicLink(target)")
+			linkInfo, err := slfs.Lstat(link)
+			require.NoError(t, err, "Lstat(link)")
+			assert.True(t, linkInfo.IsSymlink, "Lstat(link).IsSymlink")
+			targetInfo, err := slfs.Lstat(target)
+			require.NoError(t, err, "Lstat(target)")
+			assert.False(t, targetInfo.IsSymlink, "Lstat(target).IsSymlink")
 			got, err := slfs.ReadSymbolicLink(link)
 			require.NoError(t, err, "ReadSymbolicLink")
 			assert.Equal(t, target, got, "ReadSymbolicLink must return the target as stored")
@@ -1283,7 +1277,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	assert.Equal(t, doc{Name: "go-fs", Count: 3}, decoded, "XML round trip")
 
 	// Rename of a file and of a non-empty directory
-	renamed, err := target.Rename("file-renamed.txt")
+	renamed, err := target.Rename(c.ctx, "file-renamed.txt")
 	require.NoError(t, err, "File.Rename")
 	assert.Equal(t, dir.Join("file-renamed.txt"), renamed, "File.Rename result")
 	assert.False(t, target.Exists(), "File.Rename source must be gone")
@@ -1294,7 +1288,7 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	srcDir := dir.Join("rename-dir-src")
 	require.NoError(t, srcDir.MakeDir())
 	require.NoError(t, srcDir.Join("child.txt").WriteAll(c.ctx, []byte("dir-content")))
-	renamedDir, err := srcDir.Rename("rename-dir-dst")
+	renamedDir, err := srcDir.Rename(c.ctx, "rename-dir-dst")
 	require.NoError(t, err, "File.Rename of a non-empty directory")
 	got, err = renamedDir.Join("child.txt").ReadAll(c.ctx)
 	require.NoError(t, err, "child must exist at the new location")
@@ -1345,8 +1339,9 @@ func (c *conformance) testHighLevelWrite(t *testing.T) {
 	assert.True(t, renamedDir.IsEmptyDir(), "directory must be empty after RemoveDirContentsRecursive")
 
 	// Cross file system copy into an in-memory file system
-	memFS, err := fs.NewMemFileSystem("/")
+	memFS, err := fs.NewMemFileSystem(nil)
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(memFS))
 	t.Cleanup(func() { _ = memFS.Close() })
 	memFile := memFS.RootDir().Join("copied.txt")
 	require.NoError(t, fs.CopyFile(c.ctx, moved, memFile), "fs.CopyFile to another file system")

@@ -33,8 +33,6 @@ var (
 	_ fs.RemoveAllFileSystem        = &MockFullyFeaturedFileSystem{}
 	_ fs.CopyFileSystem             = &MockFullyFeaturedFileSystem{}
 	_ fs.MoveFileSystem             = &MockFullyFeaturedFileSystem{}
-	_ fs.RenameFileSystem           = &MockFullyFeaturedFileSystem{}
-	_ fs.ListDirMaxFileSystem       = &MockFullyFeaturedFileSystem{}
 	_ fs.ListDirRecursiveFileSystem = &MockFullyFeaturedFileSystem{}
 	_ fs.WatchFileSystem            = &MockFullyFeaturedFileSystem{}
 	_ fs.HiddenFileSystem           = &MockFullyFeaturedFileSystem{}
@@ -99,14 +97,12 @@ type MockFullyFeaturedFileSystem struct {
 	MockAppend           func(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error
 	MockOpenAppendWriter func(filePath string, perm fs.Permissions) (io.WriteCloser, error)
 	MockOpenReadWriter   func(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error)
-	MockTruncate         func(filePath string, size int64) error
+	MockTruncate         func(ctx context.Context, filePath string, size int64) error
 	MockTouch            func(filePath string, perm fs.Permissions) error
 	MockMakeAllDirs      func(dirPath string, perm fs.Permissions) error
 	MockRemoveAll        func(ctx context.Context, filePath string) error
 	MockCopyFile         func(ctx context.Context, srcFile string, destFile string) error
-	MockMove             func(filePath string, destPath string) error
-	MockRename           func(filePath string, newName string) (newPath string, err error)
-	MockListDirMax       func(ctx context.Context, dirPath string, max int, patterns []string) ([]fs.File, error)
+	MockMove             func(ctx context.Context, filePath string, destPath string) error
 	MockListDirRecursive func(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error
 	MockWatch            func(filePath string, onEvent func(fs.File, fs.Event)) (cancel func() error, err error)
 	MockIsHidden         func(filePath string) bool
@@ -116,13 +112,13 @@ type MockFullyFeaturedFileSystem struct {
 	MockGroup            func(filePath string) (string, error)
 	MockSetGroup         func(filePath string, group string) error
 
-	MockIsSymbolicLink     func(filePath string) bool
+	MockLstat              func(filePath string) (*fs.FileInfo, error)
 	MockCreateSymbolicLink func(targetPath, linkPath string) error
 	MockReadSymbolicLink   func(linkPath string) (targetPath string, err error)
 
 	MockListXAttr   func(filePath string, followSymlinks bool) ([]string, error)
 	MockGetXAttr    func(filePath string, name string, followSymlinks bool) ([]byte, error)
-	MockSetXAttr    func(filePath string, name string, data []byte, flags int, followSymlinks bool) error
+	MockSetXAttr    func(filePath string, name string, data []byte, flags fs.XAttrFlags, followSymlinks bool) error
 	MockRemoveXAttr func(filePath string, name string, followSymlinks bool) error
 
 	MockVolumeName func(filePath string) string
@@ -304,11 +300,11 @@ func (m *MockFullyFeaturedFileSystem) OpenReadWriter(filePath string, perm fs.Pe
 }
 
 // Truncate implements fs.TruncateFileSystem
-func (m *MockFullyFeaturedFileSystem) Truncate(filePath string, size int64) error {
+func (m *MockFullyFeaturedFileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
 	if m.MockTruncate == nil {
 		panic("MockFullyFeaturedFileSystem.MockTruncate is nil")
 	}
-	return m.MockTruncate(filePath, size)
+	return m.MockTruncate(ctx, filePath, size)
 }
 
 // Touch implements fs.TouchFileSystem
@@ -344,27 +340,11 @@ func (m *MockFullyFeaturedFileSystem) CopyFile(ctx context.Context, srcFile stri
 }
 
 // Move implements fs.MoveFileSystem
-func (m *MockFullyFeaturedFileSystem) Move(filePath string, destPath string) error {
+func (m *MockFullyFeaturedFileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if m.MockMove == nil {
 		panic("MockFullyFeaturedFileSystem.MockMove is nil")
 	}
-	return m.MockMove(filePath, destPath)
-}
-
-// Rename implements fs.RenameFileSystem
-func (m *MockFullyFeaturedFileSystem) Rename(filePath string, newName string) (newPath string, err error) {
-	if m.MockRename == nil {
-		panic("MockFullyFeaturedFileSystem.MockRename is nil")
-	}
-	return m.MockRename(filePath, newName)
-}
-
-// ListDirMax implements fs.ListDirMaxFileSystem
-func (m *MockFullyFeaturedFileSystem) ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]fs.File, error) {
-	if m.MockListDirMax == nil {
-		panic("MockFullyFeaturedFileSystem.MockListDirMax is nil")
-	}
-	return m.MockListDirMax(ctx, dirPath, max, patterns)
+	return m.MockMove(ctx, filePath, destPath)
 }
 
 // ListDirRecursive implements fs.ListDirRecursiveFileSystem
@@ -431,12 +411,12 @@ func (m *MockFullyFeaturedFileSystem) SetGroup(filePath string, group string) er
 	return m.MockSetGroup(filePath, group)
 }
 
-// IsSymbolicLink implements fs.SymbolicLinkFileSystem
-func (m *MockFullyFeaturedFileSystem) IsSymbolicLink(filePath string) bool {
-	if m.MockIsSymbolicLink == nil {
-		panic("MockFullyFeaturedFileSystem.MockIsSymbolicLink is nil")
+// Lstat implements fs.SymbolicLinkFileSystem
+func (m *MockFullyFeaturedFileSystem) Lstat(filePath string) (*fs.FileInfo, error) {
+	if m.MockLstat == nil {
+		panic("MockFullyFeaturedFileSystem.MockLstat is nil")
 	}
-	return m.MockIsSymbolicLink(filePath)
+	return m.MockLstat(filePath)
 }
 
 // CreateSymbolicLink implements fs.SymbolicLinkFileSystem
@@ -472,7 +452,7 @@ func (m *MockFullyFeaturedFileSystem) GetXAttr(filePath string, name string, fol
 }
 
 // SetXAttr implements fs.XAttrFileSystem
-func (m *MockFullyFeaturedFileSystem) SetXAttr(filePath string, name string, data []byte, flags int, followSymlinks bool) error {
+func (m *MockFullyFeaturedFileSystem) SetXAttr(filePath string, name string, data []byte, flags fs.XAttrFlags, followSymlinks bool) error {
 	if m.MockSetXAttr == nil {
 		panic("MockFullyFeaturedFileSystem.MockSetXAttr is nil")
 	}

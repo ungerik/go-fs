@@ -127,7 +127,7 @@ func TestClosedFileSystem(t *testing.T) {
 	err = dbfs.Remove("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
-	err = dbfs.Move("/a", "/b")
+	err = dbfs.Move(t.Context(), "/a", "/b")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	err = dbfs.CopyFile(ctx, "/a", "/b")

@@ -55,11 +55,11 @@ func ReadHeaderString(fr FileReader, maxNumBytes int) (string, error) {
 	return string(data), err
 }
 
-// ReadAllContext reads all data from r until EOF is reached,
+// ReadAll reads all data from r until EOF is reached,
 // another error is returned, or the context got canceled.
 // It is identical to io.ReadAll except that
 // it can be canceled via a context.
-func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
+func ReadAll(ctx context.Context, r io.Reader) ([]byte, error) {
 	b := make([]byte, 0, 512)
 	for ctx.Err() == nil {
 		if len(b) == cap(b) {
@@ -78,9 +78,9 @@ func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
 	return b, ctx.Err()
 }
 
-// WriteAllContext writes all of data to w
+// WriteAll writes all of data to w
 // with a cancelable context.
-func WriteAllContext(ctx context.Context, w io.Writer, data []byte) error {
+func WriteAll(ctx context.Context, w io.Writer, data []byte) error {
 	const chunkSize = 4 * 1024 * 1024 // 4MB
 	return writeAllContext(ctx, w, data, chunkSize)
 }

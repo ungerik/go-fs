@@ -27,11 +27,11 @@ func TestConformance(t *testing.T) {
 	t.Cleanup(server.Close)
 	addr := strings.TrimPrefix(server.URL, "http://")
 
-	fstest.RunConformance(t, FileSystem, fstest.Config{
+	fstest.RunConformance(t, Default, fstest.Config{
 		Name:          "HTTP",
 		Prefix:        "http://",
 		TestDir:       addr,
 		NoDirectories: true,
-		SkipClose:     true, // FileSystem is a package level singleton
+		SkipClose:     true, // Default is a package level singleton
 	})
 }

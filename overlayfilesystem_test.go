@@ -16,13 +16,14 @@ import (
 // of a mem upper layer on a read-only MapFS base that has content
 // outside the suite's directory.
 func TestOverlayFileSystem_Conformance(t *testing.T) {
-	base := fs.NewStdFileSystemAndRegister(stdfstest.MapFS{
+	base := fs.NewStdFileSystem(stdfstest.MapFS{
 		"base.txt":            {Data: []byte("base")},
 		"conformance/.keep":   {Data: nil},
 		"other/base-only.txt": {Data: []byte("x")},
 	}, "")
+	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { _ = base.Close() })
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
 
@@ -42,27 +43,29 @@ func TestOverlayFileSystem_Conformance(t *testing.T) {
 // through, shadowing, whiteouts, copy up and the union listing.
 func TestOverlayFileSystem_Layers(t *testing.T) {
 	ctx := t.Context()
-	base := fs.NewStdFileSystemAndRegister(stdfstest.MapFS{
+	base := fs.NewStdFileSystem(stdfstest.MapFS{
 		"docs/readme.md":  {Data: []byte("base readme")},
 		"docs/notes.txt":  {Data: []byte("notes")},
 		"docs/old/a.txt":  {Data: []byte("a")},
 		"config.json":     {Data: []byte(`{}`)},
 		"data/report.csv": {Data: []byte("1,2")},
 	}, "")
+	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { _ = base.Close() })
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
 
-	readOnly, err := fs.NewMemFileSystem("/")
+	readOnly, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = readOnly.Close() })
 	readOnly.SetReadOnly(true)
 	_, err = fs.NewOverlayFileSystem(base, readOnly, "")
 	require.Error(t, err, "upper layer must be writable")
 
-	overlay, err := fs.NewOverlayFileSystemAndRegister(base, upper, "layers")
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "layers")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
 	t.Cleanup(func() { assert.NoError(t, overlay.Close()) })
 	root := fs.File("overlay://layers/")
 
@@ -137,17 +140,19 @@ func mustRead(t *testing.T, f fs.File) []byte {
 // on a read-only MapFS base containing "/base.txt".
 func newOverlayTestFS(t *testing.T) *fs.OverlayFileSystem {
 	t.Helper()
-	base := fs.NewStdFileSystemAndRegister(stdfstest.MapFS{
+	base := fs.NewStdFileSystem(stdfstest.MapFS{
 		"base.txt":      {Data: []byte("base")},
 		"basedir/x.txt": {Data: []byte("x")},
 	}, "")
+	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { _ = base.Close() })
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
 
-	overlay, err := fs.NewOverlayFileSystemAndRegister(base, upper, "")
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
 	t.Cleanup(func() { _ = overlay.Close() })
 	assert.Equal(t, fs.FileSystem(base), overlay.Base())
 	assert.Equal(t, fs.WriteFileSystem(upper), overlay.Upper())
@@ -157,7 +162,7 @@ func newOverlayTestFS(t *testing.T) *fs.OverlayFileSystem {
 // TestOverlayFileSystem_NilLayers verifies that a missing layer is
 // rejected at construction instead of panicking on the first operation.
 func TestOverlayFileSystem_NilLayers(t *testing.T) {
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
 
@@ -165,7 +170,7 @@ func TestOverlayFileSystem_NilLayers(t *testing.T) {
 	assert.Error(t, err, "nil base layer")
 	_, err = fs.NewOverlayFileSystem(upper, nil, "")
 	assert.Error(t, err, "nil upper layer")
-	_, err = fs.NewOverlayFileSystemAndRegister(nil, upper, "")
+	err = fs.NewOverlayFileSystemAndRegister(nil, upper, "nil-base")
 	assert.Error(t, err, "nil base layer must not be registered")
 }
 
@@ -194,7 +199,7 @@ func TestOverlayFileSystem_Closed(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.WriteAll(ctx, "/a.txt", []byte("x"), 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.Append(ctx, "/a.txt", []byte("x"), 0), fs.ErrFileSystemClosed)
-	assert.ErrorIs(t, overlay.Truncate("/a.txt", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, overlay.Truncate(t.Context(), "/a.txt", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.Touch("/a.txt", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.MakeDir("/dir", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.MakeAllDirs("/dir/sub", 0), fs.ErrFileSystemClosed)
@@ -227,7 +232,7 @@ func TestOverlayFileSystem_EmptyPath(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.WriteAll(ctx, "", []byte("x"), 0), fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.Append(ctx, "", []byte("x"), 0), fs.ErrEmptyPath)
-	assert.ErrorIs(t, overlay.Truncate("", 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, overlay.Truncate(t.Context(), "", 0), fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.Touch("", 0), fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.MakeDir("", 0), fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.MakeAllDirs("", 0), fs.ErrEmptyPath)
@@ -249,7 +254,7 @@ func TestOverlayFileSystem_IsDirectoryErrors(t *testing.T) {
 	assert.ErrorAs(t, err, new(fs.ErrIsDirectory))
 	// Copy up of a base-only directory must fail instead of
 	// materializing the directory as a file in the upper layer
-	assert.ErrorAs(t, overlay.Truncate("/basedir", 1), new(fs.ErrIsDirectory))
+	assert.ErrorAs(t, overlay.Truncate(t.Context(), "/basedir", 1), new(fs.ErrIsDirectory))
 	assert.ErrorAs(t, overlay.Touch("/basedir", 0), new(fs.ErrIsDirectory))
 	err = overlay.ListDir(ctx, "/base.txt", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorAs(t, err, new(fs.ErrIsNotDirectory), "listing a file")

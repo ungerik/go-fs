@@ -10,7 +10,7 @@ import (
 
 var _ iofs.File = new(ReadonlyFileBuffer)
 
-// ReadonlyFileBuffer is a memory buffer that implements ReadSeekCloser which combines the interfaces
+// ReadonlyFileBuffer is a memory buffer that implements ReadAtSeekCloser which combines the interfaces
 //
 //	io/fs.File
 //	io.Reader

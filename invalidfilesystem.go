@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
@@ -59,9 +60,13 @@ func (InvalidFileSystem) Separator() string {
 	return "/"
 }
 
-// ReadableWritable returns false, false because no operation is possible.
+// ReadableWritable returns true, true so that every operation reaches
+// the methods of the invalid file system, which return ErrInvalidFileSystem.
 func (InvalidFileSystem) ReadableWritable() (readable, writable bool) {
-	return false, false
+	// Report readable and writable so that the readable/writable gates
+	// of the package let the operations through to the methods below,
+	// which return ErrInvalidFileSystem with the unregistered URI.
+	return true, true
 }
 
 // RootDir returns InvalidFile.
@@ -77,35 +82,45 @@ func (fs InvalidFileSystem) CleanPath(uriParts ...string) string {
 
 // Stat returns ErrInvalidFileSystem.
 func (InvalidFileSystem) Stat(filePath string) (*FileInfo, error) {
-	return nil, ErrInvalidFileSystem
+	return nil, errInvalidFile(filePath)
 }
 
 // ListDir returns ErrInvalidFileSystem.
 func (InvalidFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
-	return ErrInvalidFileSystem
+	return errInvalidFile(dirPath)
 }
 
 // OpenReader returns ErrInvalidFileSystem.
 func (InvalidFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
-	return nil, ErrInvalidFileSystem
+	return nil, errInvalidFile(filePath)
 }
 
 // OpenWriter returns ErrInvalidFileSystem.
 func (InvalidFileSystem) OpenWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
-	return nil, ErrInvalidFileSystem
+	return nil, errInvalidFile(filePath)
 }
 
 // MakeDir returns ErrInvalidFileSystem.
 func (InvalidFileSystem) MakeDir(dirPath string, perm Permissions) error {
-	return ErrInvalidFileSystem
+	return errInvalidFile(dirPath)
 }
 
 // Remove returns ErrInvalidFileSystem.
 func (InvalidFileSystem) Remove(filePath string) error {
-	return ErrInvalidFileSystem
+	return errInvalidFile(filePath)
 }
 
 // Close does nothing and returns nil.
 func (InvalidFileSystem) Close() error {
 	return nil
+}
+
+// errInvalidFile returns an error wrapping ErrInvalidFileSystem
+// for a path or URI of a file without a registered file system.
+// The password of a URI with user info is redacted.
+func errInvalidFile(filePath string) error {
+	if filePath == "" {
+		return ErrInvalidFileSystem
+	}
+	return fmt.Errorf("%w: no file system registered for %q", ErrInvalidFileSystem, redactURI(filePath))
 }

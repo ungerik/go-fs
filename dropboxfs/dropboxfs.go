@@ -88,7 +88,9 @@ func NewAndRegister(ctx context.Context, accessToken string, cacheTimeout time.D
 		return nil, fmt.Errorf("dropboxfs: getting the current account: %w", err)
 	}
 	dbfs := newFileSystem(account.AccountId, files.New(config), cacheTimeout, mute)
-	fs.Register(dbfs)
+	if err := fs.Register(dbfs); err != nil {
+		return nil, errors.Join(err, dbfs.Close())
+	}
 	return dbfs, nil
 }
 
@@ -458,7 +460,7 @@ func (dbfs *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile s
 // the no-op behavior required by the [fs.MoveFileSystem] contract.
 // (Dropbox MoveV2 would otherwise reject the request with a "to/conflict"
 // error.)
-func (dbfs *fileSystem) Move(filePath string, destPath string) error {
+func (dbfs *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if err := dbfs.checkClosed(); err != nil {
 		return err
 	}
