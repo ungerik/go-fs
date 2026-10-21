@@ -212,6 +212,8 @@ type ReadAllFileSystem interface {
 	FileSystem
 
 	// ReadAll reads the entire content of the file at filePath.
+	// The returned slice belongs to the caller, who may modify it,
+	// so implementations must not return a slice they keep using.
 	ReadAll(ctx context.Context, filePath string) ([]byte, error)
 }
 

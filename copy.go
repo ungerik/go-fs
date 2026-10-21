@@ -135,7 +135,7 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 	if makeParentDirs {
 		destDir := dest.Dir()
 		if err := destDir.MakeAllDirs(); err != nil {
-			return fmt.Errorf("CopyFile: can't make directory %q: %w", destDir, err)
+			return fmt.Errorf("CopyFile: can't make directory %q: %w", errSubject(destDir), err)
 		}
 	}
 
@@ -269,7 +269,7 @@ func (c *treeCopier) copyDir(src, dest File) error {
 		// Also tried if Stat failed for another reason than a missing
 		// directory, like on write-only file systems.
 		if err := fsMakeAllDirs(destFS, destPath, NoPermissions); err != nil {
-			return fmt.Errorf("can't make directory %q: %w", dest, err)
+			return fmt.Errorf("can't make directory %q: %w", errSubject(dest), err)
 		}
 	}
 
