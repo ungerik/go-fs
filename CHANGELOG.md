@@ -159,6 +159,15 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   canceled ctx and merged into existing directories on cross-device moves; a
   zero-value `LocalFileSystem` created mode 0000 files; `~foo` expanded to
   `$HOME/foo`.
+- ftpfs: Append ran twice after a lost reply, ListDirRecursive returned
+  partial results without an error, Dial ignored ctx during login, Close
+  waited behind hung operations, data connections went to the IP of the PASV
+  reply, FTPS servers that require TLS session reuse rejected transfers,
+  `DebugOut` logged the password, IPv6 addresses without a port failed.
+- smbfs: `Options.Password` was ignored for a username from the address,
+  sessions dropped by the server were never reconnected, ReadAt at the end
+  didn't return `io.EOF`, Move replaced empty directories, symlink targets
+  lost their leading `/`; anonymous guest shares work.
 - The root module did not compile on freebsd, netbsd, openbsd, solaris and
   wasm; `./test-workspace.sh` failed on Go 1.27 because of the pinned
   staticcheck version; the azureblobfs and smbfs dependencies had known

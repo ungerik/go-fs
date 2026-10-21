@@ -49,7 +49,8 @@ defer memFS.Close() // unregisters
 | `webdavfs.NewAndRegister` returning the file system | returns only `error` |
 | `sftpfs.Dial(ctx, addr, creds, hostKeyCallback, logger)` | `sftpfs.Dial(ctx, addr, &sftpfs.Options{Credentials: creds, HostKeyCallback: hk, Logger: logger})`; also `Username`, `Password`, `Auth`, `Timeout`, `KeepAlive`, `ConnectRetries`, `RetryBackoff`, `DialContext` |
 | `sftpfs.MaxConnectRetries`, `InitialRetryBackoff`, `URLHostKeyCallback` | `Options.ConnectRetries`, `RetryBackoff` (0 = default, negative = off), `HostKeyCallback` |
-| `ftpfs.Dial(ctx, addr, creds, opts)` | `ftpfs.Dial(ctx, addr, &ftpfs.Options{Credentials: creds, …})` |
+| `ftpfs.Dial(ctx, addr, creds, opts)` | `ftpfs.Dial(ctx, addr, &ftpfs.Options{Credentials: creds, …})`, or `Username`/`Password`; also `Timeout`, `DialContext`, `DisableEPSV` |
+| `smbfs.Options.Dialer` | `smbfs.Options.DialContext`, `Options.Timeout` |
 | `sftpfs`/`ftpfs`/`smbfs` `DialAndRegister` returning the file system | returns only `error`; `EnsureRegistered(ctx, addr, opts)` returns `free` |
 
 Behaviour changes:
@@ -68,6 +69,14 @@ Behaviour changes:
 - With a username, the webdavfs prefix is `webdav://user@host/base`, so
   stored URIs change. An `Authorization` header in `webdavfs.Options.Header`
   disables basic auth.
+- ftpfs logs in as `anonymous` without a username (that was an error), uses
+  EPSV by default (`Options.DisableEPSV` for PASV) and rejects paths and
+  credentials containing CR, LF or NUL with `os.ErrInvalid`.
+- sftpfs, ftpfs and smbfs don't retry operations that can't be repeated
+  (append, remove, move, make dir, symlink, writers) after their request may
+  have reached the server; they return the connection error instead.
+- smbfs `ReadSymbolicLink` returns the raw target, and a Move onto an
+  existing empty directory fails with `os.ErrExist` instead of replacing it.
 
 ### Errors
 
