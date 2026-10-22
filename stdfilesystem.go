@@ -42,22 +42,6 @@ type StdFileSystem struct {
 	closed atomic.Bool
 }
 
-// Prefix returns the URI prefix of the file system.
-func (s *StdFileSystem) Prefix() string {
-	return s.paths.URIPrefix
-}
-
-// Separator returns "/".
-func (s *StdFileSystem) Separator() string {
-	return s.paths.Separator()
-}
-
-// CleanPath joins the uriParts with the separator and returns
-// the cleaned absolute path of the file system without the prefix.
-func (s *StdFileSystem) CleanPath(uriParts ...string) string {
-	return s.paths.CleanPath(uriParts...)
-}
-
 // NewStdFileSystem returns a read-only FileSystem for fsys with the
 // URI prefix "stdfs://" + id. A random id is used if id is empty.
 // The file system is not registered, use Register to make
@@ -91,6 +75,22 @@ func NewStdFileSystemAndRegister(fsys iofs.FS, id string) error {
 		return errors.New("NewStdFileSystemAndRegister needs an id")
 	}
 	return Register(NewStdFileSystem(fsys, id))
+}
+
+// Prefix returns the URI prefix of the file system.
+func (s *StdFileSystem) Prefix() string {
+	return s.paths.URIPrefix
+}
+
+// Separator returns "/".
+func (s *StdFileSystem) Separator() string {
+	return s.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (s *StdFileSystem) CleanPath(uriParts ...string) string {
+	return s.paths.CleanPath(uriParts...)
 }
 
 // name returns the io/fs name of a file system path.

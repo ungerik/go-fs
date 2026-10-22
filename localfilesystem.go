@@ -39,6 +39,10 @@ const (
 // or DefaultCreateDirPermissions field of the LocalFileSystem are set.
 const localDefaultPermissions = UserAndGroupReadWrite
 
+// localID is the file system id of the root directory
+// formatted as hex, or "/" if it can't be determined.
+var localID = sync.OnceValue(localFileSystemID)
+
 var (
 	_ FileSystem             = new(LocalFileSystem)
 	_ WriteFileSystem        = new(LocalFileSystem)
@@ -194,8 +198,6 @@ func (local *LocalFileSystem) RootDir() File {
 func (local *LocalFileSystem) ID() string {
 	return localID()
 }
-
-var localID = sync.OnceValue(localFileSystemID)
 
 // Prefix returns [LocalPrefix] ("file://").
 func (local *LocalFileSystem) Prefix() string {
