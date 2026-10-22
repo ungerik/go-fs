@@ -396,7 +396,7 @@ func (s *SubFileSystem) Remove(filePath string) error {
 		return err
 	}
 	if parentPath == s.dir {
-		return fmt.Errorf("can't remove root directory of %s", s)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, s)
 	}
 	return s.subErr(fsRemove(s.parent, parentPath))
 }
@@ -512,7 +512,7 @@ func (s *SubFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		return err
 	}
 	if parentPath == s.dir {
-		return fmt.Errorf("can't remove root directory of %s", s)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, s)
 	}
 	return s.subErr(fsRemoveAll(ctx, s.parent, parentPath))
 }

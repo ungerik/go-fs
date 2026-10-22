@@ -708,7 +708,7 @@ func (o *OverlayFileSystem) Remove(filePath string) error {
 		return err
 	}
 	if o.CleanPath(filePath) == "/" {
-		return fmt.Errorf("can't remove root directory of %s", o)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, o)
 	}
 	if info.IsDir {
 		empty := true
@@ -740,7 +740,7 @@ func (o *OverlayFileSystem) RemoveAll(ctx context.Context, filePath string) erro
 		return err
 	}
 	if o.CleanPath(filePath) == "/" {
-		return fmt.Errorf("can't remove root directory of %s", o)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, o)
 	}
 	unlock := o.lockPath(filePath)
 	defer unlock()

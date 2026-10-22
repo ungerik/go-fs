@@ -875,7 +875,7 @@ func (f *fileSystem) Remove(filePath string) error {
 	return f.do(context.Background(), func(c *conn) error {
 		filePath := path.Clean(filePath)
 		if filePath == Separator {
-			return fmt.Errorf("ftpfs: can't remove the root directory of %s", f)
+			return fmt.Errorf("%w: ftpfs: can't remove the root directory of %s", os.ErrInvalid, f)
 		}
 		info, err := f.stat(c, filePath)
 		if err != nil {
@@ -913,7 +913,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return f.do(ctx, func(c *conn) error {
 		filePath := path.Clean(filePath)
 		if filePath == Separator {
-			return fmt.Errorf("ftpfs: can't remove the root directory of %s", f)
+			return fmt.Errorf("%w: ftpfs: can't remove the root directory of %s", os.ErrInvalid, f)
 		}
 		info, err := f.stat(c, filePath)
 		if isNotExist(err) {

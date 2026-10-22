@@ -438,3 +438,13 @@ func TestClosedFileSystem(t *testing.T) {
 	assert.ErrorIs(t, dbfs.ListDir(ctx, "/dir", nil, func(*fs.FileInfo) error { return nil }), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, dbfs.RemoveAll(ctx, "/dir"), fs.ErrFileSystemClosed)
 }
+
+// TestRemoveRoot verifies that the root folder of the account is never
+// removed and that the error wraps os.ErrInvalid like in the other backends.
+func TestRemoveRoot(t *testing.T) {
+	dbfs, client := newTestFS(t, nil)
+	require.NoError(t, dbfs.WriteAll(t.Context(), "/file.txt", []byte("x"), 0))
+	assert.ErrorIs(t, dbfs.Remove("/"), os.ErrInvalid, "Remove of the root")
+	assert.ErrorIs(t, dbfs.RemoveAll(t.Context(), "/"), os.ErrInvalid, "RemoveAll of the root")
+	assert.Contains(t, client.entries, "/file.txt", "nothing must be removed")
+}

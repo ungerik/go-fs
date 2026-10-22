@@ -1074,3 +1074,18 @@ func TestLocalFileSystem_OpenReaderReadAll(t *testing.T) {
 		assert.True(t, slices.Contains(strings.Fields(string(data)), "Name:"), "content of /proc/self/status")
 	}
 }
+
+// TestLocalFileSystem_RemoveRoot verifies that the root directory of a
+// volume is never removed, like in the other file systems. RemoveAll of "/"
+// called os.RemoveAll("/"), which deletes everything the process may write.
+func TestLocalFileSystem_RemoveRoot(t *testing.T) {
+	abs, err := filepath.Abs(t.TempDir())
+	require.NoError(t, err)
+	root := filepath.VolumeName(abs) + Separator
+	assert.True(t, isLocalRoot(root), "isLocalRoot(%q)", root)
+	assert.False(t, isLocalRoot(abs), "isLocalRoot(%q)", abs)
+
+	assert.ErrorIs(t, Local.Remove(root), os.ErrInvalid, "Remove of the root")
+	assert.ErrorIs(t, Local.RemoveAll(t.Context(), root), os.ErrInvalid, "RemoveAll of the root")
+	assert.ErrorIs(t, File(root).RemoveRecursive(t.Context()), os.ErrInvalid, "File.RemoveRecursive of the root")
+}

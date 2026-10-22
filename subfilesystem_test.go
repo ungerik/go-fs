@@ -99,8 +99,8 @@ func TestSubFileSystem_View(t *testing.T) {
 	assert.False(t, isSymlink(subFS, "/inner"))
 
 	// The root directory of the view can't be removed
-	assert.Error(t, subFS.Remove("/"))
-	assert.Error(t, subFS.RemoveAll(ctx, "/"))
+	assert.ErrorIs(t, subFS.Remove("/"), os.ErrInvalid)
+	assert.ErrorIs(t, subFS.RemoveAll(ctx, "/"), os.ErrInvalid)
 
 	// Closing the view leaves the parent alone
 	require.NoError(t, subFS.Close())

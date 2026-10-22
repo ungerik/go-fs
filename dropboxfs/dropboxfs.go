@@ -707,7 +707,7 @@ func (dbfs *fileSystem) Remove(filePath string) error {
 	}
 	p := apiPath(filePath)
 	if p == "" {
-		return fmt.Errorf("can't remove root directory of %s", dbfs)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, dbfs)
 	}
 	ctx := context.Background()
 	meta, info, err := dbfs.metadata(ctx, p, filePath)
@@ -739,7 +739,7 @@ func (dbfs *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	}
 	p := apiPath(filePath)
 	if p == "" {
-		return fmt.Errorf("can't remove root directory of %s", dbfs)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, dbfs)
 	}
 	dbfs.cache.Delete(p)
 	_, err := dbfs.client.DeleteV2Context(ctx, files.NewDeleteArg(p))

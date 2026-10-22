@@ -1006,11 +1006,16 @@ func isLocalSubPath(dirPath, filePath string) bool {
 
 // Remove deletes filePath via [os.Remove]. Directories must be empty,
 // a non-empty directory is an [ErrDirectoryNotEmpty].
+// The root directory of a volume is never removed,
+// that is an error wrapping [os.ErrInvalid].
 // For recursive removal use [LocalFileSystem.RemoveAll].
 // Other OS errors are mapped to the typed errors of this package.
 func (local *LocalFileSystem) Remove(filePath string) error {
 	if filePath == "" {
 		return ErrEmptyPath
+	}
+	if isLocalRoot(filePath) {
+		return fmt.Errorf("%w: can't remove the root directory %s", os.ErrInvalid, filePath)
 	}
 	err := os.Remove(filePath)
 	if errors.Is(err, os.ErrExist) {
@@ -1023,6 +1028,8 @@ func (local *LocalFileSystem) Remove(filePath string) error {
 
 // RemoveAll removes filePath and any children it contains via [os.RemoveAll].
 // No error is returned if the path does not exist.
+// The root directory of a volume, like "/" or `C:\`, is never removed,
+// that is an error wrapping [os.ErrInvalid] like in the other file systems.
 func (local *LocalFileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1030,7 +1037,19 @@ func (local *LocalFileSystem) RemoveAll(ctx context.Context, filePath string) er
 	if filePath == "" {
 		return ErrEmptyPath
 	}
+	if isLocalRoot(filePath) {
+		return fmt.Errorf("%w: can't remove the root directory %s", os.ErrInvalid, filePath)
+	}
 	return wrapOSErr(filePath, os.RemoveAll(filePath))
+}
+
+// isLocalRoot reports if filePath is the root directory of its volume.
+func isLocalRoot(filePath string) bool {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return false
+	}
+	return filepath.Dir(absPath) == absPath
 }
 
 // localWatcher is the fsnotify watcher of a LocalFileSystem

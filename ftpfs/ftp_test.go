@@ -660,3 +660,15 @@ func TestDialAndRegisterWithPublicOnlineServers(t *testing.T) {
 		})
 	}
 }
+
+// TestRemoveRoot verifies that the root directory is never removed
+// and that the error wraps os.ErrInvalid like in the other backends.
+func TestRemoveRoot(t *testing.T) {
+	srv := newTestFTPServer(t)
+	ftpFS := dialInProcess(t, srv)
+	srv.writeFile("/file.txt", "content")
+	assert.ErrorIs(t, ftpFS.Remove("/"), os.ErrInvalid, "Remove of the root")
+	assert.ErrorIs(t, ftpFS.RemoveAll(t.Context(), "/"), os.ErrInvalid, "RemoveAll of the root")
+	_, err := ftpFS.Stat("/file.txt")
+	assert.NoError(t, err, "nothing must be removed")
+}

@@ -131,7 +131,7 @@ func TestOverlayFileSystem_Layers(t *testing.T) {
 	assert.True(t, upper.RootDir().Join("data", "sub").IsDir())
 
 	// The root can't be removed
-	assert.Error(t, overlay.Remove("/"))
+	assert.ErrorIs(t, overlay.Remove("/"), os.ErrInvalid, "the root can't be removed")
 }
 
 func mustRead(t *testing.T, f fs.File) []byte {
@@ -273,7 +273,7 @@ func TestOverlayFileSystem_IsDirectoryErrors(t *testing.T) {
 	assert.ErrorAs(t, overlay.MakeAllDirs("/base.txt", 0), new(fs.ErrIsNotDirectory))
 
 	// The root can't be removed recursively either
-	assert.Error(t, overlay.RemoveAll(ctx, "/"))
+	assert.ErrorIs(t, overlay.RemoveAll(ctx, "/"), os.ErrInvalid, "the root can't be removed")
 }
 
 // TestOverlayFileSystem_RecreateRemovedDir verifies that a directory
