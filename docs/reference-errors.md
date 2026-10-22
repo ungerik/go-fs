@@ -117,6 +117,9 @@ file is a directory: file:///srv/data
 directory is not empty: sftp://user@host/home/user/dir
 ```
 
+The password is also redacted from a URI that is not a valid URL,
+like one with a file named `100%.txt` or a password containing `/`.
+
 ### Constructors
 
 ```go
