@@ -494,7 +494,7 @@ func TestOverlayFileSystem_ListDirRecursiveSymlinkLoop(t *testing.T) {
 	base, err := fs.RegisteredTestMemFileSystem(nil, fs.NewMemFile("/dir/a.txt", []byte("a")))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = base.Close() })
-	require.NoError(t, base.CreateSymbolicLink("/dir", "/dir/loop"))
+	require.NoError(t, base.CreateSymbolicLink(".", "/dir/loop"))
 	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
@@ -514,16 +514,17 @@ func TestOverlayFileSystem_ListDirRecursiveSymlinkLoop(t *testing.T) {
 
 	assert.Equal(t, []string{"/dir/a.txt", "/dir/loop"}, listFiles(), "a link of the base")
 
-	require.NoError(t, upper.MakeDir("/dir", 0))
-	require.NoError(t, upper.CreateSymbolicLink("..", "/dir/up"))
-	assert.Equal(t, []string{"/dir/a.txt", "/dir/loop", "/dir/up"}, listFiles(), "a relative link of the upper layer")
+	require.NoError(t, upper.MakeAllDirs("/dir/sub", 0))
+	require.NoError(t, upper.CreateSymbolicLink("..", "/dir/sub/up"))
+	assert.Equal(t, []string{"/dir/a.txt", "/dir/loop", "/dir/sub/up"}, listFiles(), "a relative link of the upper layer")
 
-	// The links of both layers are copied with their targets
+	// The links of both layers are copied with their targets,
+	// which are relative and stay inside the copied directory
 	dest, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = dest.Close() })
 	require.NoError(t, fs.CopyRecursive(t.Context(), overlay.RootDir().Join("dir"), dest.RootDir().Join("copy")))
-	for link, target := range map[string]string{"loop": "/dir", "up": ".."} {
+	for link, target := range map[string]string{"loop": ".", "sub/up": ".."} {
 		got, err := dest.ReadSymbolicLink("/copy/" + link)
 		require.NoError(t, err, "the copy of %s must be a link", link)
 		assert.Equal(t, target, got, "the target of the copy of %s", link)

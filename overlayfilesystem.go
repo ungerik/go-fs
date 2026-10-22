@@ -64,7 +64,8 @@ var (
 // The overlay has no symbolic links of its own, but it shows the links of its
 // layers like their files. A recursive listing doesn't follow them, see
 // ListDirRecursiveFileSystem, and CopyRecursive from the overlay copies
-// a link to a directory as link with the target read from its layer.
+// a link to a directory as link with the target read from its layer,
+// if the target is one that CopyRecursive copies to another file system.
 type OverlayFileSystem struct {
 	paths fsimpl.PathHelper
 

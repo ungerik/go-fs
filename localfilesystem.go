@@ -857,6 +857,14 @@ var osRename = os.Rename
 // renamed back if a later step fails. A process that dies in between
 // leaves the file under a name starting with ".gofs-move-".
 //
+// A symbolic link at filePath is moved as link, not what it points to.
+// Moving it onto the file it points to, [os.SameFile] of [os.Stat] of the
+// link and [os.Lstat] of destPath, is an error wrapping [os.ErrInvalid]
+// like the "are the same file" of mv, because the rename would replace
+// the file with a link to itself. Only if the file has other hard links,
+// which keep it, the link replaces destPath like any other file.
+// On Windows, where the link count is unknown, the move is always refused.
+//
 // Move uses [os.Rename], which is atomic but only works within the same
 // underlying file system. If the OS returns a cross-device error
 // (EXDEV on Unix, ERROR_NOT_SAME_DEVICE on Windows) it falls back to
@@ -896,6 +904,8 @@ func (local *LocalFileSystem) Move(ctx context.Context, filePath string, destPat
 		return NewErrAlreadyExists(File(destPath))
 	case srcInfo.IsDir():
 		return NewErrIsNotDirectory(File(destPath))
+	case srcInfo.Mode()&os.ModeSymlink != 0 && isLocalLinkOntoTarget(filePath, destInfo):
+		return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, filePath, destPath)
 	}
 
 	err = osRename(filePath, destPath)
@@ -954,6 +964,22 @@ func moveLocalSameFile(filePath, destPath string, srcInfo os.FileInfo) error {
 		return wrapRenameErr(destPath, osRename(filePath, destPath))
 	}
 	return moveLocalViaTemp(filePath, destPath)
+}
+
+// isLocalLinkOntoTarget reports if the symbolic link linkPath points to the
+// file that destInfo from os.Lstat describes, the destination of a move of
+// the link, and the destination is the only link of the file or its link
+// count is unknown, like on Windows. Renaming the link onto the file would
+// remove the file and leave a link that points to itself. A file with other
+// hard links is kept by them, so the move replaces the destination like any
+// other file.
+func isLocalLinkOntoTarget(linkPath string, destInfo os.FileInfo) bool {
+	target, err := os.Stat(linkPath)
+	if err != nil || !os.SameFile(target, destInfo) {
+		return false
+	}
+	links, ok := localLinkCount(destInfo)
+	return !ok || links <= 1
 }
 
 // moveLocalViaTemp moves filePath to destPath, which is the same file:

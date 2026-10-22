@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -256,6 +259,13 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // and merged with if it does: a file of src replaces a file at the same path
 // in dest, a file of src over a directory of dest is an [ErrIsDirectory]
 // and a directory of src over a file of dest an [ErrIsNotDirectory].
+// dest itself may be a symbolic link to a directory, the copy is written into
+// the directory it points to. Below dest a symbolic link is never written
+// through, which would write outside of dest: a file or directory of src over
+// a symbolic link in dest is an error wrapping [os.ErrExist] ([ErrAlreadyExists])
+// that names the link, like for a link that an earlier copy created for a link
+// of src that is a directory now, or for a link and a directory of src whose
+// names only differ in case on a case-insensitive destination.
 // Copying a directory onto itself is a no-op,
 // copying it into one of its sub-directories is an error wrapping [os.ErrInvalid],
 // for a local directory also through another path to it, like through
@@ -267,11 +277,18 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // and permissions of the target. Symbolic links to directories are never
 // followed, like by [ListDirRecursiveFileSystem], so a link cycle is not copied
 // into itself and a link to the root directory doesn't copy a whole disk:
-// a link to a directory is copied as symbolic link with its target stored
-// verbatim if dest is on a file system that implements [SymbolicLinkFileSystem].
-// Else CopyRecursive fails before it writes anything with an error wrapping
-// [errors.ErrUnsupported] that names the link, so src is checked for such
-// links first, which lists the tree twice. Only a link at src is followed.
+// a link to a directory is copied as symbolic link if dest is on a file system
+// that implements [SymbolicLinkFileSystem], and it replaces a file or link
+// at the same path in dest. Within one file system its target is stored
+// verbatim. Another file system resolves the target to another file, so
+// between file systems only a relative target that stays inside src, resolved
+// lexically against the directory of the link, is copied, with the separator
+// of dest. An absolute target, a target that leaves src, also if it comes
+// back like "../src/sub", or a target with a name that dest can't express
+// fails the copy like a link that dest can't create: CopyRecursive fails
+// before it writes anything with an error wrapping [errors.ErrUnsupported]
+// that names the link, so src is checked for such links first, which lists
+// the tree twice. Only a link at src is followed.
 // An entry of src with a name that is not valid for dest,
 // like the name `..\x` from an archive on a file system with the separator `\`,
 // is an error wrapping [os.ErrInvalid], so no file can be written outside of dest.
@@ -304,11 +321,11 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 		// to a parent directory, a bind mount or a SubFileSystem
 		return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
 	}
-	c := newTreeCopier(ctx, srcFS, destFS, patterns)
+	c := newTreeCopier(ctx, srcFS, srcPath, destFS, patterns)
 	if err := c.checkDirLinks(src, dest); err != nil {
 		return err
 	}
-	return c.copyDir(src, dest)
+	return c.copyDir(src, dest, true)
 }
 
 // treeCopier copies directory trees for CopyRecursive and moveByCopy.
@@ -318,17 +335,22 @@ type treeCopier struct {
 	links     SymbolicLinkFileSystem // if not nil, every symbolic link is copied as link within it
 	dirLinks  SymbolicLinkFileSystem // the destination if it can create the copies of links to directories
 	readLinks bool                   // the source can read the targets of its links, see fsReadSymbolicLink
+	sameFS    bool                   // the source and the destination are the same file system
+	srcRoot   string                 // the path of the copied directory or moved file of the source
 	buf       []byte                 // copy buffer for all files, allocated on first use
 }
 
 // newTreeCopier returns a treeCopier from srcFS to destFS
-// that copies the files matching patterns.
-func newTreeCopier(ctx context.Context, srcFS, destFS FileSystem, patterns []string) *treeCopier {
+// that copies the files matching patterns of the directory
+// or the moved file srcRoot.
+func newTreeCopier(ctx context.Context, srcFS FileSystem, srcRoot string, destFS FileSystem, patterns []string) *treeCopier {
 	return &treeCopier{
 		ctx:       ctx,
 		patterns:  patterns,
 		dirLinks:  fsLinks(destFS),
 		readLinks: fsCanReadLinks(srcFS),
+		sameFS:    srcFS == destFS,
+		srcRoot:   srcRoot,
 	}
 }
 
@@ -348,12 +370,15 @@ func (c *treeCopier) errDirLink(link, dest File) error {
 	return fmt.Errorf("can't copy the symbolic link to a directory %s: %w", errSubject(link), err)
 }
 
-// checkDirLinks returns the error of errDirLink for the first symbolic link
-// to a directory below the directory src that copyDir can't copy to dest,
-// so that the copy fails before it writes anything.
-// The tree is only listed if links to directories can't be copied.
+// checkDirLinks returns an error for the first symbolic link to a directory
+// below the directory src that copyDir can't copy to dest, so that the copy
+// fails before it writes anything: the error of errDirLink if links to
+// directories can't be copied, or of dirLinkTarget for a link of another
+// file system whose target would point somewhere else at dest.
+// The tree is only listed if links to directories can't be copied
+// or are copied from another file system.
 func (c *treeCopier) checkDirLinks(src, dest File) error {
-	if c.links != nil || c.canCopyDirLinks() {
+	if c.links != nil || (c.sameFS && c.canCopyDirLinks()) {
 		return nil
 	}
 	srcFS, srcPath := src.ParseRawURI()
@@ -362,24 +387,44 @@ func (c *treeCopier) checkDirLinks(src, dest File) error {
 			return nil
 		}
 		// A link that can't be followed is an error of copyDir
-		if target, err := fsStat(srcFS, info.File.Path()); err == nil && target.IsDir {
+		target, err := fsStat(srcFS, info.File.Path())
+		if err != nil || !target.IsDir {
+			return nil
+		}
+		if !c.canCopyDirLinks() {
 			return c.errDirLink(info.File, dest)
 		}
-		return nil
+		_, err = c.dirLinkTarget(info.File)
+		return err
 	})
 }
 
 // copyDir copies the directory src recursively to dest,
 // creating dest if it does not exist and merging with it if it does.
-func (c *treeCopier) copyDir(src, dest File) error {
+//
+// Only the root of the copy, passed with root true, may be a symbolic link
+// to a directory, then the copy is written into the directory it points to.
+// Below the root an existing symbolic link where a directory or a file is
+// to be written is an error of errDestLink, because the copy would be written
+// through the link, outside of the destination. Such a link can be the copy
+// of a link that is a directory of src now, or the copy of a link of src
+// that has the name of a directory or file of src on a case-insensitive
+// destination.
+func (c *treeCopier) copyDir(src, dest File, root bool) error {
 	if err := c.ctx.Err(); err != nil {
 		return err
 	}
 	destFS, destPath := dest.ParseRawURI()
-	info, err := fsStat(destFS, destPath)
+	stat := fsLstat
+	if root {
+		stat = fsStat
+	}
+	info, err := stat(destFS, destPath)
 	switch {
+	case err == nil && info.IsSymlink && !root:
+		return errDestLink(src, dest)
 	case err == nil && !info.IsDir:
-		return fmt.Errorf("can't copy directory %s over a file: %w", src, NewErrIsNotDirectory(dest))
+		return fmt.Errorf("can't copy directory %s over a file: %w", errSubject(src), NewErrIsNotDirectory(dest))
 	case err != nil:
 		// Also tried if Stat failed for another reason than a missing
 		// directory, like on write-only file systems.
@@ -398,7 +443,7 @@ func (c *treeCopier) copyDir(src, dest File) error {
 			return c.copyLink(file, fileDest)
 		}
 		if info.IsDir && !info.IsSymlink {
-			return c.copyDir(file, fileDest)
+			return c.copyDir(file, fileDest, false)
 		}
 		match, err := fsimpl.MatchAnyPattern(info.Name, c.patterns)
 		if err != nil || !match {
@@ -416,8 +461,38 @@ func (c *treeCopier) copyDir(src, dest File) error {
 			// Copy the file that the link points to
 			perm = target.Permissions
 		}
-		return copyFileTo(c.ctx, file, perm, fileDest, &c.buf, nil, false, false)
+		if err := checkFileDest(file, fileDest); err != nil {
+			return err
+		}
+		return copyFileTo(c.ctx, file, perm, fileDest, &c.buf, nil, false, true)
 	})
+}
+
+// checkFileDest returns an error if the file src can't be copied to dest
+// below the root of a copy: an existing directory is an ErrIsDirectory and
+// a symbolic link the error of errDestLink, so the file it points to is never
+// written. A missing dest or an error of Lstat, like on write-only file
+// systems, is left to the writer. The one Lstat replaces the check of
+// copyFileTo if dest is a directory.
+func checkFileDest(src, dest File) error {
+	destFS, destPath := dest.ParseRawURI()
+	info, err := fsLstat(destFS, destPath)
+	switch {
+	case err != nil:
+		return nil
+	case info.IsSymlink:
+		return errDestLink(src, dest)
+	case info.IsDir:
+		return NewErrIsDirectory(dest)
+	}
+	return nil
+}
+
+// errDestLink returns the error wrapping os.ErrExist for the symbolic link
+// dest below the root of a copy, where the file or directory src is to be
+// copied. Writing through the link would write outside of the destination.
+func errDestLink(src, dest File) error {
+	return fmt.Errorf("can't copy %s through the symbolic link at the destination: %w", errSubject(src), NewErrAlreadyExists(dest))
 }
 
 // copyLink copies the symbolic link src
@@ -430,9 +505,9 @@ func (c *treeCopier) copyLink(src, dest File) error {
 	return c.links.CreateSymbolicLink(target, dest.Path())
 }
 
-// copyDirLink copies the symbolic link src to a directory as a link with
-// the same target to dest in c.dirLinks for copyDir, see replaceWithLink.
-// Like a file, the link replaces a file or link at dest
+// copyDirLink copies the symbolic link src to a directory as a link
+// to dest in c.dirLinks for copyDir, see replaceWithLink.
+// The link replaces a file or link at dest, which is never written through,
 // and an existing directory at dest is an ErrIsDirectory.
 func (c *treeCopier) copyDirLink(src, dest File) error {
 	if !c.canCopyDirLinks() {
@@ -453,14 +528,13 @@ func (c *treeCopier) copyDirLink(src, dest File) error {
 }
 
 // replaceWithLink creates dest in c.dirLinks as a symbolic link with the
-// target of the link src, which canCopyDirLinks must allow to read.
-// An existing file or link at dest, described by destInfo, is replaced like
-// by os.Rename, destInfo is nil if there is none. To keep dest if the file
-// system can't create the link, the link is first created at a temporary
-// path next to dest and removed again before dest is.
+// target of the link src, which canCopyDirLinks must allow to read,
+// see dirLinkTarget. An existing file or link at dest, described by destInfo,
+// is replaced like by os.Rename, destInfo is nil if there is none.
+// To keep dest if the file system can't create the link, the link is first
+// created at a temporary path next to dest and removed again before dest is.
 func (c *treeCopier) replaceWithLink(src, dest File, destInfo *FileInfo) error {
-	srcFS, srcPath := src.ParseRawURI()
-	target, err := fsReadSymbolicLink(srcFS, srcPath)
+	target, err := c.dirLinkTarget(src)
 	if err != nil {
 		return err
 	}
@@ -493,6 +567,91 @@ func (c *treeCopier) replaceWithLink(src, dest File, destInfo *FileInfo) error {
 		return errors.Join(err, restoreLink())
 	}
 	return err
+}
+
+// dirLinkTarget returns the target for the copy of the symbolic link to
+// a directory link, which canCopyDirLinks must allow to read.
+// Within one file system the target is kept verbatim. Another file system
+// resolves the same target to another file, so between file systems only
+// a relative target that stays inside the copied directory c.srcRoot is
+// copied, written with the separator of the destination, see
+// relativeLinkTarget. Every other target is an error wrapping
+// errors.ErrUnsupported that names the link.
+func (c *treeCopier) dirLinkTarget(link File) (string, error) {
+	srcFS, linkPath := link.ParseRawURI()
+	target, err := fsReadSymbolicLink(srcFS, linkPath)
+	if err != nil {
+		return "", err
+	}
+	if c.sameFS {
+		return target, nil
+	}
+	destTarget, reason := relativeLinkTarget(srcFS, c.srcRoot, linkPath, target, c.dirLinks)
+	if reason != "" {
+		return "", fmt.Errorf("can't copy the symbolic link to a directory %s to another file system, its target %q %s: %w",
+			errSubject(link), target, reason, errors.ErrUnsupported)
+	}
+	return destTarget, nil
+}
+
+// relativeLinkTarget returns target, the target of the symbolic link at
+// linkPath of srcFS, for the copy of the link in destFS, or the reason why
+// the copy would point to another file than the link: the target must be
+// relative and, resolved lexically against the directory of the link, stay
+// inside rootPath, the copied directory, or the link itself if it is moved,
+// without going above rootPath on the way, because only the copied tree is
+// the same in destFS.
+//
+// The target is split into names with the separator of srcFS and the slash,
+// which CleanPath treats as separator too. If destFS has another separator,
+// the names are joined with it, so they must be valid names of destFS,
+// see isValidName, and the result must not be absolute in destFS.
+func relativeLinkTarget(srcFS FileSystem, rootPath, linkPath, target string, destFS FileSystem) (destTarget, reason string) {
+	srcSep, destSep := srcFS.Separator(), destFS.Separator()
+	switch {
+	case target == "":
+		return "", "is empty"
+	case strings.HasPrefix(target, "/"), strings.HasPrefix(target, srcSep), fsVolumeLen(srcFS, target) > 0:
+		return "", "is absolute"
+	}
+	leaves := "leaves the copied directory"
+	if linkPath == rootPath {
+		leaves = "points outside of the moved link"
+	}
+	root := fsSplitPath(srcFS, rootPath)
+	linkDir, _ := fsSplitDirAndName(srcFS, linkPath)
+	resolved := fsSplitPath(srcFS, linkDir)
+	var names []string
+	for name := range strings.SplitSeq(strings.ReplaceAll(target, srcSep, "/"), "/") {
+		switch name {
+		case "":
+			continue
+		case ".":
+		case "..":
+			if len(resolved) <= len(root) {
+				return "", leaves
+			}
+			resolved = resolved[:len(resolved)-1]
+		default:
+			if !isValidName(destFS, name) {
+				return "", fmt.Sprintf("has the name %q, which is no name with the separator %q", name, destSep)
+			}
+			resolved = append(resolved, name)
+		}
+		names = append(names, name)
+	}
+	if len(resolved) < len(root) || !slices.Equal(resolved[:len(root)], root) {
+		// Only possible for a moved link, whose directory is above rootPath
+		return "", leaves
+	}
+	if srcSep == destSep {
+		return target, ""
+	}
+	destTarget = strings.Join(names, destSep)
+	if fsVolumeLen(destFS, destTarget) > 0 {
+		return "", "is absolute with the separator " + strconv.Quote(destSep)
+	}
+	return destTarget, ""
 }
 
 // removeLink removes the symbolic link at linkPath and returns a function

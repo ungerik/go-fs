@@ -39,11 +39,13 @@ func JoinCleanFilePath(uriParts ...string) File {
 // for example a failed upload, never deletes the source.
 // Between different file systems a symbolic link to a file is followed:
 // the destination gets a copy of the file, but only the link is removed
-// from the source. A symbolic link to a directory, as source or below a
-// moved directory, is copied as link with its target stored verbatim if the
-// destination file system implements [SymbolicLinkFileSystem], like by
-// [CopyRecursive]. Else Move fails before anything is copied with an error
-// wrapping [errors.ErrUnsupported] that names the link.
+// from the source. A symbolic link to a directory below a moved directory
+// is copied as link like by [CopyRecursive], if the destination file system
+// implements [SymbolicLinkFileSystem] and the target is relative and stays
+// inside the moved directory. Else Move fails before anything is copied with
+// an error wrapping [errors.ErrUnsupported] that names the link. A symbolic
+// link to a directory as source can't be moved to another file system that
+// way, its target is always outside of the moved link.
 //
 // When source and destination resolve to the same location on the same
 // FileSystem, Move returns nil without touching the file. This matches
@@ -52,8 +54,15 @@ func JoinCleanFilePath(uriParts ...string) File {
 // destroying the file when caller passes identical source and
 // destination. The copy-then-delete fallback also returns nil for two
 // paths of the same local file, like through bind mounts, a symbolic
-// link to a parent directory or a [SubFileSystem], and moving a local
-// directory into itself through such a path is an error wrapping [os.ErrInvalid].
+// link to a parent directory or a [SubFileSystem], and renames the file for
+// a name in the same directory that only differs in case, like
+// [LocalFileSystem.Move] does it. Moving a local directory into itself
+// through such a path is an error wrapping [os.ErrInvalid].
+// Moving a symbolic link onto the file it points to, which would replace
+// the file with a link to itself, is an error wrapping [os.ErrInvalid] that
+// tells they are the same file, like mv reports it, for [LocalFileSystem.Move]
+// and the copy-then-delete fallback, except for a local file with other
+// hard links that keep it.
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath

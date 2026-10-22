@@ -615,19 +615,25 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // rejected by the caller, see fsMove. Local paths are also compared as
 // files, because two paths can be the same file, like through bind mounts,
 // a symbolic link to a parent directory or a SubFileSystem: moving a file
-// or directory onto itself that way is a no-op, and moving a directory into
-// itself that way is an error wrapping [os.ErrInvalid].
+// or directory onto itself that way is a no-op, unless the name in the same
+// directory only differs in case, then the file is renamed like by
+// LocalFileSystem.Move, and moving a directory into itself that way
+// is an error wrapping [os.ErrInvalid].
 //
 // Within a file system that implements [SymbolicLinkFileSystem],
 // symbolic links are copied as links with their target stored verbatim,
 // like [os.Rename] keeps them, and a link replaces an existing file or link.
 // Between file systems, or within one without symbolic links, a link
 // to a file is followed and the file is copied. A link to a directory,
-// also below a moved directory, is copied as link with its target stored
-// verbatim if destFS can create links, else the move fails with an error
-// wrapping [errors.ErrUnsupported] before anything is copied, see CopyRecursive.
+// also below a moved directory, is copied as link if destFS can create links
+// and, between file systems, its target is relative and stays inside srcPath,
+// see CopyRecursive, so a moved link to a directory itself is never copied
+// to another file system. Else the move fails with an error wrapping
+// [errors.ErrUnsupported] before anything is copied.
 // A symbolic link at destPath is replaced, not the file it points to,
-// and recreated if the copy fails.
+// and recreated if the copy fails. Moving a symbolic link onto the file
+// it points to is an error wrapping [os.ErrInvalid], see isLinkOntoTarget,
+// because the file would be replaced with a link to itself.
 // Removing the source never follows symbolic links, see fsRemoveAll.
 // The copied files get permissions like with CopyFile.
 func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) error {
@@ -645,13 +651,14 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	if err != nil {
 		return err
 	}
-	c := newTreeCopier(ctx, srcFS, destFS, nil)
+	c := newTreeCopier(ctx, srcFS, srcPath, destFS, nil)
 	if srcFS == destFS {
 		// Within one file system every link is moved as link
 		c.links = c.dirLinks
 	}
-	moveLink := srcInfo.IsSymlink && c.links != nil
-	if srcInfo.IsSymlink && !moveLink {
+	srcIsLink := srcInfo.IsSymlink
+	moveLink := srcIsLink && c.links != nil
+	if srcIsLink && !moveLink {
 		target, err := fsStat(srcFS, srcPath)
 		if err != nil {
 			return err
@@ -673,7 +680,15 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 			// The copy would be a no-op and removing
 			// the source would remove the only copy
 			if isLocalSameDirEntry(srcLocal, destLocal) {
-				return nil
+				if filepath.Base(srcLocal) == filepath.Base(destLocal) {
+					return nil
+				}
+				// Another case of the name, renamed like by LocalFileSystem.Move
+				srcLocalInfo, err := os.Lstat(srcLocal)
+				if err != nil {
+					return wrapOSErr(srcLocal, err)
+				}
+				return moveLocalSameFile(srcLocal, destLocal, srcLocalInfo)
 			}
 			// Another hard link of the file, or the same directory entry
 			// under a name that only the file system matches, like another
@@ -699,6 +714,8 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return NewErrAlreadyExists(dest)
 	case srcIsDir:
 		return NewErrIsNotDirectory(dest)
+	case srcIsLink && !destInfo.IsSymlink && isLinkOntoTarget(srcFS, srcPath, destFS, destPath):
+		return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
 	}
 
 	switch {
@@ -707,7 +724,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	case srcIsDir:
 		err = c.checkDirLinks(src, dest)
 		if err == nil {
-			err = c.copyDir(src, dest)
+			err = c.copyDir(src, dest, true)
 		}
 	default:
 		var restoreLink func() error
@@ -728,6 +745,87 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return err
 	}
 	return fsRemoveAll(ctx, srcFS, srcPath)
+}
+
+// isLinkOntoTarget reports if the symbolic link srcPath of srcFS points to
+// destPath of destFS, an existing file that is no link, which a move of the
+// link would replace with the link: the link would then point to itself and
+// the file would be gone, so mv refuses to move them as the same file.
+// Local paths are compared like by LocalFileSystem.Move, see
+// isLocalLinkOntoTarget, a file with other hard links is kept by them and
+// replaced like any other file. Within one other file system the paths are
+// compared with every symbolic link resolved, see fsEvalSymlinks, a link
+// that can't be resolved is reported as not pointing to destPath.
+func isLinkOntoTarget(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
+	if srcLocal, destLocal, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
+		destInfo, err := os.Lstat(destLocal)
+		return err == nil && isLocalLinkOntoTarget(srcLocal, destInfo)
+	}
+	if srcFS != destFS {
+		return false
+	}
+	srcResolved, ok := fsEvalSymlinks(srcFS, srcPath)
+	if !ok {
+		return false
+	}
+	destResolved, ok := fsEvalSymlinks(destFS, destPath)
+	return ok && srcResolved == destResolved
+}
+
+// evalSymlinksMaxLinks is the number of symbolic links
+// that fsEvalSymlinks follows, like filepath.EvalSymlinks.
+const evalSymlinksMaxLinks = 255
+
+// fsEvalSymlinks returns the clean filePath of fileSystem with every symbolic
+// link in it resolved, like filepath.EvalSymlinks, and false if a link can't
+// be read, an element doesn't exist or more than evalSymlinksMaxLinks links
+// are followed. Like MemFileSystem resolves its paths, the elements are walked
+// from the root and a link is replaced with the elements of its target,
+// which is absolute or relative to the resolved directory of the link.
+// Every element costs a Lstat, a round trip on a remote file system.
+func fsEvalSymlinks(fileSystem FileSystem, filePath string) (string, bool) {
+	if !fsCanReadLinks(fileSystem) {
+		return "", false
+	}
+	sep := fileSystem.Separator()
+	filePath = fileSystem.CleanPath(filePath)
+	resolved := fileSystem.CleanPath(filePath[:fsVolumeLen(fileSystem, filePath)])
+	pending := fsSplitPath(fileSystem, filePath)
+	for links := 0; len(pending) > 0; {
+		name := pending[0]
+		pending = pending[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			resolved = fileSystem.CleanPath(resolved, "..")
+			continue
+		}
+		next := fileSystem.CleanPath(resolved, name)
+		info, err := fsLstat(fileSystem, next)
+		if err != nil {
+			return "", false
+		}
+		if !info.IsSymlink {
+			resolved = next
+			continue
+		}
+		if links++; links > evalSymlinksMaxLinks {
+			return "", false
+		}
+		target, err := fsReadSymbolicLink(fileSystem, next)
+		if err != nil || target == "" {
+			return "", false
+		}
+		volumeLen := fsVolumeLen(fileSystem, target)
+		if volumeLen > 0 || strings.HasPrefix(target, "/") || strings.HasPrefix(target, sep) {
+			// An absolute target
+			resolved = fileSystem.CleanPath(target[:volumeLen])
+		}
+		elems := strings.Split(strings.ReplaceAll(target[volumeLen:], sep, "/"), "/")
+		pending = append(elems, pending...)
+	}
+	return resolved, true
 }
 
 // isSubPath reports if filePath is inside the directory dirPath

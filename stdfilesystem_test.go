@@ -2,6 +2,7 @@ package fs_test
 
 import (
 	"embed"
+	"errors"
 	"maps"
 	"os"
 	"slices"
@@ -96,7 +97,8 @@ func TestStdFileSystem_DirFS(t *testing.T) {
 // TestStdFileSystem_SymbolicLinks checks the symbolic links of an os.DirFS:
 // ListDirRecursive lists a link to a directory as entry without following it,
 // except a link at the start, and CopyRecursive copies the link as link,
-// where it used to copy the directory the link points to.
+// where it used to copy the directory the link points to. The target leaves
+// the directory "tree", so the link can only be copied with its target.
 func TestStdFileSystem_SymbolicLinks(t *testing.T) {
 	dir := fs.File(t.TempDir())
 	writeFiles(t, dir, map[string]string{"tree/a.txt": "a", "outside/b.txt": "b"})
@@ -113,7 +115,12 @@ func TestStdFileSystem_SymbolicLinks(t *testing.T) {
 	requireFiles(t, tree.Join("link"), "b.txt")
 
 	dest := newLinkMemFS(t).RootDir().Join("copy")
-	require.NoError(t, fs.CopyRecursive(t.Context(), tree, dest))
-	requireLink(t, dest.Join("link"), "../outside")
-	requireContent(t, dest.Join("a.txt"), "a")
+	err := fs.CopyRecursive(t.Context(), tree, dest)
+	require.ErrorIs(t, err, errors.ErrUnsupported, "the target leaves the copied directory")
+	requireMissing(t, dest)
+
+	require.NoError(t, fs.CopyRecursive(t.Context(), stdFS.RootDir(), dest))
+	requireLink(t, dest.Join("tree", "link"), "../outside")
+	requireContent(t, dest.Join("tree", "a.txt"), "a")
+	requireContent(t, dest.Join("outside", "b.txt"), "b")
 }

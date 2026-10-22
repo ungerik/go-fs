@@ -84,8 +84,9 @@ func TestMove_CrossFileSystemOverwriteSemantics(t *testing.T) {
 
 // TestMove_CrossFileSystemSymlinks checks the move of a directory with a
 // symbolic link to a directory to another file system: the link is copied
-// as link if the destination can create links, else the move fails before
-// anything is copied. It used to copy the directory that the link points to.
+// as link if the destination can create links and its target is relative
+// and stays inside the moved directory, else the move fails before anything
+// is copied. It used to copy the directory that the link points to.
 func TestMove_CrossFileSystemSymlinks(t *testing.T) {
 	t.Run("destination without symbolic links", func(t *testing.T) {
 		// The source file system has no RemoveAll,
@@ -101,22 +102,40 @@ func TestMove_CrossFileSystemSymlinks(t *testing.T) {
 		require.True(t, tree.Join("link").IsSymbolicLink(), "the link must be kept")
 		requireContent(t, outside.Join("precious.txt"), "precious")
 	})
-	t.Run("destination with symbolic links", func(t *testing.T) {
+	t.Run("absolute target", func(t *testing.T) {
+		// The absolute local path means another directory
+		// in the destination, the link must not be copied
 		tree, outside := symlinkTree(t, fs.File(t.TempDir()), os.Symlink)
+		dest := newLinkMemFS(t).RootDir().Join("moved")
+
+		err := tree.MoveTo(t.Context(), dest)
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		require.ErrorContains(t, err, tree.Join("link").String(), "the error must name the link")
+		requireMissing(t, dest)
+		requireContent(t, tree.Join("file.txt"), "file")
+		requireLink(t, tree.Join("link"), outside.Path())
+	})
+	t.Run("relative target inside the moved directory", func(t *testing.T) {
+		tree := fs.File(t.TempDir()).Join("tree")
+		writeFiles(t, tree, map[string]string{"file.txt": "file", "sub/a.txt": "a"})
+		if err := os.Symlink("sub", tree.Join("link").LocalPath()); err != nil {
+			t.Skipf("can't create symbolic link: %v", err)
+		}
 		dest := newLinkMemFS(t).RootDir().Join("moved")
 
 		require.NoError(t, tree.MoveTo(t.Context(), dest))
 		requireMissing(t, tree)
 		requireContent(t, dest.Join("file.txt"), "file")
-		requireLink(t, dest.Join("link"), outside.Path())
-		requireContent(t, outside.Join("precious.txt"), "precious")
+		requireLink(t, dest.Join("link"), "sub")
+		requireFiles(t, dest.Join("link"), "a.txt")
 	})
 }
 
 // TestMove_CrossFileSystemFollowedLink checks the move of a symbolic link
 // to another file system: for a link to a file the file is copied and only
-// the link is removed, a link to a directory is copied as link. A failed
-// copy keeps the link and its target.
+// the link is removed. A link to a directory can't be moved, because its
+// target is outside of the moved link, so the destination would resolve
+// it to another directory. A failed copy keeps the link and its target.
 func TestMove_CrossFileSystemFollowedLink(t *testing.T) {
 	setup := func(t *testing.T) (dirLink, fileLink, outside fs.File) {
 		dir := fs.File(t.TempDir())
@@ -134,12 +153,14 @@ func TestMove_CrossFileSystemFollowedLink(t *testing.T) {
 		dirLink, fileLink, outside := setup(t)
 		dest := newLinkMemFS(t).RootDir()
 
-		require.NoError(t, fs.Move(t.Context(), dirLink, dest.Join("dir")))
+		err := fs.Move(t.Context(), dirLink, dest.Join("dir"))
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		require.ErrorContains(t, err, dirLink.String(), "the error must name the link")
+		requireMissing(t, dest.Join("dir"))
+		requireLink(t, dirLink, outside.Path())
 		require.NoError(t, fs.Move(t.Context(), fileLink, dest.Join("file.txt")))
-		requireLink(t, dest.Join("dir"), outside.Path())
 		requireContent(t, dest.Join("file.txt"), "precious")
 		require.False(t, dest.Join("file.txt").IsSymbolicLink(), "the file must be copied")
-		requireMissing(t, dirLink)
 		requireMissing(t, fileLink)
 		requireContent(t, outside.Join("precious.txt"), "precious")
 	})
@@ -174,9 +195,10 @@ func TestMove_CrossFileSystemFollowedLink(t *testing.T) {
 // into itself until the path had too many links.
 func TestMove_CrossFileSystemSymlinkLoop(t *testing.T) {
 	setup := func(t *testing.T) fs.File {
-		src := newSymlinkMemFS(t).RootDir()
+		s := newSymlinkMemFS(t)
+		src := s.RootDir()
 		writeFiles(t, src, map[string]string{"dir/a.txt": "a", "dir/sub/b.txt": "b"})
-		require.NoError(t, src.Join("dir", "loop").CreateSymbolicLink(src.Join("dir")))
+		require.NoError(t, s.CreateSymbolicLink(".", "/dir/loop"))
 		return src
 	}
 
@@ -188,7 +210,7 @@ func TestMove_CrossFileSystemSymlinkLoop(t *testing.T) {
 
 		require.NoError(t, fs.Move(ctx, src.Join("dir"), dest.Join("dir")))
 		requireFiles(t, dest.Join("dir"), "a.txt", "loop", "sub/b.txt")
-		requireLink(t, dest.Join("dir", "loop"), "/dir")
+		requireLink(t, dest.Join("dir", "loop"), ".")
 		requireMissing(t, src.Join("dir"))
 	})
 	t.Run("destination without symbolic links", func(t *testing.T) {
@@ -225,6 +247,94 @@ func TestMove_SameFileThroughSubFileSystem(t *testing.T) {
 	err = fs.Move(ctx, dir.Join("sub"), sub.RootDir().Join("sub"))
 	require.ErrorIs(t, err, os.ErrInvalid)
 	requireFiles(t, dir.Join("sub"), "a.txt")
+}
+
+// TestMove_LinkOntoItsTarget is a regression test: moving a symbolic link
+// onto the file it points to replaced the file with the link, which then
+// pointed to itself, and Move returned nil. Like mv, which reports that
+// they are the same file, Move refuses with an error wrapping os.ErrInvalid.
+func TestMove_LinkOntoItsTarget(t *testing.T) {
+	t.Run("LocalFileSystem", func(t *testing.T) {
+		dir := fs.File(t.TempDir())
+		requireLocalLinks(t, dir)
+		file := dir.Join("file.txt")
+		require.NoError(t, file.WriteAllString(t.Context(), "precious"))
+		for _, target := range []string{"file.txt", file.LocalPath()} {
+			link := dir.Join("link")
+			require.NoError(t, os.Symlink(target, link.LocalPath()))
+
+			err := fs.Move(t.Context(), link, file)
+			require.ErrorIs(t, err, os.ErrInvalid, "link to %s", target)
+			requireContent(t, file, "precious")
+			requireLink(t, link, target)
+			require.NoError(t, link.Remove())
+		}
+	})
+	t.Run("through a SubFileSystem", func(t *testing.T) {
+		// The move emulation between the view and the local file system
+		dir := fs.File(t.TempDir())
+		requireLocalLinks(t, dir)
+		file := dir.Join("file.txt")
+		require.NoError(t, file.WriteAllString(t.Context(), "precious"))
+		require.NoError(t, os.Symlink("file.txt", dir.Join("link").LocalPath()))
+		sub, err := fs.NewSubFileSystem(fs.Local, dir.LocalPath(), "")
+		require.NoError(t, err)
+		register(t, sub)
+
+		err = fs.Move(t.Context(), sub.RootDir().Join("link"), file)
+		require.ErrorIs(t, err, os.ErrInvalid)
+		requireContent(t, file, "precious")
+		requireLink(t, dir.Join("link"), "file.txt")
+	})
+	t.Run("move emulation", func(t *testing.T) {
+		s := newSymlinkMemFS(t)
+		root := s.RootDir()
+		writeFiles(t, root, map[string]string{"file.txt": "precious", "real/other.txt": "other"})
+		links := map[string]string{
+			"/link":     "/file.txt",
+			"/relative": "file.txt",
+			"/chain":    "/link", // a link to the link
+			"/alias":    "/real", // a link to the directory of the next link's target
+			"/via":      "/alias/other.txt",
+		}
+		for link, target := range links {
+			require.NoError(t, s.CreateSymbolicLink(target, link))
+		}
+
+		for _, link := range []string{"link", "relative", "chain"} {
+			_, err := root.Join(link).Rename(t.Context(), "file.txt")
+			require.ErrorIs(t, err, os.ErrInvalid, "Rename of %s", link)
+			requireContent(t, root.Join("file.txt"), "precious")
+			requireLink(t, root.Join(link), links["/"+link])
+		}
+		err := fs.Move(t.Context(), root.Join("via"), root.Join("real", "other.txt"))
+		require.ErrorIs(t, err, os.ErrInvalid, "Move of a link through a link to the directory")
+		requireContent(t, root.Join("real", "other.txt"), "other")
+		requireLink(t, root.Join("via"), "/alias/other.txt")
+	})
+}
+
+// TestMove_CaseOnlyRenameThroughSubFileSystem is a regression test: a move
+// between the local file system and a SubFileSystem of the same directory
+// to a name that only differs in case did nothing on a case-insensitive file
+// system and returned nil, while LocalFileSystem.Move renames the file.
+func TestMove_CaseOnlyRenameThroughSubFileSystem(t *testing.T) {
+	dir := caseInsensitiveTempDir(t)
+	writeFiles(t, dir, map[string]string{"file.txt": "file"})
+	sub, err := fs.NewSubFileSystem(fs.Local, dir.LocalPath(), "")
+	require.NoError(t, err)
+	register(t, sub)
+
+	require.NoError(t, fs.Move(t.Context(), dir.Join("file.txt"), sub.RootDir().Join("File.txt")))
+	requireNames(t, dir, "File.txt")
+	require.NoError(t, fs.Move(t.Context(), sub.RootDir().Join("File.txt"), dir.Join("FILE.txt")))
+	requireNames(t, dir, "FILE.txt")
+	requireContent(t, dir.Join("FILE.txt"), "file")
+
+	// The same name is still a no-op
+	require.NoError(t, fs.Move(t.Context(), sub.RootDir().Join("FILE.txt"), dir.Join("FILE.txt")))
+	requireNames(t, dir, "FILE.txt")
+	requireContent(t, dir.Join("FILE.txt"), "file")
 }
 
 func TestRemoveFiles(t *testing.T) {

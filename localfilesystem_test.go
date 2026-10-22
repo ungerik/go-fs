@@ -255,6 +255,67 @@ func TestLocalFileSystem_Move(t *testing.T) {
 		requireLocalContent(t, dest, "source")
 	})
 
+	t.Run("LinkOntoItsTarget", func(t *testing.T) {
+		// Regression test: the link replaced the file it points to and then
+		// pointed to itself, so the file was gone and Move returned nil
+		dir := setupLocalMove(t)
+		dest := filepath.Join(dir, "dest.txt")
+		for _, target := range []string{"dest.txt", dest} {
+			link := filepath.Join(dir, "link")
+			if err := os.Symlink(target, link); err != nil {
+				t.Skipf("can't create symbolic link: %v", err)
+			}
+			err := Local.Move(t.Context(), link, dest)
+			require.ErrorIs(t, err, os.ErrInvalid, "link to %s", target)
+			requireLocalContent(t, dest, "destination")
+			stored, err := os.Readlink(link)
+			require.NoError(t, err, "the link must be kept")
+			assert.Equal(t, target, stored)
+			require.NoError(t, os.Remove(link))
+		}
+	})
+
+	t.Run("LinkOntoItsTargetCrossDevice", func(t *testing.T) {
+		// The fallback of copying the link must not replace its target either
+		dir := setupLocalMove(t)
+		dest, link := filepath.Join(dir, "dest.txt"), filepath.Join(dir, "link")
+		if err := os.Symlink("dest.txt", link); err != nil {
+			t.Skipf("can't create symbolic link: %v", err)
+		}
+		osRename = func(oldPath, newPath string) error {
+			return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: syscall.EXDEV}
+		}
+		t.Cleanup(func() { osRename = os.Rename })
+
+		err := Local.Move(t.Context(), link, dest)
+		require.ErrorIs(t, err, os.ErrInvalid)
+		requireLocalContent(t, dest, "destination")
+		_, err = os.Readlink(link)
+		require.NoError(t, err, "the link must be kept")
+	})
+
+	t.Run("LinkOntoItsTargetWithOtherHardLink", func(t *testing.T) {
+		// The file is kept by its other hard link, so the link replaces
+		// the destination like any other file, like mv does it
+		if runtime.GOOS == "windows" {
+			t.Skip("the link count is unknown on Windows, the move is refused")
+		}
+		dir := setupLocalMove(t)
+		dest, other, link := filepath.Join(dir, "dest.txt"), filepath.Join(dir, "other.txt"), filepath.Join(dir, "link")
+		if err := os.Link(dest, other); err != nil {
+			t.Skipf("can't create hard link: %v", err)
+		}
+		if err := os.Symlink("other.txt", link); err != nil {
+			t.Skipf("can't create symbolic link: %v", err)
+		}
+		require.NoError(t, Local.Move(t.Context(), link, dest))
+		stored, err := os.Readlink(dest)
+		require.NoError(t, err, "the destination must be the link")
+		assert.Equal(t, "other.txt", stored)
+		requireLocalContent(t, dest, "destination")
+		assert.NoFileExists(t, link)
+	})
+
 	t.Run("OntoHardLinkFails", func(t *testing.T) {
 		// The source link is moved to a temporary name before the
 		// destination is replaced. If that fails, the source link
