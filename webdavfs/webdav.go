@@ -19,6 +19,7 @@ package webdavfs
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -88,7 +89,15 @@ type Options struct {
 	// it refuses redirects that would change the method, because Go turns
 	// PROPFIND, PUT, DELETE, MKCOL, MOVE and COPY into GET when following
 	// a 301, 302 or 303, and redirects to the same URL with a trailing slash,
-	// which tell that the path is a collection. Other redirects are passed
+	// which tell that the path is a collection.
+	//
+	// It also refuses redirects to another host or port than the one of the
+	// base URL, and from an https base URL to http, because Go would send
+	// the Header entries to any host and basic authentication to the same
+	// host name, also over plain HTTP. If Client has a CheckRedirect, that
+	// decides about such a redirect instead, with a request without the
+	// Authorization header and the Header entries, which it may add back.
+	// A refused redirect is a *StatusError. Other redirects are passed
 	// to the CheckRedirect of Client, if it has one.
 	Client *http.Client
 }
@@ -152,7 +161,7 @@ func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, err
 		client = opts.Client
 		f.header = opts.Header
 	}
-	f.client = newClient(client)
+	f.client = f.newClient(client)
 	f.basicAuth = (f.username != "" || f.password != "") && !hasAuthorization(f.header)
 	prefix := Prefix
 	if f.username != "" {
@@ -187,7 +196,7 @@ func NewAndRegister(ctx context.Context, baseURL string, opts *Options) error {
 
 // newClient returns a copy of client, or of http.DefaultClient
 // if client is nil, with the CheckRedirect described at Options.Client.
-func newClient(client *http.Client) *http.Client {
+func (f *fileSystem) newClient(client *http.Client) *http.Client {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -200,6 +209,13 @@ func newClient(client *http.Client) *http.Client {
 			// and handled as *StatusError by do
 			return http.ErrUseLastResponse
 		}
+		if !f.keepsCredentials(req.URL) {
+			if next == nil {
+				return http.ErrUseLastResponse
+			}
+			// Go copied the headers of the first request to req
+			f.removeCredentials(req.Header)
+		}
 		if next != nil {
 			return next(req, via)
 		}
@@ -209,6 +225,27 @@ func newClient(client *http.Client) *http.Client {
 		return nil
 	}
 	return &c
+}
+
+// keepsCredentials reports whether the credentials may be sent to u:
+// it must have the host and port of the base URL, and the scheme https
+// if the base URL has it.
+func (f *fileSystem) keepsCredentials(u *url.URL) bool {
+	if !strings.EqualFold(u.Host, f.baseURL.Host) {
+		return false
+	}
+	return u.Scheme == f.baseURL.Scheme || u.Scheme == "https"
+}
+
+// removeCredentials removes the Authorization header
+// and the entries of Options.Header from header.
+func (f *fileSystem) removeCredentials(header http.Header) {
+	header.Del("Authorization")
+	for key := range f.header {
+		// The keys of Options.Header are copied as they are
+		delete(header, key)
+		header.Del(key)
+	}
 }
 
 // hasAuthorization reports whether header has an Authorization header,
@@ -641,7 +678,39 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, f.readError(ctx, err, filePath)
 	}
 	defer response.Body.Close()
-	return fs.ReadAll(ctx, response.Body)
+	return readAll(ctx, response.Body, response.ContentLength)
+}
+
+// maxPreallocate limits the buffer that readAll allocates for the
+// announced size of a body, so that a wrong Content-Length doesn't
+// allocate much more memory than the body needs.
+const maxPreallocate = 16 << 20
+
+// readAll reads r until EOF, another error or the end of ctx like
+// fs.ReadAll. If size is not negative, the buffer is allocated for size
+// bytes, up to maxPreallocate, instead of growing it while reading.
+func readAll(ctx context.Context, r io.Reader, size int64) ([]byte, error) {
+	if size < 0 {
+		return fs.ReadAll(ctx, r)
+	}
+	// One byte more, so that the read that returns io.EOF
+	// doesn't grow the buffer
+	b := make([]byte, 0, min(size, maxPreallocate)+1)
+	for ctx.Err() == nil {
+		if len(b) == cap(b) {
+			// Add more capacity (let append pick how much)
+			b = append(b, 0)[:len(b)]
+		}
+		n, err := r.Read(b[len(b):cap(b)])
+		b = b[:len(b)+n]
+		if err == io.EOF {
+			return b, nil
+		}
+		if err != nil {
+			return b, err
+		}
+	}
+	return b, ctx.Err()
 }
 
 // readError maps an error of a GET request for filePath. Servers answer
@@ -816,6 +885,13 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 // if filePath is a collection), an existing collection is an error
 // wrapping os.ErrExist and is neither deleted nor merged.
 // Moving a collection into itself is an error wrapping os.ErrInvalid.
+//
+// A destPath that only differs in case from filePath renames it on a
+// case-insensitive server. An existing destination with such a path, or
+// an existing file with the same size and modification time, may be the
+// source itself, so filePath is moved to a temporary name ".gofs-rename-*"
+// in its collection and from there onto destPath, and moved back if that
+// fails. An error that leaves it at the temporary name contains that name.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return fs.ErrEmptyPath
@@ -840,6 +916,12 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 // CopyFile copies a file server-side with the COPY method.
 // An existing file at destFile is replaced,
 // an existing collection is an fs.ErrIsDirectory.
+//
+// An existing destFile that may be srcFile itself under another name,
+// because it only differs in case or has the same size and modification
+// time, is checked by moving srcFile to a temporary name ".gofs-rename-*"
+// and back. A copy onto the file itself, like on a case-insensitive
+// server, does nothing.
 func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if srcFile == "" || destFile == "" {
 		return fs.ErrEmptyPath
@@ -866,47 +948,151 @@ func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 // If the destination exists (412 Precondition Failed), an existing
 // file is replaced by a second request with Overwrite T,
 // an existing collection is an error.
+//
+// A destination that may be the source itself under another name, see
+// maybeSource, is never replaced like that, because the server would
+// delete the source: a MOVE renames the source through a temporary name,
+// and a COPY onto the source itself does nothing.
 func (f *fileSystem) relocate(ctx context.Context, method string, srcInfo *fs.FileInfo, src, dest string) error {
-	header := map[string]string{
-		// nginx wants both URLs of a collection with trailing slash
-		"Destination": f.urlOf(dest, srcInfo.IsDir),
-		"Overwrite":   "F",
-	}
-	if method == "COPY" {
-		header["Depth"] = "0"
-	}
-	response, err := f.do(ctx, method, src, srcInfo.IsDir, nil, header)
+	err := f.send(ctx, method, src, dest, srcInfo.IsDir, false)
 	if statusCode(err) == http.StatusPreconditionFailed {
 		destInfo, statErr := f.stat(ctx, dest)
 		if statErr != nil {
 			return statErr
 		}
+		maybeSource := maybeSource(src, dest, srcInfo, destInfo)
 		switch {
+		case maybeSource && method == "MOVE":
+			return f.moveThroughTemp(ctx, srcInfo, src, dest)
 		case destInfo.IsDir && method == "COPY":
 			return fs.NewErrIsDirectory(destInfo.File)
 		case destInfo.IsDir:
 			return fs.NewErrAlreadyExists(destInfo.File)
 		case srcInfo.IsDir:
 			return fs.NewErrIsNotDirectory(destInfo.File)
-		}
-		header["Overwrite"] = "T"
-		response, err = f.do(ctx, method, src, srcInfo.IsDir, nil, header)
-	}
-	if err != nil {
-		switch statusCode(err) {
-		case http.StatusConflict:
-			// The parent collection of the destination is missing
-			return fs.NewErrDoesNotExist(f.file(path.Dir(dest)))
-		case http.StatusForbidden:
-			// golang.org/x/net/webdav answers a MOVE
-			// into a missing collection with 403
-			if _, statErr := f.stat(ctx, path.Dir(dest)); errors.Is(statErr, os.ErrNotExist) {
-				return statErr
+		case maybeSource:
+			isSource, err := f.isSource(ctx, src, dest)
+			if err != nil || isSource {
+				return err
 			}
 		}
-		return f.fsError(err, src)
+		err = f.send(ctx, method, src, dest, srcInfo.IsDir, true)
+	}
+	return f.relocateError(ctx, err, src, dest)
+}
+
+// send sends a MOVE or COPY request for src to dest with the Overwrite
+// header T or F, for a collection with both URLs as collection URLs.
+func (f *fileSystem) send(ctx context.Context, method, src, dest string, dir, overwrite bool) error {
+	header := map[string]string{
+		// nginx wants both URLs of a collection with trailing slash
+		"Destination": f.urlOf(dest, dir),
+		"Overwrite":   "F",
+	}
+	if overwrite {
+		header["Overwrite"] = "T"
+	}
+	if method == "COPY" {
+		header["Depth"] = "0"
+	}
+	response, err := f.do(ctx, method, src, dir, nil, header)
+	if err != nil {
+		return err
 	}
 	return discard(response)
+}
+
+// relocateError maps an error of a MOVE or COPY request for src to dest.
+func (f *fileSystem) relocateError(ctx context.Context, err error, src, dest string) error {
+	switch statusCode(err) {
+	case http.StatusConflict:
+		// The parent collection of the destination is missing
+		return fs.NewErrDoesNotExist(f.file(path.Dir(dest)))
+	case http.StatusForbidden:
+		// golang.org/x/net/webdav answers a MOVE
+		// into a missing collection with 403
+		if _, statErr := f.stat(ctx, path.Dir(dest)); errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+	}
+	return f.fsError(err, src)
+}
+
+// maybeSource reports whether the existing destination of a MOVE or COPY
+// may be the source itself under another name: if the paths only differ
+// in case, because the server may be case-insensitive, or if both are
+// files with the same size and modification time, because the server may
+// normalize names, like their Unicode form. A false positive costs a few
+// requests, a false negative would make the server delete the source.
+func maybeSource(src, dest string, srcInfo, destInfo *fs.FileInfo) bool {
+	switch {
+	case srcInfo.IsDir != destInfo.IsDir:
+		return false
+	case strings.EqualFold(src, dest):
+		return true
+	}
+	return !srcInfo.IsDir && srcInfo.Size == destInfo.Size && srcInfo.Modified.Equal(destInfo.Modified)
+}
+
+// tempPath returns a new temporary path in the collection of p.
+func tempPath(p string) string {
+	return path.Join(path.Dir(p), ".gofs-rename-"+rand.Text())
+}
+
+// moveThroughTemp moves src onto the existing dest, which may be src
+// itself, through a temporary name in the collection of src. Once src is
+// at the temporary name, an existing dest is another resource and is
+// replaced like by relocate. If that fails, src is moved back.
+func (f *fileSystem) moveThroughTemp(ctx context.Context, srcInfo *fs.FileInfo, src, dest string) error {
+	tmp := tempPath(src)
+	if err := f.send(ctx, "MOVE", src, tmp, srcInfo.IsDir, false); err != nil {
+		return f.relocateError(ctx, err, src, tmp)
+	}
+	err := f.send(ctx, "MOVE", tmp, dest, srcInfo.IsDir, false)
+	if statusCode(err) == http.StatusPreconditionFailed {
+		var destInfo *fs.FileInfo
+		destInfo, err = f.stat(ctx, dest)
+		switch {
+		case err != nil:
+		case destInfo.IsDir:
+			err = fs.NewErrAlreadyExists(destInfo.File)
+		case srcInfo.IsDir:
+			err = fs.NewErrIsNotDirectory(destInfo.File)
+		default:
+			err = f.send(ctx, "MOVE", tmp, dest, srcInfo.IsDir, true)
+		}
+	}
+	if err == nil {
+		return nil
+	}
+	err = f.relocateError(ctx, err, src, dest)
+	// Also if the context is done
+	if restoreErr := f.send(context.WithoutCancel(ctx), "MOVE", tmp, src, srcInfo.IsDir, false); restoreErr != nil {
+		return fmt.Errorf("%w; %s remains at %s: %w", err, f.file(src), f.file(tmp), restoreErr)
+	}
+	return err
+}
+
+// isSource reports whether the existing file dest is the file src under
+// another name. It moves src to a temporary name in its collection and
+// back: dest is src if it was gone meanwhile.
+func (f *fileSystem) isSource(ctx context.Context, src, dest string) (bool, error) {
+	tmp := tempPath(src)
+	if err := f.send(ctx, "MOVE", src, tmp, false, false); err != nil {
+		return false, f.relocateError(ctx, err, src, tmp)
+	}
+	_, statErr := f.stat(ctx, dest)
+	// Also if the context is done
+	if err := f.send(context.WithoutCancel(ctx), "MOVE", tmp, src, false, false); err != nil {
+		return false, fmt.Errorf("webdavfs: %s remains at %s: %w", f.file(src), f.file(tmp), err)
+	}
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
+		return true, nil
+	case statErr != nil:
+		return false, statErr
+	}
+	return false, nil
 }
 
 // Close unregisters the file system. Every method returns

@@ -1,15 +1,24 @@
 package webdavfs
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -177,6 +186,148 @@ func TestCheckRedirect(t *testing.T) {
 	assert.Equal(t, 1, userRedirects)
 }
 
+// TestCheckRedirect_Credentials is the regression test for redirects that
+// sent the credentials to another server: Go repeats basic authentication
+// for the same host name, also for another port and after a downgrade
+// from https to http, and the Options.Header entries for every host.
+func TestCheckRedirect_Credentials(t *testing.T) {
+	// leak records the credentials of the requests that reach it
+	var (
+		mtx      sync.Mutex
+		received []string
+	)
+	leak := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mtx.Lock()
+		received = append(received, fmt.Sprintf("%s %s Authorization=%q X-Api-Key=%q",
+			r.Method, r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")))
+		mtx.Unlock()
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(leak.Close)
+	takeReceived := func() []string {
+		mtx.Lock()
+		defer mtx.Unlock()
+		r := received
+		received = nil
+		return r
+	}
+
+	// davServer returns a WebDAV handler that requires the credentials
+	// and redirects /same to / and /redirect to location, both with
+	// 308 Permanent Redirect, which keeps the method
+	davServer := func(location string) http.Handler {
+		handler := &webdav.Handler{FileSystem: webdav.NewMemFS(), LockSystem: webdav.NewMemLS()}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if user, pass, _ := r.BasicAuth(); user != "alice" || pass != "secret" || r.Header.Get("X-Api-Key") != "key" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			switch r.URL.Path {
+			case "/same":
+				http.Redirect(w, r, "/", http.StatusPermanentRedirect)
+			case "/redirect":
+				http.Redirect(w, r, location, http.StatusPermanentRedirect)
+			default:
+				handler.ServeHTTP(w, r)
+			}
+		})
+	}
+	newFS := func(t *testing.T, baseURL string, client *http.Client) fs.FileSystem {
+		t.Helper()
+		davFS, err := New(t.Context(), baseURL, &Options{
+			Username: "alice",
+			Password: "secret",
+			Header:   http.Header{"X-Api-Key": {"key"}},
+			Client:   client,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = davFS.Close() })
+
+		// A redirect to the same server keeps the credentials
+		info, err := davFS.Stat("/same")
+		require.NoError(t, err)
+		assert.True(t, info.IsDir)
+		return davFS
+	}
+	requireRefused := func(t *testing.T, err error) {
+		t.Helper()
+		var statusErr *StatusError
+		require.ErrorAs(t, err, &statusErr, "the redirect must not be followed")
+		assert.Equal(t, http.StatusPermanentRedirect, statusErr.StatusCode)
+		assert.Contains(t, err.Error(), "/stolen")
+		assert.Empty(t, takeReceived(), "nothing must reach the other server")
+	}
+
+	t.Run("another port", func(t *testing.T) {
+		srv := httptest.NewServer(davServer(leak.URL + "/stolen"))
+		t.Cleanup(srv.Close)
+		davFS := newFS(t, srv.URL, nil)
+		_, err := davFS.Stat("/redirect")
+		requireRefused(t, err)
+	})
+
+	t.Run("https to http", func(t *testing.T) {
+		srv := httptest.NewTLSServer(davServer("http://example.com/stolen"))
+		t.Cleanup(srv.Close)
+		roots := x509.NewCertPool()
+		roots.AddCert(srv.Certificate())
+		transport := &http.Transport{
+			TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+			// https://example.com is the WebDAV server
+			// and http://example.com the leak
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				target := srv.Listener.Addr().String()
+				if addr == "example.com:80" {
+					target = leak.Listener.Addr().String()
+				}
+				var dialer net.Dialer
+				return dialer.DialContext(ctx, network, target)
+			},
+		}
+		t.Cleanup(transport.CloseIdleConnections)
+		davFS := newFS(t, "https://example.com", &http.Client{Transport: transport})
+		_, err := davFS.Stat("/redirect")
+		requireRefused(t, err)
+	})
+
+	t.Run("allowed by the CheckRedirect of the client", func(t *testing.T) {
+		srv := httptest.NewServer(davServer(leak.URL + "/stolen"))
+		t.Cleanup(srv.Close)
+		davFS := newFS(t, srv.URL, &http.Client{
+			CheckRedirect: func(*http.Request, []*http.Request) error { return nil },
+		})
+		_, err := davFS.Stat("/redirect")
+		assert.ErrorIs(t, err, os.ErrNotExist, "the other server answers 404")
+		assert.Equal(t, []string{`PROPFIND /stolen Authorization="" X-Api-Key=""`}, takeReceived(),
+			"the redirect is followed without the credentials")
+	})
+}
+
+// Test_keepsCredentials checks which redirect targets get the credentials:
+// the host and port of the base URL, also after an upgrade to https.
+func Test_keepsCredentials(t *testing.T) {
+	for _, check := range []struct {
+		base, target string
+		want         bool
+	}{
+		{"https://dav.example.com/files", "https://dav.example.com/other", true},
+		{"https://dav.example.com", "https://DAV.example.com/", true},
+		{"https://dav.example.com", "http://dav.example.com/", false},
+		{"https://dav.example.com", "https://dav.example.com:8443/", false},
+		{"https://dav.example.com", "https://cdn.example.com/", false},
+		{"http://dav.example.com:8080", "http://dav.example.com:8080/", true},
+		{"http://dav.example.com:8080", "http://dav.example.com:9090/", false},
+		{"http://dav.example.com", "https://dav.example.com/", true},
+	} {
+		base, err := url.Parse(check.base)
+		require.NoError(t, err)
+		target, err := url.Parse(check.target)
+		require.NoError(t, err)
+		f := &fileSystem{baseURL: *base}
+		assert.Equal(t, check.want, f.keepsCredentials(target), "%s -> %s", check.base, check.target)
+	}
+}
+
 // TestMove_OntoDirectoryKeepsTree is the regression test for MOVE with
 // "Overwrite: T", which deleted the destination directory tree.
 func TestMove_OntoDirectoryKeepsTree(t *testing.T) {
@@ -203,6 +354,186 @@ func TestMove_OntoDirectoryKeepsTree(t *testing.T) {
 	content, err := root.Join("y.txt").ReadAllString(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "x", content)
+}
+
+// listNames returns the sorted names of the files in dir.
+func listNames(t *testing.T, dir fs.File) []string {
+	t.Helper()
+	var names []string
+	require.NoError(t, dir.ListDir(t.Context(), func(f fs.File) error {
+		names = append(names, f.Name())
+		return nil
+	}))
+	slices.Sort(names)
+	return names
+}
+
+// TestMoveCopy_CaseInsensitive is the regression test for MOVE and COPY onto
+// a path that only differs in case from the source on a case-insensitive
+// server: it answered Overwrite F with 412 Precondition Failed, because the
+// destination exists, it is the source itself, and the repeated request with
+// Overwrite T made it delete the destination, so the source was lost.
+func TestMoveCopy_CaseInsensitive(t *testing.T) {
+	for _, variant := range []struct {
+		name string
+		mem  func(t *testing.T) webdav.FileSystem
+	}{
+		{"simulated", func(*testing.T) webdav.FileSystem { return caseInsensitiveFS{webdav.NewMemFS()} }},
+		{"webdav.Dir", func(t *testing.T) webdav.FileSystem { return webdav.Dir(caseInsensitiveTempDir(t)) }},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			ctx := t.Context()
+			srv := newStyledServerOn(t, variant.mem(t), styleXNet, "", true)
+			davFS := newTestFS(t, srv.Server, "")
+			root := davFS.RootDir()
+			require.NoError(t, root.Join("File.txt").WriteAllString(ctx, "content"))
+
+			// Move changes the case of the name
+			err := davFS.(fs.MoveFileSystem).Move(ctx, "/File.txt", "/file.txt")
+			assert.Equal(t, []string{"file.txt"}, listNames(t, root))
+			require.NoError(t, err)
+			content, err := root.Join("file.txt").ReadAllString(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, "content", content)
+
+			// A copy onto the file itself changes nothing
+			require.NoError(t, davFS.(fs.CopyFileSystem).CopyFile(ctx, "/file.txt", "/FILE.txt"))
+			assert.Equal(t, []string{"file.txt"}, listNames(t, root))
+			content, err = root.Join("file.txt").ReadAllString(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, "content", content)
+
+			// A collection is renamed with its members
+			require.NoError(t, root.Join("Dir").MakeDir())
+			require.NoError(t, root.Join("Dir", "a.txt").WriteAllString(ctx, "a"))
+			require.NoError(t, davFS.(fs.MoveFileSystem).Move(ctx, "/Dir", "/dir"))
+			assert.Equal(t, []string{"dir", "file.txt"}, listNames(t, root))
+			assert.Equal(t, []string{"a.txt"}, listNames(t, root.Join("dir")))
+		})
+	}
+}
+
+// TestMoveCopy_MaybeSource checks MOVE and COPY onto existing files that are
+// not the source, but could be: their path only differs in case, or they have
+// the same size and modification time. They are replaced, a collection is
+// kept, and no temporary name is left over.
+func TestMoveCopy_MaybeSource(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	srv := newStyledServerOn(t, webdav.Dir(dir), styleXNet, "", true)
+	davFS := newTestFS(t, srv.Server, "")
+	root := davFS.RootDir()
+	throughTemp := func() bool {
+		return slices.ContainsFunc(srv.requests(), func(r string) bool { return strings.HasPrefix(r, "MOVE /.gofs-rename-") })
+	}
+	moveFS, copyFS := davFS.(fs.MoveFileSystem), davFS.(fs.CopyFileSystem)
+	write := func(name, content string, modified time.Time) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
+		require.NoError(t, os.Chtimes(filepath.Join(dir, name), modified, modified))
+	}
+	modified := time.Now().Add(-time.Hour).Truncate(time.Second)
+
+	// The same size and modification time
+	write("a.txt", "aaa", modified)
+	write("b.txt", "bbb", modified)
+	require.NoError(t, moveFS.Move(ctx, "/a.txt", "/b.txt"))
+	assert.True(t, throughTemp(), "the source is moved through a temporary name")
+	content, err := root.Join("b.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "aaa", content)
+	assert.Equal(t, []string{"b.txt"}, listNames(t, root))
+
+	write("c.txt", "ccc", modified)
+	require.NoError(t, copyFS.CopyFile(ctx, "/b.txt", "/c.txt"))
+	content, err = root.Join("c.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "aaa", content)
+	assert.Equal(t, []string{"b.txt", "c.txt"}, listNames(t, root))
+
+	// An existing collection is never replaced
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "d1", "sub"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "d2"), 0o700))
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "d1"), modified, modified))
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "d2"), modified, modified))
+	assert.ErrorIs(t, moveFS.Move(ctx, "/d1", "/d2"), os.ErrExist)
+	assert.Equal(t, []string{"b.txt", "c.txt", "d1", "d2"}, listNames(t, root))
+	assert.Equal(t, []string{"sub"}, listNames(t, root.Join("d1")))
+}
+
+// TestMoveCopy_MaybeSourceCaseSensitive checks MOVE and COPY onto existing
+// paths that only differ in case from the source on a case-sensitive server,
+// where they are other files: they are replaced, a collection is kept.
+func TestMoveCopy_MaybeSourceCaseSensitive(t *testing.T) {
+	ctx := t.Context()
+	srv := newStyledServer(t, styleXNet, "", true)
+	davFS := newTestFS(t, srv.Server, "")
+	root := davFS.RootDir()
+	moveFS, copyFS := davFS.(fs.MoveFileSystem), davFS.(fs.CopyFileSystem)
+
+	srv.writeMemFile(t, "/File.txt", "File")
+	srv.writeMemFile(t, "/file.txt", "file")
+	require.NoError(t, moveFS.Move(ctx, "/File.txt", "/file.txt"))
+	assert.Equal(t, []string{"file.txt"}, listNames(t, root))
+	content, err := root.Join("file.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "File", content)
+
+	srv.writeMemFile(t, "/FILE.txt", "FILE")
+	require.NoError(t, copyFS.CopyFile(ctx, "/file.txt", "/FILE.txt"))
+	assert.Equal(t, []string{"FILE.txt", "file.txt"}, listNames(t, root))
+	content, err = root.Join("FILE.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "File", content)
+
+	require.NoError(t, root.Join("Dir", "a").MakeAllDirs())
+	require.NoError(t, root.Join("dir").MakeDir())
+	assert.ErrorIs(t, moveFS.Move(ctx, "/Dir", "/dir"), os.ErrExist)
+	assert.Equal(t, []string{"Dir", "FILE.txt", "dir", "file.txt"}, listNames(t, root))
+	assert.Equal(t, []string{"a"}, listNames(t, root.Join("Dir")))
+}
+
+// TestMove_MaybeSourceRestore checks that a failed rename through a
+// temporary name restores the source, or tells where it is.
+func TestMove_MaybeSourceRestore(t *testing.T) {
+	ctx := t.Context()
+	srv := newStyledServer(t, styleXNet, "", true)
+	davFS := newTestFS(t, srv.Server, "")
+	root := davFS.RootDir()
+	moveFS := davFS.(fs.MoveFileSystem)
+	srv.writeMemFile(t, "/File.txt", "File")
+	srv.writeMemFile(t, "/file.txt", "file")
+
+	// The server refuses to replace the destination
+	srv.setRefuse(func(r *http.Request) int {
+		if r.Method == "MOVE" && r.Header.Get("Overwrite") == "T" {
+			return http.StatusForbidden
+		}
+		return 0
+	})
+	require.Error(t, moveFS.Move(ctx, "/File.txt", "/file.txt"))
+	assert.Equal(t, []string{"File.txt", "file.txt"}, listNames(t, root))
+	content, err := root.Join("File.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "File", content, "the source is restored")
+
+	// The server refuses every MOVE from the temporary name
+	srv.setRefuse(func(r *http.Request) int {
+		if r.Method == "MOVE" && strings.HasPrefix(r.URL.Path, "/.gofs-") {
+			return http.StatusForbidden
+		}
+		return 0
+	})
+	err = moveFS.Move(ctx, "/File.txt", "/file.txt")
+	require.Error(t, err)
+	names := listNames(t, root)
+	require.Len(t, names, 2)
+	assert.Equal(t, "file.txt", names[1])
+	assert.True(t, strings.HasPrefix(names[0], ".gofs-"), "the source is at a temporary name: %v", names)
+	assert.Contains(t, err.Error(), names[0], "the error names the temporary name")
+	content, err = root.Join(names[0]).ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "File", content)
 }
 
 // TestMove_IntoItself checks the pre-check, the server is never asked.
@@ -412,6 +743,43 @@ func TestRangedRead(t *testing.T) {
 	data, err := davFS.RootDir().Join("copied.txt").ReadAllString(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "0123456789", data)
+}
+
+// TestReadAll_Preallocates checks that ReadAll allocates the buffer for the
+// Content-Length of the response at once, instead of growing it from 512
+// bytes while reading, which copies the data over and over.
+func TestReadAll_Preallocates(t *testing.T) {
+	srv := newStyledServer(t, styleXNet, "", true)
+	davFS := newTestFS(t, srv.Server, "")
+	content := strings.Repeat("0123456789", 100_000)
+	srv.writeMemFile(t, "/big.bin", content)
+
+	data, err := davFS.(fs.ReadAllFileSystem).ReadAll(t.Context(), "/big.bin")
+	require.NoError(t, err)
+	assert.Equal(t, content, string(data))
+	assert.Equal(t, len(content)+1, cap(data), "one byte more for reading the end of the body")
+}
+
+// Test_readAll checks readAll with a size that is unknown, smaller or
+// larger than the data, or too large to allocate, and a done context.
+func Test_readAll(t *testing.T) {
+	ctx := t.Context()
+	content := []byte(strings.Repeat("x", 1000))
+	for _, size := range []int64{-1, 0, 10, 1000, 2000} {
+		data, err := readAll(ctx, bytes.NewReader(content), size)
+		require.NoError(t, err, "size %d", size)
+		assert.Equal(t, content, data, "size %d", size)
+	}
+
+	data, err := readAll(ctx, bytes.NewReader(content), 1<<40)
+	require.NoError(t, err)
+	assert.Equal(t, content, data)
+	assert.Equal(t, maxPreallocate+1, cap(data), "the allocation is limited")
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = readAll(canceled, bytes.NewReader(content), 1000)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 // TestRequests_TrailingSlash checks the URLs the file system sends

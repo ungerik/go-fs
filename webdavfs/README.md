@@ -103,6 +103,17 @@ The file system uses a copy of `Options.Client` with its own
   `fs.ErrIsDirectory` for `CopyFile`, and a collection moved onto a file is an
   `fs.ErrIsNotDirectory`. Moving a collection into itself is an error wrapping
   `os.ErrInvalid` without asking the server.
+- **Case-insensitive servers.** An existing destination may be the source
+  itself under another name: on a case-insensitive server if the paths only
+  differ in case, or on a server that normalizes names if both are files with
+  the same size and modification time. `Overwrite: T` would make the server
+  delete it, so it is never sent for such a destination. `Move` moves the
+  source to a temporary `.gofs-rename-*` name in its collection first and
+  then onto the destination, which renames it on a case-insensitive server,
+  and moves it back if that fails. `CopyFile` checks with a move to a
+  temporary name and back whether the destination is the source, and then
+  does nothing. An error that leaves the source at the temporary name
+  contains that name.
 - **Trailing slashes.** Servers differ in how they treat the trailing slash
   of collection URLs: nginx answers `DELETE` or `MKCOL` of a collection
   without it with `409 Conflict` and a file URL with it with `404`, Apache
@@ -114,7 +125,13 @@ The file system uses a copy of `Options.Client` with its own
   system doesn't follow such redirects and redirects to the same URL with a
   trailing slash: a `PROPFIND` is repeated for the collection URL, a `GET` or
   `PUT` of a collection is an `fs.ErrIsDirectory`, every other one a
-  `*webdavfs.StatusError`. Redirects that keep the method are followed.
+  `*webdavfs.StatusError`. Redirects that keep the method are followed, but
+  not to another host or port than the one of the base URL, nor from `https`
+  to `http`: Go would send `Options.Header` to any host and basic auth to the
+  same host name, also over plain HTTP. A `CheckRedirect` of `Options.Client`
+  decides about such a redirect instead; it gets the request without the
+  `Authorization` header and the `Options.Header` entries and may add them
+  back.
 - **Permissions.** WebDAV has no permission model. The reported permissions
   are the constants `webdavfs.DefaultPermissions` /
   `webdavfs.DefaultDirPermissions`.
