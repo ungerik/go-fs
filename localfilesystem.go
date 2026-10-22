@@ -132,10 +132,12 @@ func wrapOSErr(filePath string, err error) error {
 		return nil
 	case errors.Is(err, syscall.EISDIR):
 		return NewErrIsDirectory(File(filePath))
+	case errors.Is(err, os.ErrNotExist):
+		// Checked before ENOTDIR, because on Windows syscall.ENOTDIR
+		// is ERROR_PATH_NOT_FOUND, the error of a missing parent directory
+		return NewErrDoesNotExist(File(filePath))
 	case errors.Is(err, syscall.ENOTDIR):
 		return NewErrIsNotDirectory(File(filePath))
-	case errors.Is(err, os.ErrNotExist):
-		return NewErrDoesNotExist(File(filePath))
 	case errors.Is(err, os.ErrExist):
 		return NewErrAlreadyExists(File(filePath))
 	case errors.Is(err, os.ErrPermission):
@@ -874,7 +876,9 @@ func wrapRenameErr(destPath string, err error) error {
 		// A directory moved into itself, like os.ErrInvalid
 		// for the paths os.Rename got
 		return &os.LinkError{Op: linkErr.Op, Old: linkErr.Old, New: linkErr.New, Err: os.ErrInvalid}
-	case errors.Is(err, syscall.ENOTDIR):
+	case errors.Is(err, syscall.ENOTDIR) && !errors.Is(err, os.ErrNotExist):
+		// On Windows syscall.ENOTDIR is ERROR_PATH_NOT_FOUND,
+		// which means a missing directory, not a file in the way
 		return NewErrIsNotDirectory(File(destPath))
 	case errors.Is(err, syscall.EISDIR), errors.Is(err, os.ErrExist):
 		return NewErrAlreadyExists(File(destPath))

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -231,6 +232,33 @@ func TestLocalFileSystem_DirectoryErrors(t *testing.T) {
 		// ENOTDIR, Windows reports a file used as directory as missing
 		_, err = Local.Stat(filepath.Join(file, "child"))
 		assert.ErrorIs(t, err, ErrIsNotDirectory{}, "Stat below a file")
+	}
+}
+
+// pathNotFoundError is an error that matches both os.ErrNotExist and
+// syscall.ENOTDIR, like ERROR_PATH_NOT_FOUND on Windows, where
+// syscall.ENOTDIR is defined as ERROR_PATH_NOT_FOUND.
+type pathNotFoundError struct{}
+
+func (pathNotFoundError) Error() string { return "the system cannot find the path specified" }
+
+func (pathNotFoundError) Is(target error) bool {
+	return target == os.ErrNotExist || target == syscall.ENOTDIR
+}
+
+// TestLocalFileSystem_PathNotFound checks that a missing parent directory
+// on Windows is reported as not existing, not as "not a directory".
+func TestLocalFileSystem_PathNotFound(t *testing.T) {
+	err := &os.PathError{Op: "open", Path: "missing/file.txt", Err: pathNotFoundError{}}
+	assert.ErrorIs(t, wrapOSErr("missing/file.txt", err), os.ErrNotExist)
+	assert.NotErrorIs(t, wrapOSErr("missing/file.txt", err), ErrIsNotDirectory{})
+	assert.NotErrorIs(t, wrapRenameErr("missing/dest", err), ErrIsNotDirectory{})
+
+	notDir := &os.PathError{Op: "open", Path: "file/child", Err: syscall.ENOTDIR}
+	if !errors.Is(notDir, os.ErrNotExist) {
+		// Unix: ENOTDIR means a file is in the way
+		assert.ErrorIs(t, wrapOSErr("file/child", notDir), ErrIsNotDirectory{})
+		assert.ErrorIs(t, wrapRenameErr("file/child", notDir), ErrIsNotDirectory{})
 	}
 }
 
