@@ -111,10 +111,15 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   emulated) never descends into a symbolic link to a directory, like
   `filepath.WalkDir`: the link itself is passed to the callback with
   `IsSymlink` true and `IsDir` false; a link at the start of the listing is
-  followed. `CopyRecursive` and moves between file systems recreate a link to
-  a directory as a link with its verbatim target when the destination
-  supports links, and otherwise fail before writing anything with an error
-  wrapping `errors.ErrUnsupported`; links to files are copied as files.
+  followed. `CopyRecursive` and moves recreate a link to a directory as a
+  link: within one file system with its verbatim target, between file
+  systems only with a relative target that stays inside the copied tree,
+  written with the separator of the destination. Otherwise, or if the
+  destination can't create links, they fail before writing anything with an
+  error wrapping `errors.ErrUnsupported`; links to files are copied as files.
+  Copies never write through a symbolic link below the destination root, a
+  link where a file or directory is to be written is an error wrapping
+  `os.ErrExist`.
 - **XAttr errors.** `XAttrCreate` on an existing attribute wraps
   `os.ErrExist`; `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing
   attribute wrap `os.ErrNotExist` (Local and MemFileSystem); fstest checks it.
@@ -123,8 +128,9 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   they write unzips with `UnzipToMemFiles`; `zipfs.Reader` skips symbolic
   links, devices and FIFOs like `tarfs`.
 - **Root directories.** `Remove` and `RemoveAll` of the root return an error
-  wrapping `os.ErrInvalid` in every file system, instead of deleting the
-  whole bucket, container or server tree in s3fs, azureblobfs and sftpfs and
+  wrapping `os.ErrInvalid` in every file system, also for relative paths of
+  the root like `"."` in sftpfs and ftpfs, instead of deleting the whole
+  bucket, container or server tree in s3fs, azureblobfs, sftpfs and ftpfs and
   calling `os.RemoveAll("/")` for the root of a local volume.
 - **Paths.** Only a `~` at the start of the first part of a Local path means
   the home directory, a directory named `~` is written `./~`; a SubFileSystem
@@ -139,7 +145,9 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   normalization) and moves a file with more than one hard link through a
   temporary `.gofs-move-*` name, so it never removes the only link of a file;
   moves through bind mounts, symbolic links to a parent or a SubFileSystem
-  onto the same file never copy and remove it.
+  onto the same file never copy and remove it. Moving a symbolic link onto
+  the file it points to is an error wrapping `os.ErrInvalid`, like `mv`
+  reports "are the same file".
 - `ServeFileHTTP` passes seekable readers to `http.ServeContent` (local files
   use sendfile again), serves multi-range requests only from local files and
   in-memory readers (other readers answer with the whole content, so a
@@ -147,7 +155,10 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   file of unknown size.
 - ftpfs and smbfs reject addresses with an unencoded `@` after the host like
   sftpfs; webdavfs rejects a base URL whose host has a port and whose path
-  has a raw `@` without user info (write `%40`).
+  has a raw `@` without user info, or that has a password and an `@` after
+  the host (write `%40`, or pass the credentials with `Options`). Error
+  messages redact everything up to the last `@` of a URI with a password, so
+  they can lose the host but never show a password.
 - webdavfs follows no redirects to another host or port or from https to
   http, unless the `CheckRedirect` of `Options.Client` allows them, and then
   without credentials.

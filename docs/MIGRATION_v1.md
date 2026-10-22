@@ -96,7 +96,9 @@ Behaviour changes:
   it as `%40`. webdavfs rejects a base URL without user info whose host has a
   port and whose path has a raw `@`, for example
   `https://cloud:8443/remote.php/dav/files/alice@example.com`; write
-  `alice%40example.com`. smbfs rejects link targets with a drive letter.
+  `alice%40example.com`. A base URL with a password and an `@` after the host
+  is rejected too: pass the credentials with `Options.Username` and
+  `Options.Password`. smbfs rejects link targets with a drive letter.
 
 ### Errors
 
@@ -163,10 +165,14 @@ Behaviour changes:
   `PermissionsFromFileMode`); mask with `0o777` to compare plain permissions.
 - Recursive listings never descend into a symbolic link to a directory: the
   callback gets the link with `IsSymlink` true and `IsDir` false, like
-  `filepath.WalkDir`. `CopyRecursive` and moves between file systems recreate
-  such a link as a link, or fail with `errors.ErrUnsupported` before writing
-  anything if the destination can't create links; follow links yourself if
-  you need the contents copied.
+  `filepath.WalkDir`. `CopyRecursive` and moves recreate such a link as a
+  link, between file systems only if its target is relative and stays inside
+  the copied tree, and otherwise fail with `errors.ErrUnsupported` before
+  writing anything; follow links yourself if you need the contents copied.
+  A copy never writes through a symbolic link below the destination root, it
+  fails with `os.ErrExist` instead.
+- Moving a symbolic link onto the file it points to fails with
+  `os.ErrInvalid` ("are the same file").
 - `LocalFileSystem.Move` of a file with more than one hard link goes through a
   temporary `.gofs-move-*` name in the source directory.
 - `fs.Zip` and `ZipMemFiles` reject absolute names, `..` and names with a
