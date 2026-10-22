@@ -66,8 +66,8 @@ func JoinCleanFilePath(uriParts ...string) File {
 // anything. Moving a symbolic link onto the file it points to, which would
 // replace the file with a link to itself, is an error wrapping
 // [os.ErrInvalid] that tells they are the same file, like mv reports it,
-// for [LocalFileSystem.Move], [MemFileSystem.Move] and the copy-then-delete
-// fallback, also through the local layers of an OverlayFileSystem, which
+// for [LocalFileSystem.Move], [MemFileSystem.Move], the native Move of
+// sftpfs and smbfs and the copy-then-delete fallback, also through the local layers of an OverlayFileSystem, which
 // can resolve the link to another path than the local file system, except
 // for a local file with other hard links that keep it.
 //
