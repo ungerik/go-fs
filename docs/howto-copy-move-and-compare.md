@@ -41,7 +41,11 @@ When source and destination are on the same file system and it implements
 move the bytes through your process. Copying a file onto itself is a no-op.
 
 When copying between two `File`s and you pass no explicit permissions, the
-source's permissions are used.
+source's read, write and execute bits are used. The setuid, setgid and sticky
+bits are never copied, pass them as `perm` if the copy needs them. A source on
+a read-only file system, like an upload, an embedded file or an archive entry,
+lacks write permissions because of its file system, so its copy also gets the
+owner's write permission and can be changed.
 
 ### Reuse the buffer in a loop
 
@@ -78,7 +82,12 @@ it does: a file of the source replaces a file at the same path, a file over a
 directory is an `fs.ErrIsDirectory` and a directory over a file an
 `fs.ErrIsNotDirectory`. Copying a directory into one of its own
 sub-directories is an error wrapping `os.ErrInvalid`. One buffer is used for
-all files.
+all files, which get permissions like with `CopyFile`; directories get the
+destination's defaults.
+
+Symbolic links are followed, the copy contains what they point to. A link
+back to the copied directory, or to a directory between it and the link, is
+skipped, so a link cycle doesn't copy the tree into itself.
 
 This is how you extract an archive, seed a `MemFileSystem` from disk, or sync a
 directory to an object store:
@@ -127,13 +136,20 @@ checked with the same rules, and a directory that is already there under the
 source's name is an error wrapping `os.ErrExist` (`fs.ErrAlreadyExists`): it is
 never merged or deleted.
 
-Two more behaviours to rely on:
+More behaviours to rely on:
 
 - **Moving a file onto itself is a no-op** returning nil. This matters: it is
   what stops the copy-then-delete fallback from destroying a file when source
-  and destination resolve to the same place.
+  and destination resolve to the same place. Moving a local file onto another
+  hard link of it removes the source link, like a rename onto any other file.
 - **Moving a directory into itself** or one of its sub-directories is an error
   wrapping `os.ErrInvalid`, like `os.Rename`.
+- **Symbolic links are moved, not what they point to.** Within one file system
+  a link stays a link and replaces an existing file or link at the
+  destination. A link at the destination is replaced, not its target, and is
+  put back if the copy fails. Between file systems the target of a link would
+  be a path of the wrong file system, so what the link points to is copied
+  and only the link is deleted.
 
 To rename in place, without moving between directories:
 

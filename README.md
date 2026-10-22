@@ -536,7 +536,10 @@ resolve the same way regardless of where it is read from.
 
 The `FileInfo` of a directory listing describes the entry itself, like
 `Lstat`: for a link `IsSymlink` is true and `IsDir` and `IsRegular` describe
-the target as far as the file system knows it cheaply.
+the target as far as the file system knows it cheaply. `ListDirRecursive` and
+`fs.CopyRecursive` follow links to directories, except a link back to the
+directory they started in or one between it and the link, so a link cycle
+doesn't make them go around in circles.
 
 Extended attributes
 -------------------
@@ -1136,7 +1139,10 @@ err = fs.File("sub://data/report.txt").WriteAllString(ctx, "...") // writes /srv
 `OverlayFileSystem` stacks a writable upper layer on a read-only base:
 reads fall through to the base, listings are the union, every write goes
 to the upper layer, base files modified in place are copied up first, and
-removed base entries are hidden by in-memory whiteouts. Typical uses are
+removed base entries are hidden by in-memory whiteouts. The whiteouts are
+recorded for the exact path, so both layers must be case-sensitive, or every
+path must always be used with the same case: over a case-insensitive base a
+removed file stays readable through a path with another case. Typical uses are
 a scratch copy of embedded defaults, or tests that must not modify a
 fixture. Both layers must stay registered while the overlay is used:
 

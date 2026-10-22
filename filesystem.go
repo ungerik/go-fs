@@ -348,6 +348,16 @@ type ListDirRecursiveFileSystem interface {
 	// recursing into all sub-directories.
 	// If any patterns are passed, then only files (not directories) with a name that matches
 	// at least one of the patterns are returned.
+	//
+	// Symbolic links to directories are followed, except a link to dirPath
+	// or to one of the directories between dirPath and the link, which is
+	// skipped, so that a link cycle doesn't list the same files again and
+	// again. The directories are compared with the links in their paths
+	// resolved. Other links, also dangling ones, are listed like files.
+	// The emulation for file systems without ListDirRecursive works the
+	// same, but a file system that can't read the targets of its links
+	// can't tell where a link points to, so it follows a link cycle until
+	// it reports an error about too many links.
 	ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error
 }
 

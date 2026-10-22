@@ -820,7 +820,9 @@ func (file File) ListDirInfo(ctx context.Context, callback func(*FileInfo) error
 
 // ListDirRecursive calls the passed callback function for every file (not directory)
 // recursing into all sub-directories.
-// patterns are only applied to files, not to directories
+// patterns are only applied to files, not to directories.
+// Symbolic links to directories are followed, except a link back to a directory
+// of the listing, see [ListDirRecursiveFileSystem].
 func (file File) ListDirRecursive(ctx context.Context, callback func(File) error, patterns ...string) error {
 	return file.ListDirInfoRecursive(ctx, FileInfoToFileCallback(callback), patterns...)
 }
@@ -853,6 +855,8 @@ func (file File) ListDirRecursiveIter(ctx context.Context, patterns ...string) i
 // (not directory) in dirPath recursing into all sub-directories.
 // If any patterns are passed, then only files (not directories) with a name that matches
 // at least one of the patterns are returned.
+// Symbolic links to directories are followed, except a link back to a directory
+// of the listing, see [ListDirRecursiveFileSystem].
 func (file File) ListDirInfoRecursive(ctx context.Context, callback func(*FileInfo) error, patterns ...string) error {
 	fileSystem, path := file.ParseRawURI()
 	return fsListDirRecursive(ctx, fileSystem, path, patterns, callback)

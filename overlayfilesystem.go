@@ -35,7 +35,8 @@ var (
 // the base, listings are the union of both layers with the upper layer
 // shadowing base entries of the same name, and every write goes to the
 // upper layer. A base file that is modified in place (append, random
-// access, truncate, touch) is copied up to the upper layer first.
+// access, truncate, touch) is copied up to the upper layer first, with
+// the permissions that CopyFile would give the copy.
 // A base directory can't be replaced by a file and a base file
 // can't be used as directory.
 //
@@ -44,16 +45,25 @@ var (
 // layer: a directory created at the path of a removed base directory is
 // opaque, it starts empty instead of bringing back the removed base entries.
 // Whiteouts are kept in memory: a new overlay over the same layers starts
-// without them.
+// without them. They are recorded for the exact overlay path, so both layers
+// must be case-sensitive, or every path must always be used with the same
+// case: over a case-insensitive base a removed file stays readable through
+// a path with another case, like "/README.md" after removing "/readme.md".
 //
 // Both layers are used with the overlay paths, so the roots of the two
 // layers map to the root of the overlay. Wrap a layer in a SubFileSystem
-// to overlay a sub directory. A name that a layer would split into several
-// elements, like `..\x` for a layer with the separator `\`, is an error
-// wrapping os.ErrInvalid. The layers must stay registered while the
-// overlay is used, because emulated operations go through the File API.
-// Concurrent writes to the same path through the overlay are serialized,
-// changing the layers directly while the overlay is used is not supported.
+// to overlay a sub directory. The overlay has no volumes: the path "/dir"
+// of the overlay is `C:\dir` of a layer with the volume "C:". A name that
+// a layer would split into several elements, like `..\x` for a layer with
+// the separator `\`, is an error wrapping os.ErrInvalid. The layers must stay
+// registered while the overlay is used, because emulated operations go
+// through the File API. Concurrent writes to the same path through the
+// overlay are serialized, changing the layers directly while the overlay
+// is used is not supported.
+//
+// The overlay has no symbolic links of its own, but it shows the links of its
+// layers like their files. A recursive listing follows them, except a link
+// to a directory of the listing, see ListDirRecursiveFileSystem.
 type OverlayFileSystem struct {
 	paths fsimpl.PathHelper
 
@@ -87,6 +97,9 @@ func (o *OverlayFileSystem) CleanPath(uriParts ...string) string {
 // NewOverlayFileSystem returns a file system with the URI prefix
 // "overlay://" + id that reads from upper and base and writes to upper.
 // A random id is used if id is empty. The file system is not registered.
+// Base and upper must be case-sensitive, or every path must be used with
+// the same case, because removed base entries are hidden by exact path,
+// see OverlayFileSystem.
 func NewOverlayFileSystem(base FileSystem, upper WriteFileSystem, id string) (*OverlayFileSystem, error) {
 	if base == nil || upper == nil {
 		return nil, errors.New("nil base or upper file system")
@@ -171,7 +184,9 @@ func (o *OverlayFileSystem) upperPath(filePath string) string {
 }
 
 // overlayPath translates a path of a layer to the overlay.
+// The overlay has no volumes, the layer path `C:\dir` is "/dir".
 func (o *OverlayFileSystem) overlayPath(layer FileSystem, layerPath string) string {
+	layerPath = layerPath[fsVolumeLen(layer, layerPath):]
 	if sep := layer.Separator(); sep != "/" {
 		layerPath = strings.ReplaceAll(layerPath, sep, "/")
 	}
@@ -335,6 +350,43 @@ func (o *OverlayFileSystem) Stat(filePath string) (*FileInfo, error) {
 	return info, err
 }
 
+// readSymbolicLink returns the target of the symbolic link at the overlay
+// path, read from the layer that has the link, with an absolute target
+// translated to the overlay. It implements linkTargetReader, so that the
+// recursive walks of the package can tell if a link of a layer points to
+// a directory they are in. The overlay can't create links, so it doesn't
+// implement SymbolicLinkFileSystem.
+func (o *OverlayFileSystem) readSymbolicLink(linkPath string) (string, error) {
+	if err := o.checkPath(linkPath); err != nil {
+		return "", err
+	}
+	layer, layerPath := FileSystem(o.upper), o.upperPath(linkPath)
+	_, err := fsLstat(layer, layerPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist) && o.hidden(linkPath):
+		return "", NewErrDoesNotExist(File(o.paths.JoinCleanURI(linkPath)))
+	case errors.Is(err, os.ErrNotExist):
+		layer, layerPath = o.base, o.basePath(linkPath)
+	case err != nil:
+		return "", o.overlayErr(layer, err)
+	}
+	links, ok := layer.(SymbolicLinkFileSystem)
+	if !ok {
+		return "", NewErrUnsupported(layer, "ReadSymbolicLink")
+	}
+	target, err := links.ReadSymbolicLink(layerPath)
+	if err != nil {
+		return "", o.overlayErr(layer, err)
+	}
+	// The overlay has no volumes and the separator "/",
+	// a relative target stays relative
+	target = target[fsVolumeLen(layer, target):]
+	if sep := layer.Separator(); sep != "/" {
+		target = strings.ReplaceAll(target, sep, "/")
+	}
+	return target, nil
+}
+
 // ListDir lists the union of both layers sorted by name,
 // with upper entries shadowing base entries of the same name.
 // The base layer is not listed for an opaque directory
@@ -465,7 +517,9 @@ func (o *OverlayFileSystem) prepareWrite(ctx context.Context, filePath string, c
 	if err != nil {
 		return o.overlayErr(layer, err)
 	}
-	err = fsWriteAll(ctx, o.upper, o.upperPath(filePath), data, info.Permissions)
+	// The copy up gets permissions like a copy with CopyFile,
+	// a file of a read-only base must be writable in the upper layer
+	err = fsWriteAll(ctx, o.upper, o.upperPath(filePath), data, copyPermissions(layer, info.Permissions))
 	return o.overlayErr(o.upper, err)
 }
 

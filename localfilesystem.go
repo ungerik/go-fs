@@ -845,6 +845,8 @@ var osRename = os.Rename
 // When filePath and destPath are the same after cleaning, Move returns nil
 // without touching the file. A destination that only differs in case
 // from the source on a case-insensitive file system renames the file.
+// A destination that is another hard link of the source is replaced
+// like any other file, so only the destination link is left.
 //
 // Move uses [os.Rename], which is atomic but only works within the same
 // underlying file system. If the OS returns a cross-device error
@@ -877,8 +879,14 @@ func (local *LocalFileSystem) Move(ctx context.Context, filePath string, destPat
 	case err != nil:
 		return wrapOSErr(destPath, err)
 	case os.SameFile(srcInfo, destInfo):
-		// A case-only rename on a case-insensitive file system
-		// or another hard link of the file, os.Rename handles both
+		// Both paths are the same file: the same directory entry, like for
+		// a case-only rename on a case-insensitive file system, which
+		// os.Rename handles, or two hard links of the file, for which
+		// os.Rename does nothing. Removing the source link replaces
+		// the destination link with the source like a rename would.
+		if !srcInfo.IsDir() && !isLocalSameDirEntry(filePath, destPath) {
+			return wrapOSErr(filePath, os.Remove(filePath))
+		}
 	case destInfo.IsDir():
 		// os.Rename would replace an empty directory on some platforms
 		return NewErrAlreadyExists(File(destPath))
@@ -915,6 +923,27 @@ func wrapRenameErr(destPath string, err error) error {
 		// because the error can be about both paths
 		return err
 	}
+}
+
+// isLocalSameDirEntry reports if the paths a and b of the same file are the
+// same directory entry: their names are equal, ignoring case for a case-only
+// rename on a case-insensitive file system, and their parent directories are
+// the same, also if one path reaches it through a symbolic link.
+// Paths that can't be checked count as the same entry,
+// so that the file is renamed and never removed.
+func isLocalSameDirEntry(a, b string) bool {
+	if !strings.EqualFold(filepath.Base(a), filepath.Base(b)) {
+		return false
+	}
+	aDir, err := os.Stat(filepath.Dir(a))
+	if err != nil {
+		return true
+	}
+	bDir, err := os.Stat(filepath.Dir(b))
+	if err != nil {
+		return true
+	}
+	return os.SameFile(aDir, bDir)
 }
 
 // isLocalSubPath reports if filePath is inside the directory dirPath,

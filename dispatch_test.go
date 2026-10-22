@@ -65,6 +65,10 @@ type minimalFileSystem struct {
 	// directory, but does not exist, like a directory that is removed
 	// while its parent is listed.
 	ghostDir string
+
+	// linkErr is returned by CreateSymbolicLink of a symlinkFileSystem,
+	// like by a file system that is not allowed to create links.
+	linkErr error
 }
 
 var (
@@ -316,6 +320,9 @@ func (s symlinkFileSystem) Lstat(filePath string) (*fs.FileInfo, error) {
 }
 
 func (s symlinkFileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
+	if s.linkErr != nil {
+		return s.linkErr
+	}
 	return s.links().CreateSymbolicLink(targetPath, linkPath)
 }
 
@@ -706,6 +713,219 @@ func TestMoveEmulation_Symlinks(t *testing.T) {
 	})
 }
 
+// requireLink requires file to be a symbolic link to target.
+func requireLink(t *testing.T, file fs.File, target string) {
+	t.Helper()
+	require.True(t, file.IsSymbolicLink(), "%s must be a symbolic link", file)
+	got, err := file.ReadSymbolicLink()
+	require.NoError(t, err)
+	require.Equal(t, target, got, "target of %s", file)
+}
+
+// requireMissing requires file not to exist, not even as dangling link.
+func requireMissing(t *testing.T, file fs.File) {
+	t.Helper()
+	_, err := file.Lstat()
+	require.ErrorIs(t, err, os.ErrNotExist, "%s must not exist", file)
+}
+
+// requireNames requires the directory dir to contain exactly the names.
+func requireNames(t *testing.T, dir fs.File, names ...string) {
+	t.Helper()
+	var listed []string
+	require.NoError(t, dir.ListDirInfo(t.Context(), func(info *fs.FileInfo) error {
+		listed = append(listed, info.Name)
+		return nil
+	}))
+	require.ElementsMatch(t, names, listed, "names in %s", dir)
+}
+
+// TestMoveEmulation_SymlinkMatrix checks the moves of files, directories and
+// symbolic links onto links, files, directories and missing paths that
+// TestMoveEmulation_Symlinks doesn't cover, each with a copy that succeeds
+// (commit) or fails (abort). A failed move must leave the source and the
+// destination as they were, a link is moved as link like by os.Rename.
+func TestMoveEmulation_SymlinkMatrix(t *testing.T) {
+	// setup returns a symlinkFileSystem with the files src.txt, file.txt,
+	// target.txt, other.txt and dir/x.txt, the link "link" to /target.txt
+	// and the link "srclink" to /other.txt.
+	setup := func(t *testing.T) (symlinkFileSystem, fs.File) {
+		s := newSymlinkMemFS(t)
+		root := s.RootDir()
+		writeFiles(t, root, map[string]string{
+			"src.txt":    "src",
+			"file.txt":   "file",
+			"target.txt": "target",
+			"other.txt":  "other",
+			"dir/x.txt":  "x",
+		})
+		require.NoError(t, s.CreateSymbolicLink("/target.txt", "/link"))
+		require.NoError(t, s.CreateSymbolicLink("/other.txt", "/srclink"))
+		return s, root
+	}
+	allNames := []string{"src.txt", "file.txt", "target.txt", "other.txt", "dir", "link", "srclink"}
+
+	t.Run("file onto link, failed upload keeps the link", func(t *testing.T) {
+		s, root := setup(t)
+		s.closeErr = errors.New("upload failed")
+
+		_, err := root.Join("src.txt").Rename(t.Context(), "link")
+		require.ErrorIs(t, err, s.closeErr)
+		requireLink(t, root.Join("link"), "/target.txt")
+		requireContent(t, root.Join("target.txt"), "target")
+		requireContent(t, root.Join("src.txt"), "src")
+	})
+	t.Run("file onto link, canceled copy keeps the link", func(t *testing.T) {
+		s, root := setup(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		s.uploads = true
+		s.onRead = cancel
+
+		_, err := root.Join("src.txt").Rename(ctx, "link")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, int32(1), s.aborts.Load(), "the writer must be aborted")
+		s.onRead = nil
+		requireLink(t, root.Join("link"), "/target.txt")
+		requireContent(t, root.Join("src.txt"), "src")
+	})
+	t.Run("file onto link, read error removes the partial copy and keeps the link", func(t *testing.T) {
+		// Without uploads the writer of the backing file system
+		// writes the partial data to the path of the link
+		s, root := setup(t)
+		s.readErr = errors.New("connection lost")
+
+		_, err := root.Join("src.txt").Rename(t.Context(), "link")
+		require.ErrorIs(t, err, s.readErr)
+		s.readErr = nil
+		requireLink(t, root.Join("link"), "/target.txt")
+		requireContent(t, root.Join("target.txt"), "target")
+		requireContent(t, root.Join("src.txt"), "src")
+	})
+	t.Run("link onto file, commit replaces the file with the link", func(t *testing.T) {
+		_, root := setup(t)
+
+		_, err := root.Join("srclink").Rename(t.Context(), "file.txt")
+		require.NoError(t, err)
+		requireLink(t, root.Join("file.txt"), "/other.txt")
+		requireMissing(t, root.Join("srclink"))
+		requireContent(t, root.Join("other.txt"), "other")
+		requireNames(t, root, "src.txt", "file.txt", "target.txt", "other.txt", "dir", "link")
+	})
+	t.Run("link onto file, abort keeps the file", func(t *testing.T) {
+		s, root := setup(t)
+		s.linkErr = errors.New("links not allowed")
+
+		_, err := root.Join("srclink").Rename(t.Context(), "file.txt")
+		require.ErrorIs(t, err, s.linkErr)
+		require.False(t, root.Join("file.txt").IsSymbolicLink())
+		requireContent(t, root.Join("file.txt"), "file")
+		requireLink(t, root.Join("srclink"), "/other.txt")
+		requireNames(t, root, allNames...)
+	})
+	t.Run("link onto link, commit replaces the link", func(t *testing.T) {
+		_, root := setup(t)
+
+		_, err := root.Join("srclink").Rename(t.Context(), "link")
+		require.NoError(t, err)
+		requireLink(t, root.Join("link"), "/other.txt")
+		requireMissing(t, root.Join("srclink"))
+		requireContent(t, root.Join("target.txt"), "target")
+		requireNames(t, root, "src.txt", "file.txt", "target.txt", "other.txt", "dir", "link")
+	})
+	t.Run("link onto link, abort keeps both links", func(t *testing.T) {
+		s, root := setup(t)
+		s.linkErr = errors.New("links not allowed")
+
+		_, err := root.Join("srclink").Rename(t.Context(), "link")
+		require.ErrorIs(t, err, s.linkErr)
+		requireLink(t, root.Join("link"), "/target.txt")
+		requireLink(t, root.Join("srclink"), "/other.txt")
+		requireNames(t, root, allNames...)
+	})
+	t.Run("link onto missing path, abort keeps the source link", func(t *testing.T) {
+		s, root := setup(t)
+		s.linkErr = errors.New("links not allowed")
+
+		_, err := root.Join("srclink").Rename(t.Context(), "new")
+		require.ErrorIs(t, err, s.linkErr)
+		requireLink(t, root.Join("srclink"), "/other.txt")
+		requireMissing(t, root.Join("new"))
+	})
+	t.Run("link onto directory is ErrAlreadyExists", func(t *testing.T) {
+		_, root := setup(t)
+
+		_, err := root.Join("srclink").Rename(t.Context(), "dir")
+		require.ErrorIs(t, err, fs.ErrAlreadyExists{})
+		requireLink(t, root.Join("srclink"), "/other.txt")
+		requireNames(t, root.Join("dir"), "x.txt")
+	})
+	t.Run("directory onto link is ErrIsNotDirectory", func(t *testing.T) {
+		s, root := setup(t)
+		require.NoError(t, s.CreateSymbolicLink("/dir", "/dirlink"))
+
+		for _, link := range []string{"link", "dirlink"} {
+			_, err := root.Join("dir").Rename(t.Context(), link)
+			require.ErrorIs(t, err, fs.ErrIsNotDirectory{}, "Rename of a directory onto %s", link)
+		}
+		requireLink(t, root.Join("link"), "/target.txt")
+		requireLink(t, root.Join("dirlink"), "/dir")
+		requireContent(t, root.Join("dir", "x.txt"), "x")
+	})
+}
+
+// TestMoveEmulation_ReadOnlyFileSystems checks that a move between file
+// systems fails before anything is copied if the source can't be removed
+// after the copy or the destination can't be written.
+func TestMoveEmulation_ReadOnlyFileSystems(t *testing.T) {
+	newMem := func(t *testing.T, initialFiles ...fs.MemFile) *fs.MemFileSystem {
+		mem, err := fs.RegisteredTestMemFileSystem(nil, initialFiles...)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = mem.Close() })
+		return mem
+	}
+
+	t.Run("read-only source", func(t *testing.T) {
+		src := newMem(t, fs.NewMemFile("/src.txt", []byte("src")), fs.NewMemFile("/dir/a.txt", []byte("a")))
+		src.SetReadOnly(true)
+		dest := newMinimalMemFS(t).RootDir()
+
+		for _, name := range []string{"src.txt", "dir"} {
+			err := fs.Move(t.Context(), src.RootDir().Join(name), dest.Join(name))
+			require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "Move of %s", name)
+		}
+		requireNames(t, dest)
+		requireContent(t, src.RootDir().Join("src.txt"), "src")
+		requireContent(t, src.RootDir().Join("dir", "a.txt"), "a")
+	})
+	t.Run("read-only destination", func(t *testing.T) {
+		src := newMinimalMemFS(t, fs.NewMemFile("/src.txt", []byte("src")), fs.NewMemFile("/dir/a.txt", []byte("a"))).RootDir()
+		dest := newMem(t)
+		dest.SetReadOnly(true)
+
+		for _, name := range []string{"src.txt", "dir"} {
+			err := fs.Move(t.Context(), src.Join(name), dest.RootDir().Join(name))
+			require.ErrorIs(t, err, fs.ErrReadOnlyFileSystem, "Move of %s", name)
+		}
+		requireNames(t, dest.RootDir())
+		requireContent(t, src.Join("src.txt"), "src")
+		requireContent(t, src.Join("dir", "a.txt"), "a")
+	})
+}
+
+// TestMoveEmulation_StatsDestinationOnce is a regression test: the move
+// emulation checked the destination with Lstat and then again if it is
+// a directory before the copy, a round trip each on remote file systems.
+func TestMoveEmulation_StatsDestinationOnce(t *testing.T) {
+	s := newStatCountingFS(t, map[string][]byte{"/src.txt": []byte("data")})
+
+	_, err := s.RootDir().Join("src.txt").Rename(t.Context(), "dest.txt")
+	require.NoError(t, err)
+	require.Equal(t, "data", string(s.files["/dest.txt"]))
+	require.NotContains(t, s.files, "/src.txt", "the source must be removed")
+	require.Equal(t, 1, s.stats["/dest.txt"], "the destination must be stated once")
+}
+
 func TestListDirRecursiveEmulation_ReturnsCallbackError(t *testing.T) {
 	m := newMinimalMemFS(t,
 		fs.NewMemFile("/dir/sub/a.txt", []byte("a")),
@@ -736,6 +956,46 @@ func TestListDirRecursiveEmulation_IgnoresVanishedDirectory(t *testing.T) {
 	})
 	require.NoError(t, err, "a directory that vanished while listing is ignored")
 	require.ElementsMatch(t, []string{"a.txt", "b.txt"}, files)
+}
+
+// TestListDirRecursiveEmulation_SymlinkLoop is a regression test: the
+// emulation followed a symbolic link to a directory of the listed path
+// again and again until the path had too many links. Links to other
+// directories are followed, links to files are listed like files.
+func TestListDirRecursiveEmulation_SymlinkLoop(t *testing.T) {
+	t.Run("SymbolicLinkFileSystem", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		s := newSymlinkMemFS(t)
+		root := s.RootDir()
+		writeFiles(t, root, map[string]string{"dir/a.txt": "a", "dir/sub/b.txt": "b", "outside/c.txt": "c"})
+		require.NoError(t, s.CreateSymbolicLink("/dir", "/dir/loop"))
+		require.NoError(t, s.CreateSymbolicLink("..", "/dir/sub/up"))
+		require.NoError(t, s.CreateSymbolicLink("/outside", "/dir/ext"))
+		require.NoError(t, s.CreateSymbolicLink("/outside/c.txt", "/dir/file-link"))
+
+		var files []string
+		err := root.Join("dir").ListDirRecursive(ctx, func(file fs.File) error {
+			files = append(files, file.Path())
+			return nil
+		})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"/dir/a.txt", "/dir/ext/c.txt", "/dir/file-link", "/dir/sub/b.txt"}, files)
+	})
+	t.Run("LocalFileSystem", func(t *testing.T) {
+		// The FileInfo of a link from LocalFileSystem.ListDir
+		// doesn't tell if the target is a directory
+		dir := fs.File(t.TempDir())
+		writeFiles(t, dir, map[string]string{"dir/a.txt": "a", "dir/sub/b.txt": "b", "outside/c.txt": "c"})
+		if err := os.Symlink(dir.Join("dir").LocalPath(), dir.Join("dir", "loop").LocalPath()); err != nil {
+			t.Skipf("can't create symbolic link: %v", err)
+		}
+		require.NoError(t, os.Symlink("..", dir.Join("dir", "sub", "up").LocalPath()))
+		require.NoError(t, os.Symlink(dir.Join("outside").LocalPath(), dir.Join("dir", "ext").LocalPath()))
+		require.NoError(t, os.Symlink(dir.Join("outside", "c.txt").LocalPath(), dir.Join("dir", "file-link").LocalPath()))
+
+		requireFiles(t, dir.Join("dir"), "a.txt", "ext/c.txt", "file-link", "sub/b.txt")
+	})
 }
 
 func TestListDirRecursiveEmulation_ReturnsListingError(t *testing.T) {

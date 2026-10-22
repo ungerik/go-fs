@@ -1,18 +1,27 @@
 package fs_test
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	stdfstest "testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
+	"github.com/ungerik/go-fs/fstest"
+	"github.com/ungerik/go-fs/tarfs"
 )
 
 func TestCopyFile_ReturnsCloseError(t *testing.T) {
@@ -264,6 +273,247 @@ func TestCopyRecursive_MergesIntoExistingDirectory(t *testing.T) {
 	require.ErrorIs(t, err, fs.ErrIsNotDirectory{})
 	err = fs.CopyRecursive(t.Context(), root.Join("src"), root.Join("dst", "keep.txt"))
 	require.ErrorIs(t, err, fs.ErrIsNotDirectory{}, "directory over a file")
+}
+
+// tarEntry is an entry of a test tar archive,
+// a directory if the name ends with a slash.
+type tarEntry struct {
+	name    string
+	mode    int64
+	content string
+}
+
+// newTarFS returns a registered tar file system with the entries,
+// which is closed at the end of the test.
+func newTarFS(t *testing.T, entries ...tarEntry) *tarfs.Reader {
+	t.Helper()
+	var archive bytes.Buffer
+	w := tar.NewWriter(&archive)
+	for _, entry := range entries {
+		header := &tar.Header{
+			Typeflag: tar.TypeReg,
+			Name:     entry.name,
+			Mode:     entry.mode,
+			Size:     int64(len(entry.content)),
+			ModTime:  time.Now(),
+		}
+		if strings.HasSuffix(entry.name, "/") {
+			header.Typeflag = tar.TypeDir
+		}
+		require.NoError(t, w.WriteHeader(header))
+		_, err := w.Write([]byte(entry.content))
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+	tarFS, err := tarfs.NewReader(fs.NewMemFile("test.tar", archive.Bytes()), "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(tarFS))
+	t.Cleanup(func() { _ = tarFS.Close() })
+	return tarFS
+}
+
+// localSpecialBits returns the setuid, setgid and sticky bits of a local file
+// read with os.Stat, independent of how the package reports permissions.
+func localSpecialBits(t *testing.T, file fs.File) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(file.LocalPath())
+	require.NoError(t, err)
+	return info.Mode() & (os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+}
+
+// TestCopyFile_DropsSpecialPermissionBits is a regression test: a copy took
+// over the setuid, setgid and sticky bits of an archive entry, so extracting
+// an archive as root created setuid files. The archive entries are empty,
+// because a write by a user without root rights clears the setuid and setgid
+// bits, which would hide the bits that the copy was created with.
+func TestCopyFile_DropsSpecialPermissionBits(t *testing.T) {
+	src := newTarFS(t, tarEntry{name: "suid", mode: 0o6755}, tarEntry{name: "sticky", mode: 0o1755}).RootDir()
+
+	t.Run("to a MemFileSystem", func(t *testing.T) {
+		dest := newMinimalMemFS(t).RootDir()
+		for _, name := range []string{"suid", "sticky"} {
+			require.NoError(t, fs.CopyFile(t.Context(), src.Join(name), dest.Join(name)))
+			require.Equal(t, fs.Permissions(0o755), dest.Join(name).Permissions(), "permissions of the copy of %s", name)
+		}
+
+		require.NoError(t, fs.CopyFile(t.Context(), src.Join("suid"), dest.Join("explicit"), 0o4755))
+		require.Equal(t, fs.Permissions(0o4755), dest.Join("explicit").Permissions(), "special bits passed as perm are kept")
+	})
+	t.Run("native copy within a MemFileSystem", func(t *testing.T) {
+		mem, err := fs.RegisteredTestMemFileSystem(nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = mem.Close() })
+		require.NoError(t, mem.WriteAll(t.Context(), "/suid", nil, 0o6755))
+
+		require.NoError(t, fs.CopyFile(t.Context(), mem.RootDir().Join("suid"), mem.RootDir().Join("copy")))
+		require.Equal(t, fs.Permissions(0o755), mem.RootDir().Join("copy").Permissions())
+	})
+	t.Run("to the local file system", func(t *testing.T) {
+		// Linux creates the file with the setuid and setgid bits,
+		// macOS drops them for users without root rights
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows has no Unix permissions")
+		}
+		dest := fs.File(t.TempDir())
+		require.NoError(t, fs.CopyFile(t.Context(), src.Join("suid"), dest.Join("suid")))
+		require.Zero(t, localSpecialBits(t, dest.Join("suid")), "the copy must not be setuid or setgid")
+		require.True(t, dest.Join("suid").Permissions().Can(fs.UserExecute), "the execute bits are kept")
+	})
+}
+
+// TestCopyRecursive_DropsSpecialPermissionBits is the CopyRecursive
+// variant of TestCopyFile_DropsSpecialPermissionBits.
+func TestCopyRecursive_DropsSpecialPermissionBits(t *testing.T) {
+	src := newTarFS(t,
+		tarEntry{name: "tmp/", mode: 0o1777},
+		tarEntry{name: "tmp/suid", mode: 0o4755},
+	).RootDir()
+	dest := newMinimalMemFS(t).RootDir().Join("extracted")
+
+	require.NoError(t, fs.CopyRecursive(t.Context(), src, dest))
+	require.Equal(t, fs.Permissions(0o755), dest.Join("tmp", "suid").Permissions())
+	require.Zero(t, dest.Join("tmp").Permissions()&0o7000, "directories are created with the default permissions")
+}
+
+// TestCopyFile_FromReadOnlyFileSystem is a regression test: the copy of a file
+// of a read-only file system took over the missing write permissions, which
+// describe the file system and not the file, so a copied upload or embedded
+// file was read-only and writing it failed.
+func TestCopyFile_FromReadOnlyFileSystem(t *testing.T) {
+	std := fs.NewStdFileSystem(stdfstest.MapFS{
+		"read-only.txt": {Data: []byte("r"), Mode: 0o444},
+		"tool":          {Data: []byte("t"), Mode: 0o555},
+		"no-perm.txt":   {Data: []byte("n")}, // Reported as fs.AllRead
+	}, "")
+	require.NoError(t, fs.Register(std))
+	t.Cleanup(func() { _ = std.Close() })
+	dest := newMinimalMemFS(t).RootDir()
+
+	for name, want := range map[string]fs.Permissions{"read-only.txt": 0o644, "tool": 0o755, "no-perm.txt": 0o644} {
+		require.NoError(t, fs.CopyFile(t.Context(), std.RootDir().Join(name), dest.Join(name)))
+		require.Equal(t, want, dest.Join(name).Permissions(), "the copy of %s gets the write permission of the owner", name)
+	}
+
+	// The permissions of a file of a writable file system are kept
+	src := newMinimalMemFS(t).RootDir().Join("read-only.txt")
+	require.NoError(t, src.WriteAllString(t.Context(), "r", fs.AllRead))
+	require.NoError(t, fs.CopyFile(t.Context(), src, dest.Join("copy.txt")))
+	require.Equal(t, fs.AllRead, dest.Join("copy.txt").Permissions())
+}
+
+// requireFiles requires the files below dir to have exactly the paths relative to dir.
+func requireFiles(t *testing.T, dir fs.File, relPaths ...string) {
+	t.Helper()
+	var listed []string
+	err := dir.ListDirRecursive(t.Context(), func(file fs.File) error {
+		relPath, err := dir.RelPathOf(file)
+		listed = append(listed, filepath.ToSlash(relPath))
+		return err
+	})
+	require.NoError(t, err)
+	require.ElementsMatch(t, relPaths, listed, "files below %s", dir)
+}
+
+// TestCopyRecursive_SymlinkLoop is a regression test: CopyRecursive followed
+// a symbolic link to the copied directory into itself and wrote nested copies
+// until the path had too many links. A link to a directory outside of the
+// copied tree is still followed.
+func TestCopyRecursive_SymlinkLoop(t *testing.T) {
+	t.Run("MemFileSystem", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		mem, err := fs.RegisteredTestMemFileSystem(nil,
+			fs.NewMemFile("/src/a.txt", []byte("a")),
+			fs.NewMemFile("/src/sub/b.txt", []byte("b")),
+			fs.NewMemFile("/outside/c.txt", []byte("c")),
+		)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = mem.Close() })
+		require.NoError(t, mem.CreateSymbolicLink("/src", "/src/loop"))
+		require.NoError(t, mem.CreateSymbolicLink("..", "/src/sub/up"))
+		require.NoError(t, mem.CreateSymbolicLink("/outside", "/src/ext"))
+		dest := newMinimalMemFS(t).RootDir().Join("dest")
+
+		require.NoError(t, fs.CopyRecursive(ctx, mem.RootDir().Join("src"), dest))
+		requireFiles(t, dest, "a.txt", "ext/c.txt", "sub/b.txt")
+	})
+	t.Run("LocalFileSystem", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		dir := fs.File(t.TempDir())
+		src := dir.Join("src")
+		writeFiles(t, dir, map[string]string{"src/a.txt": "a", "src/sub/b.txt": "b", "outside/c.txt": "c"})
+		if err := os.Symlink(src.LocalPath(), src.Join("loop").LocalPath()); err != nil {
+			t.Skipf("can't create symbolic link: %v", err)
+		}
+		require.NoError(t, os.Symlink("..", src.Join("sub", "up").LocalPath()))
+		require.NoError(t, os.Symlink(dir.Join("outside").LocalPath(), src.Join("ext").LocalPath()))
+		dest := newMinimalMemFS(t).RootDir().Join("dest")
+
+		require.NoError(t, fs.CopyRecursive(ctx, src, dest))
+		requireFiles(t, dest, "a.txt", "ext/c.txt", "sub/b.txt")
+	})
+}
+
+// statCountingFS is a MockFileSystem with the files of a map that counts
+// the calls of Stat by path, see newStatCountingFS.
+type statCountingFS struct {
+	*fstest.MockFileSystem
+
+	files map[string][]byte
+	stats map[string]int
+}
+
+// newStatCountingFS returns a registered statCountingFS
+// with the root directory and the passed files.
+func newStatCountingFS(t *testing.T, files map[string][]byte) *statCountingFS {
+	t.Helper()
+	s := &statCountingFS{files: files, stats: make(map[string]int)}
+	prefix := "stat-count-" + fsimpl.RandomString() + "://"
+	s.MockFileSystem = &fstest.MockFileSystem{
+		MockPrefix: prefix,
+		MockStat: func(filePath string) (*fs.FileInfo, error) {
+			s.stats[filePath]++
+			if filePath == "/" {
+				return &fs.FileInfo{Name: "/", Exists: true, IsDir: true}, nil
+			}
+			data, ok := s.files[filePath]
+			if !ok {
+				return nil, fs.NewErrDoesNotExist(fs.File(prefix + filePath))
+			}
+			return &fs.FileInfo{Name: path.Base(filePath), Exists: true, IsRegular: true, Size: int64(len(data))}, nil
+		},
+		MockOpenReader: func(filePath string) (io.ReadCloser, error) {
+			data, ok := s.files[filePath]
+			if !ok {
+				return nil, fs.NewErrDoesNotExist(fs.File(prefix + filePath))
+			}
+			return io.NopCloser(bytes.NewReader(data)), nil
+		},
+		MockOpenWriter: func(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+			return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
+				s.files[filePath] = data
+				return nil
+			}), nil
+		},
+		MockRemove: func(filePath string) error {
+			delete(s.files, filePath)
+			return nil
+		},
+	}
+	register(t, s.MockFileSystem)
+	return s
+}
+
+// TestCopyFile_StatsDestinationOnce is a regression test: CopyFile checked
+// twice if the destination is a directory, a round trip each on remote file systems.
+func TestCopyFile_StatsDestinationOnce(t *testing.T) {
+	s := newStatCountingFS(t, map[string][]byte{})
+
+	err := fs.CopyFile(t.Context(), fs.NewMemFile("a.txt", []byte("data")), s.RootDir().Join("a.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "data", string(s.files["/a.txt"]))
+	require.Equal(t, 1, s.stats["/a.txt"], "the destination must be stated once")
 }
 
 func TestCopyRecursive_UsesOneBuffer(t *testing.T) {

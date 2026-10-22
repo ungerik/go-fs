@@ -153,6 +153,36 @@ func TestLocalFileSystem_Move(t *testing.T) {
 		requireLocalContent(t, filepath.Join(dir, "dest.txt"), "source")
 		assert.NoFileExists(t, filepath.Join(dir, "src.txt"))
 	})
+
+	t.Run("OntoHardLink", func(t *testing.T) {
+		// Regression test: rename(2) does nothing for two hard links
+		// of the same file, so Move returned nil and kept the source
+		dir := setupLocalMove(t)
+		src, dest := filepath.Join(dir, "src.txt"), filepath.Join(dir, "hard-link.txt")
+		if err := os.Link(src, dest); err != nil {
+			t.Skipf("can't create hard link: %v", err)
+		}
+		require.NoError(t, Local.Move(t.Context(), src, dest))
+		assert.NoFileExists(t, src, "the source must be removed")
+		requireLocalContent(t, dest, "source")
+	})
+
+	t.Run("SameDirectoryEntry", func(t *testing.T) {
+		// Two paths of the same directory entry are the same file like hard
+		// links, but rename(2) does nothing for them and the file must be kept
+		dir := setupLocalMove(t)
+		src := filepath.Join(dir, "srcdir", "child.txt")
+		link := filepath.Join(dir, "link")
+		if err := os.Symlink(filepath.Join(dir, "srcdir"), link); err != nil {
+			t.Skipf("can't create symbolic link: %v", err)
+		}
+		require.NoError(t, Local.Move(t.Context(), src, filepath.Join(link, "child.txt")), "through a link to the directory")
+		requireLocalContent(t, src, "child")
+
+		t.Chdir(filepath.Join(dir, "srcdir"))
+		require.NoError(t, Local.Move(t.Context(), "child.txt", src), "relative and absolute path")
+		requireLocalContent(t, src, "child")
+	})
 }
 
 func TestLocalFileSystem_MoveCrossDevice(t *testing.T) {
@@ -185,6 +215,16 @@ func TestLocalFileSystem_MoveCrossDevice(t *testing.T) {
 		require.NoError(t, err, "the moved link must be a symbolic link")
 		assert.Equal(t, "dest.txt", target)
 		assert.NoFileExists(t, filepath.Join(dir, "link"))
+
+		// A symbolic link replaces an existing file like with os.Rename,
+		// this was an ErrAlreadyExists
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("file"), 0o600))
+		require.NoError(t, Local.Move(t.Context(), filepath.Join(dir, "moved-link"), filepath.Join(dir, "file.txt")))
+		target, err = os.Readlink(filepath.Join(dir, "file.txt"))
+		require.NoError(t, err, "the file must be replaced with the link")
+		assert.Equal(t, "dest.txt", target)
+		assert.NoFileExists(t, filepath.Join(dir, "moved-link"))
+		requireLocalContent(t, filepath.Join(dir, "dest.txt"), "source")
 	}
 	assert.Positive(t, renames, "Move must try os.Rename first")
 }

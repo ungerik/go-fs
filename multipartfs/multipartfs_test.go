@@ -162,6 +162,57 @@ func TestNew(t *testing.T) {
 	assert.Error(t, err, "a nil form would panic on every later call")
 }
 
+// TestNew_EmptyFieldName is a regression test: the directory of a form field
+// with an empty name was the root directory, so the root listed itself and
+// a recursive listing of the root overflowed the stack. mime/multipart skips
+// such fields, but a form passed to New can have them.
+func TestNew_EmptyFieldName(t *testing.T) {
+	body, contentType := newFormBody(t, []upload{
+		{field: "files", name: "a.txt", content: "A"},
+		{field: "unnamed-field", name: "b.txt", content: "B"},
+	}, nil)
+	_, params, err := mime.ParseMediaType(contentType)
+	require.NoError(t, err)
+	form, err := multipart.NewReader(body, params["boundary"]).ReadForm(1 << 20)
+	require.NoError(t, err)
+	form.File[""] = form.File["unnamed-field"]
+	delete(form.File, "unnamed-field")
+	multipartFS, err := New(form, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(multipartFS))
+	t.Cleanup(func() { _ = multipartFS.Close() })
+
+	dirs, err := multipartFS.RootDir().ListDirMax(t.Context(), -1)
+	require.NoError(t, err)
+	assert.Equal(t, []fs.File{multipartFS.JoinCleanFile("files")}, dirs, "the root must not list itself")
+
+	var files []string
+	err = multipartFS.RootDir().ListDirRecursive(t.Context(), func(file fs.File) error {
+		files = append(files, file.Path())
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/files/a.txt"}, files)
+
+	_, err = multipartFS.FormFile("")
+	assert.ErrorIs(t, err, os.ErrNotExist, "an upload without field name has no path")
+	assert.Nil(t, multipartFS.FormFiles(""))
+}
+
+// TestCopyFile_UploadIsWritable is a regression test: a copy of an upload
+// took over the permissions fs.AllRead of the read-only file system,
+// so the copy was read-only and writing it failed.
+func TestCopyFile_UploadIsWritable(t *testing.T) {
+	multipartFS := newTestFS(t, []upload{{field: "files", name: "a.txt", content: "A"}}, nil)
+	upload, err := multipartFS.FormFile("files")
+	require.NoError(t, err)
+	dest := fs.File(filepath.Join(t.TempDir(), "a.txt"))
+
+	require.NoError(t, fs.CopyFile(t.Context(), upload, dest))
+	assert.True(t, dest.Permissions().Can(fs.UserRead|fs.UserWrite), "permissions of the copy: %s", dest.Permissions().FileMode(false))
+	require.NoError(t, dest.WriteAllString(t.Context(), "changed"), "writing the copy")
+}
+
 func TestUniqueFileNames(t *testing.T) {
 	// A file system path has to identify exactly one file,
 	// so files uploaded with the same or an unusable name

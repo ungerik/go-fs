@@ -257,6 +257,9 @@ err = fs.CopyRecursive(ctx, zipFS.RootDir(), fs.File("/srv/extracted"))
 
 `CopyRecursive` creates missing destination directories and works across file
 systems, so this also extracts straight into S3, SFTP or a `MemFileSystem`.
+The extracted files keep the read and execute bits of their entries and get
+the owner's write permission; the setuid, setgid and sticky bits are dropped,
+so extracting as root never creates setuid files.
 
 ## Verification
 

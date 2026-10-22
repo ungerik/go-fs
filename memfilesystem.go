@@ -1711,8 +1711,8 @@ func (fs *MemFileSystem) Truncate(ctx context.Context, filePath string, newSize 
 // destFile is the final path of the copy: an existing file is replaced,
 // an existing directory is an ErrIsDirectory, copying a file onto itself
 // is a no-op. The copy gets a copy of the content, a new file also
-// the permissions of the source, a replaced file keeps its permissions
-// like with LocalFileSystem.CopyFile.
+// the permissions of the source without the setuid, setgid and sticky bits,
+// a replaced file keeps its permissions like with LocalFileSystem.CopyFile.
 func (fs *MemFileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1752,7 +1752,7 @@ func (fs *MemFileSystem) CopyFile(ctx context.Context, srcFile string, destFile 
 	dest.parent.Dir[dest.name] = newMemFileNode(
 		MemFile{FileName: dest.name, FileData: bytes.Clone(src.FileData)},
 		time.Now(),
-		src.Permissions,
+		src.Permissions&permBits,
 	)
 	fs.emitEvent(destFile, EventCreate|EventWrite)
 	return nil

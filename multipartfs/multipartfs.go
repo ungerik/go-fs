@@ -78,10 +78,13 @@ var (
 // names "." and ".." become "%2E" and "%2E%2E". Other field names, like
 // "files" or "my files", are used as they are. A path is split into its
 // elements before the field name is unescaped, so neither a field nor a file
-// name can address an upload of another field.
+// name can address an upload of another field. A field with an empty name has
+// no directory name, its uploads are not part of the file system.
+// mime/multipart skips such fields, but a form passed to New can have them.
 //
 // The uploaded files are read-only with the permissions fs.AllRead
-// and have no modification time.
+// and have no modification time. A copy made with fs.CopyFile
+// also gets the write permission of the owner, so it can be written.
 type MultipartFileSystem struct {
 	paths fsimpl.PathHelper
 
@@ -170,12 +173,13 @@ func (f *MultipartFileSystem) FormValues(name string) []string {
 
 // FormFile returns the first file uploaded under name
 // or ErrDoesNotExist if there is no file under name.
+// An empty name has no files, see MultipartFileSystem.
 func (f *MultipartFileSystem) FormFile(name string) (fs.File, error) {
 	if err := f.checkClosed(); err != nil {
 		return fs.InvalidFile, err
 	}
 	formFiles := f.Form.File[name]
-	if len(formFiles) == 0 {
+	if len(formFiles) == 0 || name == "" {
 		return fs.InvalidFile, fs.NewErrDoesNotExist(f.fieldFile(name))
 	}
 	return f.uploadFile(name, fileNames(formFiles)[0]), nil
@@ -183,8 +187,9 @@ func (f *MultipartFileSystem) FormFile(name string) (fs.File, error) {
 
 // FormFiles returns the files uploaded under name,
 // or nil if there are none or the file system is closed.
+// An empty name has no files, see MultipartFileSystem.
 func (f *MultipartFileSystem) FormFiles(name string) (files []fs.File) {
-	if f.checkClosed() != nil {
+	if f.checkClosed() != nil || name == "" {
 		return nil
 	}
 	names := fileNames(f.Form.File[name])
@@ -427,7 +432,9 @@ func (f *MultipartFileSystem) ListDir(ctx context.Context, dirPath string, patte
 		// Sorted for a deterministic listing,
 		// the form fields are stored in a map
 		for _, field := range slices.Sorted(maps.Keys(f.Form.File)) {
-			if len(f.Form.File[field]) == 0 {
+			if len(f.Form.File[field]) == 0 || field == "" {
+				// The path of a field without name would be the root,
+				// which would list itself
 				continue
 			}
 			matched, err := fsimpl.MatchAnyPattern(fieldDir(field), patterns)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -615,9 +616,14 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 //
 // Within a file system that implements [SymbolicLinkFileSystem],
 // symbolic links are copied as links with their target stored verbatim,
-// like [os.Rename] keeps them. Between file systems the target of a link
-// would be a path of the wrong file system, so what the link points to is copied.
+// like [os.Rename] keeps them, and a link replaces an existing file or link.
+// Between file systems the target of a link would be a path of the wrong
+// file system, so what the link points to is copied, except a link to a
+// directory that is being copied, see CopyRecursive.
+// A symbolic link at destPath is replaced, not the file it points to,
+// and recreated if the copy fails.
 // Removing the source never follows symbolic links, see fsRemoveAll.
+// The copied files get permissions like with CopyFile.
 func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -648,6 +654,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	srcIsDir := srcInfo.IsDir && !copyLink
 	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
 
+	// destInfo stays nil if there is nothing to replace
 	destInfo, err := fsLstat(destFS, destPath)
 	switch {
 	case errors.Is(err, os.ErrNotExist), errors.Is(err, ErrWriteOnlyFileSystem):
@@ -658,20 +665,28 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return NewErrAlreadyExists(dest)
 	case srcIsDir:
 		return NewErrIsNotDirectory(dest)
-	case destInfo.IsSymlink:
-		// Replace the link, not the file it points to
-		if err := fsRemove(destFS, destPath); err != nil {
-			return err
-		}
 	}
 
 	switch {
 	case copyLink:
-		err = c.copyLink(src, dest)
+		err = c.moveLink(src, dest, destInfo)
 	case srcIsDir:
+		c.walk = newDirWalk(srcFS, srcPath)
 		err = c.copyDir(src, dest)
 	default:
-		err = copyFileTo(ctx, src, srcInfo.Permissions, dest, &c.buf, nil, true)
+		var restoreLink func() error
+		if destInfo != nil && destInfo.IsSymlink {
+			// Replace the link, not the file it points to
+			restoreLink, err = removeLink(destFS, destPath)
+			if err != nil {
+				return err
+			}
+		}
+		// The Lstat above told that dest is no directory
+		err = copyFileTo(ctx, src, srcInfo.Permissions, dest, &c.buf, nil, true, true)
+		if err != nil && restoreLink != nil {
+			err = errors.Join(err, restoreLink())
+		}
 	}
 	if err != nil {
 		return err
@@ -747,7 +762,7 @@ func fsListDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath stri
 			return callback(completeFileInfo(fileSystem, dirPath, info))
 		})
 	}
-	err := listDirRecursive(ctx, fileSystem, dirPath, patterns, func(info *FileInfo) error {
+	err := listDirRecursive(ctx, newDirWalk(fileSystem, dirPath), dirPath, patterns, func(info *FileInfo) error {
 		if err := callback(info); err != nil {
 			return callbackError{err}
 		}
@@ -767,13 +782,28 @@ type callbackError struct{ err error }
 func (e callbackError) Error() string { return e.err.Error() }
 func (e callbackError) Unwrap() error { return e.err }
 
-// listDirRecursive emulates ListDirRecursive with ListDir.
+// listDirRecursive emulates ListDirRecursive with ListDir
+// for the directory dirPath, which walk is in.
 // The callback must return its errors as callbackError.
-func listDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {
-	return fsListDir(ctx, fileSystem, dirPath, nil, func(info *FileInfo) error {
-		if info.IsDir {
+//
+// Symbolic links to directories are followed, except a link to a directory
+// of the walk, see dirWalk. Other links, also dangling ones, are listed like
+// files. A link that ListDir doesn't describe as directory or regular file,
+// because the file system doesn't know its target cheaply, is checked with Stat.
+func listDirRecursive(ctx context.Context, walk *dirWalk, dirPath string, patterns []string, callback func(*FileInfo) error) error {
+	return fsListDir(ctx, walk.fileSystem, dirPath, nil, func(info *FileInfo) error {
+		isDir := info.IsDir
+		if info.IsSymlink && !info.IsDir && !info.IsRegular {
+			target, err := fsStat(walk.fileSystem, info.File.Path())
+			isDir = err == nil && target.IsDir
+		}
+		if isDir {
+			if !walk.enter(info) {
+				return nil // A link to a directory of the walk
+			}
 			// Not returning directories, but recursing into them.
-			err := listDirRecursive(ctx, fileSystem, info.File.Path(), patterns, callback)
+			err := listDirRecursive(ctx, walk, info.File.Path(), patterns, callback)
+			walk.leave()
 			if errors.As(err, new(callbackError)) {
 				return err
 			}
@@ -787,4 +817,156 @@ func listDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string
 		}
 		return callback(info)
 	})
+}
+
+// dirWalk is the path of a recursive walk through the directories of
+// fileSystem: the directory where the walk started and the sub-directories
+// down to the directory the walk is in. It detects a symbolic link to one of
+// these directories, which the walk must not follow, because it would reach
+// the link again and again until the path has too many links.
+//
+// The paths are compared with their symbolic links resolved, see
+// fsEvalSymlinks, like MemFileSystem compares the nodes of its directories.
+// The resolved paths are only computed when the walk meets a link
+// to a directory, so a tree without links costs no extra Stat.
+// A link that can't be resolved, because the file system can't read
+// the targets of its links, is followed without the check.
+type dirWalk struct {
+	fileSystem FileSystem
+	dirs       []walkDir
+}
+
+// walkDir is a directory of a dirWalk.
+type walkDir struct {
+	path     string // the path as listed
+	name     string // the name as listed, empty for the start
+	isLink   bool   // the listed path is a symbolic link
+	resolved string // the path without symbolic links if ok
+	known    bool   // resolved and ok are computed
+	ok       bool   // the path could be resolved
+}
+
+// newDirWalk returns a dirWalk that starts at dirPath of fileSystem.
+func newDirWalk(fileSystem FileSystem, dirPath string) *dirWalk {
+	return &dirWalk{fileSystem: fileSystem, dirs: []walkDir{{path: dirPath}}}
+}
+
+// enter adds the directory described by info, an entry of the directory
+// that the walk is in, to the walk. It returns false without adding it if
+// info describes a symbolic link to one of the directories of the walk,
+// which must not be entered. Every successful enter must be followed by leave.
+func (w *dirWalk) enter(info *FileInfo) bool {
+	dir := walkDir{path: info.File.Path(), name: info.Name, isLink: info.IsSymlink}
+	if dir.isLink {
+		dir.resolved, dir.ok = fsEvalSymlinks(w.fileSystem, dir.path)
+		dir.known = true
+	}
+	if dir.isLink && dir.ok {
+		for i := range w.dirs {
+			if resolved, ok := w.resolvedPath(i); ok && resolved == dir.resolved {
+				return false
+			}
+		}
+	}
+	w.dirs = append(w.dirs, dir)
+	return true
+}
+
+// leave removes the directory of the last successful enter from the walk.
+func (w *dirWalk) leave() {
+	w.dirs = w.dirs[:len(w.dirs)-1]
+}
+
+// resolvedPath returns the path of the i-th directory of the walk without
+// symbolic links, and false if it can't be resolved. A directory that is no
+// link is resolved as the entry with its name in the resolved parent directory.
+func (w *dirWalk) resolvedPath(i int) (string, bool) {
+	dir := &w.dirs[i]
+	if !dir.known {
+		dir.known = true
+		if i == 0 {
+			dir.resolved, dir.ok = fsEvalSymlinks(w.fileSystem, dir.path)
+		} else if parent, ok := w.resolvedPath(i - 1); ok {
+			dir.resolved, dir.ok = w.fileSystem.CleanPath(parent, dir.name), true
+		}
+	}
+	return dir.resolved, dir.ok
+}
+
+// evalSymlinksMaxLinks is the number of symbolic links
+// that fsEvalSymlinks follows, like filepath.EvalSymlinks.
+const evalSymlinksMaxLinks = 255
+
+// linkTargetReader is implemented by file systems that can read the target
+// of a symbolic link without implementing SymbolicLinkFileSystem, like
+// OverlayFileSystem with the links of its layers, so that fsEvalSymlinks
+// can resolve their paths.
+type linkTargetReader interface {
+	readSymbolicLink(linkPath string) (string, error)
+}
+
+// fsEvalSymlinks returns the clean filePath of fileSystem with every symbolic
+// link in it resolved, like filepath.EvalSymlinks, which is used for the local
+// file system. It returns false if the path can't be resolved, for example
+// because fileSystem can't read the targets of its links.
+func fsEvalSymlinks(fileSystem FileSystem, filePath string) (string, bool) {
+	if _, ok := fileSystem.(*LocalFileSystem); ok {
+		resolved, err := filepath.EvalSymlinks(filePath)
+		if err != nil {
+			return "", false
+		}
+		resolved, err = filepath.Abs(resolved)
+		return resolved, err == nil
+	}
+	var readLink func(linkPath string) (string, error)
+	switch f := fileSystem.(type) {
+	case SymbolicLinkFileSystem:
+		readLink = f.ReadSymbolicLink
+	case linkTargetReader:
+		readLink = f.readSymbolicLink
+	default:
+		return "", false
+	}
+	// Like MemFileSystem resolves its paths: walk the elements from the root
+	// and replace a link with the elements of its target, which is absolute
+	// or relative to the resolved directory of the link
+	sep := fileSystem.Separator()
+	filePath = fileSystem.CleanPath(filePath)
+	resolved := fileSystem.CleanPath(filePath[:fsVolumeLen(fileSystem, filePath)])
+	pending := fsSplitPath(fileSystem, filePath)
+	for links := 0; len(pending) > 0; {
+		name := pending[0]
+		pending = pending[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			resolved = fileSystem.CleanPath(resolved, "..")
+			continue
+		}
+		next := fileSystem.CleanPath(resolved, name)
+		info, err := fsLstat(fileSystem, next)
+		if err != nil {
+			return "", false
+		}
+		if !info.IsSymlink {
+			resolved = next
+			continue
+		}
+		if links++; links > evalSymlinksMaxLinks {
+			return "", false
+		}
+		target, err := readLink(next)
+		if err != nil || target == "" {
+			return "", false
+		}
+		volumeLen := fsVolumeLen(fileSystem, target)
+		if volumeLen > 0 || strings.HasPrefix(target, "/") || strings.HasPrefix(target, sep) {
+			// An absolute target
+			resolved = fileSystem.CleanPath(target[:volumeLen])
+		}
+		elems := strings.Split(strings.ReplaceAll(target[volumeLen:], sep, "/"), "/")
+		pending = append(elems, pending...)
+	}
+	return resolved, true
 }

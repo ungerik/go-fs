@@ -46,6 +46,8 @@ func (i *FileInfo) Validate() error {
 // NewFileInfo returns a FileInfo using the
 // data from an io/fs.FileInfo as snapshot
 // of an existing file.
+// The Permissions are the result of PermissionsFromFileMode,
+// so they include the setuid, setgid and sticky bits of the mode.
 // Use NewNonExistingFileInfo to get
 // a FileInfo for non existing file.
 func NewFileInfo(file File, info iofs.FileInfo, hidden bool) *FileInfo {
@@ -60,7 +62,7 @@ func NewFileInfo(file File, info iofs.FileInfo, hidden bool) *FileInfo {
 		IsHidden:    hidden,
 		Size:        info.Size(),
 		Modified:    info.ModTime(),
-		Permissions: Permissions(mode.Perm()),
+		Permissions: PermissionsFromFileMode(mode),
 		Sys:         info.Sys(),
 	}
 }

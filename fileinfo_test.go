@@ -2,6 +2,9 @@ package fs
 
 import (
 	iofs "io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -71,4 +74,24 @@ func TestNewFileInfo(t *testing.T) {
 	require.False(t, nonExisting.Exists)
 	require.True(t, nonExisting.IsHidden)
 	require.Equal(t, ".hidden", nonExisting.Name)
+}
+
+// TestNewFileInfo_SpecialBits is a regression test: NewFileInfo dropped
+// the setuid, setgid and sticky bits, while the archive file systems report
+// them with PermissionsFromFileMode, so a local file and an archive entry
+// with the same mode had different permissions.
+func TestNewFileInfo_SpecialBits(t *testing.T) {
+	for _, perm := range []Permissions{0o4755, 0o2755, 0o1777, 0o7777} {
+		stat := (&FileInfo{Name: "x", Exists: true, IsDir: true, Permissions: perm}).StdFileInfo()
+		info := NewFileInfo("x", stat, false)
+		require.Equal(t, perm, info.Permissions, "permissions of the mode %s", stat.Mode())
+	}
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no sticky bit")
+	}
+	dir := filepath.Join(t.TempDir(), "sticky")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.Chmod(dir, os.ModeSticky|0o755))
+	require.Equal(t, Permissions(0o1755), File(dir).Permissions(), "Stat of a local sticky directory")
 }

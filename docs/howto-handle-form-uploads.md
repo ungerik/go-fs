@@ -192,8 +192,14 @@ Three normalisations happen because a path has to identify exactly one file:
   such as `.` or `..`, becomes `unnamed`.
 - **There are no modification times.** Uploaded files carry none.
 
+A form field with an empty name has no directory name, so its uploads are not
+in the file system. `mime/multipart` already skips such fields when it parses a
+request, only a form passed to `multipartfs.New` can have them.
+
 The file system is read-only and the uploaded files have the permissions
-`fs.AllRead`. It also provides `Exists` and `ReadAll` natively.
+`fs.AllRead`. A copy made with `fs.CopyFile` also gets the owner's write
+permission, so it can be changed. The file system provides `Exists` and
+`ReadAll` natively.
 
 ## Verification
 
