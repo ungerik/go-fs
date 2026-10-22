@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## v1.0.0-beta.2 - 2026-10-21
+## [1.0.0-beta.2] - 2026-10-22
 
 Second beta. It fixes the bugs of a full review of beta.1 (data loss,
 security, crashes) and settles the API decisions that freeze with v1.0.0.
@@ -100,6 +100,47 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   `feature/s3/manager`; `smbfs` uses the maintained `github.com/cloudsoda/go-smb2`
   fork (GO-2026-5051); dependencies are bumped (x/net, x/text, x/crypto,
   x/sys, AWS SDK, jlaffaye/ftp v0.2.4, Dropbox SDK v6.6.2).
+- **Copies never take over setuid, setgid and sticky bits.** `CopyFile`,
+  `CopyRecursive`, emulated moves, the overlay copy-up and
+  `MemFileSystem.CopyFile` give the destination only the 9 permission bits of
+  the source; pass `perm` to set special bits. A copy from a read-only file
+  system (uploads, archive entries, `StdFileSystem`) gets the owner write bit,
+  so an upload copies as 0644 instead of 0444. `NewFileInfo` (Local,
+  `StdFileSystem`, sftpfs, smbfs) reports the special bits.
+- **Directory links in recursive walks.** The `ListDirRecursive` emulation,
+  `CopyRecursive` and moves between file systems follow links to directories
+  and skip a link that resolves to the start of the walk or one of its
+  directories; Local listings no longer report a directory link as a file.
+- **XAttr errors.** `XAttrCreate` on an existing attribute wraps
+  `os.ErrExist`; `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing
+  attribute wrap `os.ErrNotExist` (Local and MemFileSystem); fstest checks it.
+- **Archive names.** `fs.Zip` and `ZipMemFiles` reject absolute names, `..`
+  and backslashes with an error wrapping `os.ErrInvalid`, so every archive
+  they write unzips with `UnzipToMemFiles`; `zipfs.Reader` skips symbolic
+  links, devices and FIFOs like `tarfs`.
+- **Root directories.** `RemoveAll` of the root returns an error in s3fs,
+  azureblobfs and sftpfs instead of deleting the whole bucket, container or
+  server tree.
+- **Paths.** Only a `~` at the start of the first part of a Local path means
+  the home directory, a directory named `~` is written `./~`; a SubFileSystem
+  stores relative link targets with `..` as paths of the parent; smbfs paths
+  and link targets containing `\` are errors wrapping `os.ErrInvalid`;
+  `TempFile` returns `InvalidFile` for an extension with a path separator;
+  `StdFS` applies the `os.DirFS` name rules (Windows device names, `\`, `:`,
+  NUL) only to the local file system.
+- `ServeFileHTTP` passes seekable readers to `http.ServeContent` (local files
+  use sendfile again), answers a multi-range request for a reader that can't
+  seek with the whole content and streams a file of unknown size.
+- webdavfs follows no redirects to another host or port or from https to
+  http, unless the `CheckRedirect` of `Options.Client` allows them, and then
+  without credentials.
+- sftpfs rejects addresses with an unencoded `@` after the host (`/`, `?` and
+  `#` of the user info must be percent-encoded), drops a connection only after
+  `KeepAliveCountMax` unanswered keep-alives and never for an SFTP status
+  reply.
+- `uuiddir.Enum` follows links to directories, multipartfs ignores form
+  fields with an empty name, `OverlayFileSystem` documents that its layers
+  must be case-sensitive.
 
 ### Added
 
@@ -107,7 +148,8 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   `File.Lstat`, `fs.NewStdDirEntry`, `fs.PermissionsFromFileMode`,
   `fs.UnzipToMemFiles` size cap (`UnzipToMemFilesMaxSize`), `fs.Event…`
   constants, `httpfs.New`/`NewAndRegister`, `smbfs.EnsureRegistered`,
-  `dropboxfs.New`, `s3fs.New`, `NewMemFileSystemAndRegister`.
+  `dropboxfs.New`, `s3fs.New`, `NewMemFileSystemAndRegister`,
+  `sftpfs.Options.HostKeyAlgorithms` and `sftpfs.KeepAliveCountMax`.
 - Streaming uploads in s3fs (multipart), azureblobfs (blocks) and dropboxfs
   (upload sessions, also above 150 MiB); multipart copies above 5 GiB in s3fs;
   native `MakeAllDirs` for the zip and tar writers.
@@ -122,6 +164,51 @@ modules are tagged in lockstep, the `tools` module is not tagged.
 
 ### Fixed
 
+- Links created through a SubFileSystem escaped its root when one was created
+  below another; names like `~/x` reached `$HOME` through `File(".").StdFS()`
+  and SubFileSystems of Local; smbfs passed `..\` to the server, so
+  SubFileSystems and CopyRecursive destinations on SMB were escaped.
+- Passwords stayed in error messages for URIs that `url.Parse` rejects (a
+  file named `100%.txt`) and for sftpfs passwords with `/`, `?` or `#`;
+  httpfs transport errors kept presigned URL signatures; webdavfs redirects
+  sent the basic auth and `Options.Header` to other hosts and over plain HTTP.
+- `ServeFileHTTP` read a file that can't seek again for every range of a
+  multi-range request, lost sendfile for local files and answered 500 for a
+  file of unknown size.
+- A failed copy onto an existing symbolic link deleted the link, and a link
+  couldn't replace an existing file in the move emulation; Local `Move` onto a
+  hard link of the source kept the source; ftpfs `Move` deleted the
+  destination when the server refused the source; sftpfs (without
+  posix-rename) and webdavfs moves deleted the source on a case-only rename
+  or through an aliased path; dropboxfs `CopyFile` deleted the destination
+  when the source had become a folder.
+- Copying archive entries with setuid or setgid bits as root created setuid
+  files; recursive listings and copies followed directory link cycles until
+  `ELOOP` and wrote about 40 nested partial copies.
+- `EnsureRegistered` waiters got the creator's context cancellation; smbfs
+  reconnect waiters dialed one after another after a dial timeout, a session
+  dialed right before the context ended leaked, a connection broken during
+  the checks of a Move wasn't retried; ftpfs leaked a connection when `Close`
+  raced a running operation; sftpfs dropped the shared connection for status
+  replies mentioning "connection reset" and killed slow downloads after one
+  late keep-alive answer.
+- `Close` contract: smbfs `io.Copy` on open files and `Remove` of the root,
+  and sftpfs `Move`, answered without `ErrFileSystemClosed` after `Close`.
+- azureblobfs `Touch` overwrote a blob created concurrently or hidden by an
+  empty listing page; dropboxfs returned a raw error for a source without
+  write permission; sftpfs `ListDirRecursive` of a link to a directory
+  returned only the link.
+- zipfs listed symbolic links as regular files whose content was the target;
+  `ZipMemFiles` wrote names that `UnzipToMemFiles` rejects; multipartfs
+  overflowed the stack for a field with an empty name; `uuiddir.Enum` skipped
+  linked level directories; the overlay returned Files with the volume of a
+  layer; the XAttr errors of Local and MemFileSystem didn't match
+  `os.ErrExist`/`os.ErrNotExist`; smbfs built invalid prefixes for `host:` and
+  IPv6 zones.
+- `ParseRawURI` allocated for every registered file system, `CopyFile` stat'ed
+  the destination twice, `ReadAll` of httpfs, s3fs, azureblobfs and webdavfs
+  grew the buffer instead of using the content length, the dropboxfs cache
+  scanned all entries for every insert when full.
 - Copy and Move reported success for a failed upload (the writer's Close
   error was dropped) and Move then deleted the source; a canceled or failed
   copy now aborts the upload and never removes the source.
@@ -183,7 +270,7 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   `fsimpl.NewFileBufferWithClose`, `fsimpl.DirTreeNode` (now
   `internal/dirtree`), `fstest.DockerAvailable`/`DockerSetupFailed`.
 
-## v1.0.0-beta.1 - 2026-10-20
+## [1.0.0-beta.1] - 2026-10-20
 
 First beta of the v1 API; further beta releases iterate on it before
 v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
@@ -457,7 +544,7 @@ module only pins development tools and is not tagged.
 - `fs.MemFileSystem.ReadAll` on a directory returns `ErrIsDirectory` instead
   of empty data.
 
-## v0.1.0 - 2026-06-30
+## [0.1.0] - 2026-06-30
 
 First release, and a v1.0 preparation pass: a broad audit of the library that
 fixes data-loss and crash bugs across the backends, tightens the public API, and

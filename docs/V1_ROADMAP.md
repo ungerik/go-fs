@@ -646,6 +646,17 @@ be hard to change after the freeze. Decisions taken 2026-10-21:
       safe retries), ftpfs and smbfs (cloudsoda/go-smb2 fork) rework.
 - [x] CI: Go stable, cross-compiles, govulncheck, tidy and `GOWORK=off`
       checks, lint on all OSes, Dependabot, `tag-release.sh`, `SECURITY.md`.
+- [x] Pre-release review of the beta.2 branch (2026-10-22): confinement
+      escapes (SubFileSystem link chains, `~` on Local, `\` on smbfs),
+      password and signature leaks in errors and webdavfs redirects,
+      `ServeFileHTTP` range amplification, move and copy data loss
+      (symlinks, hard links, case-only renames, refused RNFR), setuid
+      propagation from archives, link cycles, reconnect and keep-alive
+      bugs, `RemoveAll` of the root in s3fs, azureblobfs and sftpfs.
+      Decided: copies keep only the 9 permission bits of the source unless
+      `perm` is passed; overlay layers must be case-sensitive; XAttr flag
+      errors wrap `os.ErrExist`/`os.ErrNotExist`. Deferred items are in
+      `.context/beta2/FOLLOWUPS.md`.
 
 ## Verification (overall)
 

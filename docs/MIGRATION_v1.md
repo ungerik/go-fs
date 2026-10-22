@@ -77,6 +77,21 @@ Behaviour changes:
   have reached the server; they return the connection error instead.
 - smbfs `ReadSymbolicLink` returns the raw target, and a Move onto an
   existing empty directory fails with `os.ErrExist` instead of replacing it.
+  smbfs paths and link targets containing `\` fail with `os.ErrInvalid`
+  (the server treats `\` as a separator).
+- sftpfs rejects addresses with an unencoded `@` after the host, including an
+  `@` in a path passed to `EnsureRegistered`: write it as `%40`, and
+  percent-encode `/`, `?` and `#` in usernames and passwords. A dead
+  connection is detected after `KeepAliveCountMax` (3) keep-alive intervals,
+  about 90 s with the default interval. SFTP status replies, including
+  `io.EOF`, reach the caller instead of dropping the connection. Set
+  `Options.HostKeyAlgorithms` when the known hosts file has only an ed25519
+  key of a server that also offers ECDSA.
+- webdavfs no longer follows redirects to another host or port or from https
+  to http; it returns a `*webdavfs.StatusError`. A `CheckRedirect` of
+  `Options.Client` can allow them, then they go out without credentials.
+- `RemoveAll` of the root returns an error in s3fs, azureblobfs and sftpfs
+  instead of deleting the bucket, container or server tree.
 
 ### Errors
 
@@ -134,6 +149,39 @@ Behaviour changes:
   snapshot; `ListDir` lists sorted by name.
 - s3fs: objects written by v0 with a leading `/` in the key are not visible,
   see "Migrating from v0" in `s3fs/README.md`.
+- Copies (`CopyFile`, `CopyRecursive`, moves between file systems) don't take
+  over setuid, setgid and sticky bits; pass them as `perm`. A copy from a
+  read-only file system gets the owner write bit, so an upload is copied as
+  0644 instead of 0444.
+- `FileInfo.Permissions` of Local, `StdFileSystem`, sftpfs and smbfs includes
+  the setuid, setgid and sticky bits (`fs.NewFileInfo` uses
+  `PermissionsFromFileMode`); mask with `0o777` to compare plain permissions.
+- Recursive listings and copies follow links to directories and skip links
+  that lead back into the walk; Local listings report a link to a directory
+  as a directory.
+- `fs.Zip` and `ZipMemFiles` reject absolute names, `..` and names with a
+  backslash; `zipfs.Reader` skips symbolic links, devices and FIFOs.
+- XAttr: `XAttrCreate` on an existing attribute wraps `os.ErrExist`,
+  `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing attribute wrap
+  `os.ErrNotExist`.
+- Local paths: only a `~` that starts the first part of a path means the home
+  directory. `CleanPath(".", "~", "x")` and `File("./~/x")` are `./~/x`, a
+  directory named `~`; `CleanPath("~/..")` is the parent of the home
+  directory.
+- `SubFileSystem.CreateSymbolicLink` stores a relative target with `..` as an
+  absolute path of the view, so `ReadSymbolicLink` returns `/d/target.txt`
+  instead of `../d/target.txt`.
+- `ServeFileHTTP` answers a multi-range request for a reader that can't seek
+  with 200 and the whole content, and streams a file of unknown size without
+  `Content-Length`, ranges and conditional requests.
+- `TempFile` returns `InvalidFile` for an extension with a path separator.
+- `StdFS` of a non-local file system accepts `:` and `\` in names on
+  Windows; on the local file system it rejects Windows device names and NUL
+  bytes like `os.DirFS`.
+- `ParseRequestMultipartFormMemFiles` reads every uploaded file into memory,
+  `maxMemory` doesn't bound that: limit the request body with
+  `http.MaxBytesReader`. multipartfs ignores fields with an empty name.
+- `uuiddir.Enum` follows links to directories.
 
 ### FileSystem implementations
 
@@ -143,7 +191,10 @@ Behaviour changes:
 `fsimpl.PathHelper` has no `IsAbsPath`/`AbsPath`/`IsHidden`, and
 `fstest.DockerAvailable`/`DockerSetupFailed` are internal. Writers that commit
 on `Close` should implement `fs.WriteAborter`. Run `fstest.RunConformance`,
-which checks the new contracts.
+which checks the new contracts. Its XAttr check requires `XAttrCreate` errors
+to wrap `os.ErrExist` and `XAttrReplace` and missing-attribute errors to wrap
+`os.ErrNotExist`, and the suite stops when `WriteSeed` fails. The layers of an
+`OverlayFileSystem` must be case-sensitive.
 
 ## The context rule
 
