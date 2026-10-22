@@ -26,6 +26,10 @@ func JoinCleanFilePath(uriParts ...string) File {
 //
 // If destination is an existing directory, then source is moved into it
 // keeping its name, else destination is the new path of source.
+// A local destination that is the directory entry of source under another
+// spelling of its name, like a name that only differs in case on
+// a case-insensitive file system, is no directory to move into,
+// source is renamed to it like by [LocalFileSystem.Move].
 // An existing file at that path is replaced ([ErrIsNotDirectory]
 // if source is a directory), an existing directory is an error
 // wrapping [os.ErrExist] and is neither merged nor deleted.
@@ -75,8 +79,9 @@ func Move(ctx context.Context, source, destination File) error {
 	if srcFS == destFS && srcPath == destPath {
 		return nil
 	}
-	// Moving into an existing directory
-	if destination.IsDir() {
+	// Moving into an existing directory, unless it is the source itself
+	// under another spelling of its name, which renames the source
+	if destination.IsDir() && !isLocalRenameOfDirEntry(srcFS, srcPath, destFS, destPath) {
 		destination = destination.Join(source.Name())
 		destFS, destPath = destination.ParseRawURI()
 	}

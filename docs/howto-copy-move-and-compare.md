@@ -171,7 +171,10 @@ The destination rules:
 After an existing directory resolved to "into it", the path inside it is
 checked with the same rules, and a directory that is already there under the
 source's name is an error wrapping `os.ErrExist` (`fs.ErrAlreadyExists`): it is
-never merged or deleted.
+never merged or deleted. A local destination that is the source itself under
+another spelling of its name, like `/data/Reports` for the directory
+`/data/reports` on a case-insensitive disk, is no directory to move into:
+the source is renamed, like by `LocalFileSystem.Move`.
 
 More behaviours to rely on:
 

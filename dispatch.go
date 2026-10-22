@@ -1065,9 +1065,11 @@ func isLocalSameFile(a, b string, stat func(string) (os.FileInfo, error)) bool {
 // for a file system that matches names by Unicode normalization or with
 // other case rules, never treat it as proof of two different entries.
 func isLocalSameDirEntry(a, b string) bool {
-	if !strings.EqualFold(filepath.Base(a), filepath.Base(b)) {
-		return false
-	}
+	return strings.EqualFold(filepath.Base(a), filepath.Base(b)) && isLocalInSameDir(a, b)
+}
+
+// isLocalInSameDir reports if the local paths a and b are in the same directory.
+func isLocalInSameDir(a, b string) bool {
 	aDir, err := os.Stat(filepath.Dir(a))
 	if err != nil {
 		return false
@@ -1077,6 +1079,32 @@ func isLocalSameDirEntry(a, b string) bool {
 		return false
 	}
 	return os.SameFile(aDir, bDir)
+}
+
+// isLocalRenameOfDirEntry reports if destPath of destFS is the directory
+// entry of srcPath of srcFS under another spelling of its name, which the
+// file system matches to the same entry, like another case on
+// a case-insensitive file system or another Unicode normalization on APFS.
+// Both must be local paths of the same file per os.Lstat with other names
+// in the same directory: that is the same entry for a directory, which has
+// no other hard links, and for a name that only differs in case.
+func isLocalRenameOfDirEntry(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
+	srcLocal, destLocal, _, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath)
+	if !ok || filepath.Base(srcLocal) == filepath.Base(destLocal) {
+		return false
+	}
+	srcInfo, err := os.Lstat(srcLocal)
+	if err != nil {
+		return false
+	}
+	destInfo, err := os.Lstat(destLocal)
+	if err != nil || !os.SameFile(srcInfo, destInfo) {
+		return false
+	}
+	if srcInfo.IsDir() {
+		return isLocalInSameDir(srcLocal, destLocal)
+	}
+	return isLocalSameDirEntry(srcLocal, destLocal)
 }
 
 // isLocalInsideDir reports if the local path filePath is inside the directory

@@ -355,6 +355,31 @@ func TestMove_CaseOnlyRenameThroughSubFileSystem(t *testing.T) {
 	requireContent(t, dir.Join("FILE.txt"), "file")
 }
 
+// TestMove_CaseOnlyRenameOfDirectory is a regression test: on a
+// case-insensitive file system Move of a directory to a name that only
+// differs in case found the destination to be an existing directory, the
+// directory itself, and moved it into itself, which failed with an error
+// wrapping os.ErrInvalid, while LocalFileSystem.Move and File.Rename
+// renamed it.
+func TestMove_CaseOnlyRenameOfDirectory(t *testing.T) {
+	dir := caseInsensitiveTempDir(t)
+	writeFiles(t, dir, map[string]string{"dir/a.txt": "a", "other/b.txt": "b"})
+	sub, err := fs.NewSubFileSystem(fs.Local, dir.LocalPath(), "")
+	require.NoError(t, err)
+	register(t, sub)
+
+	require.NoError(t, fs.Move(t.Context(), dir.Join("dir"), dir.Join("DIR")), "within the local file system")
+	requireNames(t, dir, "DIR", "other")
+	require.NoError(t, fs.Move(t.Context(), sub.RootDir().Join("DIR"), dir.Join("Dir")), "from a SubFileSystem")
+	requireNames(t, dir, "Dir", "other")
+	requireContent(t, dir.Join("Dir", "a.txt"), "a")
+
+	// Another existing directory is still moved into
+	require.NoError(t, fs.Move(t.Context(), dir.Join("Dir"), dir.Join("OTHER")))
+	requireNames(t, dir, "other")
+	requireContent(t, dir.Join("other", "Dir", "a.txt"), "a")
+}
+
 func TestRemoveFiles(t *testing.T) {
 	m := newMinimalMemFS(t,
 		fs.NewMemFile("/a.tmp", []byte("a")),
