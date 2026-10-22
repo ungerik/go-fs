@@ -554,7 +554,9 @@ the same files again or the whole disk:
   anything, with an error wrapping `errors.ErrUnsupported` that names the link.
 - `fs.CopyRecursive` never writes through a symbolic link below the
   destination: a file or directory over a link there is an error wrapping
-  `os.ErrExist`. The destination directory itself may be a link.
+  `os.ErrExist`. The destination directory itself may be a link. The links
+  are checked by path before each write, so this assumes that nobody else
+  changes the destination during the copy.
 - `fs.Move` between file systems copies links the same way and only removes
   the source after the copy, so a link to a directory, the moved source itself
   or one in a moved directory, can't be moved to another file system. Within

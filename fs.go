@@ -70,6 +70,12 @@ func JoinCleanFilePath(uriParts ...string) File {
 // fallback, also through the local layers of an OverlayFileSystem, which
 // can resolve the link to another path than the local file system, except
 // for a local file with other hard links that keep it.
+//
+// The copy-then-delete fallback replaces a symbolic link at destination,
+// never writes through it and never writes through a link below a moved
+// directory, see [CopyRecursive]. It checks the destination by path before
+// it writes, so these guarantees about links at the destination assume that
+// destination is not changed concurrently by others.
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath

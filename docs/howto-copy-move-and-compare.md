@@ -41,7 +41,9 @@ When source and destination are on the same file system and it implements
 move the bytes through your process. Copying a file onto itself is a no-op,
 for a local file also through another path to it, like a symbolic link, a hard
 link, a `SubFileSystem` or the local layer of an `OverlayFileSystem`, which
-would otherwise truncate the file while it is read.
+would otherwise truncate the file while it is read. Like the other checks of
+the destination it is done by path before the destination is opened, so it
+assumes that nobody else changes the destination during the copy.
 
 When copying between two `File`s and you pass no explicit permissions, the
 source's read, write and execute bits are used. The setuid, setgid and sticky
@@ -90,7 +92,10 @@ an error wrapping `os.ErrExist` (`fs.ErrAlreadyExists`) that names the link.
 That happens when a second copy finds a link that the first copy created for a
 link of the source that is a directory now, or when a link of the destination
 and a file or directory of the source only differ in the case of their names
-and the destination ignores case, like macOS and Windows do. Copying
+and the destination ignores case, like macOS and Windows do. The links are
+checked by path before a file or directory is written, so this holds as long
+as nobody else changes the destination during the copy: a link that another
+process creates between the check and the write is written through. Copying
 a directory into one of its own sub-directories is an error wrapping
 `os.ErrInvalid`, for a local directory also through a symbolic link to
 a parent directory or a `SubFileSystem`. One buffer is used for all files,
@@ -216,7 +221,9 @@ More behaviours to rely on:
   directory, the moved source itself or one below a moved directory, is never
   copied to another file system, like by `CopyRecursive`: the move fails
   before it copies anything with an error wrapping `errors.ErrUnsupported`
-  that names the link.
+  that names the link. The destination is checked by path before the copy
+  writes, so the rules about links at the destination assume that nobody else
+  changes the destination during the move.
 
 To rename in place, without moving between directories:
 

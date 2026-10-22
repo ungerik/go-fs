@@ -20,7 +20,9 @@ const copyBufferSize = 1024 * 1024 * 4
 // is an [ErrIsDirectory]. Missing parent directories of the copy are created.
 // Copying a file onto itself is a no-op, for a local file also through
 // another path to it, like a symbolic link, a hard link, a [SubFileSystem]
-// or the local layer of an [OverlayFileSystem].
+// or the local layer of an [OverlayFileSystem]. dest is checked by path
+// before it is opened for writing, which follows a symbolic link at dest,
+// so these guarantees assume that dest is not changed concurrently by others.
 // src must exist and must not be a directory ([ErrIsDirectory]).
 //
 // The copy is created with perm, or without perm with the permissions
@@ -265,7 +267,10 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // that names the link, like for a link that an earlier copy created for a link
 // of src that is a directory now, or for a link of dest whose name only
 // differs in case from a file or directory of src on a case-insensitive
-// destination.
+// destination. The links are checked by path before a file or directory is
+// written, so these guarantees about the links of dest assume that dest is
+// not changed concurrently by others: a link that another process creates
+// between the check and the write is written through.
 // Copying a directory onto itself is a no-op,
 // copying it into one of its sub-directories is an error wrapping [os.ErrInvalid],
 // for a local directory also through another path to it, like through
