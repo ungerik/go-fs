@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -115,7 +114,7 @@ func registerLocked(entry *registryEntry, prefixes []string) error {
 			if sameFileSystem(existing.fs, entry.fs) {
 				return nil // Already registered
 			}
-			return fmt.Errorf("%w: %s by %s", ErrAlreadyRegistered, redactURI(prefix), existing.fs)
+			return fmt.Errorf("%w: %s by %s", ErrAlreadyRegistered, fsimpl.RedactURI(prefix), existing.fs)
 		}
 	}
 	for _, prefix := range prefixes {
@@ -226,7 +225,7 @@ func ensureRegisteredCreate(ctx context.Context, prefix string, call *registryCa
 		return nil, nil, err
 	}
 	if fileSystem.Prefix() != prefix {
-		err = fmt.Errorf("EnsureRegistered: created file system has prefix %s instead of %s", redactURI(fileSystem.Prefix()), redactURI(prefix))
+		err = fmt.Errorf("EnsureRegistered: created file system has prefix %s instead of %s", fsimpl.RedactURI(fileSystem.Prefix()), fsimpl.RedactURI(prefix))
 		return nil, nil, joinCloseErr(err, fileSystem)
 	}
 
@@ -415,56 +414,4 @@ func uriPath(fileSystem FileSystem, uri string) string {
 		return u.PathFromURI(uri)
 	}
 	return fileSystem.CleanPath(fileSystem.Prefix() + fsimpl.UnescapeURIPath(uri[prefixLen:]))
-}
-
-// redactURI returns uri with the password of its user info replaced
-// by "xxxxx", so that the URI can be used in error messages and logs.
-// A URI that url.Parse rejects, like one with an invalid percent escape
-// in a file name, is redacted by redactURIString.
-func redactURI(uri string) string {
-	if !strings.Contains(uri, "@") {
-		return uri
-	}
-	u, err := url.Parse(uri)
-	if err != nil {
-		return redactURIString(uri)
-	}
-	if u.User == nil {
-		return uri
-	}
-	if _, hasPassword := u.User.Password(); !hasPassword {
-		return uri
-	}
-	return u.Redacted()
-}
-
-// redactURIString replaces the password of the user info of uri
-// with "xxxxx" without parsing the URI. The authority ends with the
-// first "/", "?" or "#" after the scheme. If it contains no "@",
-// the password itself may contain one of them, then the user info
-// ends with the last "@" of uri, which redacts too much rather
-// than too little. The password is everything between the first ":"
-// of the user info and its end. A uri without a scheme is returned
-// unchanged, it has no authority.
-func redactURIString(uri string) string {
-	scheme, rest, found := strings.Cut(uri, PrefixSeparator)
-	if !found {
-		return uri
-	}
-	authority := rest
-	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
-		authority = rest[:i]
-	}
-	at := strings.LastIndex(authority, "@")
-	if at < 0 {
-		at = strings.LastIndex(rest, "@")
-	}
-	if at < 0 {
-		return uri
-	}
-	colon := strings.Index(rest[:at], ":")
-	if colon < 0 {
-		return uri
-	}
-	return scheme + PrefixSeparator + rest[:colon+1] + "xxxxx" + rest[at:]
 }

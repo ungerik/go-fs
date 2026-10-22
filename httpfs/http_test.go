@@ -604,7 +604,10 @@ func TestTransportErrorsRedacted(t *testing.T) {
 // also of URLs that url.Parse rejects. The URLs are listed without
 // the "http://" prefix. A password with "?" was cut at the query
 // and its start was kept, an URL that url.Parse rejected kept the
-// whole password.
+// whole password. A password of digits or an empty one with a '/'
+// or '?', which url.Parse takes for a port, was kept too, and the
+// port and path of an URL with an invalid escape before an '@'
+// in the path were replaced.
 func Test_redactURL(t *testing.T) {
 	for uri, want := range map[string]string{
 		"host/key":                         "host/key",
@@ -619,6 +622,9 @@ func Test_redactURL(t *testing.T) {
 		"host/key%zz?mail=a@b":             "host/key%zz?…",
 		"host/key?mail=a@b":                "host/key?…",
 		"user:topsecret@host/key%zz?m=a@b": "user:xxxxx@host/key%zz?…",
+		"user:/topsecret@host/key?x":       "user:xxxxx@host/key?…",
+		"user:123?topsecret@host/key":      "user:xxxxx@host/key",
+		"host:8080/a%zz@b/key":             "host:8080/a%zz@b/key",
 	} {
 		assert.Equal(t, Prefix+want, redactURL(Prefix+uri), "redactURL(%q)", Prefix+uri)
 	}
@@ -639,4 +645,11 @@ func TestErrorMessage_noQuery(t *testing.T) {
 	err := fs.NewErrDoesNotExist(fs.File("https://example.com/key.txt?X-Amz-Signature=secret"))
 	assert.NotContains(t, err.Error(), "secret")
 	assert.Contains(t, err.Error(), "https://example.com/key.txt")
+
+	// The query was cut off before the password was redacted, so the
+	// start of a password with an unencoded '?' remained
+	err = fs.NewErrDoesNotExist(fs.File("https://user:top?secret@example.com/key.txt"))
+	assert.NotContains(t, err.Error(), "top")
+	assert.NotContains(t, err.Error(), "secret")
+	assert.Contains(t, err.Error(), "https://user:xxxxx@example.com/key.txt")
 }

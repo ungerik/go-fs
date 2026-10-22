@@ -277,55 +277,16 @@ func (f *FileSystem) String() string {
 
 // redactURL returns rawURL for error messages and logs: without the
 // query and fragment, which can carry secrets like the signature of a
-// presigned URL, and with a password replaced by "xxxxx".
-// The password is also replaced in an URL that url.Parse rejects.
+// presigned URL, and with a password replaced by "xxxxx", see
+// fsimpl.RedactURI for URLs that url.Parse rejects or misreads.
+// The password is redacted before the query is cut off, because a
+// password with an unencoded '?' or '#' reaches into the query.
 func redactURL(rawURL string) string {
-	if strings.Contains(rawURL, "@") {
-		u, err := url.Parse(rawURL)
-		switch {
-		case err != nil:
-			rawURL = redactPassword(rawURL)
-		case u.User != nil:
-			if _, hasPassword := u.User.Password(); hasPassword {
-				rawURL = u.Redacted()
-			}
-		}
-	}
-	withoutQuery, query := splitQuery(rawURL)
+	withoutQuery, query := splitQuery(fsimpl.RedactURI(rawURL))
 	if query != "" {
 		withoutQuery += "?…"
 	}
 	return withoutQuery
-}
-
-// redactPassword replaces the password of the user info of an URL
-// that url.Parse rejects with "xxxxx", like the redaction of the fs
-// package. The authority ends with the first "/", "?" or "#" after
-// the scheme. If it contains no "@", the password itself may contain
-// one of them, then the user info ends with the last "@" of rawURL,
-// which redacts too much rather than too little. The password is
-// everything between the first ":" of the user info and its end.
-func redactPassword(rawURL string) string {
-	scheme, rest, found := strings.Cut(rawURL, "://")
-	if !found {
-		return rawURL
-	}
-	authority := rest
-	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
-		authority = rest[:i]
-	}
-	at := strings.LastIndex(authority, "@")
-	if at < 0 {
-		at = strings.LastIndex(rest, "@")
-	}
-	if at < 0 {
-		return rawURL
-	}
-	colon := strings.Index(rest[:at], ":")
-	if colon < 0 {
-		return rawURL
-	}
-	return scheme + "://" + rest[:colon+1] + "xxxxx" + rest[at:]
 }
 
 // redactErr redacts the URL of a *url.Error in err, see redactURL.

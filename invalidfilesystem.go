@@ -205,5 +205,5 @@ func errInvalidFile(filePath string) error {
 	if filePath == "" {
 		return ErrInvalidFileSystem
 	}
-	return fmt.Errorf("%w: no file system registered for %q", ErrInvalidFileSystem, redactURI(filePath))
+	return fmt.Errorf("%w: no file system registered for %q", ErrInvalidFileSystem, fsimpl.RedactURI(filePath))
 }

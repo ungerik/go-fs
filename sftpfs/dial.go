@@ -141,7 +141,7 @@ func parseAddress(address string) (*target, error) {
 	// would take parts of the password for the port, path, query or fragment.
 	_, rest, _ := strings.Cut(address, "://")
 	if end := strings.IndexAny(rest, "/?#"); end >= 0 && strings.Contains(rest[end:], "@") {
-		return nil, fmt.Errorf("invalid SFTP address %s: '@' after the host, percent-encode a '/', '?' or '#' of the username or password and an '@' of the path", redactAddress(address))
+		return nil, fmt.Errorf("invalid SFTP address %s: '@' after the host, percent-encode a '/', '?' or '#' of the username or password and an '@' of the path", fsimpl.RedactAddress(address))
 	}
 	u, err := url.Parse(address)
 	if err != nil {
@@ -177,7 +177,7 @@ func parseAddress(address string) (*target, error) {
 // of the password, so the reason is the error of parsing the address with
 // the redacted password. If that one is valid, the user info is invalid.
 func invalidAddressErr(address string) error {
-	redacted := redactAddress(address)
+	redacted := fsimpl.RedactAddress(address)
 	_, reason := url.Parse(redacted)
 	if urlErr, ok := errors.AsType[*url.Error](reason); ok {
 		reason = urlErr.Err // without the repeated address
@@ -186,31 +186,6 @@ func invalidAddressErr(address string) error {
 		reason = errors.New("invalid username or password, special characters must be percent-encoded")
 	}
 	return fmt.Errorf("invalid SFTP address %s: %w", redacted, reason)
-}
-
-// redactAddress returns address for errors and log messages with the
-// password replaced by "xxxxx", also if address is not a valid URL or the
-// password contains an unencoded '/', '?' or '#'. Everything after "://"
-// up to the last '@' is taken for the user info. Its username before the
-// first ':' is kept unless it contains a '/', '?' or '#', then it can't be
-// told apart from the host and path, and the whole user info is replaced.
-func redactAddress(address string) string {
-	at := strings.LastIndexByte(address, '@')
-	if at < 0 {
-		return address
-	}
-	start := 0
-	if i := strings.Index(address[:at], "://"); i >= 0 {
-		start = i + len("://")
-	}
-	username, _, hasPassword := strings.Cut(address[start:at], ":")
-	switch {
-	case strings.ContainsAny(username, "/?#"):
-		return address[:start] + "xxxxx" + address[at:]
-	case hasPassword:
-		return address[:start] + username + ":xxxxx" + address[at:]
-	}
-	return address
 }
 
 // credentials are the username and password for a dial.

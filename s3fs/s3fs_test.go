@@ -419,28 +419,46 @@ func TestNewAndRegister(t *testing.T) {
 	assert.Error(t, NewAndRegister(nil, bucket, nil), "nil client")
 }
 
-// TestRedactURI checks the password redaction of String, also for an
-// Options.Prefix that url.Parse rejects, like one with an invalid percent
-// escape, an invalid port or a control character, which redactURI
-// returned unchanged with the password.
-func TestRedactURI(t *testing.T) {
-	for uri, want := range map[string]string{
+// TestString_RedactsPassword checks the password redaction of String, also
+// for an Options.Prefix that url.Parse rejects, like one with an invalid
+// percent escape, an invalid port or a control character, which was returned
+// unchanged with the password, and for a password of digits or an empty one
+// with an unencoded '/' or '?', which url.Parse takes for a port.
+func TestString_RedactsPassword(t *testing.T) {
+	client := s3.New(s3.Options{Region: testRegion})
+	for prefix, want := range map[string]string{
 		"s3://user:secret@minio.example.com/bucket":      "s3://user:xxxxx@minio.example.com/bucket",
 		"s3://user:secret@minio.example.com/100%":        "s3://user:xxxxx@minio.example.com/100%",
 		"s3://user:secret@minio.example.com:port/bucket": "s3://user:xxxxx@minio.example.com:port/bucket",
 		"s3://user:secret@minio.example.com/bucket\x7f":  "s3://user:xxxxx@minio.example.com/bucket\x7f",
 		// The password ends at the last '@', it may contain '@' and '/'
-		"s3://user:se@cr/et@minio.example.com/b%zz": "s3://user:xxxxx@minio.example.com/b%zz",
-		"s3://user@minio.example.com/b%zz":          "s3://user@minio.example.com/b%zz",
-		"s3://minio.example.com/b%zz":               "s3://minio.example.com/b%zz",
-		"s3://bucket":                               "s3://bucket",
+		"s3://user:se@cr/et@minio.example.com/b%zz":  "s3://user:xxxxx@minio.example.com/b%zz",
+		"s3://user@minio.example.com/b%zz":           "s3://user@minio.example.com/b%zz",
+		"s3://minio.example.com/b%zz":                "s3://minio.example.com/b%zz",
+		"s3://bucket":                                "s3://bucket",
+		"s3://user:/secret@minio.example.com/bucket": "s3://user:xxxxx@minio.example.com/bucket",
+		"s3://user:123?secret@minio.example.com":     "s3://user:xxxxx@minio.example.com",
 	} {
-		assert.Equal(t, want, redactURI(uri), "redactURI(%q)", uri)
+		f, err := New(client, "bucket", &Options{Prefix: prefix})
+		require.NoError(t, err, prefix)
+		assert.Equal(t, "S3 "+want, f.String(), "String of the prefix %q", prefix)
 	}
+}
 
-	f, err := New(s3.New(s3.Options{Region: testRegion}), "bucket", &Options{Prefix: "s3://user:secret@minio.example.com/100%"})
-	require.NoError(t, err)
-	assert.Equal(t, "S3 s3://user:xxxxx@minio.example.com/100%", f.String(), "String must redact the password")
+// TestNew_InvalidPrefixRedacted is a regression test: the error
+// for an invalid Options.Prefix contained its password.
+func TestNew_InvalidPrefixRedacted(t *testing.T) {
+	client := s3.New(s3.Options{Region: testRegion})
+	for _, prefix := range []string{
+		"user:secret@minio.example.com/bucket",
+		"s3://user:secret@minio.example.com/bucket/",
+		"s3://user:sec/ret@minio.example.com/bucket/",
+	} {
+		_, err := New(client, "bucket", &Options{Prefix: prefix})
+		require.Error(t, err, prefix)
+		assert.NotContains(t, err.Error(), "sec", "the error for %q must not contain the password", prefix)
+		assert.NotContains(t, err.Error(), "ret", "the error for %q must not contain the password", prefix)
+	}
 }
 
 // httptestClient returns an S3 client without retries for a test server

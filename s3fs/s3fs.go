@@ -183,7 +183,7 @@ func New(client *s3.Client, bucketName string, opts *Options) (fs.FileSystem, er
 	prefix, id := Prefix+bucketName, bucketName
 	if opts.Prefix != "" {
 		if !strings.Contains(opts.Prefix, fs.PrefixSeparator) || strings.HasSuffix(opts.Prefix, Separator) {
-			return nil, fmt.Errorf("s3fs: Options.Prefix %q must contain %q and must not end with %q", opts.Prefix, fs.PrefixSeparator, Separator)
+			return nil, fmt.Errorf("s3fs: Options.Prefix %q must contain %q and must not end with %q", fsimpl.RedactAddress(opts.Prefix), fs.PrefixSeparator, Separator)
 		}
 		// The prefix is unique among the registered file systems,
 		// the bucket name is not if Prefix distinguishes endpoints
@@ -292,44 +292,7 @@ func (s *fileSystem) Name() string {
 // String returns the name and the prefix of the file system
 // with a redacted password, if Options.Prefix had one.
 func (s *fileSystem) String() string {
-	return s.Name() + " " + redactURI(s.URIPrefix)
-}
-
-// redactURI returns uri with the password
-// of its user info replaced by "xxxxx".
-//
-// A uri that url.Parse rejects, like one with an invalid percent escape
-// or an invalid port, is redacted as string: the password reaches from
-// the first ':' after the scheme to the last '@', because it may contain
-// '@' and '/'. That can redact more than the password, never less.
-func redactURI(uri string) string {
-	u, err := url.Parse(uri)
-	if err != nil {
-		scheme, rest, found := strings.Cut(uri, fs.PrefixSeparator)
-		if !found {
-			scheme, rest = "", uri
-		}
-		at := strings.LastIndexByte(rest, '@')
-		if at < 0 {
-			return uri
-		}
-		colon := strings.IndexByte(rest[:at], ':')
-		if colon < 0 {
-			return uri
-		}
-		rest = rest[:colon+1] + "xxxxx" + rest[at:]
-		if found {
-			return scheme + fs.PrefixSeparator + rest
-		}
-		return rest
-	}
-	if u.User == nil {
-		return uri
-	}
-	if _, hasPassword := u.User.Password(); !hasPassword {
-		return uri
-	}
-	return u.Redacted()
+	return s.Name() + " " + fsimpl.RedactURI(s.URIPrefix)
 }
 
 ///////////////////////////////////////////////////////////////////////////////

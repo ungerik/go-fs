@@ -422,34 +422,6 @@ func TestInvalidFileSystem_Errors(t *testing.T) {
 	assert.ErrorIs(t, RemoveErrDoesNotExist(file.Remove()), ErrInvalidFileSystem, "must not be swallowed as not existing")
 }
 
-// Test_redactURI is a regression test: a URI that url.Parse rejects,
-// like one with an invalid percent escape, an invalid port or a control
-// character, was returned unchanged with the password.
-func Test_redactURI(t *testing.T) {
-	for uri, want := range map[string]string{
-		// Parsed by url.Parse
-		"ftp://user:hunter2@host/dir/file.txt": "ftp://user:xxxxx@host/dir/file.txt",
-		"ftp://user@host/dir/file.txt":         "ftp://user@host/dir/file.txt",
-		"ftp://host/dir/a@b.txt":               "ftp://host/dir/a@b.txt",
-		"/local/a:b@c.txt":                     "/local/a:b@c.txt",
-		// Rejected by url.Parse
-		"ftp://user:hunter2@host/dir/100%.txt":   "ftp://user:xxxxx@host/dir/100%.txt",
-		"ftp://user:hunter2@host:port/dir":       "ftp://user:xxxxx@host:port/dir",
-		"ftp://user:hunter2@host/dir/\x7f.txt":   "ftp://user:xxxxx@host/dir/\x7f.txt",
-		"ftp://user:hunter2@[::1/dir":            "ftp://user:xxxxx@[::1/dir",
-		"ftp://user:hunter2/x@host/dir/100%.txt": "ftp://user:xxxxx@host/dir/100%.txt",
-		"ftp://user:hunter2?x@host/dir/100%.txt": "ftp://user:xxxxx@host/dir/100%.txt",
-		"ftp://user:hunter2#x@host/dir/100%.txt": "ftp://user:xxxxx@host/dir/100%.txt",
-		"ftp://user:hunter2@x@host/100%.txt":     "ftp://user:xxxxx@host/100%.txt",
-		"ftp://user@host/dir/100%.txt":           "ftp://user@host/dir/100%.txt",
-		"ftp://host/dir/100%.txt":                "ftp://host/dir/100%.txt",
-		"ftp://host/a@b/100%.txt":                "ftp://host/a@b/100%.txt",
-		"/local/a:b@c%.txt":                      "/local/a:b@c%.txt",
-	} {
-		assert.Equal(t, want, redactURI(uri), "redactURI(%q)", uri)
-	}
-}
-
 // prefixTestFS is an InvalidFileSystem with any prefix.
 type prefixTestFS struct {
 	InvalidFileSystem
@@ -459,13 +431,17 @@ type prefixTestFS struct {
 func (f *prefixTestFS) Prefix() string { return f.prefix }
 
 // TestRedactURI_Errors is a regression test: the error messages
-// that name a URI contained the password if url.Parse rejected the URI.
+// that name a URI contained the password if url.Parse rejected the URI,
+// or if url.Parse took a password of digits or an empty one with an
+// unencoded '/' or '?' for a port, see fsimpl.RedactURI.
 func TestRedactURI_Errors(t *testing.T) {
 	for _, uri := range []string{
 		"ftp-unregistered://user:hunter2@host/dir/100%.txt",
 		"ftp-unregistered://user:hunter2@host:port/dir/file.txt",
 		"ftp-unregistered://user:hunter2@host/dir/\x7f.txt",
 		"ftp-unregistered://user:hunter2/x@host/dir/file.txt",
+		"ftp-unregistered://user:/hunter2@host/dir/file.txt",
+		"ftp-unregistered://user:123?hunter2@host/dir/file.txt",
 	} {
 		assert.NotContains(t, NewErrDoesNotExist(File(uri)).Error(), "hunter2", "ErrDoesNotExist for %q", uri)
 

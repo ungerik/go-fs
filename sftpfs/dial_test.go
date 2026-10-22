@@ -87,26 +87,21 @@ func TestParseAddress(t *testing.T) {
 	}
 }
 
-func TestRedactAddress(t *testing.T) {
-	for address, want := range map[string]string{
-		"sftp://user:secret@host":          "sftp://user:xxxxx@host",
-		"sftp://user@host":                 "sftp://user@host",
-		"sftp://user@host/path":            "sftp://user@host/path",
-		"sftp://user:secret@ho st/path":    "sftp://user:xxxxx@ho st/path",
-		"sftp://user:secret@[::1":          "sftp://user:xxxxx@[::1",
-		"sftp://ho st":                     "sftp://ho st",
-		"user:secret@host":                 "user:xxxxx@host",
-		"sftp://:secret@host":              "sftp://:xxxxx@host",
-		"sftp://bob:ab/cd@host":            "sftp://bob:xxxxx@host",
-		"sftp://bob:12/34@127.0.0.1":       "sftp://bob:xxxxx@127.0.0.1",
-		"sftp://bob:12?34@host":            "sftp://bob:xxxxx@host",
-		"sftp://bob:ab#cd@host":            "sftp://bob:xxxxx@host",
-		"sftp://bob:a@b/c@host":            "sftp://bob:xxxxx@host",
-		"sftp://bob:ab/cd@host:22/path":    "sftp://bob:xxxxx@host:22/path",
-		"sftp://ali/ce:secret@host":        "sftp://xxxxx@host", // no telling the username apart
-		"sftp://host/dir/name@example.com": "sftp://xxxxx@example.com",
+// TestParseAddress_Redacted checks that the errors of parseAddress name
+// the address with the password redacted by fsimpl.RedactAddress, which
+// takes everything up to the last '@' for the user info.
+func TestParseAddress_Redacted(t *testing.T) {
+	for address, redacted := range map[string]string{
+		"sftp://user:secret@ho st/path": "sftp://user:xxxxx@ho st/path",
+		"user:secret@[::1":              "sftp://user:xxxxx@[::1",
+		"sftp://bob:ab/cd@host":         "sftp://bob:xxxxx@host",
+		"sftp://bob:12?34@host":         "sftp://bob:xxxxx@host",
+		"sftp://bob:a@b/c@host":         "sftp://bob:xxxxx@host",
+		"sftp://ali/ce:secret@host":     "sftp://xxxxx@host", // no telling the username apart
 	} {
-		assert.Equal(t, want, redactAddress(address), address)
+		_, err := parseAddress(address)
+		require.Error(t, err, address)
+		assert.Contains(t, err.Error(), "invalid SFTP address "+redacted+":", address)
 	}
 }
 

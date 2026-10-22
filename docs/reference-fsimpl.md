@@ -245,6 +245,37 @@ fsimpl.Ext("image.png/file", "/")  // ""            like path.Ext: last element 
 fsimpl.Ext("image.png/file", "")   // ".png/file"   empty separator searches the whole path
 ```
 
+## Password redaction
+
+```go
+func RedactURI(uri string) string
+func RedactAddress(address string) string
+```
+
+Both return their argument for error messages and logs with the password of
+the user info replaced by `xxxxx`, also if `url.Parse` rejects it. The `fs`
+package, `httpfs`, `s3fs`, `sftpfs`, `ftpfs`, `smbfs` and `webdavfs` use them,
+so every package redacts the same way.
+
+`RedactURI` is for URIs whose path may contain an `@`, like the URI of a file.
+The user info ends with the last `@` of the authority, unless a password with
+an unencoded `/`, `?` or `#` moved its end behind the authority: then the last
+`@` of the URI ends it. That is the case if the host or port is invalid, like
+`user:secret` of `ftp://user:secret/x@host`, or if the authority has no user
+info and looks like a host with a port, like `u:123` of `ftp://u:123/x@host`,
+which `url.Parse` takes for the host `u` with the port `123`. A URI without
+`://` is returned unchanged. The doc comment of `RedactURI` lists every rule.
+
+`RedactAddress` is for the address of a file system that is rejected because
+it has an `@` after the host: everything up to the last `@` is the user info.
+It also redacts an address without scheme like `user:secret@host`.
+
+```go
+fsimpl.RedactURI("ftp://user:secret@host/me@example.com.txt") // "ftp://user:xxxxx@host/me@example.com.txt"
+fsimpl.RedactURI("ftp://u:123/x@host/dir")                    // "ftp://u:xxxxx@host/dir"
+fsimpl.RedactAddress("sftp://bob:a@b/c@host")                 // "sftp://bob:xxxxx@host"
+```
+
 ## Content hashing
 
 ```go

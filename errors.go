@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // SentinelError is used for const sentinel errors
@@ -399,14 +401,16 @@ func errSubject(fileReader FileReader) string {
 	case nil:
 		return ""
 	case File:
-		uri := r.String()
+		// The password is redacted before the query is cut off,
+		// because a password with an unencoded '?' or '#' reaches into it
+		uri := fsimpl.RedactURI(r.String())
 		if _, ok := r.FileSystem().(URIFileSystem); ok {
 			// A query can carry secrets like presigned URL signatures
 			if i := strings.IndexAny(uri, "?#"); i >= 0 {
 				uri = uri[:i]
 			}
 		}
-		return redactURI(uri)
+		return uri
 	case MemFile:
 		return r.FileName
 	default:

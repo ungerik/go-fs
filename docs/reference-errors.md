@@ -118,7 +118,9 @@ directory is not empty: sftp://user@host/home/user/dir
 ```
 
 The password is also redacted from a URI that is not a valid URL,
-like one with a file named `100%.txt` or a password containing `/`.
+like one with a file named `100%.txt` or a password containing `/`,
+and from a URI like `ftp://user:123/x@host/file` that `url.Parse` reads
+as the host `user` with the port `123`, see `fsimpl.RedactURI`.
 
 ### Constructors
 
