@@ -415,9 +415,9 @@ func TestSubFileSystem_CopyFileOntoDirectory(t *testing.T) {
 }
 
 // TestSubFileSystem_CreateSymbolicLink verifies the link targets stored in
-// the parent: a relative target is stored verbatim, it used to be turned into
-// an absolute path of the parent resolved against the root instead of the
-// directory of the link, which also allowed targets outside of the root.
+// the parent: a relative target without ".." is stored verbatim, it used to be
+// turned into an absolute path of the parent resolved against the root instead
+// of the directory of the link, which also allowed targets outside of the root.
 func TestSubFileSystem_CreateSymbolicLink(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
@@ -444,8 +444,12 @@ func TestSubFileSystem_CreateSymbolicLink(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "target", string(data), "reading through the relative link")
 
-	// A relative target may go up as long as it stays in the view
+	// A relative target may go up as long as it stays in the view,
+	// it is stored as the parent path it resolves to in the view
 	require.NoError(t, subFS.CreateSymbolicLink("../d/./target.txt", "/d/up"))
+	stored, err = os.Readlink(filepath.Join(rootDir, "d", "up"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(rootDir, "d", "target.txt"), stored)
 	data, err = subFS.ReadAll(ctx, "/d/up")
 	require.NoError(t, err)
 	assert.Equal(t, "target", string(data))
@@ -468,6 +472,43 @@ func TestSubFileSystem_CreateSymbolicLink(t *testing.T) {
 		assert.ErrorIs(t, err, os.ErrNotExist, "no link created at %s", link)
 	}
 	assert.ErrorIs(t, subFS.CreateSymbolicLink("", "/empty"), fs.ErrEmptyPath)
+}
+
+// TestSubFileSystem_CreateSymbolicLinkChain is a regression test:
+// a relative target with ".." was checked only lexically against the path
+// of the link in the view and then stored verbatim, but the parent resolves
+// ".." from the real directory of the link, which an earlier link can move.
+// The link "/d/up" to ".." made the directory "/d/up/d/up" of the view
+// the root directory itself, so "../../../secret.txt" reached a file
+// three directories above the root.
+func TestSubFileSystem_CreateSymbolicLinkChain(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	rootDir := filepath.Join(dir, "a", "b", "root")
+	require.NoError(t, os.MkdirAll(filepath.Join(rootDir, "d"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(rootDir, "d", "secret.txt"), []byte("inside"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("secret"), 0o600))
+	subFS, err := fs.NewSubFileSystem(fs.Local, rootDir, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = subFS.Close() })
+
+	err = subFS.CreateSymbolicLink("..", "/d/up")
+	if errors.Is(err, os.ErrPermission) || errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("symbolic links not available: %v", err)
+	}
+	require.NoError(t, err)
+	stored, err := os.Readlink(filepath.Join(rootDir, "d", "up"))
+	require.NoError(t, err)
+	assert.Equal(t, rootDir, stored, `a target with ".." is stored as the parent path it resolves to in the view`)
+
+	// The view resolves "/d/up/d/up" + "../../../secret.txt" to "/d/secret.txt"
+	require.NoError(t, subFS.CreateSymbolicLink("../../../secret.txt", "/d/up/d/up/esc"))
+	data, err := subFS.ReadAll(ctx, "/esc")
+	require.NoError(t, err)
+	assert.Equal(t, "inside", string(data), "the link chain must not leave the root directory")
+	target, err := subFS.ReadSymbolicLink("/esc")
+	require.NoError(t, err)
+	assert.Equal(t, "/d/secret.txt", target, "read as path of the view")
 }
 
 // symlinkMockFileSystem is a MockFileSystem that also implements

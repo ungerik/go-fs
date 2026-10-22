@@ -154,8 +154,17 @@ func (s *SubFileSystem) errInvalidName(filePath, name string) error {
 
 // linkTarget translates the target of a symbolic link at linkPath
 // to the parent. An absolute target is a path of the view and translated
-// like every path. A relative target is stored verbatim, because the parent
-// resolves it relative to the directory of the link just like the view.
+// like every path. A relative target without ".." elements is stored
+// verbatim, because the parent resolves it relative to the directory
+// of the link just like the view.
+//
+// A relative target with ".." elements is resolved lexically against
+// the directory of the link in the view and stored as the corresponding
+// path of the parent. The parent resolves ".." from the real directory
+// of the link, which differs from the view's directory if the link path
+// goes through other links: with "/d/up" linking to "..", the target
+// "../../x" of "/d/up/d/up/link" would point above the root directory.
+//
 // A relative target that would leave the view, like "../x" for a link
 // in the root directory, or that contains a name with the separator
 // of the parent is an error wrapping os.ErrInvalid.
@@ -165,11 +174,13 @@ func (s *SubFileSystem) linkTarget(targetPath, linkPath string) (string, error) 
 	}
 	linkDir, _ := s.paths.SplitDirAndName(s.CleanPath(linkPath))
 	depth := len(s.paths.SplitPath(linkDir))
+	hasDotDot := false
 	for name := range strings.SplitSeq(targetPath, "/") {
 		switch name {
 		case "", ".":
 			continue
 		case "..":
+			hasDotDot = true
 			depth--
 		default:
 			if !isValidName(s.parent, name) {
@@ -181,6 +192,9 @@ func (s *SubFileSystem) linkTarget(targetPath, linkPath string) (string, error) 
 			return "", fmt.Errorf("%w: the link target %q of %s leaves the root directory of %s",
 				os.ErrInvalid, targetPath, s.paths.JoinCleanURI(linkPath), s)
 		}
+	}
+	if hasDotDot {
+		return s.parentPath(s.CleanPath(linkDir, targetPath))
 	}
 	return targetPath, nil
 }
@@ -558,9 +572,13 @@ func (s *SubFileSystem) Lstat(filePath string) (*FileInfo, error) {
 // CreateSymbolicLink creates a link at linkPath to targetPath.
 // An absolute targetPath is a path of the view and stored as the
 // corresponding path of the parent file system. A relative targetPath
-// is stored verbatim, the parent resolves it relative to the directory
-// of the link. A relative targetPath that leaves the root directory
-// of the view is an error wrapping os.ErrInvalid.
+// without ".." elements is stored verbatim, the parent resolves it
+// relative to the directory of the link. A relative targetPath with ".."
+// elements is resolved against the directory of linkPath in the view
+// and stored as the corresponding path of the parent, because the parent
+// would resolve ".." from the real directory of the link, which a link
+// in linkPath can move outside of the view. A relative targetPath that
+// leaves the root directory of the view is an error wrapping os.ErrInvalid.
 func (s *SubFileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
 	parentLink, err := s.checkPath(linkPath)
 	if err != nil {
