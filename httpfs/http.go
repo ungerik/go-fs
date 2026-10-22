@@ -23,6 +23,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ungerik/go-fs"
@@ -91,6 +92,7 @@ type FileSystem struct {
 	// then the host is the first element of the paths.
 	hostInPath bool
 	client     *http.Client
+	closed     atomic.Bool
 }
 
 // New returns a read-only file system for URLs starting with prefix,
@@ -318,6 +320,9 @@ func redactErr(err error) error {
 // never downloaded to determine the size. The Size is -1 if the server
 // reports no size at all.
 func (f *FileSystem) info(filePath string) (fs.FileInfo, error) {
+	if err := f.checkClosed(); err != nil {
+		return fs.FileInfo{}, err
+	}
 	uri := f.URIFromPath(filePath)
 	request, err := http.NewRequest(http.MethodHead, uri, nil)
 	if err != nil {
@@ -479,6 +484,9 @@ func (f *FileSystem) Exists(filePath string) (bool, error) {
 // get returns the response of a GET request with ctx.
 // A 404 or 410 status is reported as an error wrapping os.ErrNotExist.
 func (f *FileSystem) get(ctx context.Context, filePath string) (*http.Response, error) {
+	if err := f.checkClosed(); err != nil {
+		return nil, err
+	}
 	uri := f.URIFromPath(filePath)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
@@ -544,13 +552,33 @@ func (f *FileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return response.Body, nil
 }
 
-// Close does nothing, the file system has no resources to release.
+// Close unregisters the file system, after that every method returns an
+// error wrapping fs.ErrFileSystemClosed. Close of Default and DefaultTLS
+// does nothing, they are process-wide like fs.Local and stay usable.
 func (f *FileSystem) Close() error {
+	if f == Default || f == DefaultTLS {
+		return nil
+	}
+	if !f.closed.Swap(true) {
+		fs.Unregister(f)
+	}
+	return nil
+}
+
+// checkClosed returns an error wrapping fs.ErrFileSystemClosed
+// if the file system was closed.
+func (f *FileSystem) checkClosed() error {
+	if f.closed.Load() {
+		return fmt.Errorf("%s: %w", f, fs.ErrFileSystemClosed)
+	}
 	return nil
 }
 
 // ListDir returns an error wrapping errors.ErrUnsupported,
 // because HTTP has no directory listing.
 func (f *FileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	if err := f.checkClosed(); err != nil {
+		return err
+	}
 	return fs.NewErrUnsupported(f, "ListDir")
 }

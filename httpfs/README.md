@@ -44,7 +44,10 @@ err := httpfs.NewAndRegister("https://api.example.com/", &httpfs.Options{
 })
 ```
 
-`httpfs.New` returns such a file system without registering it.
+`httpfs.New` returns such a file system without registering it. Its `Close`
+unregisters it, and every method returns an error wrapping
+`fs.ErrFileSystemClosed` afterwards. `Close` of `Default` and `DefaultTLS`
+does nothing, they are process-wide like `fs.Local`.
 
 ## How HTTP concepts map to the file system
 
