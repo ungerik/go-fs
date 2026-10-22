@@ -1,0 +1,8 @@
+# Fake credentials in the tests that check that passwords are redacted
+# from file system names, URIs and error messages.
+https://user:secret@api.example.com
+https://user:xxxxx@api.example.com
+http://alice:topsecret@127.0.0.1:1
+http://alice:topsecret@[::1
+http://bob%40example.com:topsecret@"+host+"
+http://alice:secret@"+srv.Listener.Addr().String(),
