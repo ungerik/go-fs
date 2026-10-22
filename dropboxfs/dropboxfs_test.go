@@ -238,17 +238,55 @@ func TestMove_Overwrite(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrIsNotDirectory{})
 }
 
-// TestMove_ReplaceOnlyCheckedVersion checks that replacing a destination
-// file deletes only the version that was checked, never a newer one.
+// TestMove_ReplaceOnlyCheckedVersion checks that Move and CopyFile replace
+// only the version of the destination file that relocate checked: another
+// client uploads a newer version between the check and the delete,
+// which must survive the failed Move or CopyFile.
 func TestMove_ReplaceOnlyCheckedVersion(t *testing.T) {
+	for name, relocate := range map[string]func(dbfs *fileSystem, ctx context.Context, src, dest string) error{
+		"Move":     (*fileSystem).Move,
+		"CopyFile": (*fileSystem).CopyFile,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			dbfs, client := newTestFS(t, nil)
+			require.NoError(t, dbfs.WriteAll(ctx, "/src.txt", []byte("src"), 0))
+			require.NoError(t, dbfs.WriteAll(ctx, "/dest.txt", []byte("dest"), 0))
+			client.onCall("DeleteV2", func() {
+				dest := client.entries["/dest.txt"]
+				dest.data, dest.rev = []byte("newer"), "rev-newer"
+			})
+
+			err := relocate(dbfs, ctx, "/src.txt", "/dest.txt")
+			assert.ErrorIs(t, err, os.ErrExist, "the newer destination is in the way")
+			assert.Equal(t, 1, client.callCount("DeleteV2"), "the hook must have replaced the destination")
+			assert.Equal(t, "newer", string(client.entries["/dest.txt"].data), "the newer version must not be deleted")
+			assert.Equal(t, "src", string(client.entries["/src.txt"].data), "the source must be kept")
+		})
+	}
+}
+
+// TestCopyFile_SourceBecameFolder is the regression test for a CopyFile
+// whose cached source file became a folder on the server: relocate deleted
+// the destination file before the copy found the folder, so the failed
+// copy lost the destination.
+func TestCopyFile_SourceBecameFolder(t *testing.T) {
 	ctx := t.Context()
-	dbfs, client := newTestFS(t, nil)
-	require.NoError(t, dbfs.WriteAll(ctx, "/src.txt", []byte("src"), 0))
+	dbfs, client := newTestFS(t, &Options{CacheTimeout: time.Hour})
+	require.NoError(t, dbfs.WriteAll(ctx, "/src", []byte("src"), 0))
 	require.NoError(t, dbfs.WriteAll(ctx, "/dest.txt", []byte("dest"), 0))
 
-	err := dbfs.deleteFile(ctx, "/dest.txt", &files.FileMetadata{Rev: "outdated"})
-	assert.Error(t, err, "a delete of an outdated version must fail")
+	// Another client replaces the cached source file with a folder
+	delete(client.entries, "/src")
+	client.entries["/src"] = &fakeEntry{display: "/src", isDir: true, id: "folder"}
+	client.entries["/src/a.txt"] = &fakeEntry{display: "/src/a.txt", data: []byte("a"), id: "a", rev: "1"}
+
+	err := dbfs.CopyFile(ctx, "/src", "/dest.txt")
+	assert.ErrorIs(t, err, fs.ErrIsDirectory{})
+	require.Contains(t, client.entries, "/dest.txt", "the destination must not be deleted")
 	assert.Equal(t, "dest", string(client.entries["/dest.txt"].data))
+	assert.NotContains(t, client.entries, "/dest.txt/a.txt", "the folder must not be copied")
+	assert.Zero(t, client.callCount("DeleteV2"), "nothing must be deleted")
 }
 
 // TestMove_CaseOnly checks a rename that only changes the case of the

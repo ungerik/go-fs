@@ -599,9 +599,10 @@ func (dbfs *fileSystem) relocateV2(ctx context.Context, move bool, src, dest str
 // not only in case, with the overwrite semantics of Move and CopyFile.
 //
 // Dropbox refuses to relocate onto an existing path. An existing file
-// at dest is therefore deleted before a second attempt, but only the
-// version of the file that was checked (DeleteArg.ParentRev), so a folder
-// or a newer file that took its place in the meantime is never deleted.
+// at dest is therefore deleted before a second attempt, if src is not
+// a folder on the server, and only the version of the file that was
+// checked (DeleteArg.ParentRev), so a folder or a newer file that took
+// its place in the meantime is never deleted.
 // The deleted file stays restorable in the version history of Dropbox.
 func (dbfs *fileSystem) relocate(ctx context.Context, move bool, src, dest string) error {
 	defer func() {
@@ -622,14 +623,18 @@ func (dbfs *fileSystem) relocate(ctx context.Context, move bool, src, dest strin
 		case destInfo.IsDir:
 			return fs.NewErrIsDirectory(destInfo.File)
 		}
-		if move {
-			_, srcInfo, statErr := dbfs.metadata(ctx, src, src)
-			if statErr != nil {
-				return statErr
-			}
-			if srcInfo.IsDir {
-				return fs.NewErrIsNotDirectory(destInfo.File)
-			}
+		// A folder never replaces a file. The source is checked on the
+		// server before the file is deleted, because CopyFile checked it
+		// in the cache and it may have become a folder since then.
+		_, srcInfo, statErr := dbfs.metadata(ctx, src, src)
+		if statErr != nil {
+			return statErr
+		}
+		switch {
+		case srcInfo.IsDir && move:
+			return fs.NewErrIsNotDirectory(destInfo.File)
+		case srcInfo.IsDir:
+			return fs.NewErrIsDirectory(srcInfo.File)
 		}
 		if err := dbfs.deleteFile(ctx, dest, destMeta); err != nil {
 			return err

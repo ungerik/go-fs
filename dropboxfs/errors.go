@@ -147,15 +147,23 @@ func (dbfs *fileSystem) wrapErr(filePath string, err error) error {
 
 // wrapRelocationErr converts an error of MoveV2 or CopyV2 from src to dest:
 // errors about the source are wrapped for src, errors about the destination
-// for dest, see wrapErr, and moving a folder into itself is an error wrapping
-// os.ErrInvalid.
+// for dest, see wrapErr, a missing write permission for the source
+// (a move deletes it) is an fs.ErrPermission for src, and moving a folder
+// into itself is an error wrapping os.ErrInvalid.
 func (dbfs *fileSystem) wrapRelocationErr(src, dest string, err error) error {
 	if r := relocationErrorOf(err); r != nil {
 		switch r.Tag {
 		case files.RelocationErrorCantMoveFolderIntoItself, files.RelocationErrorDuplicatedOrNestedPaths:
 			return fmt.Errorf("%w: can't move or copy %s to %s: %w", os.ErrInvalid, dbfs.file(src), dbfs.file(dest), err)
-		case files.RelocationErrorFromLookup, files.RelocationErrorFromWrite:
+		case files.RelocationErrorFromLookup:
 			return dbfs.wrapErr(src, err)
+		case files.RelocationErrorFromWrite:
+			// writeErrorOf returns the write error of the destination,
+			// so wrapErr would not see this one
+			if r.FromWrite != nil && r.FromWrite.Tag == files.WriteErrorNoWritePermission {
+				return fs.NewErrPermission(dbfs.file(src))
+			}
+			return err
 		}
 	}
 	return dbfs.wrapErr(dest, err)

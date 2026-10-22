@@ -9,6 +9,7 @@ import (
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox"
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox/files"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
 )
@@ -132,4 +133,32 @@ func TestWrapErr(t *testing.T) {
 	err := dbfs.wrapRelocationErr("/a", "/b", fromMissing)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	assert.ErrorContains(t, err, "/a", "the error is about the source")
+}
+
+// TestWrapRelocationErr_FromWrite is the regression test for a move whose
+// source can't be deleted for a missing write permission, which was not
+// mapped to fs.ErrPermission, because wrapErr only reads the write error
+// of the destination.
+func TestWrapRelocationErr_FromWrite(t *testing.T) {
+	ctx := t.Context()
+	dbfs, client := newTestFS(t, nil)
+	require.NoError(t, dbfs.WriteAll(ctx, "/a.txt", []byte("a"), 0))
+	fromWrite := func(write *files.WriteError) files.MoveV2APIError {
+		return files.MoveV2APIError{EndpointError: &files.RelocationError{
+			Tagged:    dropbox.Tagged{Tag: files.RelocationErrorFromWrite},
+			FromWrite: write,
+		}}
+	}
+
+	client.setFailNext("MoveV2", fromWrite(&files.WriteError{Tagged: dropbox.Tagged{Tag: files.WriteErrorNoWritePermission}}))
+	err := dbfs.Move(ctx, "/a.txt", "/b.txt")
+	assert.ErrorIs(t, err, os.ErrPermission)
+	assert.ErrorContains(t, err, "/a.txt", "the error is about the source")
+	assert.Equal(t, "a", string(client.entries["/a.txt"].data))
+
+	// A conflict of the source is no conflict of the destination,
+	// which relocate would replace
+	conflict := fromWrite(conflictError(files.WriteConflictErrorFile))
+	assert.Empty(t, conflictTag(conflict))
+	assert.Equal(t, error(conflict), dbfs.wrapRelocationErr("/a.txt", "/b.txt", conflict), "other errors of the source are returned unchanged")
 }

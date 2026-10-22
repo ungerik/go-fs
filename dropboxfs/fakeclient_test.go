@@ -44,6 +44,7 @@ type fakeClient struct {
 	calls     map[string]int                // number of calls per method
 	muted     int                           // number of muted commits
 	failNext  map[string][]error            // errors of the next calls of a method, nil for success
+	hooks     map[string]func()             // runs once at the next call of a method, see onCall
 }
 
 type fakeEntry struct {
@@ -69,15 +70,21 @@ func newFakeClient() *fakeClient {
 		maxUpload: maxUploadSize,
 		calls:     map[string]int{},
 		failNext:  map[string][]error{},
+		hooks:     map[string]func(){},
 	}
 }
 
-// begin locks the fake, counts the call of method and returns the error
-// of a canceled ctx or the next error set with setFailNext for method.
+// begin locks the fake, counts the call of method, runs the hook set
+// with onCall for method and returns the error of a canceled ctx
+// or the next error set with setFailNext for method.
 // The caller must unlock the fake.
 func (c *fakeClient) begin(ctx context.Context, method string) error {
 	c.mtx.Lock()
 	c.calls[method]++
+	if hook := c.hooks[method]; hook != nil {
+		delete(c.hooks, method)
+		hook()
+	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("Post \"https://api.dropboxapi.com/2/files/%s\": %w", method, err)
 	}
@@ -101,6 +108,16 @@ func (c *fakeClient) setFailNext(method string, errs ...error) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	c.failNext[method] = errs
+}
+
+// onCall makes hook run once at the next call of method, before the call
+// does anything else, like another client changing the account between
+// two calls of the file system. hook runs with the fake locked,
+// so it must change the entries directly instead of calling methods.
+func (c *fakeClient) onCall(method string, hook func()) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.hooks[method] = hook
 }
 
 func (c *fakeClient) nextID() string {

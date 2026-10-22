@@ -1,6 +1,7 @@
 package dropboxfs
 
 import (
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -84,11 +85,9 @@ func (cache *fileInfoCache) Put(path string, info *fs.FileInfo) {
 
 // evictExpired deletes the entries that expired before now.
 func (cache *fileInfoCache) evictExpired(now time.Time) {
-	for key, entry := range cache.infos {
-		if now.After(entry.expires) {
-			delete(cache.infos, key)
-		}
-	}
+	maps.DeleteFunc(cache.infos, func(_ string, entry fileInfoCacheEntry) bool {
+		return now.After(entry.expires)
+	})
 }
 
 // Get returns a copy of the FileInfo for a path, or nil and false
@@ -123,11 +122,8 @@ func (cache *fileInfoCache) Delete(path string) {
 	cache.mtx.Lock()
 	defer cache.mtx.Unlock()
 	key := cacheKey(path)
-	delete(cache.infos, key)
 	prefix := key + "/"
-	for k := range cache.infos {
-		if strings.HasPrefix(k, prefix) {
-			delete(cache.infos, k)
-		}
-	}
+	maps.DeleteFunc(cache.infos, func(k string, _ fileInfoCacheEntry) bool {
+		return k == key || strings.HasPrefix(k, prefix)
+	})
 }

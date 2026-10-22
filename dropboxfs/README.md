@@ -99,7 +99,9 @@ dbxFS, err := dropboxfs.New(ctx, "", &dropboxfs.Options{HTTPClient: client})
   An existing destination folder is an error wrapping `os.ErrExist` for
   `Move` and an `fs.ErrIsDirectory` for `CopyFile`, a folder moved onto a
   file is an `fs.ErrIsNotDirectory`, and a folder moved into itself an error
-  wrapping `os.ErrInvalid`.
+  wrapping `os.ErrInvalid`. The source is checked on the server before the
+  destination file is deleted, so a `CopyFile` of a cached file that became
+  a folder returns an `fs.ErrIsDirectory` and keeps the destination.
 - **Remove.** The Dropbox API deletes folders recursively, so `Remove` checks
   the type of the path on the server, never in the cache, and returns an
   `fs.ErrDirectoryNotEmpty` for a folder with content. A file is only deleted
