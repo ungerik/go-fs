@@ -579,9 +579,11 @@ func (f *fileSystem) moveViaTemp(client *sftp.Client, filePath, destPath string)
 
 // Remove removes a file or an empty directory.
 // A non-empty directory is an fs.ErrDirectoryNotEmpty.
-// The root directory is never removed, that is an error wrapping os.ErrInvalid.
+// The root directory is never removed, that is an error wrapping os.ErrInvalid,
+// also for a relative path like "", "." or "dir/..", which the server
+// resolves against the login directory.
 func (f *fileSystem) Remove(filePath string) error {
-	if path.Clean(filePath) == Separator {
+	if isRoot(filePath) {
 		return f.removeRootErr(context.Background())
 	}
 	return f.run(context.Background(), func(c *conn, noRetry func()) error {
@@ -607,9 +609,10 @@ func (f *fileSystem) Remove(filePath string) error {
 
 // RemoveAll removes the file or directory tree over one connection.
 // Symbolic links are removed, not followed. A missing path is not an error.
-// The root directory is never removed, that is an error wrapping os.ErrInvalid.
+// The root directory is never removed, that is an error wrapping os.ErrInvalid,
+// also for a relative path like "", "." or "dir/..", see Remove.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
-	if path.Clean(filePath) == Separator {
+	if isRoot(filePath) {
 		return f.removeRootErr(ctx)
 	}
 	return f.run(ctx, func(c *conn, _ func()) error {
@@ -622,6 +625,13 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		}
 		return removeAll(ctx, c.sftp, filePath, info)
 	})
+}
+
+// isRoot reports whether filePath, cleaned as an absolute path, is the root
+// directory. A relative path that cleans to "." is the login directory
+// for the server and the root directory of the file system.
+func isRoot(filePath string) bool {
+	return path.Clean(Separator+filePath) == Separator
 }
 
 // removeRootErr returns the error of Remove and RemoveAll for the root

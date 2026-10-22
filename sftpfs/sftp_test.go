@@ -458,6 +458,9 @@ func TestListDirRecursiveSymlink(t *testing.T) {
 // TestRemoveRoot checks that Remove and RemoveAll refuse the root directory
 // with an error wrapping os.ErrInvalid. RemoveAll removed every file of the
 // server, Remove sent the server a request to remove its root directory.
+// The server resolves a relative path like "." or "" against the login
+// directory, which the guards let through as long as they only compared
+// the cleaned path with "/".
 func TestRemoveRoot(t *testing.T) {
 	var removeRequests atomic.Int32
 	s := startTestServer(t, testServerConfig{fail: func(r *sftp.Request) error {
@@ -469,7 +472,7 @@ func TestRemoveRoot(t *testing.T) {
 	f := s.dial(t, nil)
 	writeTestFile(t, f, "/file.txt", "content")
 
-	for _, root := range []string{"/", "//", "/.", "/dir/.."} {
+	for _, root := range []string{"/", "//", "/.", "/dir/..", "", ".", "./", "dir/..", ".."} {
 		err := f.RemoveAll(t.Context(), root)
 		assert.ErrorIs(t, err, os.ErrInvalid, "RemoveAll(%q)", root)
 		assert.ErrorContains(t, err, "can't remove the root directory", "RemoveAll(%q)", root)

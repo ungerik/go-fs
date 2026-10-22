@@ -179,7 +179,8 @@ they are.
   directory lists the files of that directory below the path of the link,
   symbolic links in the tree are not followed. `Remove` and `RemoveAll`
   refuse the root directory `/` with an error wrapping `os.ErrInvalid`
-  without a request to the server.
+  without a request to the server, also as a relative path like `""`, `.`
+  or `dir/..`, which the server would resolve to the login directory.
 - **Permissions.** Unix permission bits, set with `SetPermissions`.
 - **Errors.** Missing files wrap `os.ErrNotExist` (`fs.ErrDoesNotExist`
   with the file URI), `MakeDir` on an existing path wraps `os.ErrExist`,
