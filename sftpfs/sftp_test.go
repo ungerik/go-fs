@@ -77,6 +77,9 @@ func TestMain(m *testing.M) {
 		"-d",
 		"--name", testContainerName,
 		"-p", "127.0.0.1::22",
+		// The test data is kept in memory, so it doesn't depend on free
+		// space on the Docker disk. testuser is the first user of the image.
+		"--tmpfs", testDataDir+":rw,uid=1000,gid=1000,mode=755",
 		testImage,
 	)
 	output, err = runCmd.CombinedOutput()
