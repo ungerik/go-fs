@@ -288,13 +288,79 @@ func TestSymbolicLink(t *testing.T) {
 	assert.ErrorIs(t, f.CreateSymbolicLink("", "/link"), fs.ErrEmptyPath)
 }
 
+// TestSymbolicLink_DriveTargets verifies on the Samba server that a view
+// can't create a symbolic link whose relative target go-smb2 stores as an
+// absolute Windows path. SubFileSystem stores a relative target without
+// ".." verbatim, so "C:x" became `\??\C:x` and the link pointed out of the
+// view. The server rejects symbolic links, the check must come first.
+func TestSymbolicLink_DriveTargets(t *testing.T) {
+	f, _ := dialTestFS(t)
+	dir := fmt.Sprintf("/link-targets-%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = f.RemoveAll(context.Background(), dir) })
+	require.NoError(t, f.MakeAllDirs(dir, 0))
+	view, err := fs.NewSubFileSystem(f, dir, "")
+	require.NoError(t, err)
+
+	for _, target := range []string{"C:x", "C:/Windows/System32", "./C:x", ".//etc/passwd"} {
+		err := view.CreateSymbolicLink(target, "/link")
+		assert.ErrorIs(t, err, os.ErrInvalid, "CreateSymbolicLink(%q)", target)
+	}
+	_, err = f.Lstat(dir + "/link")
+	assert.ErrorIs(t, err, os.ErrNotExist, "no link must have been created")
+}
+
 // TestRemove_Root verifies that the root directory of the share is never removed.
 func TestRemove_Root(t *testing.T) {
 	f, _ := dialTestFS(t)
-	assert.Error(t, f.Remove("/"))
-	assert.Error(t, f.RemoveAll(t.Context(), "/"))
+	assert.ErrorIs(t, f.Remove("/"), os.ErrInvalid)
+	assert.ErrorIs(t, f.RemoveAll(t.Context(), "/"), os.ErrInvalid)
 	assert.ErrorIs(t, f.MakeDir("/", 0), os.ErrExist)
 	assert.NoError(t, f.MakeAllDirs("/", 0))
+}
+
+// Test_fileSystem_RemoveRoot verifies that Remove and RemoveAll refuse the
+// root directory of the share with an error wrapping os.ErrInvalid, like
+// the other file systems, before they need a session.
+func Test_fileSystem_RemoveRoot(t *testing.T) {
+	f := &fileSystem{
+		PathHelper: fsimpl.PathHelper{URIPrefix: "smb://user@example.com/share", Rooted: true},
+	}
+	for _, root := range []string{"/", "//", ".", "/a/.."} {
+		err := f.Remove(root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "Remove(%q)", root)
+		assert.ErrorContains(t, err, "can't remove the root directory", "Remove(%q)", root)
+		err = f.RemoveAll(t.Context(), root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "RemoveAll(%q)", root)
+		assert.ErrorContains(t, err, "can't remove the root directory", "RemoveAll(%q)", root)
+	}
+}
+
+// Test_fileSystem_SymlinkTargets verifies that CreateSymbolicLink rejects the
+// relative targets that go-smb2 doesn't store as relative paths, before it
+// sends a request. go-smb2 replaces "/" with `\` and strips leading `.\`,
+// then it stores a target with ':' as second character, like "C:x", as the
+// absolute Windows path `\??\C:x` and one with a leading `\` as absolute
+// path of the share, and it panics for a target that is empty after that.
+// The file system is closed, so an accepted target is fs.ErrFileSystemClosed.
+func Test_fileSystem_SymlinkTargets(t *testing.T) {
+	f := &fileSystem{
+		PathHelper: fsimpl.PathHelper{URIPrefix: "smb://user@example.com/share", Rooted: true},
+	}
+	f.closed.Store(true)
+
+	for _, target := range []string{
+		"C:x", "c:/x", "C:", "x:", "1:x", "a:b",
+		"./C:x", "././c:/x",
+		".//x", "././//etc/passwd",
+		".", "./", "././", "./.",
+	} {
+		assert.ErrorIs(t, f.CreateSymbolicLink(target, "/link"), os.ErrInvalid, "CreateSymbolicLink(%q)", target)
+	}
+	for _, target := range []string{
+		"x", "../x", "./x", ".hidden", "..", "a/./b", "dir/C:x", "ab:c", "/C:x", "/x", "//x",
+	} {
+		assert.ErrorIs(t, f.CreateSymbolicLink(target, "/link"), fs.ErrFileSystemClosed, "CreateSymbolicLink(%q)", target)
+	}
 }
 
 // TestClosedFileSystem verifies that a closed SMB file system reports

@@ -140,9 +140,11 @@ The file system uses a copy of `Options.Client` with its own
   collection, 405 on `MKCOL` wraps `os.ErrExist`, 401 and 403 wrap
   `os.ErrPermission`. Reading or writing a collection is an
   `fs.ErrIsDirectory`, `Remove` of a collection with members an
-  `fs.ErrDirectoryNotEmpty`. A `207 Multi-Status` answer of `DELETE`, `MOVE`
-  or `COPY` reports members that failed and every other error status becomes
-  a `*webdavfs.StatusError` with the method, file and status.
+  `fs.ErrDirectoryNotEmpty`, `Remove` and `RemoveAll` of the root directory
+  an error wrapping `os.ErrInvalid` without a request. A `207 Multi-Status`
+  answer of `DELETE`, `MOVE` or `COPY` reports members that failed and every
+  other error status becomes a `*webdavfs.StatusError` with the method, file
+  and status.
   After `Close` every method returns `fs.ErrFileSystemClosed`.
 
 ## Testing

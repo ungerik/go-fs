@@ -930,8 +930,9 @@ func (s *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 }
 
 // Remove deletes an object or an empty directory marker.
-// It returns an error wrapping os.ErrNotExist for a missing path
-// and an fs.ErrDirectoryNotEmpty for a directory with content.
+// It returns an error wrapping os.ErrNotExist for a missing path,
+// an fs.ErrDirectoryNotEmpty for a directory with content,
+// and an error wrapping os.ErrInvalid for the root directory.
 func (s *fileSystem) Remove(filePath string) error {
 	client, err := s.getWriteClient()
 	if err != nil {
@@ -954,7 +955,7 @@ func (s *fileSystem) Remove(filePath string) error {
 		return err
 	}
 	if k == "" {
-		return fmt.Errorf("can't remove root directory of %s", s)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, s)
 	}
 	marker := k + Separator
 	out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -980,7 +981,8 @@ func (s *fileSystem) Remove(filePath string) error {
 // RemoveAll deletes the object at filePath and every object below it
 // (including directory markers) with batched DeleteObjects requests.
 // A missing path is not an error. The root directory can't be removed,
-// that would delete every object of the bucket.
+// that would delete every object of the bucket, it is an error
+// wrapping os.ErrInvalid.
 func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	client, err := s.getWriteClient()
 	if err != nil {
@@ -994,7 +996,7 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	}
 	k := key(filePath)
 	if k == "" {
-		return fmt.Errorf("can't remove root directory of %s", s)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, s)
 	}
 	batch := []types.ObjectIdentifier{{Key: aws.String(k)}}
 	deleteBatch := func() error {

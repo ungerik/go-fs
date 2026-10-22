@@ -177,8 +177,9 @@ they are.
   `os.ErrInvalid`.
 - **Recursive operations.** `ListDirRecursive` of a symbolic link to a
   directory lists the files of that directory below the path of the link,
-  symbolic links in the tree are not followed. `RemoveAll` refuses the root
-  directory `/` with an error wrapping `os.ErrInvalid`.
+  symbolic links in the tree are not followed. `Remove` and `RemoveAll`
+  refuse the root directory `/` with an error wrapping `os.ErrInvalid`
+  without a request to the server.
 - **Permissions.** Unix permission bits, set with `SetPermissions`.
 - **Errors.** Missing files wrap `os.ErrNotExist` (`fs.ErrDoesNotExist`
   with the file URI), `MakeDir` on an existing path wraps `os.ErrExist`,

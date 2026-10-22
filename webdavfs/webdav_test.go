@@ -620,6 +620,28 @@ func TestRemove_NonEmptyDir(t *testing.T) {
 	assert.True(t, davFS.RootDir().Join("dir", "a.txt").IsDir())
 }
 
+// TestRemoveRoot checks that Remove and RemoveAll of the root fail with an
+// error wrapping os.ErrInvalid, like the other file systems, without a
+// request and without deleting anything.
+func TestRemoveRoot(t *testing.T) {
+	ctx := t.Context()
+	srv := newStyledServer(t, styleXNet, "", true)
+	davFS := newTestFS(t, srv.Server, "")
+	require.NoError(t, davFS.RootDir().Join("keep.txt").WriteAllString(ctx, "keep"))
+	requestsBefore := len(srv.requests())
+
+	for _, root := range []string{"/", "//", "/.", "/dir/.."} {
+		err := davFS.(fs.WriteFileSystem).Remove(root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "Remove(%q)", root)
+		assert.ErrorContains(t, err, "can't remove root directory", "Remove(%q)", root)
+		err = davFS.(fs.RemoveAllFileSystem).RemoveAll(ctx, root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "RemoveAll(%q)", root)
+		assert.ErrorContains(t, err, "can't remove root directory", "RemoveAll(%q)", root)
+	}
+	assert.Len(t, srv.requests(), requestsBefore, "removing the root must not send a request")
+	assert.True(t, davFS.RootDir().Join("keep.txt").Exists(), "removing the root must not delete anything")
+}
+
 // TestStat_ApacheRedirect is the regression test for the 301 redirect
 // of a collection URL without trailing slash, which Go's client followed
 // as GET, so Stat of a directory failed.

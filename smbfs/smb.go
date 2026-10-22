@@ -212,6 +212,37 @@ func checkPath(filePath string) error {
 	return nil
 }
 
+// checkLinkTarget checks the target of a symbolic link with checkPath and
+// returns an error wrapping os.ErrInvalid for a relative target that
+// go-smb2 doesn't store as a relative path.
+//
+// Share.Symlink of go-smb2 converts "/" to `\` and strips leading `.\`.
+// Then it stores a target with ':' as second character, like "C:x" or
+// "C:/x", as the absolute Windows path `\??\C:x`, a target with a leading
+// `\`, like ".//x", as absolute path, and panics for an empty target,
+// like ".". For the file system these are relative targets, which
+// SubFileSystem for example stores verbatim, so the link would point out
+// of the directory of the view.
+func checkLinkTarget(targetPath string) error {
+	if err := checkPath(targetPath); err != nil {
+		return err
+	}
+	if strings.HasPrefix(targetPath, Separator) {
+		return nil // An absolute target is absolute for go-smb2 too
+	}
+	stripped := targetPath
+	for strings.HasPrefix(stripped, "./") {
+		stripped = stripped[2:]
+	}
+	switch {
+	case stripped == "" || stripped == ".":
+		return fmt.Errorf("%w: smbfs can't store the symbolic link target %q", os.ErrInvalid, targetPath)
+	case strings.HasPrefix(stripped, Separator) || (len(stripped) >= 2 && stripped[1] == ':'):
+		return fmt.Errorf("%w: smbfs would store the relative symbolic link target %q as an absolute path", os.ErrInvalid, targetPath)
+	}
+	return nil
+}
+
 // sharePath checks a file system path with checkPath and returns
 // its share relative path, the empty string for the root.
 // Every path is translated with it before it is sent to the server.
@@ -570,6 +601,7 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 
 // Remove removes a file or an empty directory.
 // A non-empty directory is an fs.ErrDirectoryNotEmpty.
+// The root directory is never removed, that is an error wrapping os.ErrInvalid.
 func (f *fileSystem) Remove(filePath string) error {
 	p, err := sharePath(filePath)
 	if err != nil {
@@ -579,7 +611,7 @@ func (f *fileSystem) Remove(filePath string) error {
 		return fs.ErrFileSystemClosed
 	}
 	if p == "" {
-		return fmt.Errorf("smbfs: can't remove the root directory of %s", f)
+		return fmt.Errorf("%w: smbfs: can't remove the root directory of %s", os.ErrInvalid, f)
 	}
 	return f.do(context.Background(), func(share *smb2.Share, noRetry func()) error {
 		noRetry()
@@ -588,6 +620,7 @@ func (f *fileSystem) Remove(filePath string) error {
 }
 
 // RemoveAll removes a file or directory tree. A missing path is not an error.
+// The root directory is never removed, that is an error wrapping os.ErrInvalid.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	p, err := sharePath(filePath)
 	if err != nil {
@@ -597,7 +630,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		return fs.ErrFileSystemClosed
 	}
 	if p == "" {
-		return fmt.Errorf("smbfs: can't remove the root directory of %s", f)
+		return fmt.Errorf("%w: smbfs: can't remove the root directory of %s", os.ErrInvalid, f)
 	}
 	return f.do(ctx, func(share *smb2.Share, _ func()) error {
 		return f.wrapErr(filePath, fs.RemoveErrDoesNotExist(share.RemoveAll(p)))
@@ -606,11 +639,15 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 
 // CreateSymbolicLink creates a symbolic link at linkPath to targetPath,
 // which is stored as given, with the separator of SMB. A target with
-// a backslash is an error wrapping os.ErrInvalid like such a path.
+// a backslash is an error wrapping os.ErrInvalid like such a path,
+// and so is a relative target that SMB would store as an absolute path:
+// one that starts with a drive like "C:x" or "C:/x", also after "./"
+// elements, one that starts with "./" followed by "/", like ".//x",
+// and the targets "." and "./" that go-smb2 can't store.
 // Most servers reject symbolic links over SMB (Samba without unix
 // extensions, Windows without privileges), which is an fs.ErrUnsupported.
 func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
-	if err := checkPath(targetPath); err != nil {
+	if err := checkLinkTarget(targetPath); err != nil {
 		return err
 	}
 	p, err := sharePath(linkPath)

@@ -11,7 +11,6 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -56,11 +55,28 @@ func returnsWithin(t *testing.T, d time.Duration, f func() error) error {
 	}
 }
 
-// waitsForConnection reports whether a goroutine waits in acquire
-// for the shared connection of a file system.
-func waitsForConnection() bool {
-	buf := make([]byte, 1<<20)
-	return bytes.Contains(buf[:runtime.Stack(buf, true)], []byte("ftpfs.(*fileSystem).acquire("))
+// usedContext is the context of an operation that reports when the
+// operation uses it for the first time, with Err or Done. An operation
+// checks that the file system is open before that, so after the report
+// it waits for the shared connection, or gets it if it is free.
+type usedContext struct {
+	context.Context
+	once sync.Once
+	used chan struct{}
+}
+
+func newUsedContext(ctx context.Context) *usedContext {
+	return &usedContext{Context: ctx, used: make(chan struct{})}
+}
+
+func (c *usedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.used) })
+	return c.Context.Done()
+}
+
+func (c *usedContext) Err() error {
+	c.once.Do(func() { close(c.used) })
+	return c.Context.Err()
 }
 
 // TestDial_Context verifies that the context limits the server greeting
@@ -404,16 +420,24 @@ func TestClose_AbortsOperation(t *testing.T) {
 	srv.configure(func(s *testFTPServer) { s.hang = "MLST" })
 
 	hung := make(chan error, 2)
-	stat := func() {
+	go func() {
 		_, err := ftpFS.Stat("/file.txt")
 		hung <- err
-	}
-	go stat()
-	// The first Stat holds the connection and waits for the reply
+	}()
+	// The Stat holds the connection and waits for the reply
 	require.Eventually(t, func() bool { return srv.count("MLST") == 1 }, 5*time.Second, time.Millisecond)
-	go stat()
-	// The second Stat waits for the connection
-	require.Eventually(t, waitsForConnection, 5*time.Second, time.Millisecond)
+	ctx := newUsedContext(t.Context())
+	go func() {
+		_, err := ftpFS.ReadAll(ctx, "/file.txt")
+		hung <- err
+	}()
+	// The ReadAll is past the check that the file system is open
+	// and waits for the connection, or will by the time of Close
+	select {
+	case <-ctx.used:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReadAll did not use its context")
+	}
 
 	// Operations that don't need the connection don't wait for it
 	err := returnsWithin(t, time.Second, func() error {
@@ -431,7 +455,7 @@ func TestClose_AbortsOperation(t *testing.T) {
 		case err := <-hung:
 			assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 		case <-time.After(3 * time.Second):
-			t.Fatal("Stat did not return after Close")
+			t.Fatal("an operation did not return after Close")
 		}
 	}
 }

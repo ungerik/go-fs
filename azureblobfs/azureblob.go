@@ -577,7 +577,16 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	}, nil
 }
 
-// ReadAll downloads the blob.
+// maxSizeHint caps the buffer that ReadAll allocates up front for the
+// Content-Length of a download, so that a huge blob or a wrong header
+// can't allocate a huge buffer before any data arrived, which would
+// end the process with an out-of-memory error that no context can cancel.
+// A longer body grows the buffer while it is read.
+const maxSizeHint = 16 << 20 // 16 MiB
+
+// ReadAll downloads the blob. The buffer is allocated once for the
+// Content-Length of the download, up to 16 MiB, a larger blob grows it.
+// A blob that is larger than an int can address is an error.
 func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	if err := f.checkClosed(); err != nil {
 		return nil, err
@@ -597,13 +606,13 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, redactErr(err)
 	}
 	defer response.Body.Close()
-	// Allocate the buffer once for the size of the blob,
-	// ctx cancels reading the body
-	hint := bytes.MinRead
-	if size := deref(response.ContentLength); size > 0 && size <= math.MaxInt-bytes.MinRead {
-		hint += int(size)
+	size := max(deref(response.ContentLength), 0)
+	if size > math.MaxInt {
+		return nil, fmt.Errorf("azureblobfs: %s is too large to read into memory", f.file(name))
 	}
-	buf := bytes.NewBuffer(make([]byte, 0, hint))
+	// Allocate the buffer once for the size of the blob up to maxSizeHint,
+	// ctx cancels reading the body
+	buf := bytes.NewBuffer(make([]byte, 0, int(min(size, maxSizeHint))+bytes.MinRead))
 	if _, err := buf.ReadFrom(response.Body); err != nil {
 		return nil, redactErr(err)
 	}
@@ -773,8 +782,9 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 }
 
 // Remove deletes a blob or an empty directory marker.
-// It returns an error wrapping os.ErrNotExist for a missing path
-// and an fs.ErrDirectoryNotEmpty for a directory with content.
+// It returns an error wrapping os.ErrNotExist for a missing path,
+// an fs.ErrDirectoryNotEmpty for a directory with content,
+// and an error wrapping os.ErrInvalid for the root directory.
 func (f *fileSystem) Remove(filePath string) error {
 	if err := f.checkWritable(); err != nil {
 		return err
@@ -793,17 +803,23 @@ func (f *fileSystem) Remove(filePath string) error {
 		return redactErr(err)
 	}
 	if name == "" {
-		return fmt.Errorf("can't remove root directory of %s", f)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
 	}
+	// The directory is empty if no blob but its marker has the prefix.
+	// Azure can return pages with fewer blobs than MaxResults, even empty
+	// ones, with a continuation marker, so the listing is read until it
+	// has a blob besides the marker or ends.
 	marker := name + Separator
 	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(marker), MaxResults: new(int32(2))})
-	page, err := pager.NextPage(ctx)
-	if err != nil {
-		return redactErr(err)
-	}
-	for _, item := range page.Segment.BlobItems {
-		if deref(item.Name) != marker {
-			return fs.NewErrDirectoryNotEmpty(info.File)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return redactErr(err)
+		}
+		for _, item := range page.Segment.BlobItems {
+			if deref(item.Name) != marker {
+				return fs.NewErrDirectoryNotEmpty(info.File)
+			}
 		}
 	}
 	_, err = f.client.NewBlobClient(marker).Delete(ctx, nil)
@@ -815,7 +831,8 @@ func (f *fileSystem) Remove(filePath string) error {
 
 // RemoveAll deletes the blob at filePath and every blob below it.
 // A missing path is not an error. The root directory can't be removed,
-// that would delete every blob of the container.
+// that would delete every blob of the container, it is an error
+// wrapping os.ErrInvalid.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if err := f.checkWritable(); err != nil {
 		return err
@@ -825,7 +842,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	}
 	name := blobName(filePath)
 	if name == "" {
-		return fmt.Errorf("can't remove root directory of %s", f)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
 	}
 	_, err := f.client.NewBlobClient(name).Delete(ctx, nil)
 	if err != nil && !isNotFound(err) {

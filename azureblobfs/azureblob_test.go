@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -477,28 +478,18 @@ func TestTouch_CreatedConcurrently(t *testing.T) {
 	assert.Equal(t, "concurrent", string(data), "Touch must not overwrite the blob")
 }
 
-// TestTouch_EmptyListingPage checks that Touch reads on when Azure returns
-// an empty listing page with a continuation marker, which it may do for
-// any listing. Touch read only the first page, so it took an existing blob
-// for a missing one, which it replaced with an empty blob, and a directory
-// for a missing path, where it created an empty blob. The policy of the
-// client answers the first request of every listing with an empty page
-// and sends the next one without the marker.
-func TestTouch_EmptyListingPage(t *testing.T) {
+// emptyFirstPagePolicy returns a policy that answers the first request of
+// every listing with a prefix that starts with prefix with an empty page
+// and a continuation marker, which Azure may return for any listing.
+// It sends the request for the next page without the marker, so that
+// Azurite answers it with the first real page. emptyPages counts the
+// empty pages that the policy returned.
+func emptyFirstPagePolicy(prefix string, emptyPages *atomic.Int32) requestPolicy {
 	const fakeMarker = "gofs-test-empty-page"
-	blobFS := newTestFileSystem(t, nil)
-	client := testClient(t)
-	ctx := t.Context()
-	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/touch-pages") })
-	for _, name := range []string{"touch-pages/keep.txt", "touch-pages/dir/file.txt"} {
-		_, err := client.NewBlockBlobClient(name).UploadBuffer(ctx, []byte("keep"), nil)
-		require.NoError(t, err)
-	}
-	var emptyPages atomic.Int32
-	paging := newPolicyFileSystem(t, func(req *policy.Request) (*http.Response, error) {
+	return func(req *policy.Request) (*http.Response, error) {
 		raw := req.Raw()
 		query := raw.URL.Query()
-		if query.Get("comp") != "list" || !strings.HasPrefix(query.Get("prefix"), "touch-pages/") {
+		if query.Get("comp") != "list" || !strings.HasPrefix(query.Get("prefix"), prefix) {
 			return req.Next()
 		}
 		if query.Get("marker") == fakeMarker {
@@ -516,7 +507,25 @@ func TestTouch_EmptyListingPage(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(body)),
 			Request:    raw,
 		}, nil
-	})
+	}
+}
+
+// TestTouch_EmptyListingPage checks that Touch reads on when Azure returns
+// an empty listing page with a continuation marker, which it may do for
+// any listing. Touch read only the first page, so it took an existing blob
+// for a missing one, which it replaced with an empty blob, and a directory
+// for a missing path, where it created an empty blob.
+func TestTouch_EmptyListingPage(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	client := testClient(t)
+	ctx := t.Context()
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/touch-pages") })
+	for _, name := range []string{"touch-pages/keep.txt", "touch-pages/dir/file.txt"} {
+		_, err := client.NewBlockBlobClient(name).UploadBuffer(ctx, []byte("keep"), nil)
+		require.NoError(t, err)
+	}
+	var emptyPages atomic.Int32
+	paging := newPolicyFileSystem(t, emptyFirstPagePolicy("touch-pages/", &emptyPages))
 
 	before, err := blobFS.Stat("/touch-pages/keep.txt")
 	require.NoError(t, err)
@@ -536,19 +545,50 @@ func TestTouch_EmptyListingPage(t *testing.T) {
 	assert.Positive(t, emptyPages.Load(), "the policy must have returned empty pages")
 }
 
-// TestRemoveAllRoot checks on Azurite that RemoveAll of the root fails
-// and keeps the blobs, it used to delete every blob of the container.
-func TestRemoveAllRoot(t *testing.T) {
+// TestRemove_EmptyListingPage checks that Remove reads on when Azure
+// returns an empty listing page with a continuation marker. Remove decided
+// from the first page whether a directory is empty, so for a directory
+// with content it deleted only the directory marker and reported success.
+func TestRemove_EmptyListingPage(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	client := testClient(t)
+	ctx := t.Context()
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/remove-pages") })
+	require.NoError(t, blobFS.MakeDir("/remove-pages/dir", 0))
+	_, err := client.NewBlockBlobClient("remove-pages/dir/file.txt").UploadBuffer(ctx, []byte("keep"), nil)
+	require.NoError(t, err)
+	require.NoError(t, blobFS.MakeDir("/remove-pages/empty", 0))
+	var emptyPages atomic.Int32
+	paging := newPolicyFileSystem(t, emptyFirstPagePolicy("remove-pages/", &emptyPages))
+
+	err = paging.Remove("/remove-pages/dir")
+	assert.ErrorIs(t, err, fs.ErrDirectoryNotEmpty{}, "Remove of a directory with content")
+	marker, err := blobFS.blobItem(ctx, "remove-pages/dir/")
+	require.NoError(t, err)
+	assert.NotNil(t, marker, "Remove must keep the marker of a directory with content")
+
+	// The marker of an empty directory is the only blob of the listing
+	require.NoError(t, paging.Remove("/remove-pages/empty"), "Remove of an empty directory")
+	_, err = blobFS.Stat("/remove-pages/empty")
+	assert.ErrorIs(t, err, os.ErrNotExist, "Remove must delete the marker of an empty directory")
+	assert.Positive(t, emptyPages.Load(), "the policy must have returned empty pages")
+}
+
+// TestRemoveRoot checks on Azurite that Remove and RemoveAll of the root
+// fail with an error wrapping os.ErrInvalid and keep the blobs.
+// RemoveAll used to delete every blob of the container.
+func TestRemoveRoot(t *testing.T) {
 	blobFS := newTestFileSystem(t, nil)
 	ctx := t.Context()
 	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/remove-root") })
 	require.NoError(t, blobFS.WriteAll(ctx, "/remove-root/keep.txt", []byte("keep"), 0))
 
 	for _, root := range []string{"/", "//"} {
-		assert.Error(t, blobFS.RemoveAll(ctx, root), "RemoveAll(%q)", root)
+		assert.ErrorIs(t, blobFS.RemoveAll(ctx, root), os.ErrInvalid, "RemoveAll(%q)", root)
+		assert.ErrorIs(t, blobFS.Remove(root), os.ErrInvalid, "Remove(%q)", root)
 	}
 	data, err := blobFS.ReadAll(ctx, "/remove-root/keep.txt")
-	require.NoError(t, err, "RemoveAll of the root must not delete any blob")
+	require.NoError(t, err, "removing the root must not delete any blob")
 	assert.Equal(t, "keep", string(data))
 }
 
@@ -565,18 +605,74 @@ func newHTTPTestFileSystem(t *testing.T, handler http.HandlerFunc) *fileSystem {
 	return f.(*fileSystem)
 }
 
-// TestRemoveAllRootOffline checks that RemoveAll refuses the root without
+// TestRemoveRootOffline checks that Remove and RemoveAll refuse the root
+// with an error wrapping os.ErrInvalid, like the other file systems, without
 // any request. The test server answers every request with an error.
-func TestRemoveAllRootOffline(t *testing.T) {
+func TestRemoveRootOffline(t *testing.T) {
 	var requests atomic.Int32
 	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		w.WriteHeader(http.StatusNotImplemented)
 	})
 	for _, root := range []string{"/", "//"} {
-		assert.ErrorContains(t, blobFS.RemoveAll(t.Context(), root), "can't remove root directory", "RemoveAll(%q)", root)
+		err := blobFS.RemoveAll(t.Context(), root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "RemoveAll(%q)", root)
+		assert.ErrorContains(t, err, "can't remove root directory", "RemoveAll(%q)", root)
+		err = blobFS.Remove(root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "Remove(%q)", root)
+		assert.ErrorContains(t, err, "can't remove root directory", "Remove(%q)", root)
 	}
-	assert.Zero(t, requests.Load(), "RemoveAll of the root must not send a request")
+	assert.Zero(t, requests.Load(), "removing the root must not send a request")
+}
+
+// transportFunc is the transport of a test client,
+// which answers every request itself.
+type transportFunc func(req *http.Request) (*http.Response, error)
+
+func (f transportFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
+
+// newTransportFileSystem returns a file system for a container whose
+// client sends every request to the transport t, so that a test runs
+// offline and can send responses that a test server can't, like a
+// Content-Length that doesn't match the body.
+func newTransportFileSystem(t *testing.T, transport transportFunc) *fileSystem {
+	t.Helper()
+	client, err := container.NewClientWithNoCredential("https://account.blob.core.windows.net/container", &container.ClientOptions{
+		ClientOptions: azcore.ClientOptions{
+			Transport: transport,
+			Retry:     policy.RetryOptions{MaxRetries: -1},
+		},
+	})
+	require.NoError(t, err)
+	f, err := New(t.Context(), client, &Options{SkipContainerCheck: true})
+	require.NoError(t, err)
+	return f.(*fileSystem)
+}
+
+// TestReadAllCapsSizeHint checks that ReadAll allocates its buffer for at
+// most maxSizeHint of the Content-Length before any data arrived. It allocated
+// the whole Content-Length, so a huge blob or a wrong header made the
+// process die of an out-of-memory error at once, which no context can
+// cancel. The transport announces 1 GiB and the largest int, but sends
+// a short body, which ReadAll must read completely.
+func TestReadAllCapsSizeHint(t *testing.T) {
+	const body = "a short body"
+	for _, contentLength := range []int64{1 << 30, math.MaxInt} {
+		blobFS := newTransportFileSystem(t, func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				Status:        "200 OK",
+				StatusCode:    http.StatusOK,
+				Header:        http.Header{"Content-Length": {strconv.FormatInt(contentLength, 10)}},
+				ContentLength: contentLength,
+				Body:          io.NopCloser(strings.NewReader(body)),
+				Request:       req,
+			}, nil
+		})
+		read, err := blobFS.ReadAll(t.Context(), "/huge.bin")
+		require.NoError(t, err, "Content-Length %d", contentLength)
+		assert.Equal(t, body, string(read), "Content-Length %d", contentLength)
+		assert.LessOrEqual(t, cap(read), maxSizeHint+bytes.MinRead, "Content-Length %d must not allocate more than the cap", contentLength)
+	}
 }
 
 // TestReadAllPreallocates checks that ReadAll reads into a buffer of the

@@ -577,7 +577,11 @@ func (f *fileSystem) moveViaTemp(client *sftp.Client, filePath, destPath string)
 
 // Remove removes a file or an empty directory.
 // A non-empty directory is an fs.ErrDirectoryNotEmpty.
+// The root directory is never removed, that is an error wrapping os.ErrInvalid.
 func (f *fileSystem) Remove(filePath string) error {
+	if path.Clean(filePath) == Separator {
+		return f.removeRootErr(context.Background())
+	}
 	return f.run(context.Background(), func(c *conn, noRetry func()) error {
 		info, err := c.sftp.Lstat(filePath)
 		if err != nil {
@@ -604,10 +608,7 @@ func (f *fileSystem) Remove(filePath string) error {
 // The root directory is never removed, that is an error wrapping os.ErrInvalid.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if path.Clean(filePath) == Separator {
-		if err := f.checkOpen(ctx); err != nil {
-			return err
-		}
-		return fmt.Errorf("%w: can't remove the root directory of %s", os.ErrInvalid, f)
+		return f.removeRootErr(ctx)
 	}
 	return f.run(ctx, func(c *conn, _ func()) error {
 		info, err := c.sftp.Lstat(filePath)
@@ -619,6 +620,17 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		}
 		return removeAll(ctx, c.sftp, filePath, info)
 	})
+}
+
+// removeRootErr returns the error of Remove and RemoveAll for the root
+// directory, which is never removed: fs.ErrFileSystemClosed after Close
+// and the error of a done ctx like for every other path, else an error
+// wrapping os.ErrInvalid. No request is sent to the server.
+func (f *fileSystem) removeRootErr(ctx context.Context) error {
+	if err := f.checkOpen(ctx); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: can't remove the root directory of %s", os.ErrInvalid, f)
 }
 
 // removeAll removes path with the Lstat info recursively.

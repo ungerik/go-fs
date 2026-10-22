@@ -825,21 +825,25 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 }
 
 // Remove deletes a file or an empty collection.
-// It returns an fs.ErrDirectoryNotEmpty for a collection with members.
+// It returns an fs.ErrDirectoryNotEmpty for a collection with members
+// and an error wrapping os.ErrInvalid for the root directory.
 func (f *fileSystem) Remove(filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
 	ctx := context.Background()
 	filePath = cleanPath(filePath)
+	if filePath == "/" {
+		if err := f.check(ctx); err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
+	}
 	info, err := f.stat(ctx, filePath)
 	if err != nil {
 		return err
 	}
 	if info.IsDir {
-		if filePath == "/" {
-			return fmt.Errorf("can't remove root directory of %s", f)
-		}
 		infos, err := f.propfind(ctx, filePath, "1", true)
 		if err != nil {
 			return err
@@ -856,7 +860,8 @@ func (f *fileSystem) Remove(filePath string) error {
 }
 
 // RemoveAll deletes a file or a collection with its content.
-// A missing path is not an error.
+// A missing path is not an error. The root directory can't be removed,
+// that is an error wrapping os.ErrInvalid.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
@@ -866,7 +871,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	}
 	filePath = cleanPath(filePath)
 	if filePath == "/" {
-		return fmt.Errorf("can't remove root directory of %s", f)
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
 	}
 	info, err := f.stat(ctx, filePath)
 	if err != nil {

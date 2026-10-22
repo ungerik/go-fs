@@ -69,6 +69,8 @@ func TestClosedFileSystem(t *testing.T) {
 
 	err = f.Remove("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	err = f.Remove("/")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "Remove of the root directory")
 
 	err = f.ListDir(t.Context(), "/dir", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)

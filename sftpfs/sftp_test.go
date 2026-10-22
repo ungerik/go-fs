@@ -455,18 +455,29 @@ func TestListDirRecursiveSymlink(t *testing.T) {
 	assert.ElementsMatch(t, []fs.File{f.JoinCleanFile(root, "link/a.txt"), f.JoinCleanFile(root, "link/sub/b.txt")}, listed)
 }
 
-// TestRemoveAllRoot checks that RemoveAll refuses the root directory
-// instead of removing every file of the server.
-func TestRemoveAllRoot(t *testing.T) {
-	s := startTestServer(t, testServerConfig{})
+// TestRemoveRoot checks that Remove and RemoveAll refuse the root directory
+// with an error wrapping os.ErrInvalid. RemoveAll removed every file of the
+// server, Remove sent the server a request to remove its root directory.
+func TestRemoveRoot(t *testing.T) {
+	var removeRequests atomic.Int32
+	s := startTestServer(t, testServerConfig{fail: func(r *sftp.Request) error {
+		if r.Method == "Rmdir" || r.Method == "Remove" {
+			removeRequests.Add(1)
+		}
+		return nil
+	}})
 	f := s.dial(t, nil)
 	writeTestFile(t, f, "/file.txt", "content")
 
 	for _, root := range []string{"/", "//", "/.", "/dir/.."} {
 		err := f.RemoveAll(t.Context(), root)
-		assert.ErrorIs(t, err, os.ErrInvalid, root)
-		assert.ErrorContains(t, err, "can't remove the root directory", root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "RemoveAll(%q)", root)
+		assert.ErrorContains(t, err, "can't remove the root directory", "RemoveAll(%q)", root)
+		err = f.Remove(root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "Remove(%q)", root)
+		assert.ErrorContains(t, err, "can't remove the root directory", "Remove(%q)", root)
 	}
+	assert.Zero(t, removeRequests.Load(), "removing the root must not send a remove request")
 	_, err := f.Stat("/file.txt")
 	assert.NoError(t, err, "the files of the root directory must not be removed")
 }

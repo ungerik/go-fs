@@ -105,13 +105,17 @@ messages of the errors it returns, so they don't leak into logs.
   an existing path wraps `os.ErrExist`, `ListDir` of a missing directory
   wraps `os.ErrNotExist`, `Remove` of a directory with content returns
   `fs.ErrDirectoryNotEmpty`, and `RemoveAll` deletes everything below a
-  prefix; it refuses the root directory, which would delete every blob of
+  prefix. `Remove` and `RemoveAll` refuse the root directory with an error
+  wrapping `os.ErrInvalid`; `RemoveAll` of it would delete every blob of
   the container. Writing or copying onto a directory returns `fs.ErrIsDirectory`
   instead of creating a blob that would turn the directory into a file.
 - **Native operations.** `ReadAll`, `WriteAll`, `OpenReadWriter`, `Touch`,
   `RemoveAll`, `ListDirRecursive` and `CopyFile` are native, and readers
   seek with range requests; everything else uses the generic emulation of
-  the `fs` package, `Move` and `Rename` copy and delete.
+  the `fs` package, `Move` and `Rename` copy and delete. `ReadAll` allocates
+  its buffer once for the `Content-Length` of the download, up to 16 MiB,
+  so a huge blob grows the buffer while it is read instead of allocating
+  all of it before the first byte arrived.
 - **Streaming writes.** `OpenWriter` streams the written data into an
   upload: blocks of 4 MiB are staged while the data is written and committed
   on `Close`, smaller data is uploaded with one request on `Close`. Memory

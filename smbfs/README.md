@@ -125,17 +125,23 @@ and the requests of open file handles, and afterwards every method returns
   file (`fs.ErrIsNotDirectory`), and a directory can't be moved into itself
   (`os.ErrInvalid`).
 - **Symbolic links.** `CreateSymbolicLink` stores the target as given and
-  `ReadSymbolicLink` returns it as stored. Most servers reject symbolic
-  links over SMB (Samba without unix extensions, Windows without the
-  privilege), which is an `fs.ErrUnsupported`.
+  `ReadSymbolicLink` returns it as stored. A relative target that SMB would
+  store as an absolute path is an error wrapping `os.ErrInvalid`: one that
+  starts with a drive like `C:x` or `C:/x` (go-smb2 stores `\??\C:x`), also
+  after `./` elements, and one like `.//x`, which go-smb2 cleans to `\x`;
+  so are `.` and `./`, which go-smb2 can't store. A `SubFileSystem` stores
+  relative targets verbatim, such a link would point out of its directory.
+  Most servers reject symbolic links over SMB (Samba without unix
+  extensions, Windows without the privilege), which is an `fs.ErrUnsupported`.
 - **Permissions.** SMB stores a read-only attribute, not Unix permission
   bits, so only the user write bit round-trips through `SetPermissions`.
 - **Errors.** Missing files wrap `os.ErrNotExist`, `MakeDir` on an existing
   path wraps `os.ErrExist`, access denied wraps `os.ErrPermission`, reading
   or writing a directory is an `fs.ErrIsDirectory`, removing a non-empty
-  directory is an `fs.ErrDirectoryNotEmpty`, and after `Close` every method
-  returns `fs.ErrFileSystemClosed`, also `Remove` and `RemoveAll` of the
-  root directory, which are errors otherwise.
+  directory is an `fs.ErrDirectoryNotEmpty`, `Remove` and `RemoveAll` of the
+  root directory are errors wrapping `os.ErrInvalid`, and after `Close` every
+  method returns `fs.ErrFileSystemClosed`, also `Remove` and `RemoveAll` of
+  the root directory.
 
 ## Testing
 

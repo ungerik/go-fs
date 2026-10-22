@@ -459,10 +459,11 @@ func httptestClient(t *testing.T, handler http.HandlerFunc) *s3.Client {
 	})
 }
 
-// TestRemoveAllRootOffline checks that RemoveAll refuses the root without
-// any request: with the empty key prefix it deleted every object of the
-// bucket. The test server answers every request with an error.
-func TestRemoveAllRootOffline(t *testing.T) {
+// TestRemoveRootOffline checks that Remove and RemoveAll refuse the root
+// with an error wrapping os.ErrInvalid, like the other file systems,
+// without any request: with the empty key prefix RemoveAll deleted every
+// object of the bucket. The test server answers every request with an error.
+func TestRemoveRootOffline(t *testing.T) {
 	var requests atomic.Int32
 	client := httptestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -473,9 +474,13 @@ func TestRemoveAllRootOffline(t *testing.T) {
 
 	for _, root := range []string{"/", "//"} {
 		err := f.(fs.RemoveAllFileSystem).RemoveAll(t.Context(), root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "RemoveAll(%q)", root)
 		assert.ErrorContains(t, err, "can't remove root directory", "RemoveAll(%q)", root)
+		err = f.(fs.WriteFileSystem).Remove(root)
+		assert.ErrorIs(t, err, os.ErrInvalid, "Remove(%q)", root)
+		assert.ErrorContains(t, err, "can't remove root directory", "Remove(%q)", root)
 	}
-	assert.Zero(t, requests.Load(), "RemoveAll of the root must not send a request")
+	assert.Zero(t, requests.Load(), "removing the root must not send a request")
 }
 
 // TestReadAllPreallocates checks that ReadAll of an object below the
@@ -499,9 +504,10 @@ func TestReadAllPreallocates(t *testing.T) {
 	assert.LessOrEqual(t, cap(read), len(data)+bytes.MinRead, "the buffer must be allocated for the size of the object")
 }
 
-// TestRemoveAllRoot checks on S3Mock that RemoveAll of the root fails
-// and keeps the objects, it used to delete every object of the bucket.
-func TestRemoveAllRoot(t *testing.T) {
+// TestRemoveRoot checks on S3Mock that Remove and RemoveAll of the root
+// fail with an error wrapping os.ErrInvalid and keep the objects.
+// RemoveAll used to delete every object of the bucket.
+func TestRemoveRoot(t *testing.T) {
 	f, client := newTestFileSystem(t, nil)
 	ctx := t.Context()
 	dir := testDataDir + "/remove-root"
@@ -509,10 +515,11 @@ func TestRemoveAllRoot(t *testing.T) {
 	putObject(t, client, dir+"/keep.txt", "keep")
 
 	for _, root := range []string{"/", "//"} {
-		assert.Error(t, f.RemoveAll(ctx, root), "RemoveAll(%q)", root)
+		assert.ErrorIs(t, f.RemoveAll(ctx, root), os.ErrInvalid, "RemoveAll(%q)", root)
+		assert.ErrorIs(t, f.Remove(root), os.ErrInvalid, "Remove(%q)", root)
 	}
 	data, err := f.ReadAll(ctx, "/"+dir+"/keep.txt")
-	require.NoError(t, err, "RemoveAll of the root must not delete any object")
+	require.NoError(t, err, "removing the root must not delete any object")
 	assert.Equal(t, "keep", string(data))
 }
 
