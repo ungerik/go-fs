@@ -561,8 +561,8 @@ the same files again or the whole disk:
   supports symbolic links, a move keeps every link a link, like `os.Rename`.
   Moving a link onto the file it points to is an error wrapping
   `os.ErrInvalid`, like `mv` reports "are the same file", on the local and the
-  in-memory file system and with the copy-then-delete move of file systems
-  without a native `Move`.
+  in-memory file system, with the native `Move` of `sftpfs` and `smbfs`, and
+  with the copy-then-delete move of file systems without a native `Move`.
 
 Extended attributes
 -------------------

@@ -566,6 +566,15 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 // source is a file and an fs.ErrIsNotDirectory if it is a directory.
 // Moving a directory into itself is an error wrapping os.ErrInvalid.
 // The checks and the rename are not atomic.
+//
+// A symbolic link at filePath is moved as link, not what it points to.
+// Moving it onto the file it points to is an error wrapping os.ErrInvalid
+// like the "are the same file" of mv, because the rename would replace the
+// file with a link to itself, see isLinkOntoTarget. go-smb2 reports no link
+// count, so unlike LocalFileSystem.Move, a move onto another hard link of
+// the file is refused too. Servers that follow symbolic links themselves,
+// like Samba without the SMB3 POSIX extensions, report a link as the file
+// it points to, so Move can't tell them apart and leaves it to the server.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	src, err := sharePath(filePath)
 	if err != nil {
@@ -598,9 +607,114 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 		case err != nil && !errors.Is(err, os.ErrNotExist):
 			return f.wrapErr(destPath, err)
 		}
+		if err == nil && srcInfo.Mode()&os.ModeSymlink != 0 {
+			onTarget, err := isLinkOntoTarget(share, src, dest, destInfo)
+			if err != nil {
+				return f.wrapErr(filePath, err)
+			}
+			if onTarget {
+				return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, f.file(filePath), f.file(destPath))
+			}
+		}
 		noRetry()
 		return f.wrapErr(filePath, share.Rename(src, dest))
 	})
+}
+
+// linkResolver is the part of smb2.Share that isLinkOntoTarget uses,
+// so that its decision can be tested without a server.
+type linkResolver interface {
+	Readlink(name string) (string, error)
+	Stat(name string) (os.FileInfo, error)
+}
+
+// isLinkOntoTarget reports whether the symbolic link at the share path link
+// may point to the file at the share path dest with the Lstat info destInfo,
+// the destination of a move of the link. Renaming the link onto that file
+// would remove the file and leave a link that points to itself.
+//
+// The link points to dest if its target resolves to dest, see linkTargetPath,
+// compared without case like most servers do, or if the file that Stat of
+// the link reaches through every link on the way has the attributes and
+// times of destInfo, see maybeSameAttrs. go-smb2 reports no link count that
+// could tell that other hard links keep the file, so such a file is taken
+// for dest too. A destination that is a symbolic link is never the file
+// that Stat reaches. An error of reading the link or its target, like for
+// a dangling link, is no link onto dest, except for a broken connection,
+// an expired session or a canceled context, which is returned.
+func isLinkOntoTarget(share linkResolver, link, dest string, destInfo os.FileInfo) (bool, error) {
+	if destInfo.Mode()&os.ModeSymlink != 0 {
+		return false, nil
+	}
+	target, err := share.Readlink(link)
+	if isLinkCheckAborted(err) {
+		return false, err
+	}
+	if err == nil {
+		p, foreign := linkTargetPath(link, target)
+		if strings.EqualFold(p, dest) || (foreign && hasPathSuffixFold(p, dest)) {
+			return true, nil
+		}
+	}
+	info, err := share.Stat(link)
+	if isLinkCheckAborted(err) {
+		return false, err
+	}
+	return err == nil && maybeSameAttrs(info, destInfo), nil
+}
+
+// isLinkCheckAborted reports whether err of a request of isLinkOntoTarget
+// aborts the check, because the server could not answer.
+func isLinkCheckAborted(err error) bool {
+	return isConnectionError(err) || isSessionExpired(err) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// linkTargetPath returns the share path that target, the target of the
+// symbolic link at the share path link as go-smb2 returns it with the
+// separator `\`, points to. A relative target is resolved against the
+// directory of the link and starts with ".." if it is outside of the share.
+// A target with a leading separator is absolute on the share, like for
+// CreateSymbolicLink. foreign is set for a target with a drive like
+// `C:\data\x` or a UNC path like `\\nas\data\x` of a Windows server,
+// which is returned cleaned with the separator "/", because the local
+// path of the share on the server is unknown.
+func linkTargetPath(link, target string) (p string, foreign bool) {
+	target = strings.ReplaceAll(target, `\`, Separator)
+	switch {
+	case strings.HasPrefix(target, "//") || (len(target) >= 2 && target[1] == ':'):
+		return path.Clean(target), true
+	case strings.HasPrefix(target, Separator):
+		return strings.Trim(path.Clean(target), Separator), false
+	}
+	p = path.Join(path.Dir(link), target)
+	if p == "." {
+		return "", false
+	}
+	return p, false
+}
+
+// hasPathSuffixFold reports whether the path p ends with the names
+// of the share path dest, compared without case.
+func hasPathSuffixFold(p, dest string) bool {
+	i := len(p) - len(dest)
+	return dest != "" && i > 0 && p[i-1] == '/' && strings.EqualFold(p[i:], dest)
+}
+
+// maybeSameAttrs reports whether the infos a and b may describe the same
+// file. go-smb2 reports no file id for Share.Stat and Share.Lstat, so equal
+// attributes and times are taken for the same file. SMB times have a
+// resolution of 100 nanoseconds, so that two files rarely look the same.
+func maybeSameAttrs(a, b os.FileInfo) bool {
+	if a.Mode() != b.Mode() || a.Size() != b.Size() || !a.ModTime().Equal(b.ModTime()) {
+		return false
+	}
+	aStat, aOK := a.Sys().(*smb2.FileStat)
+	bStat, bOK := b.Sys().(*smb2.FileStat)
+	return !aOK || !bOK ||
+		(aStat.FileAttributes == bStat.FileAttributes &&
+			aStat.CreationTime.Equal(bStat.CreationTime) &&
+			aStat.ChangeTime.Equal(bStat.ChangeTime))
 }
 
 // Remove removes a file or an empty directory.

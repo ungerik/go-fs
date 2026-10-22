@@ -127,7 +127,13 @@ and the requests of open file handles, and afterwards every method returns
   checks the destination first: an existing directory is an error wrapping
   `os.ErrExist`, an existing file is replaced, a directory can't replace a
   file (`fs.ErrIsNotDirectory`), and a directory can't be moved into itself
-  (`os.ErrInvalid`).
+  (`os.ErrInvalid`). A symbolic link is moved as link; moving it onto the
+  file it points to is an error wrapping `os.ErrInvalid` ("are the same
+  file", like `mv`), because the rename would replace the file with a link
+  to itself. SMB reports no link count here, so a move onto another hard
+  link of that file is refused too. Servers that follow links themselves,
+  like Samba without the SMB3 POSIX extensions, show a link as the file it
+  points to, and the server decides about the rename.
 - **Symbolic links.** `CreateSymbolicLink` stores the target as given and
   `ReadSymbolicLink` returns it as stored. A relative target that SMB would
   store as an absolute path is an error wrapping `os.ErrInvalid`: one that

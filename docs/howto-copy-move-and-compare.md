@@ -182,12 +182,13 @@ More behaviours to rely on:
   directory entry, like another case or Unicode normalization of the name on
   macOS, renames the file. Neither removes the only link of a file.
 - **Moving a symbolic link onto the file it points to** is an error wrapping
-  `os.ErrInvalid` on the local and the in-memory file system and with copy
-  then delete, like
+  `os.ErrInvalid` on the local and the in-memory file system, with the native
+  `Move` of `sftpfs` and `smbfs` and with copy then delete, like
   `mv` reports "are the same file": the link would replace the file and then
   point to itself. Only a local file with other hard links, which keep it, is
   replaced by the link. On Windows, where the link count is unknown, the move
-  is always refused.
+  is always refused, and so it is over SFTP and SMB, which report no link
+  count either.
 - **Moving a directory into itself** or one of its sub-directories is an error
   wrapping `os.ErrInvalid`, like `os.Rename`, for a local directory also
   through such another path to it.

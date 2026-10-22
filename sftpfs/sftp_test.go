@@ -434,6 +434,90 @@ func TestMoveAliasRenamesBack(t *testing.T) {
 	assert.Equal(t, []string{"src.txt"}, names, "no temporary file is left")
 }
 
+// TestMoveLinkOntoTarget is a regression test: moving a symbolic link onto
+// the file it points to replaced the file with the link, which then pointed
+// to itself, so the data of the file was gone. With the posix-rename
+// extension the rename replaced the file, without it the file was removed
+// before the rename. Move must refuse like mv with an error wrapping
+// os.ErrInvalid and keep the file and the link, for a relative and an
+// absolute target and for one through a symbolic link to its directory.
+func TestMoveLinkOntoTarget(t *testing.T) {
+	for _, posixRename := range []bool{true, false} {
+		for name, target := range map[string]func(root string) string{
+			"relative":    func(string) string { return "dir/file.txt" },
+			"absolute":    func(root string) string { return root + "/dir/file.txt" },
+			"through-dir": func(string) string { return "dirlink/file.txt" },
+		} {
+			t.Run(fmt.Sprintf("%s/posixRename=%t", name, posixRename), func(t *testing.T) {
+				root := t.TempDir()
+				require.NoError(t, os.Mkdir(root+"/dir", 0o700))
+				require.NoError(t, os.Symlink("dir", root+"/dirlink"))
+				require.NoError(t, os.WriteFile(root+"/dir/file.txt", []byte("content"), 0o600))
+				require.NoError(t, os.Symlink(target(root), root+"/link"))
+				s := startTestServer(t, testServerConfig{root: root})
+				f := s.dial(t, nil)
+				f.currentConn().posixRename = posixRename
+
+				err := f.Move(t.Context(), root+"/link", root+"/dir/file.txt")
+				require.ErrorIs(t, err, os.ErrInvalid)
+				assert.ErrorContains(t, err, "are the same file")
+				data, err := os.ReadFile(root + "/dir/file.txt")
+				require.NoError(t, err, "the file must still exist")
+				assert.Equal(t, "content", string(data))
+				linkInfo, err := os.Lstat(root + "/link")
+				require.NoError(t, err, "the link must still exist")
+				assert.NotZero(t, linkInfo.Mode()&os.ModeSymlink, "the link must still be a link")
+				data, err = os.ReadFile(root + "/link")
+				require.NoError(t, err, "the link must still point to the file")
+				assert.Equal(t, "content", string(data))
+				assert.Equal(t, []string{"file.txt"}, dirNames(t, root+"/dir"), "no temporary file is left")
+			})
+		}
+	}
+}
+
+// TestMoveLinkOntoOtherFile moves symbolic links onto files that are not
+// their target, which they replace like any other file, and onto another
+// hard link of their target. SFTP reports no link count that would tell
+// whether the other link keeps the file, so that move is refused like
+// one onto the target itself.
+func TestMoveLinkOntoOtherFile(t *testing.T) {
+	for _, posixRename := range []bool{true, false} {
+		t.Run(fmt.Sprintf("posixRename=%t", posixRename), func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.WriteFile(root+"/target.txt", []byte("target"), 0o600))
+			require.NoError(t, os.WriteFile(root+"/other.txt", []byte("other file"), 0o600))
+			require.NoError(t, os.Symlink("target.txt", root+"/link"))
+			s := startTestServer(t, testServerConfig{root: root})
+			f := s.dial(t, nil)
+			f.currentConn().posixRename = posixRename
+
+			require.NoError(t, f.Move(t.Context(), root+"/link", root+"/other.txt"))
+			linkTarget, err := os.Readlink(root + "/other.txt")
+			require.NoError(t, err, "the link must have replaced the file")
+			assert.Equal(t, "target.txt", linkTarget)
+			assert.NoFileExists(t, root+"/link")
+
+			// A dangling link has no target that the move could remove
+			require.NoError(t, os.Symlink("missing.txt", root+"/dangling"))
+			require.NoError(t, f.Move(t.Context(), root+"/dangling", root+"/other.txt"))
+			linkTarget, err = os.Readlink(root + "/other.txt")
+			require.NoError(t, err)
+			assert.Equal(t, "missing.txt", linkTarget)
+
+			require.NoError(t, os.Link(root+"/target.txt", root+"/hardlink.txt"))
+			require.NoError(t, os.Symlink("target.txt", root+"/link"))
+			err = f.Move(t.Context(), root+"/link", root+"/hardlink.txt")
+			require.ErrorIs(t, err, os.ErrInvalid)
+			for _, name := range []string{"/target.txt", "/hardlink.txt"} {
+				data, err := os.ReadFile(root + name)
+				require.NoError(t, err, "%s must still exist", name)
+				assert.Equal(t, "target", string(data), name)
+			}
+		})
+	}
+}
+
 // TestListDirRecursiveSymlink lists a symbolic link to a directory:
 // the files of the directory are listed below the path of the link.
 func TestListDirRecursiveSymlink(t *testing.T) {

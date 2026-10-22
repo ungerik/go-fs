@@ -482,6 +482,15 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 // file at filePath under another name, see maybeSameFile, that file is
 // renamed to a temporary name in the directory of destPath first, and
 // destPath is only removed if it still exists then.
+//
+// A symbolic link at filePath is moved as link, not what it points to.
+// Moving it onto the file it points to is an error wrapping os.ErrInvalid
+// like the "are the same file" of mv, because the rename would replace the
+// file with a link to itself. SFTP has no inode numbers and no link counts,
+// so a destination with the size, mode, owner and modification time of the
+// file that the link points to is taken for that file, see isLinkOntoTarget.
+// Unlike LocalFileSystem.Move, a move onto another hard link of the file
+// is refused too.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	// The checks before f.run need no request, but must not answer after Close
 	if err := f.checkOpen(ctx); err != nil {
@@ -512,6 +521,15 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 		case srcInfo.IsDir():
 			return fs.NewErrIsNotDirectory(f.file(destPath))
 		}
+		if srcInfo.Mode()&os.ModeSymlink != 0 {
+			onTarget, err := isLinkOntoTarget(c.sftp, filePath, destInfo)
+			if err != nil {
+				return err
+			}
+			if onTarget {
+				return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, f.file(filePath), f.file(destPath))
+			}
+		}
 		// Replace the file or symbolic link at destPath
 		noRetry()
 		if c.posixRename {
@@ -531,18 +549,43 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 // maybeSameFile reports whether filePath and destPath with the Lstat infos
 // srcInfo and destInfo may be the same file under two names: names that
 // only differ in case on a case-insensitive server, or a path through a
-// symbolic link to the directory of the other path. SFTP has no inode
-// numbers to tell, so equal attributes are taken for the same file.
+// symbolic link to the directory of the other path, see maybeSameAttrs.
 func maybeSameFile(filePath, destPath string, srcInfo, destInfo os.FileInfo) bool {
-	if strings.EqualFold(filePath, destPath) {
-		return true
-	}
-	if srcInfo.Mode() != destInfo.Mode() || srcInfo.Size() != destInfo.Size() || !srcInfo.ModTime().Equal(destInfo.ModTime()) {
+	return strings.EqualFold(filePath, destPath) || maybeSameAttrs(srcInfo, destInfo)
+}
+
+// maybeSameAttrs reports whether the infos a and b may describe the same
+// file. SFTP has no inode numbers to tell, so equal attributes are taken
+// for the same file.
+func maybeSameAttrs(a, b os.FileInfo) bool {
+	if a.Mode() != b.Mode() || a.Size() != b.Size() || !a.ModTime().Equal(b.ModTime()) {
 		return false
 	}
-	srcStat, srcOK := srcInfo.Sys().(*sftp.FileStat)
-	destStat, destOK := destInfo.Sys().(*sftp.FileStat)
-	return !srcOK || !destOK || (srcStat.UID == destStat.UID && srcStat.GID == destStat.GID)
+	aStat, aOK := a.Sys().(*sftp.FileStat)
+	bStat, bOK := b.Sys().(*sftp.FileStat)
+	return !aOK || !bOK || (aStat.UID == bStat.UID && aStat.GID == bStat.GID)
+}
+
+// isLinkOntoTarget reports whether the symbolic link at linkPath may point
+// to the file that destInfo from Lstat describes, the destination of a move
+// of the link. Renaming the link onto that file would remove the file and
+// leave a link that points to itself. The Stat info of the link, which
+// follows every link on the way, is compared with destInfo by maybeSameAttrs.
+// SFTP reports no link count either, which could tell that other hard links
+// keep the file, so equal attributes always refuse the move, also those of
+// another file with the same size, mode, owner and modification second.
+// A link whose target can't be read, like a dangling one, points to no
+// existing file. The error is that of a lost connection only, so that
+// fileSystem.run retries the move.
+func isLinkOntoTarget(client *sftp.Client, linkPath string, destInfo os.FileInfo) (bool, error) {
+	targetInfo, err := client.Stat(linkPath)
+	switch {
+	case isConnectionError(err):
+		return false, err
+	case err != nil:
+		return false, nil
+	}
+	return maybeSameAttrs(targetInfo, destInfo), nil
 }
 
 // moveViaTemp moves filePath to an existing destPath without the

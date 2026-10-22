@@ -174,7 +174,12 @@ they are.
   later step fails. An existing directory at the destination is an error
   wrapping `os.ErrExist`, a directory onto a file is an
   `fs.ErrIsNotDirectory`, a directory into itself an error wrapping
-  `os.ErrInvalid`.
+  `os.ErrInvalid`. A symbolic link is moved as link; moving it onto the
+  file it points to is an error wrapping `os.ErrInvalid` ("are the same
+  file", like `mv`), because the rename would replace the file with a link
+  to itself. SFTP has no inode numbers and no link counts, so a destination
+  with the size, mode, owner and modification time of the link's target is
+  taken for it, also another hard link of that file.
 - **Recursive operations.** `ListDirRecursive` of a symbolic link to a
   directory lists the files of that directory below the path of the link,
   symbolic links in the tree are not followed. `Remove` and `RemoveAll`

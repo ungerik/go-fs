@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudsoda/go-smb2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -442,6 +444,107 @@ func Test_sharePath(t *testing.T) {
 		assert.ErrorIs(t, err, os.ErrInvalid, filePath)
 		assert.ErrorIs(t, checkPath(filePath), os.ErrInvalid, filePath)
 	}
+}
+
+// fakeLinkShare is the linkResolver of a share with the symbolic links
+// of targets, stored like go-smb2 returns them with the separator `\`,
+// and the Stat infos of infos, which follow the links.
+type fakeLinkShare struct {
+	targets map[string]string
+	infos   map[string]os.FileInfo
+	err     error // returned by every call if not nil
+}
+
+func (s *fakeLinkShare) Readlink(name string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	target, ok := s.targets[name]
+	if !ok {
+		return "", &os.PathError{Op: "readlink", Path: name, Err: errors.New("not a reparse point")}
+	}
+	return target, nil
+}
+
+func (s *fakeLinkShare) Stat(name string) (os.FileInfo, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	info, ok := s.infos[name]
+	if !ok {
+		return nil, &os.PathError{Op: "stat", Path: name, Err: os.ErrNotExist}
+	}
+	return info, nil
+}
+
+// Test_isLinkOntoTarget is a regression test for Move of a symbolic link
+// onto the file it points to, which replaced the file with the link, which
+// then pointed to itself, so the data of the file was gone. The test Samba
+// server rejects symbolic links, so the decision is tested without a server.
+// The link points to the destination if its target resolves to it, without
+// case like on most servers, or if the file that Stat reaches through the
+// link has the attributes and times of the destination.
+func Test_isLinkOntoTarget(t *testing.T) {
+	created := time.Date(2026, 10, 22, 12, 0, 0, 100, time.UTC)
+	file := &smb2.FileStat{FileName: "file.txt", EndOfFile: 7, FileAttributes: 0x20, CreationTime: created, LastWriteTime: created, ChangeTime: created}
+	// The same size and write time, but created later
+	other := &smb2.FileStat{FileName: "other.txt", EndOfFile: 7, FileAttributes: 0x20, CreationTime: created.Add(100), LastWriteTime: created, ChangeTime: created}
+	link := &smb2.FileStat{FileName: "link", FileAttributes: 0x400, CreationTime: created, LastWriteTime: created, ChangeTime: created}
+
+	for _, tc := range []struct {
+		name     string
+		target   string // of the link at "dir/link", empty for no symbolic link target
+		stat     os.FileInfo
+		dest     string
+		destInfo os.FileInfo
+		want     bool
+	}{
+		{"relative", "file.txt", file, "dir/file.txt", file, true},
+		{"relative other case", "FILE.txt", file, "dir/file.txt", file, true},
+		{"relative parent", `..\dir\file.txt`, file, "dir/file.txt", file, true},
+		{"absolute", `\dir\file.txt`, file, "dir/file.txt", file, true},
+		{"absolute outside of the share root", `\..\dir\file.txt`, file, "dir/file.txt", file, true},
+		// The local path of the share on the server is unknown
+		{"drive", `C:\shares\data\dir\file.txt`, nil, "dir/file.txt", file, true},
+		{"UNC", `\\nas\data\dir\file.txt`, nil, "dir/file.txt", file, true},
+		// Through a symbolic link to the directory, or a reparse point
+		// that is no symbolic link, like a junction: Stat follows it
+		{"alias", `linkdir\file.txt`, file, "dir/file.txt", file, true},
+		{"no symbolic link target", "", file, "dir/file.txt", file, true},
+		// No link count tells whether other hard links keep the file
+		{"hard link", "file.txt", file, "dir/hardlink.txt", file, true},
+
+		{"other file", "other.txt", other, "dir/file.txt", file, false},
+		{"other file same name", "file.txt", other, "other/file.txt", file, false},
+		{"drive other file", `C:\shares\data\other.txt`, nil, "dir/file.txt", file, false},
+		{"drive other directory", `C:\shares\data\otherdir\file.txt`, nil, "dir/file.txt", file, false},
+		{"drive name suffix", `C:\shares\data\dir\myfile.txt`, nil, "dir/file.txt", file, false},
+		{"outside of the share", `..\..\file.txt`, nil, "file.txt", file, false},
+		{"dangling", "missing.txt", nil, "dir/file.txt", file, false},
+		// Stat of the link never reaches a symbolic link
+		{"onto a link", "link2", file, "dir/link2", link, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			share := &fakeLinkShare{targets: map[string]string{}, infos: map[string]os.FileInfo{}}
+			if tc.target != "" {
+				share.targets["dir/link"] = tc.target
+			}
+			if tc.stat != nil {
+				share.infos["dir/link"] = tc.stat
+			}
+			onTarget, err := isLinkOntoTarget(share, "dir/link", tc.dest, tc.destInfo)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, onTarget)
+		})
+	}
+
+	// A broken connection can't tell, Move is retried on a new session
+	broken := &os.PathError{Op: "readlink", Path: "dir/link", Err: &smb2.TransportError{Err: io.EOF}}
+	_, err := isLinkOntoTarget(&fakeLinkShare{err: broken}, "dir/link", "dir/file.txt", file)
+	assert.True(t, isConnectionError(err), "the connection error must be returned: %v", err)
+	expired := &os.PathError{Op: "stat", Path: "dir/link", Err: &smb2.ResponseError{Code: statusNetworkSessionExpired}}
+	_, err = isLinkOntoTarget(&fakeLinkShare{err: expired}, "dir/link", "dir/file.txt", file)
+	assert.True(t, isSessionExpired(err), "the expired session must be returned: %v", err)
 }
 
 // Test_fileSystem_BackslashPaths verifies that every method rejects a path
