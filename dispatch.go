@@ -625,11 +625,10 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // like [os.Rename] keeps them, and a link replaces an existing file or link.
 // Between file systems, or within one without symbolic links, a link
 // to a file is followed and the file is copied. A link to a directory,
-// also below a moved directory, is copied as link if destFS can create links
-// and, between file systems, its target is relative and stays inside srcPath,
-// see CopyRecursive, so a moved link to a directory itself is never copied
-// to another file system. Else the move fails with an error wrapping
-// [errors.ErrUnsupported] before anything is copied.
+// the moved one or one below a moved directory, can't be copied that way,
+// another file system can resolve its target to another directory, see
+// CopyRecursive: the move fails with an error wrapping
+// [errors.ErrUnsupported] that names the link before anything is copied.
 // A symbolic link at destPath is replaced, not the file it points to,
 // and recreated if the copy fails. Moving a symbolic link onto the file
 // it points to is an error wrapping [os.ErrInvalid], see isLinkOntoTarget,
@@ -651,7 +650,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	if err != nil {
 		return err
 	}
-	c := newTreeCopier(ctx, srcFS, srcPath, destFS, nil)
+	c := newTreeCopier(ctx, srcFS, destFS, nil)
 	if srcFS == destFS {
 		// Within one file system every link is moved as link
 		c.links = c.dirLinks
@@ -950,8 +949,8 @@ func listDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string
 
 // linkTargetReader is implemented by file systems that can read the target
 // of a symbolic link without implementing SymbolicLinkFileSystem, like
-// OverlayFileSystem with the links of its layers, so that copies can
-// recreate their links, see fsReadSymbolicLink.
+// OverlayFileSystem with the links of its layers, so that fsEvalSymlinks
+// can resolve their links, see fsReadSymbolicLink.
 type linkTargetReader interface {
 	readSymbolicLink(linkPath string) (string, error)
 }

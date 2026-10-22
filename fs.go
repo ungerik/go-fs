@@ -39,13 +39,11 @@ func JoinCleanFilePath(uriParts ...string) File {
 // for example a failed upload, never deletes the source.
 // Between different file systems a symbolic link to a file is followed:
 // the destination gets a copy of the file, but only the link is removed
-// from the source. A symbolic link to a directory below a moved directory
-// is copied as link like by [CopyRecursive], if the destination file system
-// implements [SymbolicLinkFileSystem] and the target is relative and stays
-// inside the moved directory. Else Move fails before anything is copied with
-// an error wrapping [errors.ErrUnsupported] that names the link. A symbolic
-// link to a directory as source can't be moved to another file system that
-// way, its target is always outside of the moved link.
+// from the source. A symbolic link to a directory, the source itself or one
+// below a moved directory, is never copied to another file system, which can
+// resolve its target to another directory, see [CopyRecursive]: Move fails
+// before anything is copied with an error wrapping [errors.ErrUnsupported]
+// that names the link.
 //
 // When source and destination resolve to the same location on the same
 // FileSystem, Move returns nil without touching the file. This matches

@@ -546,19 +546,20 @@ the same files again or the whole disk:
   `IsSymlink` true and `IsDir` false, and doesn't list the files of the
   directory it points to. Only a link you start the listing at is followed.
 - `fs.CopyRecursive` copies a link to a file as a file with the target's
-  content, and a link to a directory as a link if the destination file system
-  implements `SymbolicLinkFileSystem`. Within one file system the target is
-  kept as it is. Another file system would resolve the same target to another
-  directory, so between file systems only a relative target that stays inside
-  the copied directory is copied. Otherwise it fails before it writes
+  content. Within one file system that implements `SymbolicLinkFileSystem` it
+  copies a link to a directory as a link with the target kept as it is.
+  Another file system can resolve the same target to another directory, even
+  a relative target inside the copied directory, so between file systems a
+  link to a directory is never copied: the copy fails before it writes
   anything, with an error wrapping `errors.ErrUnsupported` that names the link.
 - `fs.CopyRecursive` never writes through a symbolic link below the
   destination: a file or directory over a link there is an error wrapping
   `os.ErrExist`. The destination directory itself may be a link.
 - `fs.Move` between file systems copies links the same way and only removes
-  the source after the copy, so a link to a directory that is the moved source
-  itself can't be moved to another file system. Within one file system that
-  supports symbolic links, a move keeps every link a link, like `os.Rename`.
+  the source after the copy, so a link to a directory, the moved source itself
+  or one in a moved directory, can't be moved to another file system. Within
+  one file system that supports symbolic links, a move keeps every link
+  a link, like `os.Rename`.
   Moving a link onto the file it points to is an error wrapping
   `os.ErrInvalid`, like `mv` reports "are the same file", on the local and the
   in-memory file system, with the native `Move` of `sftpfs` and `smbfs`, and

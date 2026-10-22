@@ -224,27 +224,6 @@ func (s *StdFileSystem) ListDir(ctx context.Context, dirPath string, patterns []
 	return nil
 }
 
-// readSymbolicLink returns the target of the symbolic link with
-// io/fs.ReadLink, which needs a wrapped file system that implements
-// io/fs.ReadLinkFS, like os.DirFS. It implements linkTargetReader,
-// so that copies can recreate the links of the wrapped file system.
-func (s *StdFileSystem) readSymbolicLink(linkPath string) (string, error) {
-	if err := s.checkClosed(); err != nil {
-		return "", err
-	}
-	if linkPath == "" {
-		return "", ErrEmptyPath
-	}
-	if _, ok := s.fsys.(iofs.ReadLinkFS); !ok {
-		return "", NewErrUnsupported(s, "ReadSymbolicLink")
-	}
-	target, err := iofs.ReadLink(s.fsys, stdName(linkPath))
-	if err != nil {
-		return "", s.wrapErr(linkPath, err)
-	}
-	return target, nil
-}
-
 // ListDirRecursive walks the tree with io/fs.WalkDir and calls
 // callback for every file (not directory) matching the patterns.
 // Like io/fs.WalkDir it follows a symbolic link at dirPath and lists

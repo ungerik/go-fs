@@ -83,10 +83,10 @@ func TestMove_CrossFileSystemOverwriteSemantics(t *testing.T) {
 }
 
 // TestMove_CrossFileSystemSymlinks checks the move of a directory with a
-// symbolic link to a directory to another file system: the link is copied
-// as link if the destination can create links and its target is relative
-// and stays inside the moved directory, else the move fails before anything
-// is copied. It used to copy the directory that the link points to.
+// symbolic link to a directory to another file system: whatever the target,
+// the move fails before anything is copied, because another file system can
+// resolve the same target to another directory. It used to copy the directory
+// that the link points to.
 func TestMove_CrossFileSystemSymlinks(t *testing.T) {
 	t.Run("destination without symbolic links", func(t *testing.T) {
 		// The source file system has no RemoveAll,
@@ -123,11 +123,12 @@ func TestMove_CrossFileSystemSymlinks(t *testing.T) {
 		}
 		dest := newLinkMemFS(t).RootDir().Join("moved")
 
-		require.NoError(t, tree.MoveTo(t.Context(), dest))
-		requireMissing(t, tree)
-		requireContent(t, dest.Join("file.txt"), "file")
-		requireLink(t, dest.Join("link"), "sub")
-		requireFiles(t, dest.Join("link"), "a.txt")
+		err := tree.MoveTo(t.Context(), dest)
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		require.ErrorContains(t, err, tree.Join("link").String(), "the error must name the link")
+		requireMissing(t, dest)
+		requireContent(t, tree.Join("sub", "a.txt"), "a")
+		requireLink(t, tree.Join("link"), "sub")
 	})
 }
 
@@ -192,7 +193,8 @@ func TestMove_CrossFileSystemFollowedLink(t *testing.T) {
 
 // TestMove_CrossFileSystemSymlinkLoop is a regression test: moving a directory
 // with a symbolic link to itself to another file system copied the directory
-// into itself until the path had too many links.
+// into itself until the path had too many links. The link to a directory
+// can't be moved to another file system, also not to one with links.
 func TestMove_CrossFileSystemSymlinkLoop(t *testing.T) {
 	setup := func(t *testing.T) fs.File {
 		s := newSymlinkMemFS(t)
@@ -208,10 +210,10 @@ func TestMove_CrossFileSystemSymlinkLoop(t *testing.T) {
 		src := setup(t)
 		dest := newLinkMemFS(t).RootDir()
 
-		require.NoError(t, fs.Move(ctx, src.Join("dir"), dest.Join("dir")))
-		requireFiles(t, dest.Join("dir"), "a.txt", "loop", "sub/b.txt")
-		requireLink(t, dest.Join("dir", "loop"), ".")
-		requireMissing(t, src.Join("dir"))
+		err := fs.Move(ctx, src.Join("dir"), dest.Join("dir"))
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		requireMissing(t, dest.Join("dir"))
+		requireFiles(t, src.Join("dir"), "a.txt", "loop", "sub/b.txt")
 	})
 	t.Run("destination without symbolic links", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)

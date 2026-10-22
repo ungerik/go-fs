@@ -489,7 +489,8 @@ func TestOverlayFileSystem_LayerSeparator(t *testing.T) {
 // of the listed path again and again until the path had too many links,
 // because the overlay couldn't tell where the link points to.
 // The links of the layers are listed as entries and not followed,
-// and a copy recreates them with the targets read from the layers.
+// and a copy fails before it writes anything, because the overlay
+// can't create links and another file system never gets them.
 func TestOverlayFileSystem_ListDirRecursiveSymlinkLoop(t *testing.T) {
 	base, err := fs.RegisteredTestMemFileSystem(nil, fs.NewMemFile("/dir/a.txt", []byte("a")))
 	require.NoError(t, err)
@@ -518,17 +519,13 @@ func TestOverlayFileSystem_ListDirRecursiveSymlinkLoop(t *testing.T) {
 	require.NoError(t, upper.CreateSymbolicLink("..", "/dir/sub/up"))
 	assert.Equal(t, []string{"/dir/a.txt", "/dir/loop", "/dir/sub/up"}, listFiles(), "a relative link of the upper layer")
 
-	// The links of both layers are copied with their targets,
-	// which are relative and stay inside the copied directory
+	// A link to a directory is never copied to another file system
 	dest, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = dest.Close() })
-	require.NoError(t, fs.CopyRecursive(t.Context(), overlay.RootDir().Join("dir"), dest.RootDir().Join("copy")))
-	for link, target := range map[string]string{"loop": ".", "sub/up": ".."} {
-		got, err := dest.ReadSymbolicLink("/copy/" + link)
-		require.NoError(t, err, "the copy of %s must be a link", link)
-		assert.Equal(t, target, got, "the target of the copy of %s", link)
-	}
+	err = fs.CopyRecursive(t.Context(), overlay.RootDir().Join("dir"), dest.RootDir().Join("copy"))
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+	assert.False(t, dest.RootDir().Join("copy").Exists(), "nothing must be copied")
 
 	// The overlay can't create links, the copy fails before it writes anything
 	err = fs.CopyRecursive(t.Context(), overlay.RootDir().Join("dir"), overlay.RootDir().Join("copy"))

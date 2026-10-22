@@ -63,9 +63,9 @@ var (
 //
 // The overlay has no symbolic links of its own, but it shows the links of its
 // layers like their files. A recursive listing doesn't follow them, see
-// ListDirRecursiveFileSystem, and CopyRecursive from the overlay copies
-// a link to a directory as link with the target read from its layer,
-// if the target is one that CopyRecursive copies to another file system.
+// ListDirRecursiveFileSystem. The overlay can't create links and another file
+// system never gets a copy of a link to a directory, so CopyRecursive and
+// Move of a link to a directory of a layer fail, see CopyRecursive.
 type OverlayFileSystem struct {
 	paths fsimpl.PathHelper
 
@@ -354,9 +354,10 @@ func (o *OverlayFileSystem) Stat(filePath string) (*FileInfo, error) {
 
 // readSymbolicLink returns the target of the symbolic link at the overlay
 // path, read from the layer that has the link, with an absolute target
-// translated to the overlay. It implements linkTargetReader, so that
-// copies from the overlay can recreate the links of its layers.
-// The overlay can't create links, so it doesn't implement SymbolicLinkFileSystem.
+// translated to the overlay. It implements linkTargetReader, so that a move
+// within the overlay can tell if a link of a layer points to the destination,
+// see isLinkOntoTarget. The overlay can't create links,
+// so it doesn't implement SymbolicLinkFileSystem.
 func (o *OverlayFileSystem) readSymbolicLink(linkPath string) (string, error) {
 	if err := o.checkPath(linkPath); err != nil {
 		return "", err
