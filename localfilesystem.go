@@ -3,6 +3,7 @@ package fs
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -843,16 +844,26 @@ var osRename = os.Rename
 // not atomically with it.
 //
 // When filePath and destPath are the same after cleaning, Move returns nil
-// without touching the file. A destination that only differs in case
-// from the source on a case-insensitive file system renames the file.
-// A destination that is another hard link of the source is replaced
-// like any other file, so only the destination link is left.
+// without touching the file. A destination that is the source under another
+// spelling of its name, which the file system matches to the same directory
+// entry, like a case-only change on a case-insensitive file system or
+// another Unicode normalization on APFS, renames the file. A destination
+// that is another hard link of the source is replaced like any other file,
+// so only the destination link is left. In both cases the paths are the
+// same file ([os.SameFile]). A file with more than one link, and any file
+// on Windows, where the link count is unknown, is then moved through
+// a temporary name in the directory of filePath: the source is renamed
+// to it first, so that the only link of a file is never removed, and
+// renamed back if a later step fails. A process that dies in between
+// leaves the file under a name starting with ".gofs-move-".
 //
 // Move uses [os.Rename], which is atomic but only works within the same
 // underlying file system. If the OS returns a cross-device error
 // (EXDEV on Unix, ERROR_NOT_SAME_DEVICE on Windows) it falls back to
 // copying and removing the source after the copy completely succeeded.
-// The fallback is not atomic but can be canceled with ctx.
+// The fallback is not atomic but can be canceled with ctx. For two paths
+// of the same file, like through two bind mounts of a directory on Linux,
+// the cross-device error is returned, because the copy would destroy it.
 func (local *LocalFileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -879,14 +890,7 @@ func (local *LocalFileSystem) Move(ctx context.Context, filePath string, destPat
 	case err != nil:
 		return wrapOSErr(destPath, err)
 	case os.SameFile(srcInfo, destInfo):
-		// Both paths are the same file: the same directory entry, like for
-		// a case-only rename on a case-insensitive file system, which
-		// os.Rename handles, or two hard links of the file, for which
-		// os.Rename does nothing. Removing the source link replaces
-		// the destination link with the source like a rename would.
-		if !srcInfo.IsDir() && !isLocalSameDirEntry(filePath, destPath) {
-			return wrapOSErr(filePath, os.Remove(filePath))
-		}
+		return moveLocalSameFile(filePath, destPath, srcInfo)
 	case destInfo.IsDir():
 		// os.Rename would replace an empty directory on some platforms
 		return NewErrAlreadyExists(File(destPath))
@@ -925,25 +929,60 @@ func wrapRenameErr(destPath string, err error) error {
 	}
 }
 
-// isLocalSameDirEntry reports if the paths a and b of the same file are the
-// same directory entry: their names are equal, ignoring case for a case-only
-// rename on a case-insensitive file system, and their parent directories are
-// the same, also if one path reaches it through a symbolic link.
-// Paths that can't be checked count as the same entry,
-// so that the file is renamed and never removed.
-func isLocalSameDirEntry(a, b string) bool {
-	if !strings.EqualFold(filepath.Base(a), filepath.Base(b)) {
-		return false
+// moveLocalSameFile moves filePath to destPath, which [os.SameFile] reported
+// as the same file as filePath with the Lstat info srcInfo. destPath is then
+// the same directory entry under another spelling of its name, like for
+// a case-only rename on a case-insensitive file system, or another hard
+// link of the file. Comparing the names can't tell these apart, because
+// file systems match names with their own rules, like Unicode normalization
+// on APFS, case folding beyond strings.EqualFold, Windows short names,
+// or a trailing dot or space that Windows ignores.
+//
+// A directory, which has no other hard links, or a file with a link count
+// of 1 has only one directory entry, so os.Rename renames it. os.Rename also
+// replaces destPath if os.SameFile was wrong, like for FUSE file systems
+// that report the inode 0 for every file. A file with more links,
+// or whose link count is unknown like on Windows, is moved with
+// moveLocalViaTemp, which never removes the only link of a file.
+//
+// A cross-device error is returned without falling back to copying,
+// because copying the file onto itself and removing the source destroys it.
+// rename(2) reports it for the paths of a file through two bind mounts
+// of its directory on Linux.
+func moveLocalSameFile(filePath, destPath string, srcInfo os.FileInfo) error {
+	if links, ok := localLinkCount(srcInfo); srcInfo.IsDir() || (ok && links <= 1) {
+		return wrapRenameErr(destPath, osRename(filePath, destPath))
 	}
-	aDir, err := os.Stat(filepath.Dir(a))
+	return moveLocalViaTemp(filePath, destPath)
+}
+
+// moveLocalViaTemp moves filePath to destPath, which is the same file:
+// the same directory entry under another name, or another hard link.
+// The source link is renamed to a random temporary name in its directory
+// first. If destPath was the source under another name, it is gone then,
+// and the file is renamed to destPath. Else destPath is another link,
+// which renaming the temporary link onto it replaces. rename(2) does
+// nothing for two links of the same file though, so the temporary link
+// is removed if it is still there after that. If a step fails,
+// the temporary link is renamed back to filePath.
+func moveLocalViaTemp(filePath, destPath string) error {
+	tempPath := filepath.Join(filepath.Dir(filePath), ".gofs-move-"+rand.Text())
+	err := osRename(filePath, tempPath)
 	if err != nil {
-		return true
+		return wrapOSErr(filePath, err)
 	}
-	bDir, err := os.Stat(filepath.Dir(b))
-	if err != nil {
-		return true
+	err = wrapRenameErr(destPath, osRename(tempPath, destPath))
+	if err == nil {
+		err = os.Remove(tempPath)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		err = wrapOSErr(filePath, err)
 	}
-	return os.SameFile(aDir, bDir)
+	if backErr := osRename(tempPath, filePath); backErr != nil {
+		return fmt.Errorf("%w, and renaming %s back failed, it is at %s: %w", err, filePath, tempPath, backErr)
+	}
+	return err
 }
 
 // isLocalSubPath reports if filePath is inside the directory dirPath,

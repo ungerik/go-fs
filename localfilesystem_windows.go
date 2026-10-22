@@ -18,6 +18,12 @@ func isCrossDeviceError(err error) bool {
 	return errors.Is(err, syscall.Errno(0x11))
 }
 
+// localLinkCount returns false, because the Sys value
+// of a FileInfo on Windows has no link count.
+func localLinkCount(os.FileInfo) (links uint64, ok bool) {
+	return 0, false
+}
+
 var extraDirPermissions Permissions = 0
 
 // localFileSystemID returns the volume serial number of the system drive

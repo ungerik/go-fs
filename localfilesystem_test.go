@@ -183,6 +183,114 @@ func TestLocalFileSystem_Move(t *testing.T) {
 		require.NoError(t, Local.Move(t.Context(), "child.txt", src), "relative and absolute path")
 		requireLocalContent(t, src, "child")
 	})
+
+	t.Run("EquivalentNames", func(t *testing.T) {
+		// Regression test: file systems match names with their own rules,
+		// not only ignoring case like strings.EqualFold. A destination that
+		// is the source under another spelling of its name was taken for
+		// another hard link and the source was removed, so Move returned nil
+		// and no file was left. The cases run where the file system of the
+		// temp directory treats both names as one directory entry, the first
+		// three on APFS, the last two on Windows.
+		for _, test := range []struct {
+			name      string
+			src, dest string
+			want      string // the name of the moved file
+		}{
+			{name: "NFDToNFC", src: "café.txt", dest: "café.txt", want: "café.txt"},
+			{name: "SharpS", src: "straße.txt", dest: "STRASSE.txt", want: "STRASSE.txt"},
+			{name: "Ligature", src: "ﬁle.txt", dest: "file.txt", want: "file.txt"},
+			{name: "TrailingDot", src: "file.txt", dest: "file.txt.", want: "file.txt"},
+			{name: "TrailingSpace", src: "file.txt", dest: "file.txt ", want: "file.txt"},
+		} {
+			// Another hard link in another directory gives the file a link
+			// count of 2, so the link count doesn't tell that both names
+			// are the same directory entry
+			for _, otherLink := range []bool{false, true} {
+				name := test.name
+				if otherLink {
+					name += "WithOtherHardLink"
+				}
+				t.Run(name, func(t *testing.T) {
+					dir := t.TempDir()
+					src, dest := filepath.Join(dir, test.src), filepath.Join(dir, test.dest)
+					require.NoError(t, os.WriteFile(src, []byte("source"), 0o600))
+					srcInfo, err := os.Lstat(src)
+					require.NoError(t, err)
+					destInfo, err := os.Lstat(dest)
+					if err != nil || !os.SameFile(srcInfo, destInfo) {
+						t.Skipf("the file system of the temp directory treats %+q and %+q as different names", test.src, test.dest)
+					}
+					other := filepath.Join(t.TempDir(), "other-link.txt")
+					if otherLink {
+						if err := os.Link(src, other); err != nil {
+							t.Skipf("can't create hard link: %v", err)
+						}
+					}
+
+					require.NoError(t, Local.Move(t.Context(), src, dest))
+					assert.Equal(t, []string{test.want}, localDirNames(t, dir), "the file must be renamed, not removed")
+					requireLocalContent(t, filepath.Join(dir, test.want), "source")
+					if otherLink {
+						requireLocalContent(t, other, "source")
+					}
+				})
+			}
+		}
+	})
+
+	t.Run("CaseOnlyHardLinks", func(t *testing.T) {
+		// Regression test: two hard links whose names only differ in case
+		// were taken for the same directory entry on a case-sensitive
+		// file system and renamed, but rename(2) does nothing for two links
+		// of the same file, so Move returned nil and kept the source
+		dir := t.TempDir()
+		src, dest := filepath.Join(dir, "File.txt"), filepath.Join(dir, "file.txt")
+		require.NoError(t, os.WriteFile(src, []byte("source"), 0o600))
+		if err := os.Link(src, dest); err != nil {
+			t.Skipf("can't create hard links whose names only differ in case, the temp directory is case-insensitive: %v", err)
+		}
+		require.NoError(t, Local.Move(t.Context(), src, dest))
+		assert.Equal(t, []string{"file.txt"}, localDirNames(t, dir), "the source link must be removed")
+		requireLocalContent(t, dest, "source")
+	})
+
+	t.Run("OntoHardLinkFails", func(t *testing.T) {
+		// The source link is moved to a temporary name before the
+		// destination is replaced. If that fails, the source link
+		// must be back at its name and no temporary file left.
+		dir := t.TempDir()
+		src, dest := filepath.Join(dir, "src.txt"), filepath.Join(dir, "hard-link.txt")
+		require.NoError(t, os.WriteFile(src, []byte("source"), 0o600))
+		if err := os.Link(src, dest); err != nil {
+			t.Skipf("can't create hard link: %v", err)
+		}
+		osRename = func(oldPath, newPath string) error {
+			if newPath == dest {
+				return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: os.ErrPermission}
+			}
+			return os.Rename(oldPath, newPath)
+		}
+		t.Cleanup(func() { osRename = os.Rename })
+
+		err := Local.Move(t.Context(), src, dest)
+		require.ErrorIs(t, err, os.ErrPermission)
+		assert.ElementsMatch(t, []string{"src.txt", "hard-link.txt"}, localDirNames(t, dir), "both links must be kept")
+		requireLocalContent(t, src, "source")
+		requireLocalContent(t, dest, "source")
+	})
+}
+
+// localDirNames returns the names of the entries of the directory dir.
+func localDirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	return names
 }
 
 func TestLocalFileSystem_MoveCrossDevice(t *testing.T) {
@@ -227,6 +335,33 @@ func TestLocalFileSystem_MoveCrossDevice(t *testing.T) {
 		requireLocalContent(t, filepath.Join(dir, "dest.txt"), "source")
 	}
 	assert.Positive(t, renames, "Move must try os.Rename first")
+}
+
+// TestLocalFileSystem_MoveSameFileCrossDevice verifies that Move doesn't
+// fall back to copying when the source and the destination are the same
+// file. rename(2) fails with EXDEV for the paths of a file through two
+// bind mounts of its directory on Linux. Copying the file onto itself
+// and removing the source destroyed it.
+func TestLocalFileSystem_MoveSameFileCrossDevice(t *testing.T) {
+	crossDevice := error(syscall.EXDEV)
+	if runtime.GOOS == "windows" {
+		crossDevice = syscall.Errno(0x11) // ERROR_NOT_SAME_DEVICE
+	}
+	osRename = func(oldPath, newPath string) error {
+		return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: crossDevice}
+	}
+	t.Cleanup(func() { osRename = os.Rename })
+
+	// A symbolic link to the directory stands in for the bind mount
+	dir := setupLocalMove(t)
+	src := filepath.Join(dir, "srcdir", "child.txt")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(filepath.Join(dir, "srcdir"), link); err != nil {
+		t.Skipf("can't create symbolic link: %v", err)
+	}
+	err := Local.Move(t.Context(), src, filepath.Join(link, "child.txt"))
+	assert.ErrorIs(t, err, crossDevice, "the rename error, no copy")
+	requireLocalContent(t, src, "child")
 }
 
 func TestLocalFileSystem_DirectoryErrors(t *testing.T) {

@@ -142,6 +142,9 @@ More behaviours to rely on:
   what stops the copy-then-delete fallback from destroying a file when source
   and destination resolve to the same place. Moving a local file onto another
   hard link of it removes the source link, like a rename onto any other file.
+  A destination that the file system matches to the source's own directory
+  entry, like another case or Unicode normalization of the name on macOS,
+  renames the file. Neither removes the only link of a file.
 - **Moving a directory into itself** or one of its sub-directories is an error
   wrapping `os.ErrInvalid`, like `os.Rename`.
 - **Symbolic links are moved, not what they point to.** Within one file system
