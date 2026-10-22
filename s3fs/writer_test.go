@@ -176,6 +176,28 @@ func TestOpenWriterStreaming(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, strings.HasSuffix(strings.Trim(aws.ToString(head.ETag), `"`), "-3"), "streamed in 3 parts: ETag %s", aws.ToString(head.ETag))
 
+	// A multipart upload replaces an existing object on Close
+	require.NoError(t, f.WriteAll(ctx, "/"+dir+"/replaced.bin", []byte("existing"), 0))
+	w, err = f.OpenWriter("/"+dir+"/replaced.bin", 0)
+	require.NoError(t, err)
+	for chunk := range slices.Chunk(data, 32*1024) {
+		_, err = w.Write(chunk)
+		require.NoError(t, err)
+	}
+	existing, err := f.ReadAll(ctx, "/"+dir+"/replaced.bin")
+	require.NoError(t, err)
+	assert.Equal(t, "existing", string(existing), "the object must not change before Close")
+	require.NoError(t, w.Close())
+	read, err = f.ReadAll(ctx, "/"+dir+"/replaced.bin")
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(data, read), "Close must replace the existing object")
+	head, err = client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(testBucketName),
+		Key:    aws.String(dir + "/replaced.bin"),
+	})
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(strings.Trim(aws.ToString(head.ETag), `"`), "-3"), "replaced in 3 parts: ETag %s", aws.ToString(head.ETag))
+
 	// Abort after the first parts were uploaded. An existing object can't
 	// be checked here, because AbortMultipartUpload of S3Mock deletes the
 	// object with the key of the upload, AWS keeps it.
@@ -201,7 +223,7 @@ func TestOpenWriterStreaming(t *testing.T) {
 	_, err = w.Write(data[:mib])
 	require.NoError(t, err)
 	require.NoError(t, w.(fs.WriteAborter).Abort())
-	existing, err := f.ReadAll(ctx, "/"+dir+"/existing.bin")
+	existing, err = f.ReadAll(ctx, "/"+dir+"/existing.bin")
 	require.NoError(t, err)
 	assert.Equal(t, "existing", string(existing), "Abort must not change an existing object")
 

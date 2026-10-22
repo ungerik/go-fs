@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -133,9 +134,13 @@ type Options struct {
 type fileSystem struct {
 	fsimpl.PathHelper
 
-	mtx        sync.RWMutex
-	client     *s3.Client              // nil after Close
-	transfer   *transfermanager.Client // nil after Close
+	mtx    sync.RWMutex
+	client *s3.Client // nil after Close
+
+	// transfer uses client. It is never changed after New, so it is read
+	// without mtx; the methods check with getClient or getWriteClient
+	// that the file system is open before they use it.
+	transfer   *transfermanager.Client
 	bucketName string
 	id         string
 	readOnly   bool
@@ -263,17 +268,6 @@ func (s *fileSystem) getWriteClient() (*s3.Client, error) {
 	return client, nil
 }
 
-// getTransfer returns the transfer manager client
-// or fs.ErrFileSystemClosed after Close.
-func (s *fileSystem) getTransfer() (*transfermanager.Client, error) {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-	if s.transfer == nil {
-		return nil, fs.ErrFileSystemClosed
-	}
-	return s.transfer, nil
-}
-
 // ReadableWritable returns true and the negated Options.ReadOnly.
 func (s *fileSystem) ReadableWritable() (readable, writable bool) {
 	return true, !s.readOnly
@@ -303,9 +297,33 @@ func (s *fileSystem) String() string {
 
 // redactURI returns uri with the password
 // of its user info replaced by "xxxxx".
+//
+// A uri that url.Parse rejects, like one with an invalid percent escape
+// or an invalid port, is redacted as string: the password reaches from
+// the first ':' after the scheme to the last '@', because it may contain
+// '@' and '/'. That can redact more than the password, never less.
 func redactURI(uri string) string {
 	u, err := url.Parse(uri)
-	if err != nil || u.User == nil {
+	if err != nil {
+		scheme, rest, found := strings.Cut(uri, fs.PrefixSeparator)
+		if !found {
+			scheme, rest = "", uri
+		}
+		at := strings.LastIndexByte(rest, '@')
+		if at < 0 {
+			return uri
+		}
+		colon := strings.IndexByte(rest[:at], ':')
+		if colon < 0 {
+			return uri
+		}
+		rest = rest[:colon+1] + "xxxxx" + rest[at:]
+		if found {
+			return scheme + fs.PrefixSeparator + rest
+		}
+		return rest
+	}
+	if u.User == nil {
 		return uri
 	}
 	if _, hasPassword := u.User.Password(); !hasPassword {
@@ -384,14 +402,8 @@ func isAccessDenied(err error) bool {
 
 // hasErrorCode reports whether err is an S3 API error with one of codes.
 func hasErrorCode(err error, codes ...string) bool {
-	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
-		for _, code := range codes {
-			if apiErr.ErrorCode() == code {
-				return true
-			}
-		}
-	}
-	return false
+	apiErr, ok := errors.AsType[smithy.APIError](err)
+	return ok && slices.Contains(codes, apiErr.ErrorCode())
 }
 
 // file returns the File of an object key or path.
@@ -664,10 +676,6 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	transfer, err := s.getTransfer()
-	if err != nil {
-		return nil, err
-	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -694,7 +702,7 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 			return nil, fmt.Errorf("s3fs: %s is too large to read into memory", s.file(k))
 		}
 		buf := make(writeAtBuffer, size)
-		_, err = transfer.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
+		_, err = s.transfer.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
 			Bucket:   &s.bucketName,
 			Key:      &k,
 			WriterAt: buf,
@@ -720,7 +728,18 @@ func (s *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, err
 	}
 	defer out.Body.Close()
-	return fs.ReadAll(ctx, out.Body)
+	// The size of HeadObject is below the multipart download threshold,
+	// which bounds the buffer. It is only a hint, because the object can
+	// be replaced after HeadObject. ctx cancels reading the body.
+	hint := bytes.MinRead
+	if size > 0 && size <= math.MaxInt-bytes.MinRead {
+		hint += int(size)
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, hint))
+	if _, err := buf.ReadFrom(out.Body); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // writeAtBuffer is the io.WriterAt for the concurrent
@@ -747,10 +766,6 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	if err != nil {
 		return err
 	}
-	transfer, err := s.getTransfer()
-	if err != nil {
-		return err
-	}
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
@@ -762,7 +777,7 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 		return err
 	}
 	if int64(len(data)) >= s.uploadThreshold {
-		return s.upload(ctx, transfer, k, bytes.NewReader(data))
+		return s.upload(ctx, k, bytes.NewReader(data))
 	}
 	_, err = client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &s.bucketName,
@@ -774,8 +789,8 @@ func (s *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 
 // upload uploads the data of body to the object k, in parts if
 // it has at least Options.MultipartUploadThreshold bytes.
-func (s *fileSystem) upload(ctx context.Context, transfer *transfermanager.Client, k string, body io.Reader) error {
-	_, err := transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{
+func (s *fileSystem) upload(ctx context.Context, k string, body io.Reader) error {
+	_, err := s.transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket: &s.bucketName,
 		Key:    &k,
 		Body:   body,
@@ -795,10 +810,6 @@ func (s *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteC
 	if err != nil {
 		return nil, err
 	}
-	transfer, err := s.getTransfer()
-	if err != nil {
-		return nil, err
-	}
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
@@ -808,7 +819,7 @@ func (s *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteC
 	}
 	return newUploadWriter(
 		func(ctx context.Context, body io.Reader) error {
-			return s.upload(ctx, transfer, k, body)
+			return s.upload(ctx, k, body)
 		},
 		func() error {
 			_, err := s.getWriteClient()
@@ -968,7 +979,8 @@ func (s *fileSystem) Remove(filePath string) error {
 
 // RemoveAll deletes the object at filePath and every object below it
 // (including directory markers) with batched DeleteObjects requests.
-// A missing path is not an error.
+// A missing path is not an error. The root directory can't be removed,
+// that would delete every object of the bucket.
 func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	client, err := s.getWriteClient()
 	if err != nil {
@@ -980,7 +992,11 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	var batch []types.ObjectIdentifier
+	k := key(filePath)
+	if k == "" {
+		return fmt.Errorf("can't remove root directory of %s", s)
+	}
+	batch := []types.ObjectIdentifier{{Key: aws.String(k)}}
 	deleteBatch := func() error {
 		if len(batch) == 0 {
 			return nil
@@ -1000,12 +1016,9 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		batch = batch[:0]
 		return nil
 	}
-	if k := key(filePath); k != "" {
-		batch = append(batch, types.ObjectIdentifier{Key: aws.String(k)})
-	}
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
 		Bucket: &s.bucketName,
-		Prefix: aws.String(dirKey(filePath)),
+		Prefix: aws.String(k + Separator),
 	})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -1241,6 +1254,5 @@ func (s *fileSystem) Close() error {
 	}
 	fs.Unregister(s)
 	s.client = nil
-	s.transfer = nil
 	return nil
 }

@@ -134,7 +134,8 @@ client := s3.New(s3.Options{
   `MakeDir` on an existing path wraps `os.ErrExist`, `ListDir` of a missing
   directory wraps `os.ErrNotExist`, `Remove` of a directory with content
   returns `fs.ErrDirectoryNotEmpty`, `RemoveAll` deletes everything below a
-  prefix with batched `DeleteObjects` requests. Writing or copying onto a
+  prefix with batched `DeleteObjects` requests; it refuses the root
+  directory, which would delete every object of the bucket. Writing or copying onto a
   directory returns `fs.ErrIsDirectory` instead of creating an object that
   would turn the directory into a file; that check costs one
   `ListObjectsV2` request per write.

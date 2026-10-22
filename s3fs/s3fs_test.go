@@ -12,8 +12,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +43,10 @@ const (
 	testSecretKey  = "test"
 	testBucketName = "testbucket"
 	testDataDir    = "testdata"
+
+	// s3MockReadyTimeout limits the wait for S3Mock to boot,
+	// it usually needs a few seconds
+	s3MockReadyTimeout = 90 * time.Second
 )
 
 var (
@@ -118,11 +124,23 @@ func setupS3MockServer(ctx context.Context) bool {
 
 	// S3Mock is a Spring Boot application that needs several seconds
 	// to boot, creating the test bucket doubles as readiness check.
+	// A container that exited, like S3Mock without disk space for its
+	// temporary directory, fails the setup at once with its logs instead
+	// of after all attempts, which took minutes with the SDK retries.
 	log.Println("Waiting for S3Mock server to be ready...")
-	const maxRetries = 60
+	ctx, cancel := context.WithTimeout(ctx, s3MockReadyTimeout)
+	defer cancel()
+	client := createS3Client(func(o *s3.Options) { o.RetryMaxAttempts = 1 })
 	var testErr error
-	for i := range maxRetries {
-		client := createS3Client()
+	for ctx.Err() == nil {
+		if !containerRunning(ctx, containerName) {
+			if ctx.Err() != nil {
+				break // docker inspect timed out
+			}
+			log.Printf("The S3Mock container exited, its logs:\n%s", containerLogs(containerName))
+			removeContainer(containerName)
+			return false
+		}
 
 		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
 			Bucket: aws.String(testBucketName),
@@ -142,17 +160,37 @@ func setupS3MockServer(ctx context.Context) bool {
 		}
 
 		testErr = err
-		if i < maxRetries-1 {
-			time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
 		}
 	}
 
-	log.Printf("Failed to connect to S3Mock server after %d retries: %v", maxRetries, testErr)
+	log.Printf("S3Mock server not ready after %s: %v\nContainer logs:\n%s", s3MockReadyTimeout, testErr, containerLogs(containerName))
 	removeContainer(containerName)
 	return false
 }
 
-func createS3Client() *s3.Client {
+// containerRunning reports whether the container is running,
+// false if it exited or docker inspect failed.
+func containerRunning(ctx context.Context, name string) bool {
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.State.Running}}", name).Output()
+	return err == nil && strings.TrimSpace(string(output)) == "true"
+}
+
+// containerLogs returns the output of the container for the log
+// of a failed setup, or the error of docker logs.
+func containerLogs(name string) string {
+	output, err := exec.Command("docker", "logs", name).CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("docker logs %s: %v\n%s", name, err, output)
+	}
+	return string(output)
+}
+
+// createS3Client returns a client for the S3Mock server,
+// optFns change its options.
+func createS3Client(optFns ...func(*s3.Options)) *s3.Client {
 	return s3.New(s3.Options{
 		Region: testRegion,
 		// S3Mock accepts any credentials,
@@ -167,7 +205,7 @@ func createS3Client() *s3.Client {
 		// S3Mock doesn't return the part checksums of a multipart upload
 		// that the default CRC32 checksums require for completing it
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
-	})
+	}, optFns...)
 }
 
 // newTestFileSystem returns a registered file system for the test bucket
@@ -378,6 +416,103 @@ func TestNewAndRegister(t *testing.T) {
 	assert.Error(t, NewAndRegister(nil, bucket, nil), "nil client")
 }
 
+// TestRedactURI checks the password redaction of String, also for an
+// Options.Prefix that url.Parse rejects, like one with an invalid percent
+// escape, an invalid port or a control character, which redactURI
+// returned unchanged with the password.
+func TestRedactURI(t *testing.T) {
+	for uri, want := range map[string]string{
+		"s3://user:secret@minio.example.com/bucket":      "s3://user:xxxxx@minio.example.com/bucket",
+		"s3://user:secret@minio.example.com/100%":        "s3://user:xxxxx@minio.example.com/100%",
+		"s3://user:secret@minio.example.com:port/bucket": "s3://user:xxxxx@minio.example.com:port/bucket",
+		"s3://user:secret@minio.example.com/bucket\x7f":  "s3://user:xxxxx@minio.example.com/bucket\x7f",
+		// The password ends at the last '@', it may contain '@' and '/'
+		"s3://user:se@cr/et@minio.example.com/b%zz": "s3://user:xxxxx@minio.example.com/b%zz",
+		"s3://user@minio.example.com/b%zz":          "s3://user@minio.example.com/b%zz",
+		"s3://minio.example.com/b%zz":               "s3://minio.example.com/b%zz",
+		"s3://bucket":                               "s3://bucket",
+	} {
+		assert.Equal(t, want, redactURI(uri), "redactURI(%q)", uri)
+	}
+
+	f, err := New(s3.New(s3.Options{Region: testRegion}), "bucket", &Options{Prefix: "s3://user:secret@minio.example.com/100%"})
+	require.NoError(t, err)
+	assert.Equal(t, "S3 s3://user:xxxxx@minio.example.com/100%", f.String(), "String must redact the password")
+}
+
+// httptestClient returns an S3 client without retries for a test server
+// with handler that stands in for S3, so that a test runs offline.
+func httptestClient(t *testing.T, handler http.HandlerFunc) *s3.Client {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return s3.New(s3.Options{
+		Region:                     testRegion,
+		Credentials:                credentials.NewStaticCredentialsProvider(testAccessKey, testSecretKey, ""),
+		BaseEndpoint:               aws.String(server.URL),
+		UsePathStyle:               true,
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+		RetryMaxAttempts:           1,
+	})
+}
+
+// TestRemoveAllRootOffline checks that RemoveAll refuses the root without
+// any request: with the empty key prefix it deleted every object of the
+// bucket. The test server answers every request with an error.
+func TestRemoveAllRootOffline(t *testing.T) {
+	var requests atomic.Int32
+	client := httptestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNotImplemented)
+	})
+	f, err := New(client, "bucket", nil)
+	require.NoError(t, err)
+
+	for _, root := range []string{"/", "//"} {
+		err := f.(fs.RemoveAllFileSystem).RemoveAll(t.Context(), root)
+		assert.ErrorContains(t, err, "can't remove root directory", "RemoveAll(%q)", root)
+	}
+	assert.Zero(t, requests.Load(), "RemoveAll of the root must not send a request")
+}
+
+// TestReadAllPreallocates checks that ReadAll of an object below the
+// multipart download threshold reads into a buffer of the size that
+// HeadObject reported, instead of growing one from 512 bytes.
+func TestReadAllPreallocates(t *testing.T) {
+	data := largeData(1<<20 + 17)
+	client := httptestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Header().Set("ETag", `"etag"`)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(data)
+		}
+	})
+	f, err := New(client, "bucket", nil)
+	require.NoError(t, err)
+
+	read, err := f.(fs.ReadAllFileSystem).ReadAll(t.Context(), "/data.bin")
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(data, read), "content")
+	assert.LessOrEqual(t, cap(read), len(data)+bytes.MinRead, "the buffer must be allocated for the size of the object")
+}
+
+// TestRemoveAllRoot checks on S3Mock that RemoveAll of the root fails
+// and keeps the objects, it used to delete every object of the bucket.
+func TestRemoveAllRoot(t *testing.T) {
+	f, client := newTestFileSystem(t, nil)
+	ctx := t.Context()
+	dir := testDataDir + "/remove-root"
+	t.Cleanup(func() { _ = f.RemoveAll(context.Background(), "/"+dir) })
+	putObject(t, client, dir+"/keep.txt", "keep")
+
+	for _, root := range []string{"/", "//"} {
+		assert.Error(t, f.RemoveAll(ctx, root), "RemoveAll(%q)", root)
+	}
+	data, err := f.ReadAll(ctx, "/"+dir+"/keep.txt")
+	require.NoError(t, err, "RemoveAll of the root must not delete any object")
+	assert.Equal(t, "keep", string(data))
+}
+
 // TestWriteWithoutListPermission checks that credentials without the
 // s3:ListBucket permission can still upload: the directory check of the
 // writes gets 403 from ListObjectsV2 and passes. An httptest server stands
@@ -385,7 +520,7 @@ func TestNewAndRegister(t *testing.T) {
 func TestWriteWithoutListPermission(t *testing.T) {
 	var mtx sync.Mutex
 	objects := map[string]string{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := httptestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Query().Has("list-type"):
 			w.WriteHeader(http.StatusForbidden)
@@ -403,15 +538,6 @@ func TestWriteWithoutListPermission(t *testing.T) {
 		default:
 			w.WriteHeader(http.StatusNotImplemented)
 		}
-	}))
-	t.Cleanup(server.Close)
-	client := s3.New(s3.Options{
-		Region:                     testRegion,
-		Credentials:                credentials.NewStaticCredentialsProvider(testAccessKey, testSecretKey, ""),
-		BaseEndpoint:               aws.String(server.URL),
-		UsePathStyle:               true,
-		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
-		RetryMaxAttempts:           1,
 	})
 	f, err := New(client, "bucket", nil)
 	require.NoError(t, err)
@@ -758,14 +884,22 @@ func TestCopyFileInParts(t *testing.T) {
 	cancel()
 	err = f.copyObjectInParts(canceled, client, dir+"/src.bin", dir+"/canceled.bin", head)
 	assert.ErrorIs(t, err, context.Canceled)
-	_, err = f.Stat("/" + dir + "/canceled.bin")
-	assert.ErrorIs(t, err, os.ErrNotExist, "a canceled copy must not create the object")
+
+	// A canceled context already fails CreateMultipartUpload, a failed part
+	// copy fails after the upload was created: the ETag of the source
+	// changed, so S3 answers UploadPartCopy with 412 Precondition Failed
+	stale := *head
+	stale.ETag = aws.String(`"00000000000000000000000000000000"`)
+	err = f.copyObjectInParts(ctx, client, dir+"/src.bin", dir+"/stale.bin", &stale)
+	assert.True(t, hasErrorCode(err, "PreconditionFailed"), "copy of a changed source: %v", err)
+	_, err = f.Stat("/" + dir + "/stale.bin")
+	assert.ErrorIs(t, err, os.ErrNotExist, "a failed copy must not create the object")
 	uploads, err := client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
 		Bucket: aws.String(testBucketName),
 		Prefix: aws.String(dir + "/"),
 	})
 	require.NoError(t, err)
-	assert.Empty(t, uploads.Uploads, "a canceled copy must abort its multipart upload")
+	assert.Empty(t, uploads.Uploads, "a failed copy must abort its multipart upload")
 
 	err = f.CopyFile(ctx, "/"+dir+"/missing.bin", "/"+dir+"/dest2.bin")
 	assert.ErrorIs(t, err, os.ErrNotExist, "CopyFile of a missing object")
