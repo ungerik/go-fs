@@ -13,10 +13,12 @@
 package azureblobfs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +29,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
@@ -332,7 +335,7 @@ func (f *fileSystem) notExistError(filePath string) error {
 }
 
 // dirExists reports if name is a directory: a marker blob "name/" exists
-// or a blob below it (implicit directory), checked with a single listing
+// or a blob below it (implicit directory), checked with a listing
 // limited to one blob. modified is the modification time of the marker
 // or zero for an implicit directory. The root with the empty name
 // always exists.
@@ -340,21 +343,33 @@ func (f *fileSystem) dirExists(ctx context.Context, name string) (exists bool, m
 	if name == "" {
 		return true, time.Time{}, nil
 	}
-	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
+	item, err := firstBlob(ctx, f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
 		Prefix:     new(name + Separator),
 		MaxResults: new(int32(1)),
-	})
-	page, err := pager.NextPage(ctx)
-	if err != nil {
-		return false, time.Time{}, redactErr(err)
+	}))
+	if err != nil || item == nil {
+		return false, time.Time{}, err
 	}
-	if len(page.Segment.BlobItems) == 0 {
-		return false, time.Time{}, nil
-	}
-	if item := page.Segment.BlobItems[0]; deref(item.Name) == name+Separator && item.Properties != nil {
+	if deref(item.Name) == name+Separator && item.Properties != nil {
 		modified = deref(item.Properties.LastModified)
 	}
 	return true, modified, nil
+}
+
+// firstBlob returns the first blob that pager lists, or nil.
+// Azure can return an empty page with a continuation marker,
+// so it reads pages until one has a blob or there are no more.
+func firstBlob(ctx context.Context, pager *runtime.Pager[container.ListBlobsFlatResponse]) (*container.BlobItem, error) {
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, redactErr(err)
+		}
+		if len(page.Segment.BlobItems) > 0 {
+			return page.Segment.BlobItems[0], nil
+		}
+	}
+	return nil, nil
 }
 
 // checkNotDir returns an fs.ErrIsDirectory error if name is a directory,
@@ -582,8 +597,17 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		return nil, redactErr(err)
 	}
 	defer response.Body.Close()
-	data, err := fs.ReadAll(ctx, response.Body)
-	return data, redactErr(err)
+	// Allocate the buffer once for the size of the blob,
+	// ctx cancels reading the body
+	hint := bytes.MinRead
+	if size := deref(response.ContentLength); size > 0 && size <= math.MaxInt-bytes.MinRead {
+		hint += int(size)
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, hint))
+	if _, err := buf.ReadFrom(response.Body); err != nil {
+		return nil, redactErr(err)
+	}
+	return buf.Bytes(), nil
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -666,24 +690,21 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 // The blob itself is the first one listed with its name as prefix,
 // because a name sorts before all names it is a prefix of.
 func (f *fileSystem) blobItem(ctx context.Context, name string) (*container.BlobItem, error) {
-	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
+	item, err := firstBlob(ctx, f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
 		Prefix:     new(name),
 		MaxResults: new(int32(1)),
 		Include:    container.ListBlobsInclude{Metadata: true},
-	})
-	page, err := pager.NextPage(ctx)
-	if err != nil {
-		return nil, redactErr(err)
+	}))
+	if err != nil || item == nil || deref(item.Name) != name {
+		return nil, err
 	}
-	if len(page.Segment.BlobItems) == 0 || deref(page.Segment.BlobItems[0].Name) != name {
-		return nil, nil
-	}
-	return page.Segment.BlobItems[0], nil
+	return item, nil
 }
 
 // Touch updates the modification time of an existing blob by setting
 // its metadata again, which keeps the metadata, the content headers and
-// the content. It creates an empty blob for a missing path
+// the content. It creates an empty blob for a missing path, but never
+// overwrites a blob that was created in the meantime,
 // and does nothing for a directory.
 func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	if err := f.checkWritable(); err != nil {
@@ -706,7 +727,15 @@ func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 		if err != nil || isDir {
 			return err
 		}
-		_, err = f.client.NewBlockBlobClient(name).UploadBuffer(ctx, nil, nil)
+		_, err = f.client.NewBlockBlobClient(name).UploadBuffer(ctx, nil, &blockblob.UploadBufferOptions{
+			// Don't replace a blob that was created after the listing
+			AccessConditions: &blob.AccessConditions{
+				ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfNoneMatch: new(azcore.ETagAny)},
+			},
+		})
+		if bloberror.HasCode(err, bloberror.BlobAlreadyExists, bloberror.ConditionNotMet) {
+			return nil // Created after the listing, so modified anyway
+		}
 		return redactErr(err)
 	}
 	opts := &blob.SetMetadataOptions{}
@@ -785,7 +814,8 @@ func (f *fileSystem) Remove(filePath string) error {
 }
 
 // RemoveAll deletes the blob at filePath and every blob below it.
-// A missing path is not an error.
+// A missing path is not an error. The root directory can't be removed,
+// that would delete every blob of the container.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if err := f.checkWritable(); err != nil {
 		return err
@@ -793,13 +823,15 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	if name := blobName(filePath); name != "" {
-		_, err := f.client.NewBlobClient(name).Delete(ctx, nil)
-		if err != nil && !isNotFound(err) {
-			return redactErr(err)
-		}
+	name := blobName(filePath)
+	if name == "" {
+		return fmt.Errorf("can't remove root directory of %s", f)
 	}
-	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(dirPrefix(filePath))})
+	_, err := f.client.NewBlobClient(name).Delete(ctx, nil)
+	if err != nil && !isNotFound(err) {
+		return redactErr(err)
+	}
+	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(name + Separator)})
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {

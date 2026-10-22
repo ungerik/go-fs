@@ -105,7 +105,8 @@ messages of the errors it returns, so they don't leak into logs.
   an existing path wraps `os.ErrExist`, `ListDir` of a missing directory
   wraps `os.ErrNotExist`, `Remove` of a directory with content returns
   `fs.ErrDirectoryNotEmpty`, and `RemoveAll` deletes everything below a
-  prefix. Writing or copying onto a directory returns `fs.ErrIsDirectory`
+  prefix; it refuses the root directory, which would delete every blob of
+  the container. Writing or copying onto a directory returns `fs.ErrIsDirectory`
   instead of creating a blob that would turn the directory into a file.
 - **Native operations.** `ReadAll`, `WriteAll`, `OpenReadWriter`, `Touch`,
   `RemoveAll`, `ListDirRecursive` and `CopyFile` are native, and readers
@@ -120,7 +121,9 @@ messages of the errors it returns, so they don't leak into logs.
 - **Copy and touch.** `CopyFile` is a server-side copy. `Touch` updates
   the modification time by setting the metadata of the blob again, which
   keeps the metadata (with the case of their names), the content headers
-  and the content.
+  and the content. `Touch` of a missing path creates an empty blob with a
+  conditional request, so a blob that another client created in the
+  meantime is not overwritten.
 - **Permissions.** Access is governed by Azure roles and SAS tokens, the
   reported permissions are the constants `azureblobfs.DefaultPermissions` /
   `azureblobfs.DefaultDirPermissions`. There are no symbolic links and no

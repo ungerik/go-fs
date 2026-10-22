@@ -8,9 +8,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +22,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
 	"github.com/stretchr/testify/assert"
@@ -421,6 +426,176 @@ func TestTouchKeepsMetadata(t *testing.T) {
 	assert.NoError(t, blobFS.Touch("/", 0), "Touch of the root")
 }
 
+// requestPolicy is a pipeline policy of a test client, which must
+// send the request with req.Next or return a response itself.
+type requestPolicy func(req *policy.Request) (*http.Response, error)
+
+func (p requestPolicy) Do(req *policy.Request) (*http.Response, error) { return p(req) }
+
+// newPolicyFileSystem returns a file system for the test container
+// whose client sends every request through the policy p.
+func newPolicyFileSystem(t *testing.T, p requestPolicy) *fileSystem {
+	t.Helper()
+	if !dockerAzuriteAvailable {
+		t.Skip("Docker Azurite server not available")
+	}
+	client, err := container.NewClientFromConnectionString(testConnectionString, testContainer, &container.ClientOptions{
+		ClientOptions: azcore.ClientOptions{PerCallPolicies: []policy.Policy{p}},
+	})
+	require.NoError(t, err)
+	f, err := New(t.Context(), client, &Options{SkipContainerCheck: true})
+	require.NoError(t, err)
+	return f.(*fileSystem)
+}
+
+// TestTouch_CreatedConcurrently checks that Touch of a missing blob doesn't
+// overwrite a blob that another client creates between the listing and
+// the upload of the empty blob, which Touch used to replace with an
+// empty one. The upload is conditional now (If-None-Match: *).
+// The policy of the client creates the blob right before the upload.
+func TestTouch_CreatedConcurrently(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	other := testClient(t)
+	ctx := t.Context()
+	const name = "touch-race/new.txt"
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/touch-race") })
+	var created atomic.Bool
+	racing := newPolicyFileSystem(t, func(req *policy.Request) (*http.Response, error) {
+		raw := req.Raw()
+		if raw.Method == http.MethodPut && strings.HasSuffix(raw.URL.Path, "/"+name) && created.CompareAndSwap(false, true) {
+			if _, err := other.NewBlockBlobClient(name).UploadBuffer(raw.Context(), []byte("concurrent"), nil); err != nil {
+				return nil, err
+			}
+		}
+		return req.Next()
+	})
+
+	require.NoError(t, racing.Touch("/"+name, 0))
+	require.True(t, created.Load(), "the policy must have created the blob")
+	data, err := blobFS.ReadAll(ctx, "/"+name)
+	require.NoError(t, err)
+	assert.Equal(t, "concurrent", string(data), "Touch must not overwrite the blob")
+}
+
+// TestTouch_EmptyListingPage checks that Touch reads on when Azure returns
+// an empty listing page with a continuation marker, which it may do for
+// any listing. Touch read only the first page, so it took an existing blob
+// for a missing one, which it replaced with an empty blob, and a directory
+// for a missing path, where it created an empty blob. The policy of the
+// client answers the first request of every listing with an empty page
+// and sends the next one without the marker.
+func TestTouch_EmptyListingPage(t *testing.T) {
+	const fakeMarker = "gofs-test-empty-page"
+	blobFS := newTestFileSystem(t, nil)
+	client := testClient(t)
+	ctx := t.Context()
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/touch-pages") })
+	for _, name := range []string{"touch-pages/keep.txt", "touch-pages/dir/file.txt"} {
+		_, err := client.NewBlockBlobClient(name).UploadBuffer(ctx, []byte("keep"), nil)
+		require.NoError(t, err)
+	}
+	var emptyPages atomic.Int32
+	paging := newPolicyFileSystem(t, func(req *policy.Request) (*http.Response, error) {
+		raw := req.Raw()
+		query := raw.URL.Query()
+		if query.Get("comp") != "list" || !strings.HasPrefix(query.Get("prefix"), "touch-pages/") {
+			return req.Next()
+		}
+		if query.Get("marker") == fakeMarker {
+			query.Del("marker")
+			raw.URL.RawQuery = query.Encode()
+			return req.Next()
+		}
+		emptyPages.Add(1)
+		body := `<?xml version="1.0" encoding="utf-8"?><EnumerationResults ContainerName="` + testContainer + `">` +
+			`<Prefix>` + query.Get("prefix") + `</Prefix><Blobs></Blobs><NextMarker>` + fakeMarker + `</NextMarker></EnumerationResults>`
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/xml"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    raw,
+		}, nil
+	})
+
+	before, err := blobFS.Stat("/touch-pages/keep.txt")
+	require.NoError(t, err)
+	time.Sleep(1100 * time.Millisecond) // Last-Modified has a resolution of seconds
+	require.NoError(t, paging.Touch("/touch-pages/keep.txt", 0))
+	data, err := blobFS.ReadAll(ctx, "/touch-pages/keep.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "keep", string(data), "Touch must not replace an existing blob")
+	after, err := blobFS.Stat("/touch-pages/keep.txt")
+	require.NoError(t, err)
+	assert.True(t, after.Modified.After(before.Modified), "Touch must find the blob and update its modification time")
+
+	require.NoError(t, paging.Touch("/touch-pages/dir", 0))
+	info, err := blobFS.Stat("/touch-pages/dir")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir, "Touch of a directory must not create a blob")
+	assert.Positive(t, emptyPages.Load(), "the policy must have returned empty pages")
+}
+
+// TestRemoveAllRoot checks on Azurite that RemoveAll of the root fails
+// and keeps the blobs, it used to delete every blob of the container.
+func TestRemoveAllRoot(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	ctx := t.Context()
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/remove-root") })
+	require.NoError(t, blobFS.WriteAll(ctx, "/remove-root/keep.txt", []byte("keep"), 0))
+
+	for _, root := range []string{"/", "//"} {
+		assert.Error(t, blobFS.RemoveAll(ctx, root), "RemoveAll(%q)", root)
+	}
+	data, err := blobFS.ReadAll(ctx, "/remove-root/keep.txt")
+	require.NoError(t, err, "RemoveAll of the root must not delete any blob")
+	assert.Equal(t, "keep", string(data))
+}
+
+// newHTTPTestFileSystem returns a file system for a container of a test
+// server with handler that stands in for Azure, so that a test runs offline.
+func newHTTPTestFileSystem(t *testing.T, handler http.HandlerFunc) *fileSystem {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	client, err := container.NewClientWithNoCredential(server.URL+"/account/container", noRetries)
+	require.NoError(t, err)
+	f, err := New(t.Context(), client, &Options{SkipContainerCheck: true})
+	require.NoError(t, err)
+	return f.(*fileSystem)
+}
+
+// TestRemoveAllRootOffline checks that RemoveAll refuses the root without
+// any request. The test server answers every request with an error.
+func TestRemoveAllRootOffline(t *testing.T) {
+	var requests atomic.Int32
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNotImplemented)
+	})
+	for _, root := range []string{"/", "//"} {
+		assert.ErrorContains(t, blobFS.RemoveAll(t.Context(), root), "can't remove root directory", "RemoveAll(%q)", root)
+	}
+	assert.Zero(t, requests.Load(), "RemoveAll of the root must not send a request")
+}
+
+// TestReadAllPreallocates checks that ReadAll reads into a buffer of the
+// Content-Length of the download, instead of growing one from 512 bytes.
+func TestReadAllPreallocates(t *testing.T) {
+	data := make([]byte, 1<<20+17)
+	for i := range data {
+		data[i] = byte(i % 251)
+	}
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		_, _ = w.Write(data)
+	})
+	read, err := blobFS.ReadAll(t.Context(), "/data.bin")
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(data, read), "content")
+	assert.LessOrEqual(t, cap(read), len(data)+bytes.MinRead, "the buffer must be allocated for the size of the blob")
+}
+
 // TestListDirSkipsNamesWithoutPath checks that blobs with empty path
 // elements are not listed: a blob "/x" made the root list itself as its
 // own child and "d//x.txt" made d list itself, so recursive walkers looped.
@@ -529,6 +704,25 @@ func TestOpenWriterStreaming(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(data, read), "streamed content")
 
+	// The staged blocks replace an existing blob when Close commits the block list
+	require.NoError(t, blobFS.WriteAll(ctx, "/streaming/replaced.bin", []byte("existing"), 0))
+	w, err = blobFS.OpenWriter("/streaming/replaced.bin", 0)
+	require.NoError(t, err)
+	for start := 0; start < len(data); start += 32 * 1024 {
+		_, err = w.Write(data[start:min(start+32*1024, len(data))])
+		require.NoError(t, err)
+	}
+	existing, err := blobFS.ReadAll(ctx, "/streaming/replaced.bin")
+	require.NoError(t, err)
+	assert.Equal(t, "existing", string(existing), "the blob must not change before Close")
+	require.NoError(t, w.Close())
+	read, err = blobFS.ReadAll(ctx, "/streaming/replaced.bin")
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(data, read), "Close must replace the existing blob")
+	blocks, err := blobFS.client.NewBlockBlobClient("streaming/replaced.bin").GetBlockList(ctx, blockblob.BlockListTypeCommitted, nil)
+	require.NoError(t, err)
+	assert.Len(t, blocks.CommittedBlocks, 4, "the blob must be committed from the 4 staged blocks")
+
 	// Abort after blocks were staged, of a new and an existing blob
 	require.NoError(t, blobFS.WriteAll(ctx, "/streaming/existing.bin", []byte("existing"), 0))
 	for _, name := range []string{"aborted.bin", "existing.bin"} {
@@ -541,7 +735,7 @@ func TestOpenWriterStreaming(t *testing.T) {
 	}
 	_, err = blobFS.Stat("/streaming/aborted.bin")
 	assert.ErrorIs(t, err, os.ErrNotExist, "Abort must not create the blob")
-	existing, err := blobFS.ReadAll(ctx, "/streaming/existing.bin")
+	existing, err = blobFS.ReadAll(ctx, "/streaming/existing.bin")
 	require.NoError(t, err)
 	assert.Equal(t, "existing", string(existing), "Abort must not change an existing blob")
 
