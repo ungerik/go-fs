@@ -1,6 +1,7 @@
 package smbfs
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -85,25 +86,26 @@ func parseAddress(address string, opts *Options) (*dialConfig, error) {
 	if opts != nil {
 		cfg.opts = *opts
 	}
-	cfg.username = cfg.opts.Username
-	if cfg.username == "" {
-		cfg.username = u.User.Username()
-	}
+	cfg.username = cmp.Or(cfg.opts.Username, u.User.Username())
 	cfg.password = cfg.opts.Password
 	if cfg.password == "" {
 		cfg.password, _ = u.User.Password()
 	}
 
-	port := u.Port()
-	if port == "" {
-		port = defaultPort
-	}
+	port := cmp.Or(u.Port(), defaultPort)
+	// u.Hostname has no brackets and no escapes, JoinHostPort adds the brackets
 	cfg.hostPort = net.JoinHostPort(u.Hostname(), port)
 
 	host := u.Host
-	if u.Port() == defaultPort {
+	switch u.Port() {
+	case "":
+		host = strings.TrimSuffix(host, ":") // "host:" has an empty port
+	case defaultPort:
 		host = strings.TrimSuffix(host, ":"+defaultPort)
 	}
+	// url.Parse unescaped the zone of an IPv6 address
+	// like "[fe80::1%25eth0]", the URI prefix needs the escape
+	host = strings.ReplaceAll(host, "%", "%25")
 	userPrefix := Prefix
 	if cfg.username != "" {
 		userPrefix += url.User(cfg.username).String() + "@"

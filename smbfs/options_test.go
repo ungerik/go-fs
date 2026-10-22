@@ -1,6 +1,7 @@
 package smbfs
 
 import (
+	"net/url"
 	"testing"
 	"time"
 
@@ -57,11 +58,32 @@ func Test_parseAddress(t *testing.T) {
 			address: "smb://u@[::1]/share", opts: &Options{Password: "pw"}, prefix: "smb://u@[::1]/share", aliases: []string{"smb://u@[::1]:445/share"},
 			hostPort: "[::1]:445", share: "share", user: "u", password: "pw",
 		},
+		// The empty port of "host:" was kept in the prefix, the alias was "smb://nas::445/share"
+		{
+			address: "smb://nas:/share", prefix: "smb://nas/share", aliases: []string{"smb://nas:445/share"},
+			hostPort: "nas:445", share: "share",
+		},
+		{
+			address: "smb://[::1]:/share", prefix: "smb://[::1]/share", aliases: []string{"smb://[::1]:445/share"},
+			hostPort: "[::1]:445", share: "share",
+		},
+		// url.Parse unescapes the zone of an IPv6 address, the prefix
+		// had the invalid host "[fe80::1%eth0]"
+		{
+			address: "smb://[fe80::1%25eth0]/share", prefix: "smb://[fe80::1%25eth0]/share", aliases: []string{"smb://[fe80::1%25eth0]:445/share"},
+			hostPort: "[fe80::1%eth0]:445", share: "share",
+		},
+		{
+			address: "smb://u@[fe80::1%25eth0]:1445/share", opts: &Options{Password: "pw"}, prefix: "smb://u@[fe80::1%25eth0]:1445/share",
+			hostPort: "[fe80::1%eth0]:1445", share: "share", user: "u", password: "pw",
+		},
 	} {
 		t.Run(tc.address, func(t *testing.T) {
 			cfg, err := parseAddress(tc.address, tc.opts)
 			require.NoError(t, err)
 			assert.Equal(t, tc.prefix, cfg.prefix, "prefix")
+			_, err = url.Parse(cfg.prefix)
+			assert.NoError(t, err, "the prefix is a valid URL")
 			assert.Equal(t, tc.aliases, cfg.aliases, "aliases")
 			assert.Equal(t, tc.hostPort, cfg.hostPort, "hostPort")
 			assert.Equal(t, tc.share, cfg.share, "share")

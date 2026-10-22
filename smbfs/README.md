@@ -87,11 +87,15 @@ A file system keeps one SMB session that operations use concurrently.
 When its connection broke, for example because a Windows server
 disconnected the session after its idle timeout of about 15 minutes, the
 next operation dials a new session before it sends its request. An
-operation that fails because the connection broke while its request was on
-the way is retried once on a new session if it is idempotent; `Remove`,
-`MakeDir`, `Move` and `CreateSymbolicLink` return the connection error
-("may have been executed") instead, because the server may have executed
-them. Open file handles belong to their session and fail after a reconnect.
+operation that fails because the connection broke while a request was on
+the way is retried once on a new session, unless the request changes the
+share: if the connection broke after `Remove`, `MakeDir` or
+`CreateSymbolicLink` sent their request, or `Move` its rename after the
+checks of source and destination, they return the connection error ("may
+have been executed"), because the server may have executed it. Operations
+waiting for a reconnect share its result, also when the dial timed out
+after `Options.Timeout`. Open file handles belong to their session and fail
+after a reconnect.
 
 Operations with a `context.Context` are aborted when the context is done.
 `Close` unregisters the file system, aborts running operations, reconnects
@@ -101,14 +105,20 @@ and the requests of open file handles, and afterwards every method returns
 ## How SMB concepts map to the file system
 
 - **Paths.** Paths below the share, separator `/`. The share itself is the
-  root directory of the file system.
+  root directory of the file system. A path or symbolic link target with a
+  backslash is an error wrapping `os.ErrInvalid`: SMB servers take the
+  backslash for a separator and resolve `..`, so a name like `..\x` from a
+  `SubFileSystem` or `CopyRecursive` would reach a file outside of its
+  directory.
 - **Native operations.** SMB has real directories and random access file
   handles, so nearly every optional interface is native: `ReadAll`,
   `WriteAll`, `OpenAppendWriter`, `OpenReadWriter`, `Truncate`, `Touch`,
   `MakeAllDirs`, `RemoveAll`, `Move`, `SetPermissions`, symbolic links and
   seeking reads. The rest uses the generic emulation of the `fs` package.
   File handles behave like `os.File`: `ReadAt` returns `io.EOF` at the end
-  of the file and `Seek` to a negative offset fails.
+  of the file and `Seek` to a negative offset fails. After `Close` of the
+  file system their methods return `fs.ErrFileSystemClosed`, also through
+  `io.Copy` and `io.WriteString`.
 - **Move.** The SMB rename replaces any existing destination, so `Move`
   checks the destination first: an existing directory is an error wrapping
   `os.ErrExist`, an existing file is replaced, a directory can't replace a
@@ -124,13 +134,16 @@ and the requests of open file handles, and afterwards every method returns
   path wraps `os.ErrExist`, access denied wraps `os.ErrPermission`, reading
   or writing a directory is an `fs.ErrIsDirectory`, removing a non-empty
   directory is an `fs.ErrDirectoryNotEmpty`, and after `Close` every method
-  returns `fs.ErrFileSystemClosed`.
+  returns `fs.ErrFileSystemClosed`, also `Remove` and `RemoveAll` of the
+  root directory, which are errors otherwise.
 
 ## Testing
 
 The tests run the go-fs conformance suite and the reconnect tests against a
 Samba server in a Docker container (`dperson/samba`) with a share for a test
-user and a share with guest access. Docker is required for them; if it is
+user and a share with guest access, both on tmpfs together with the session
+databases of smbd, so a full Docker disk doesn't fail the tests. Docker is
+required for them; if it is
 not installed they are skipped, if it is installed but the container can't
 be started they fail. The other tests run offline.
 

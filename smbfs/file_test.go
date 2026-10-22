@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,24 +70,43 @@ func TestFile(t *testing.T) {
 	assert.Equal(t, "Xab3456789", string(data))
 }
 
-// TestFile_AfterClose verifies that an open handle reports
-// fs.ErrFileSystemClosed after Close of the file system.
+// TestFile_AfterClose verifies that open handles report
+// fs.ErrFileSystemClosed after Close of the file system, also from
+// WriteTo, ReadFrom and WriteString, which io.Copy and io.WriteString
+// prefer. Those were promoted from the go-smb2 file without the mapping.
 func TestFile_AfterClose(t *testing.T) {
 	f, _ := dialTestFS(t)
 	name := fmt.Sprintf("/after-close-%d.txt", time.Now().UnixNano())
+	written := fmt.Sprintf("/after-close-written-%d.txt", time.Now().UnixNano())
 	require.NoError(t, f.WriteAll(t.Context(), name, []byte("content"), 0))
 	t.Cleanup(func() {
 		cleanup, err := Dial(context.Background(), testSMBAddress, &Options{Username: testUsername, Password: testPassword})
 		if err == nil {
 			_ = cleanup.(*fileSystem).Remove(name)
+			_ = cleanup.(*fileSystem).Remove(written)
 			_ = cleanup.Close()
 		}
 	})
 
 	r, err := f.OpenReader(name)
 	require.NoError(t, err)
+	w, err := f.OpenWriter(written, 0)
+	require.NoError(t, err)
 	require.NoError(t, f.Close())
+
 	_, err = r.Read(make([]byte, 4))
-	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "Read")
+	_, err = io.Copy(io.Discard, r)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "io.Copy from the file calls its WriteTo")
+	// The struct hides the WriteTo method of strings.Reader,
+	// which io.Copy would prefer over the ReadFrom of the file
+	_, err = io.Copy(w, struct{ io.Reader }{strings.NewReader("data")})
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "io.Copy to the file calls its ReadFrom")
+	_, err = io.WriteString(w, "data")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "io.WriteString calls WriteString")
+	_, err = w.Write([]byte("data"))
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "Write")
+
 	assert.NoError(t, r.Close(), "closing a handle of a closed file system")
+	assert.NoError(t, w.Close(), "closing a handle of a closed file system")
 }

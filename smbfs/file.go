@@ -15,7 +15,9 @@ import (
 // file is an open SMB file handle with the io semantics of os.File:
 // ReadAt returns io.EOF when it reads less than len(b), Seek rejects a
 // resulting negative offset, and after Close of the file system the
-// methods return errors wrapping fs.ErrFileSystemClosed.
+// methods of the io interfaces, also WriteTo, ReadFrom and WriteString
+// that io.Copy and io.WriteString prefer, return errors wrapping
+// fs.ErrFileSystemClosed.
 type file struct {
 	*smb2.File
 	fsys *fileSystem
@@ -24,6 +26,9 @@ type file struct {
 var (
 	_ fs.ReadAtSeekCloser    = new(file)
 	_ fs.ReadWriteSeekCloser = new(file)
+	_ io.WriterTo            = new(file)
+	_ io.ReaderFrom          = new(file)
+	_ io.StringWriter        = new(file)
 )
 
 // err maps the context error of a handle whose file system was closed.
@@ -62,6 +67,23 @@ func (f *file) Write(b []byte) (int, error) {
 
 func (f *file) WriteAt(b []byte, off int64) (int, error) {
 	n, err := f.File.WriteAt(b, off)
+	return n, f.err(err)
+}
+
+func (f *file) WriteString(s string) (int, error) {
+	n, err := f.File.WriteString(s)
+	return n, f.err(err)
+}
+
+// WriteTo writes the rest of the file to w, io.Copy uses it.
+func (f *file) WriteTo(w io.Writer) (int64, error) {
+	n, err := f.File.WriteTo(w)
+	return n, f.err(err)
+}
+
+// ReadFrom writes the data of r to the file, io.Copy uses it.
+func (f *file) ReadFrom(r io.Reader) (int64, error) {
+	n, err := f.File.ReadFrom(r)
 	return n, f.err(err)
 }
 

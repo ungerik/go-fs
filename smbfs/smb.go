@@ -11,11 +11,15 @@
 // When its connection broke, for example because a Windows server
 // disconnected the idle session, the next operation dials a new session
 // before it sends its request. An operation that fails because the
-// connection broke while its request was on the way is retried once on a
-// new session if it is idempotent; Remove, MakeDir, Move and
-// CreateSymbolicLink return the connection error instead, because the
-// server may have executed them. Open file handles belong to their
-// session and fail after a reconnect.
+// connection broke while a request was on the way is retried once on a
+// new session, unless the request changes the share: if the connection
+// broke after Remove, MakeDir or CreateSymbolicLink sent their request,
+// or Move its rename after the checks, they return the connection error,
+// because the server may have executed it. Open file handles belong to
+// their session and fail after a reconnect.
+//
+// Paths have the separator "/". A path with a backslash is an error
+// wrapping os.ErrInvalid, because SMB servers take it for a separator.
 //
 // URIs have the form "smb://user@host:port/share/path" and never contain a
 // password; the port is omitted if it is 445, and "smb://user@host:445/share"
@@ -45,7 +49,8 @@ const (
 	// Prefix is the URI scheme prefix of smbfs URIs: smb://user@host/share
 	Prefix = "smb://"
 
-	// Separator used in smbfs paths
+	// Separator used in smbfs paths. Paths must not contain backslashes,
+	// the separator of SMB servers.
 	Separator = "/"
 )
 
@@ -189,10 +194,32 @@ func (f *fileSystem) file(filePath string) fs.File {
 	return fs.File(f.JoinCleanURI(filePath))
 }
 
-// sharePath returns the share relative path of a file system path,
-// the empty string for the root.
-func sharePath(filePath string) string {
-	return strings.Trim(path.Clean("/"+filePath), Separator)
+// checkPath returns fs.ErrEmptyPath for an empty path and an error
+// wrapping os.ErrInvalid for a path with a backslash.
+//
+// SMB servers separate the names of a path with backslashes and go-smb2
+// converts the separator "/" to them. A name like `..\x` is a single name
+// for the separator "/", also for SubFileSystem and CopyRecursive, but
+// the server would split it and resolve "..", so the name would reach
+// a file outside of the directory that it is meant to be in.
+func checkPath(filePath string) error {
+	if filePath == "" {
+		return fs.ErrEmptyPath
+	}
+	if strings.Contains(filePath, `\`) {
+		return fmt.Errorf("%w: smbfs path %q contains a backslash, which SMB servers take for a separator", os.ErrInvalid, filePath)
+	}
+	return nil
+}
+
+// sharePath checks a file system path with checkPath and returns
+// its share relative path, the empty string for the root.
+// Every path is translated with it before it is sent to the server.
+func sharePath(filePath string) (string, error) {
+	if err := checkPath(filePath); err != nil {
+		return "", err
+	}
+	return strings.Trim(path.Clean("/"+filePath), Separator), nil
 }
 
 // wrapErr maps the errors of go-smb2 to the fs error types for filePath.
@@ -216,16 +243,17 @@ func (f *fileSystem) wrapErr(filePath string, err error) error {
 	return err
 }
 
-// dirErr maps the error of reading or writing filePath to fs.ErrIsDirectory
-// if filePath is a directory. Servers report that in different ways,
-// Samba for example with STATUS_INVALID_PARAMETER for opening a directory
-// for writing and STATUS_INVALID_DEVICE_REQUEST for reading it.
-func (f *fileSystem) dirErr(share *smb2.Share, filePath string, err error) error {
+// dirErr maps the error of reading or writing filePath, with the share
+// path p, to fs.ErrIsDirectory if it is a directory. Servers report that
+// in different ways, Samba for example with STATUS_INVALID_PARAMETER for
+// opening a directory for writing and STATUS_INVALID_DEVICE_REQUEST for
+// reading it.
+func (f *fileSystem) dirErr(share *smb2.Share, filePath, p string, err error) error {
 	err = f.wrapErr(filePath, err)
 	if err == nil || isConnectionError(err) || errors.Is(err, os.ErrNotExist) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	if info, statErr := share.Stat(sharePath(filePath)); statErr == nil && info.IsDir() {
+	if info, statErr := share.Stat(p); statErr == nil && info.IsDir() {
 		return fs.NewErrIsDirectory(f.file(filePath))
 	}
 	return err
@@ -247,12 +275,23 @@ func (f *fileSystem) rootInfo() *fs.FileInfo {
 // Stat returns the FileInfo with the symlink flag from Lstat
 // and the other fields from Stat like os does.
 func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
-	if filePath == "" {
-		return nil, fs.ErrEmptyPath
+	return f.stat(filePath, true)
+}
+
+// Lstat returns the FileInfo of the file without following a symbolic link.
+func (f *fileSystem) Lstat(filePath string) (*fs.FileInfo, error) {
+	return f.stat(filePath, false)
+}
+
+// stat returns the FileInfo of the file. If follow is set, the fields
+// except the symlink flag describe the file that a symbolic link points to.
+func (f *fileSystem) stat(filePath string, follow bool) (*fs.FileInfo, error) {
+	p, err := sharePath(filePath)
+	if err != nil {
+		return nil, err
 	}
 	var fileInfo *fs.FileInfo
-	err := f.do(context.Background(), true, func(share *smb2.Share) error {
-		p := sharePath(filePath)
+	err = f.do(context.Background(), func(share *smb2.Share, _ func()) error {
 		if p == "" {
 			fileInfo = f.rootInfo()
 			return nil
@@ -262,14 +301,15 @@ func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 			return f.wrapErr(filePath, err)
 		}
 		info := linkInfo
-		if linkInfo.Mode()&os.ModeSymlink != 0 {
+		isSymlink := linkInfo.Mode()&os.ModeSymlink != 0
+		if follow && isSymlink {
 			info, err = share.Stat(p)
 			if err != nil {
 				return f.wrapErr(filePath, err)
 			}
 		}
 		fileInfo = fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
-		fileInfo.IsSymlink = linkInfo.Mode()&os.ModeSymlink != 0
+		fileInfo.IsSymlink = isSymlink
 		return nil
 	})
 	return fileInfo, err
@@ -278,14 +318,15 @@ func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 // ListDir lists the directory. The FileInfo of a symbolic link describes
 // the link itself. The callbacks are called after the listing completed.
 func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
-	if dirPath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(dirPath)
+	if err != nil {
+		return err
 	}
 	var infos []os.FileInfo
-	err := f.do(ctx, true, func(share *smb2.Share) (err error) {
-		infos, err = share.ReadDir(sharePath(dirPath))
+	err = f.do(ctx, func(share *smb2.Share, _ func()) (err error) {
+		infos, err = share.ReadDir(p)
 		if err != nil {
-			if info, statErr := share.Stat(sharePath(dirPath)); statErr == nil && !info.IsDir() {
+			if info, statErr := share.Stat(p); statErr == nil && !info.IsDir() {
 				return fs.NewErrIsNotDirectory(f.file(dirPath))
 			}
 			return f.wrapErr(dirPath, err)
@@ -317,15 +358,16 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 // openFile opens a file handle with the flags. A created file gets
 // the permissions perm if perm is not zero.
 func (f *fileSystem) openFile(filePath string, flag int, perm fs.Permissions) (*file, error) {
-	if filePath == "" {
-		return nil, fs.ErrEmptyPath
+	p, err := sharePath(filePath)
+	if err != nil {
+		return nil, err
 	}
 	var handle *file
-	err := f.doHandle(true, func(share *smb2.Share) error {
-		smbFile, err := share.OpenFile(sharePath(filePath), flag, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
+	err = f.doHandle(func(share *smb2.Share, _ func()) error {
+		smbFile, err := share.OpenFile(p, flag, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
 		if err != nil {
 			if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
-				return f.dirErr(share, filePath, err)
+				return f.dirErr(share, filePath, p, err)
 			}
 			return f.wrapErr(filePath, err)
 		}
@@ -352,13 +394,14 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 }
 
 func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	if filePath == "" {
-		return nil, fs.ErrEmptyPath
+	p, err := sharePath(filePath)
+	if err != nil {
+		return nil, err
 	}
 	var data []byte
-	err := f.do(ctx, true, func(share *smb2.Share) (err error) {
-		data, err = share.ReadFile(sharePath(filePath))
-		return f.dirErr(share, filePath, err)
+	err = f.do(ctx, func(share *smb2.Share, _ func()) (err error) {
+		data, err = share.ReadFile(p)
+		return f.dirErr(share, filePath, p, err)
 	})
 	return data, err
 }
@@ -367,12 +410,13 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 // Writing
 
 func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(filePath)
+	if err != nil {
+		return err
 	}
-	return f.do(ctx, true, func(share *smb2.Share) error {
-		err := share.WriteFile(sharePath(filePath), data, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
-		return f.dirErr(share, filePath, err)
+	return f.do(ctx, func(share *smb2.Share, _ func()) error {
+		err := share.WriteFile(p, data, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
+		return f.dirErr(share, filePath, p, err)
 	})
 }
 
@@ -389,22 +433,23 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 }
 
 func (f *fileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(filePath)
+	if err != nil {
+		return err
 	}
-	return f.do(ctx, true, func(share *smb2.Share) error {
-		return f.dirErr(share, filePath, share.Truncate(sharePath(filePath), size))
+	return f.do(ctx, func(share *smb2.Share, _ func()) error {
+		return f.dirErr(share, filePath, p, share.Truncate(p, size))
 	})
 }
 
 // Touch updates the modification time of an existing file
 // and creates an empty file with the permissions perm otherwise.
 func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(filePath)
+	if err != nil {
+		return err
 	}
-	return f.do(context.Background(), true, func(share *smb2.Share) error {
-		p := sharePath(filePath)
+	return f.do(context.Background(), func(share *smb2.Share, _ func()) error {
 		_, err := share.Stat(p)
 		if errors.Is(err, os.ErrNotExist) {
 			created, err := share.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm.OrDefault(fs.UserAndGroupReadWrite).FileMode(false))
@@ -424,17 +469,18 @@ func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 // MakeDir creates a directory.
 // It returns an error wrapping os.ErrExist if the path exists.
 func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
-	if dirPath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(dirPath)
+	if err != nil {
+		return err
 	}
 	if f.closed.Load() {
 		return fs.ErrFileSystemClosed
 	}
-	p := sharePath(dirPath)
 	if p == "" {
 		return fs.NewErrAlreadyExists(f.RootDir())
 	}
-	return f.do(context.Background(), false, func(share *smb2.Share) error {
+	return f.do(context.Background(), func(share *smb2.Share, noRetry func()) error {
+		noRetry()
 		err := share.Mkdir(p, perm.OrDefault(fs.AllReadWrite|fs.AllExecute).FileMode(true))
 		if err != nil && !errors.Is(err, os.ErrExist) && !isConnectionError(err) {
 			// Some servers report a generic error for an existing path
@@ -447,11 +493,11 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 }
 
 func (f *fileSystem) MakeAllDirs(dirPath string, perm fs.Permissions) error {
-	if dirPath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(dirPath)
+	if err != nil {
+		return err
 	}
-	return f.do(context.Background(), true, func(share *smb2.Share) error {
-		p := sharePath(dirPath)
+	return f.do(context.Background(), func(share *smb2.Share, _ func()) error {
 		if p == "" {
 			return nil
 		}
@@ -468,11 +514,12 @@ func (f *fileSystem) MakeAllDirs(dirPath string, perm fs.Permissions) error {
 // SetPermissions sets the read-only attribute of a file when perm has no
 // user write bit and clears it otherwise. SMB has no POSIX permission bits.
 func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(filePath)
+	if err != nil {
+		return err
 	}
-	return f.do(context.Background(), true, func(share *smb2.Share) error {
-		return f.wrapErr(filePath, share.Chmod(sharePath(filePath), perm.FileMode(false)))
+	return f.do(context.Background(), func(share *smb2.Share, _ func()) error {
+		return f.wrapErr(filePath, share.Chmod(p, perm.FileMode(false)))
 	})
 }
 
@@ -485,17 +532,21 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 // Moving a directory into itself is an error wrapping os.ErrInvalid.
 // The checks and the rename are not atomic.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
-	if filePath == "" || destPath == "" {
-		return fs.ErrEmptyPath
+	src, err := sharePath(filePath)
+	if err != nil {
+		return err
 	}
-	src, dest := sharePath(filePath), sharePath(destPath)
+	dest, err := sharePath(destPath)
+	if err != nil {
+		return err
+	}
 	if src == dest {
 		if f.closed.Load() {
 			return fs.ErrFileSystemClosed
 		}
 		return ctx.Err()
 	}
-	return f.do(ctx, false, func(share *smb2.Share) error {
+	return f.do(ctx, func(share *smb2.Share, noRetry func()) error {
 		srcInfo, err := share.Lstat(src)
 		if err != nil {
 			return f.wrapErr(filePath, err)
@@ -512,6 +563,7 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 		case err != nil && !errors.Is(err, os.ErrNotExist):
 			return f.wrapErr(destPath, err)
 		}
+		noRetry()
 		return f.wrapErr(filePath, share.Rename(src, dest))
 	})
 }
@@ -519,68 +571,55 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 // Remove removes a file or an empty directory.
 // A non-empty directory is an fs.ErrDirectoryNotEmpty.
 func (f *fileSystem) Remove(filePath string) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(filePath)
+	if err != nil {
+		return err
 	}
-	p := sharePath(filePath)
+	if f.closed.Load() {
+		return fs.ErrFileSystemClosed
+	}
 	if p == "" {
 		return fmt.Errorf("smbfs: can't remove the root directory of %s", f)
 	}
-	return f.do(context.Background(), false, func(share *smb2.Share) error {
+	return f.do(context.Background(), func(share *smb2.Share, noRetry func()) error {
+		noRetry()
 		return f.wrapErr(filePath, share.Remove(p))
 	})
 }
 
 // RemoveAll removes a file or directory tree. A missing path is not an error.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	p, err := sharePath(filePath)
+	if err != nil {
+		return err
 	}
-	p := sharePath(filePath)
+	if f.closed.Load() {
+		return fs.ErrFileSystemClosed
+	}
 	if p == "" {
 		return fmt.Errorf("smbfs: can't remove the root directory of %s", f)
 	}
-	return f.do(ctx, true, func(share *smb2.Share) error {
-		err := share.RemoveAll(p)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return f.wrapErr(filePath, err)
+	return f.do(ctx, func(share *smb2.Share, _ func()) error {
+		return f.wrapErr(filePath, fs.RemoveErrDoesNotExist(share.RemoveAll(p)))
 	})
-}
-
-// Lstat returns the FileInfo of the file without following a symbolic link.
-func (f *fileSystem) Lstat(filePath string) (*fs.FileInfo, error) {
-	if filePath == "" {
-		return nil, fs.ErrEmptyPath
-	}
-	var fileInfo *fs.FileInfo
-	err := f.do(context.Background(), true, func(share *smb2.Share) error {
-		p := sharePath(filePath)
-		if p == "" {
-			fileInfo = f.rootInfo()
-			return nil
-		}
-		info, err := share.Lstat(p)
-		if err != nil {
-			return f.wrapErr(filePath, err)
-		}
-		fileInfo = fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
-		return nil
-	})
-	return fileInfo, err
 }
 
 // CreateSymbolicLink creates a symbolic link at linkPath to targetPath,
-// which is stored as given, with the separator of SMB. Most servers
-// reject symbolic links over SMB (Samba without unix extensions, Windows
-// without privileges), which is an fs.ErrUnsupported.
+// which is stored as given, with the separator of SMB. A target with
+// a backslash is an error wrapping os.ErrInvalid like such a path.
+// Most servers reject symbolic links over SMB (Samba without unix
+// extensions, Windows without privileges), which is an fs.ErrUnsupported.
 func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
-	if targetPath == "" || linkPath == "" {
-		return fs.ErrEmptyPath
+	if err := checkPath(targetPath); err != nil {
+		return err
 	}
-	return f.do(context.Background(), false, func(share *smb2.Share) error {
-		err := share.Symlink(targetPath, sharePath(linkPath))
+	p, err := sharePath(linkPath)
+	if err != nil {
+		return err
+	}
+	return f.do(context.Background(), func(share *smb2.Share, noRetry func()) error {
+		noRetry()
+		err := share.Symlink(targetPath, p)
 		if err == nil || isConnectionError(err) {
 			return err
 		}
@@ -595,11 +634,12 @@ func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
 // ReadSymbolicLink returns the target of the symbolic link
 // at linkPath as stored, with the separator "/".
 func (f *fileSystem) ReadSymbolicLink(linkPath string) (targetPath string, err error) {
-	if linkPath == "" {
-		return "", fs.ErrEmptyPath
+	p, err := sharePath(linkPath)
+	if err != nil {
+		return "", err
 	}
-	err = f.do(context.Background(), true, func(share *smb2.Share) error {
-		target, err := share.Readlink(sharePath(linkPath))
+	err = f.do(context.Background(), func(share *smb2.Share, _ func()) error {
+		target, err := share.Readlink(p)
 		if err != nil {
 			return f.wrapErr(linkPath, err)
 		}

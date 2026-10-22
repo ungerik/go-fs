@@ -331,6 +331,10 @@ func TestClosedFileSystem(t *testing.T) {
 	assert.ErrorIs(t, f.Move(ctx, "/a", "/a"), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.Remove("/file"), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, f.RemoveAll(ctx, "/dir"), fs.ErrFileSystemClosed)
+	// The root directory is never removed, but a closed file system
+	// reports that it is closed first, like for every other path
+	assert.ErrorIs(t, f.Remove("/"), fs.ErrFileSystemClosed, "Remove of the root directory")
+	assert.ErrorIs(t, f.RemoveAll(ctx, "/"), fs.ErrFileSystemClosed, "RemoveAll of the root directory")
 	assert.ErrorIs(t, f.CreateSymbolicLink("/a", "/link"), fs.ErrFileSystemClosed)
 	_, err = f.ReadSymbolicLink("/link")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
@@ -345,4 +349,118 @@ func TestClosedFileSystem(t *testing.T) {
 	// Close on an already-closed file system is a safe no-op
 	// that must not touch the released connection.
 	assert.NoError(t, f.Close())
+}
+
+// Test_sharePath checks the share relative paths and that an empty path
+// and a path with a backslash are rejected.
+func Test_sharePath(t *testing.T) {
+	for filePath, want := range map[string]string{
+		"/":        "",
+		".":        "",
+		"/a":       "a",
+		"a/b/":     "a/b",
+		"//a//b":   "a/b",
+		"/../a":    "a",
+		"/a/../b":  "b",
+		"/a b/c.d": "a b/c.d",
+	} {
+		p, err := sharePath(filePath)
+		require.NoError(t, err, filePath)
+		assert.Equal(t, want, p, filePath)
+	}
+
+	_, err := sharePath("")
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	for _, filePath := range []string{`\`, `/..\outside.txt`, `/a\b`, `C:\x`, `dir\`} {
+		_, err := sharePath(filePath)
+		assert.ErrorIs(t, err, os.ErrInvalid, filePath)
+		assert.ErrorIs(t, checkPath(filePath), os.ErrInvalid, filePath)
+	}
+}
+
+// Test_fileSystem_BackslashPaths verifies that every method rejects a path
+// with a backslash, also the destination of Move and the target of a
+// symbolic link, before it sends a request. The file system is closed, so
+// a method that doesn't check the path returns fs.ErrFileSystemClosed.
+func Test_fileSystem_BackslashPaths(t *testing.T) {
+	ctx := t.Context()
+	f := &fileSystem{
+		PathHelper: fsimpl.PathHelper{URIPrefix: "smb://user@example.com/share", Rooted: true},
+	}
+	f.closed.Store(true)
+	const bad = `/dir/..\..\outside.txt`
+
+	for _, check := range []struct {
+		method string
+		call   func() error
+	}{
+		{"Stat", func() error { _, err := f.Stat(bad); return err }},
+		{"Lstat", func() error { _, err := f.Lstat(bad); return err }},
+		{"ListDir", func() error { return f.ListDir(ctx, bad, nil, func(*fs.FileInfo) error { return nil }) }},
+		{"OpenReader", func() error { _, err := f.OpenReader(bad); return err }},
+		{"OpenWriter", func() error { _, err := f.OpenWriter(bad, 0); return err }},
+		{"OpenAppendWriter", func() error { _, err := f.OpenAppendWriter(bad, 0); return err }},
+		{"OpenReadWriter", func() error { _, err := f.OpenReadWriter(bad, 0); return err }},
+		{"ReadAll", func() error { _, err := f.ReadAll(ctx, bad); return err }},
+		{"WriteAll", func() error { return f.WriteAll(ctx, bad, []byte("x"), 0) }},
+		{"Truncate", func() error { return f.Truncate(ctx, bad, 0) }},
+		{"Touch", func() error { return f.Touch(bad, 0) }},
+		{"MakeDir", func() error { return f.MakeDir(bad, 0) }},
+		{"MakeAllDirs", func() error { return f.MakeAllDirs(bad, 0) }},
+		{"SetPermissions", func() error { return f.SetPermissions(bad, 0) }},
+		{"Move source", func() error { return f.Move(ctx, bad, "/b") }},
+		{"Move destination", func() error { return f.Move(ctx, "/a", bad) }},
+		{"Remove", func() error { return f.Remove(bad) }},
+		{"RemoveAll", func() error { return f.RemoveAll(ctx, bad) }},
+		{"CreateSymbolicLink target", func() error { return f.CreateSymbolicLink(`..\..\outside.txt`, "/link") }},
+		{"CreateSymbolicLink link", func() error { return f.CreateSymbolicLink("/a", bad) }},
+		{"ReadSymbolicLink", func() error { _, err := f.ReadSymbolicLink(bad); return err }},
+	} {
+		assert.ErrorIs(t, check.call(), os.ErrInvalid, check.method)
+	}
+}
+
+// TestBackslashPaths_Escape verifies on the Samba server that a name with a
+// backslash can't reach a file outside of a SubFileSystem or outside of the
+// destination of CopyRecursive. smbfs has the separator "/", so `..\x` is a
+// single name for both, but Samba splits names at backslashes and resolves
+// "..": the view read and wrote the files next to its root directory, and
+// CopyRecursive of an entry named like that wrote outside of dest.
+func TestBackslashPaths_Escape(t *testing.T) {
+	f, _ := dialTestFS(t)
+	ctx := t.Context()
+	dir := fmt.Sprintf("/backslash-%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = f.RemoveAll(context.Background(), dir) })
+	require.NoError(t, f.MakeAllDirs(dir+"/root", 0))
+	require.NoError(t, f.WriteAll(ctx, dir+"/outside.txt", []byte("outside"), 0))
+	require.NoError(t, f.WriteAll(ctx, dir+"/root/inside.txt", []byte("inside"), 0))
+
+	view, err := fs.NewSubFileSystem(f, dir+"/root", "")
+	require.NoError(t, err)
+	data, err := view.ReadAll(ctx, `/..\outside.txt`)
+	assert.ErrorIs(t, err, os.ErrInvalid, "the view read %q outside of its root", data)
+	err = view.WriteAll(ctx, `/..\written-outside.txt`, []byte("x"), 0)
+	assert.ErrorIs(t, err, os.ErrInvalid, "WriteAll outside of the view")
+	err = view.Move(ctx, "/inside.txt", `/..\moved-outside.txt`)
+	assert.ErrorIs(t, err, os.ErrInvalid, "Move outside of the view")
+
+	// CopyRecursive uses the File API, which needs registered file systems
+	require.NoError(t, fs.Register(f))
+	t.Cleanup(func() { fs.Unregister(f) })
+	// An entry with that name, like from an archive
+	mem, err := fs.NewMemFileSystem(nil, fs.NewMemFile(`/src/..\copied-outside.txt`, []byte("copied")))
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(mem))
+	t.Cleanup(func() { _ = mem.Close() })
+	err = fs.CopyRecursive(ctx, mem.RootDir().Join("src"), f.file(dir+"/root/dest"))
+	assert.ErrorIs(t, err, os.ErrInvalid, "CopyRecursive outside of dest")
+
+	for _, outside := range []string{
+		dir + "/written-outside.txt",
+		dir + "/moved-outside.txt",
+		dir + "/root/copied-outside.txt",
+	} {
+		_, err := f.Stat(outside)
+		assert.ErrorIs(t, err, os.ErrNotExist, "%s must not have been written", outside)
+	}
 }

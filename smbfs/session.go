@@ -124,6 +124,10 @@ func ntStatus(err error) uint32 {
 type dialCall struct {
 	done chan struct{}
 	err  error
+	// ctxEnded is set if the context of the operation that dialed ended,
+	// not only the dial after Options.Timeout, so that the waiting
+	// operations dial again with their own contexts
+	ctxEnded bool
 }
 
 // session returns the current session, after dialing a new one if the
@@ -152,8 +156,9 @@ func (f *fileSystem) session(ctx context.Context) (*session, error) {
 
 		select {
 		case <-call.done:
-			// Another caller's context ended its dial, try again with this one
-			if call.err != nil && !errors.Is(call.err, context.Canceled) && !errors.Is(call.err, context.DeadlineExceeded) {
+			// Use the new session or try again with this context
+			// if the context of the other caller ended its dial
+			if call.err != nil && !call.ctxEnded {
 				return nil, call.err
 			}
 		case <-ctx.Done():
@@ -163,12 +168,14 @@ func (f *fileSystem) session(ctx context.Context) (*session, error) {
 }
 
 // reconnect replaces the broken session old with a new one.
+// A dialed session is kept even if ctx ended right after the dial.
 func (f *fileSystem) reconnect(ctx context.Context, call *dialCall, old *session) (s *session, err error) {
 	if old != nil {
 		_ = old.conn.Close()
 	}
 	s, err = dial(ctx, f.cfg)
-	if ctx.Err() != nil {
+	ctxEnded := ctx.Err() != nil
+	if err != nil && ctxEnded {
 		err = errors.Join(err, context.Cause(ctx))
 	}
 
@@ -182,7 +189,7 @@ func (f *fileSystem) reconnect(ctx context.Context, call *dialCall, old *session
 			f.sess = s
 		}
 	}
-	call.err = err
+	call.err, call.ctxEnded = err, ctxEnded
 	close(call.done)
 	f.mtx.Unlock()
 	return s, err
@@ -198,23 +205,25 @@ func (f *fileSystem) drop(s *session) {
 // do runs op with the share of the current session and the context of the
 // operation. If the session's connection is broken before op is called, a
 // new session is dialed first. If op fails because the connection broke,
-// it is retried once on a new session if it is idempotent, so that an
-// operation like Remove or Move whose request may have been executed
-// doesn't run twice. A request that the server rejected because the
-// session expired is always retried.
-func (f *fileSystem) do(ctx context.Context, idempotent bool, op func(share *smb2.Share) error) error {
-	return f.run(ctx, idempotent, false, op)
+// it is retried once on a new session unless op called noRetry before:
+// an op calls noRetry right before it sends a request that changes the
+// share, so that an operation like Remove or Move whose request may have
+// been executed doesn't run twice. An op that never calls noRetry must be
+// idempotent. A request that the server rejected because the session
+// expired was not executed, it is always retried.
+func (f *fileSystem) do(ctx context.Context, op func(share *smb2.Share, noRetry func()) error) error {
+	return f.run(ctx, false, op)
 }
 
 // doHandle is like do for an op that opens a file handle. The share
 // passed to op has the context of the file system instead of the context
 // of the operation, because the handle uses it for all its requests,
 // so that Close of the file system aborts them.
-func (f *fileSystem) doHandle(idempotent bool, op func(share *smb2.Share) error) error {
-	return f.run(context.Background(), idempotent, true, op)
+func (f *fileSystem) doHandle(op func(share *smb2.Share, noRetry func()) error) error {
+	return f.run(context.Background(), true, op)
 }
 
-func (f *fileSystem) run(ctx context.Context, idempotent, handle bool, op func(share *smb2.Share) error) error {
+func (f *fileSystem) run(ctx context.Context, handle bool, op func(share *smb2.Share, noRetry func()) error) error {
 	if f.closed.Load() {
 		return fs.ErrFileSystemClosed
 	}
@@ -233,7 +242,8 @@ func (f *fileSystem) run(ctx context.Context, idempotent, handle bool, op func(s
 		if handle {
 			shareCtx = f.closing
 		}
-		err = op(s.share.WithContext(shareCtx))
+		final := false
+		err = op(s.share.WithContext(shareCtx), func() { final = true })
 		switch {
 		case err == nil:
 			return nil
@@ -243,7 +253,7 @@ func (f *fileSystem) run(ctx context.Context, idempotent, handle bool, op func(s
 			f.drop(s)
 		case isConnectionError(err):
 			f.drop(s)
-			if !idempotent {
+			if final {
 				return fmt.Errorf("smbfs: the connection to %s broke after a request was sent, it may have been executed: %w", f.URIPrefix, err)
 			}
 		default:

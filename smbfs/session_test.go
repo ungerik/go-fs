@@ -2,6 +2,7 @@ package smbfs
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // silentListener accepts connections and never answers, like a hung server.
@@ -106,21 +108,43 @@ type testDialer struct {
 	mu    sync.Mutex
 	conns []*testConn
 	block atomic.Bool // block dials until their context is done, like a hung server
+
+	// afterDial is called after a TCP connection was dialed,
+	// before the SMB session is set up on it
+	afterDial func()
 }
+
+// smb2SetInfo is the SMB2 command code of SET_INFO requests, which rename files.
+const smb2SetInfo = 0x11
 
 type testConn struct {
 	net.Conn
-	closeAfterWrite atomic.Bool
+	closeAfterWrite   atomic.Bool
+	closeAfterCommand atomic.Uint32 // an SMB2 command code, 0 (NEGOTIATE) for none
 }
 
 // Write closes the connection after the write if closeAfterWrite is set,
-// so a request reaches the server but its response never arrives.
+// so the request is not sent completely, or after the write of an SMB2
+// request with the command closeAfterCommand, so the request reaches the
+// server but its response never arrives. go-smb2 writes the length prefix
+// of a request and the request itself with two writes.
 func (c *testConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
-	if c.closeAfterWrite.CompareAndSwap(true, false) {
+	if c.closeAfterWrite.CompareAndSwap(true, false) || c.wroteCommand(b) {
 		_ = c.Conn.Close()
 	}
 	return n, err
+}
+
+// wroteCommand reports whether b is an SMB2 request with the command
+// closeAfterCommand and resets closeAfterCommand if it is.
+// The command code follows the protocol ID and 8 bytes of the header.
+func (c *testConn) wroteCommand(b []byte) bool {
+	command := c.closeAfterCommand.Load()
+	if command == 0 || len(b) < 14 || string(b[:4]) != "\xfeSMB" || uint32(binary.LittleEndian.Uint16(b[12:14])) != command {
+		return false
+	}
+	return c.closeAfterCommand.CompareAndSwap(command, 0)
 }
 
 func (d *testDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -138,6 +162,9 @@ func (d *testDialer) DialContext(ctx context.Context, network, addr string) (net
 	d.mu.Lock()
 	d.conns = append(d.conns, c)
 	d.mu.Unlock()
+	if d.afterDial != nil {
+		d.afterDial()
+	}
 	return c, nil
 }
 
@@ -208,9 +235,11 @@ func TestReconnect(t *testing.T) {
 }
 
 // TestRetry verifies that an idempotent operation whose response was lost
-// is retried on a new session, and that Remove, MakeDir and Move are not:
-// they don't report os.ErrNotExist or os.ErrExist for a request that the
-// server may have executed.
+// is retried on a new session, and that Remove, MakeDir and Move are not
+// once they sent the request that changes the share: they don't report
+// os.ErrNotExist or os.ErrExist for a request that the server may have
+// executed. Move is retried if the connection broke during its checks,
+// which change nothing; it returned "may have been executed" for them.
 func TestRetry(t *testing.T) {
 	f, dialer := dialTestFS(t)
 	ctx := t.Context()
@@ -225,13 +254,35 @@ func TestRetry(t *testing.T) {
 	assert.Equal(t, "content", string(data))
 	assert.Equal(t, int64(2), dialer.dials.Load())
 
+	// The first request of Move is the Lstat of the source
+	require.NoError(t, f.WriteAll(ctx, dir+"/checked-from.txt", []byte("x"), 0))
+	dialer.last().closeAfterWrite.Store(true)
+	require.NoError(t, f.Move(ctx, dir+"/checked-from.txt", dir+"/checked-to.txt"), "Move is retried after its checks")
+	assert.Equal(t, int64(3), dialer.dials.Load())
+	_, err = f.Stat(dir + "/checked-to.txt")
+	require.NoError(t, err, "moved")
+
 	for _, check := range []struct {
-		name string
-		op   func() error
+		name  string
+		op    func() error
+		setup func(c *testConn)
 	}{
-		{"MakeDir", func() error { return f.MakeDir(dir+"/sub", 0) }},
-		{"Remove", func() error { return f.Remove(dir + "/file.txt") }},
-		{"Move", func() error { return f.Move(ctx, dir+"/moved-from.txt", dir+"/moved-to.txt") }},
+		{
+			name:  "MakeDir",
+			op:    func() error { return f.MakeDir(dir+"/sub", 0) },
+			setup: func(c *testConn) { c.closeAfterWrite.Store(true) },
+		},
+		{
+			name:  "Remove",
+			op:    func() error { return f.Remove(dir + "/file.txt") },
+			setup: func(c *testConn) { c.closeAfterWrite.Store(true) },
+		},
+		{
+			// The rename is a SET_INFO request after the checks
+			name:  "Move",
+			op:    func() error { return f.Move(ctx, dir+"/moved-from.txt", dir+"/moved-to.txt") },
+			setup: func(c *testConn) { c.closeAfterCommand.Store(smb2SetInfo) },
+		},
 	} {
 		if check.name == "Move" {
 			require.NoError(t, f.WriteAll(ctx, dir+"/moved-from.txt", []byte("x"), 0))
@@ -240,7 +291,7 @@ func TestRetry(t *testing.T) {
 		_, err := f.Stat(dir)
 		require.NoError(t, err)
 		dials := dialer.dials.Load()
-		dialer.last().closeAfterWrite.Store(true)
+		check.setup(dialer.last())
 		err = check.op()
 		require.Error(t, err, "%s whose response was lost", check.name)
 		assert.Contains(t, err.Error(), "may have been executed", check.name)
@@ -248,6 +299,102 @@ func TestRetry(t *testing.T) {
 		assert.NotErrorIs(t, err, os.ErrNotExist, check.name)
 		assert.Equal(t, dials, dialer.dials.Load(), "%s must not be retried", check.name)
 	}
+}
+
+// TestRetry_SessionExpired verifies that a request that the server
+// rejected because the session expired is sent again on a new session,
+// also after the op called noRetry: the server didn't execute it.
+func TestRetry_SessionExpired(t *testing.T) {
+	f, dialer := dialTestFS(t)
+	for _, final := range []bool{false, true} {
+		dials := dialer.dials.Load()
+		calls := 0
+		err := f.run(t.Context(), false, func(share *smb2.Share, noRetry func()) error {
+			calls++
+			if final {
+				noRetry()
+			}
+			if calls == 1 {
+				return &os.PathError{Op: "stat", Path: "x", Err: &smb2.ResponseError{Code: statusNetworkSessionExpired}}
+			}
+			_, err := share.Stat("")
+			return err
+		})
+		require.NoError(t, err, "noRetry called: %t", final)
+		assert.Equal(t, 2, calls, "noRetry called: %t", final)
+		assert.Equal(t, dials+1, dialer.dials.Load(), "a new session, noRetry called: %t", final)
+	}
+	assert.Equal(t, int64(3), dialer.dials.Load())
+}
+
+// TestReconnect_DialTimeout verifies that operations waiting for the
+// reconnect of another operation return its error if the dial timed out
+// after Options.Timeout. They took that for the end of the context of the
+// other operation and dialed again one after another, so the k-th
+// operation returned after k times the timeout.
+func TestReconnect_DialTimeout(t *testing.T) {
+	const timeout = 300 * time.Millisecond
+	dialer := new(testDialer)
+	dialer.block.Store(true)
+	cfg, err := parseAddress("smb://host/share", &Options{Timeout: timeout, DialContext: dialer.DialContext})
+	require.NoError(t, err)
+	// A file system without a session dials one for the first operation
+	f := &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: cfg.prefix, Rooted: true}, cfg: cfg}
+	f.closing, f.cancel = context.WithCancelCause(t.Context())
+	t.Cleanup(func() { _ = f.Close() })
+
+	const operations = 4
+	start := time.Now()
+	var wg sync.WaitGroup
+	for range operations {
+		wg.Go(func() {
+			_, err := f.Stat("/")
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+		})
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	assert.Equal(t, int64(1), dialer.dials.Load(), "the operations share one dial")
+	// One timeout and a generous allowance for slow test machines,
+	// far less than the timeout for each of the operations
+	assert.Less(t, elapsed, timeout*operations*2/3, "the operations wait for one dial")
+}
+
+// lateCtx is a context that reports that it ended once ended is set,
+// without closing its Done channel, so a dial that started completes.
+// It ends the context of an operation right after its dial succeeded.
+type lateCtx struct {
+	context.Context
+	ended atomic.Bool
+}
+
+func (c *lateCtx) Err() error {
+	if c.ended.Load() {
+		return context.Canceled
+	}
+	return c.Context.Err()
+}
+
+// TestReconnect_ContextEndsAfterDial verifies that a session that was
+// dialed for an operation whose context ended right after the dial
+// is kept for the next operations. It was neither kept nor closed,
+// which leaked its connection and the reader goroutine of go-smb2.
+func TestReconnect_ContextEndsAfterDial(t *testing.T) {
+	f, dialer := dialTestFS(t)
+	breakConnection(t, f, dialer)
+	ctx := &lateCtx{Context: t.Context()}
+	dialer.afterDial = func() { ctx.ended.Store(true) }
+
+	s, err := f.session(ctx)
+	require.NoError(t, err, "the session was dialed")
+	dialer.afterDial = nil
+	f.mtx.Lock()
+	current := f.sess
+	f.mtx.Unlock()
+	assert.Same(t, s, current, "the dialed session is kept")
+	_, err = f.Stat("/")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), dialer.dials.Load(), "Stat uses the kept session")
 }
 
 // TestClose_AbortsReconnect verifies that Close aborts an operation
