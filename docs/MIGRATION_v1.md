@@ -90,8 +90,13 @@ Behaviour changes:
 - webdavfs no longer follows redirects to another host or port or from https
   to http; it returns a `*webdavfs.StatusError`. A `CheckRedirect` of
   `Options.Client` can allow them, then they go out without credentials.
-- `RemoveAll` of the root returns an error in s3fs, azureblobfs and sftpfs
-  instead of deleting the bucket, container or server tree.
+- `Remove` and `RemoveAll` of the root directory return an error wrapping
+  `os.ErrInvalid` in every file system, including the root of a local volume.
+- ftpfs and smbfs reject addresses with an unencoded `@` after the host, write
+  it as `%40`. webdavfs rejects a base URL without user info whose host has a
+  port and whose path has a raw `@`, for example
+  `https://cloud:8443/remote.php/dav/files/alice@example.com`; write
+  `alice%40example.com`. smbfs rejects link targets with a drive letter.
 
 ### Errors
 
@@ -156,9 +161,14 @@ Behaviour changes:
 - `FileInfo.Permissions` of Local, `StdFileSystem`, sftpfs and smbfs includes
   the setuid, setgid and sticky bits (`fs.NewFileInfo` uses
   `PermissionsFromFileMode`); mask with `0o777` to compare plain permissions.
-- Recursive listings and copies follow links to directories and skip links
-  that lead back into the walk; Local listings report a link to a directory
-  as a directory.
+- Recursive listings never descend into a symbolic link to a directory: the
+  callback gets the link with `IsSymlink` true and `IsDir` false, like
+  `filepath.WalkDir`. `CopyRecursive` and moves between file systems recreate
+  such a link as a link, or fail with `errors.ErrUnsupported` before writing
+  anything if the destination can't create links; follow links yourself if
+  you need the contents copied.
+- `LocalFileSystem.Move` of a file with more than one hard link goes through a
+  temporary `.gofs-move-*` name in the source directory.
 - `fs.Zip` and `ZipMemFiles` reject absolute names, `..` and names with a
   backslash; `zipfs.Reader` skips symbolic links, devices and FIFOs.
 - XAttr: `XAttrCreate` on an existing attribute wraps `os.ErrExist`,
@@ -171,13 +181,14 @@ Behaviour changes:
 - `SubFileSystem.CreateSymbolicLink` stores a relative target with `..` as an
   absolute path of the view, so `ReadSymbolicLink` returns `/d/target.txt`
   instead of `../d/target.txt`.
-- `ServeFileHTTP` answers a multi-range request for a reader that can't seek
-  with 200 and the whole content, and streams a file of unknown size without
-  `Content-Length`, ranges and conditional requests.
+- `ServeFileHTTP` serves multi-range requests only from local files and
+  in-memory readers; for every other reader it answers 200 with the whole
+  content. A file of unknown size is streamed without `Content-Length`,
+  ranges and conditional requests.
 - `TempFile` returns `InvalidFile` for an extension with a path separator.
 - `StdFS` of a non-local file system accepts `:` and `\` in names on
-  Windows; on the local file system it rejects Windows device names and NUL
-  bytes like `os.DirFS`.
+  Windows; on the local file system it, and a SubFileSystem of Local, reject
+  Windows device names and NUL bytes like `os.DirFS`.
 - `ParseRequestMultipartFormMemFiles` reads every uploaded file into memory,
   `maxMemory` doesn't bound that: limit the request body with
   `http.MaxBytesReader`. multipartfs ignores fields with an empty name.

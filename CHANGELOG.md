@@ -107,10 +107,14 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   system (uploads, archive entries, `StdFileSystem`) gets the owner write bit,
   so an upload copies as 0644 instead of 0444. `NewFileInfo` (Local,
   `StdFileSystem`, sftpfs, smbfs) reports the special bits.
-- **Directory links in recursive walks.** The `ListDirRecursive` emulation,
-  `CopyRecursive` and moves between file systems follow links to directories
-  and skip a link that resolves to the start of the walk or one of its
-  directories; Local listings no longer report a directory link as a file.
+- **Directory links in recursive walks.** `ListDirRecursive` (native and
+  emulated) never descends into a symbolic link to a directory, like
+  `filepath.WalkDir`: the link itself is passed to the callback with
+  `IsSymlink` true and `IsDir` false; a link at the start of the listing is
+  followed. `CopyRecursive` and moves between file systems recreate a link to
+  a directory as a link with its verbatim target when the destination
+  supports links, and otherwise fail before writing anything with an error
+  wrapping `errors.ErrUnsupported`; links to files are copied as files.
 - **XAttr errors.** `XAttrCreate` on an existing attribute wraps
   `os.ErrExist`; `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing
   attribute wrap `os.ErrNotExist` (Local and MemFileSystem); fstest checks it.
@@ -118,19 +122,32 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   and backslashes with an error wrapping `os.ErrInvalid`, so every archive
   they write unzips with `UnzipToMemFiles`; `zipfs.Reader` skips symbolic
   links, devices and FIFOs like `tarfs`.
-- **Root directories.** `RemoveAll` of the root returns an error in s3fs,
-  azureblobfs and sftpfs instead of deleting the whole bucket, container or
-  server tree.
+- **Root directories.** `Remove` and `RemoveAll` of the root return an error
+  wrapping `os.ErrInvalid` in every file system, instead of deleting the
+  whole bucket, container or server tree in s3fs, azureblobfs and sftpfs and
+  calling `os.RemoveAll("/")` for the root of a local volume.
 - **Paths.** Only a `~` at the start of the first part of a Local path means
   the home directory, a directory named `~` is written `./~`; a SubFileSystem
   stores relative link targets with `..` as paths of the parent; smbfs paths
-  and link targets containing `\` are errors wrapping `os.ErrInvalid`;
-  `TempFile` returns `InvalidFile` for an extension with a path separator;
-  `StdFS` applies the `os.DirFS` name rules (Windows device names, `\`, `:`,
-  NUL) only to the local file system.
+  and link targets containing `\` or a drive letter are errors wrapping
+  `os.ErrInvalid`; `TempFile` returns `InvalidFile` for an extension with a
+  path separator; `StdFS` and SubFileSystems of Local apply the `os.DirFS`
+  name rules (Windows device names, `\`, `:`, NUL) to the local file system
+  only.
+- **Same file under two names.** `LocalFileSystem.Move` renames a file onto
+  its own directory entry under another spelling (case, Unicode
+  normalization) and moves a file with more than one hard link through a
+  temporary `.gofs-move-*` name, so it never removes the only link of a file;
+  moves through bind mounts, symbolic links to a parent or a SubFileSystem
+  onto the same file never copy and remove it.
 - `ServeFileHTTP` passes seekable readers to `http.ServeContent` (local files
-  use sendfile again), answers a multi-range request for a reader that can't
-  seek with the whole content and streams a file of unknown size.
+  use sendfile again), serves multi-range requests only from local files and
+  in-memory readers (other readers answer with the whole content, so a
+  request can't make a backend read the file once per range) and streams a
+  file of unknown size.
+- ftpfs and smbfs reject addresses with an unencoded `@` after the host like
+  sftpfs; webdavfs rejects a base URL whose host has a port and whose path
+  has a raw `@` without user info (write `%40`).
 - webdavfs follows no redirects to another host or port or from https to
   http, unless the `CheckRedirect` of `Options.Client` allows them, and then
   without credentials.
@@ -149,7 +166,8 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   `fs.UnzipToMemFiles` size cap (`UnzipToMemFilesMaxSize`), `fs.Event…`
   constants, `httpfs.New`/`NewAndRegister`, `smbfs.EnsureRegistered`,
   `dropboxfs.New`, `s3fs.New`, `NewMemFileSystemAndRegister`,
-  `sftpfs.Options.HostKeyAlgorithms` and `sftpfs.KeepAliveCountMax`.
+  `sftpfs.Options.HostKeyAlgorithms`, `sftpfs.KeepAliveCountMax`,
+  `fsimpl.RedactURI` and `fsimpl.RedactAddress`.
 - Streaming uploads in s3fs (multipart), azureblobfs (blocks) and dropboxfs
   (upload sessions, also above 150 MiB); multipart copies above 5 GiB in s3fs;
   native `MakeAllDirs` for the zip and tar writers.
@@ -169,7 +187,8 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   and SubFileSystems of Local; smbfs passed `..\` to the server, so
   SubFileSystems and CopyRecursive destinations on SMB were escaped.
 - Passwords stayed in error messages for URIs that `url.Parse` rejects (a
-  file named `100%.txt`) and for sftpfs passwords with `/`, `?` or `#`;
+  file named `100%.txt`) or misreads as `host:port`, and for passwords with
+  `/`, `?` or `#` in sftpfs, ftpfs, smbfs and webdavfs addresses;
   httpfs transport errors kept presigned URL signatures; webdavfs redirects
   sent the basic auth and `Options.Header` to other hosts and over plain HTTP.
 - `ServeFileHTTP` read a file that can't seek again for every range of a
@@ -183,8 +202,9 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   or through an aliased path; dropboxfs `CopyFile` deleted the destination
   when the source had become a folder.
 - Copying archive entries with setuid or setgid bits as root created setuid
-  files; recursive listings and copies followed directory link cycles until
-  `ELOOP` and wrote about 40 nested partial copies.
+  files; recursive copies followed directory link cycles until `ELOOP` and
+  wrote about 40 nested partial copies; moving a file onto itself through
+  bind mounts or a symbolic link to its directory deleted it.
 - `EnsureRegistered` waiters got the creator's context cancellation; smbfs
   reconnect waiters dialed one after another after a dial timeout, a session
   dialed right before the context ended leaked, a connection broken during
@@ -195,7 +215,9 @@ modules are tagged in lockstep, the `tools` module is not tagged.
 - `Close` contract: smbfs `io.Copy` on open files and `Remove` of the root,
   and sftpfs `Move`, answered without `ErrFileSystemClosed` after `Close`.
 - azureblobfs `Touch` overwrote a blob created concurrently or hidden by an
-  empty listing page; dropboxfs returned a raw error for a source without
+  empty listing page, and `Remove` deleted the marker of a non-empty
+  directory after an empty listing page; smbfs `CreateSymbolicLink` panicked
+  for the targets `.` and `./`; dropboxfs returned a raw error for a source without
   write permission; sftpfs `ListDirRecursive` of a link to a directory
   returned only the link.
 - zipfs listed symbolic links as regular files whose content was the target;
