@@ -1026,6 +1026,8 @@ func (file File) ReadFrom(reader io.Reader) (n int64, err error) {
 }
 
 // OpenReader opens the file and returns a io/fs.File that has to be closed after reading.
+// A reader of the file system that can seek, like an fsimpl.RangeReader,
+// still implements io.Seeker.
 func (file File) OpenReader() (ReadCloser, error) {
 	fileSystem, path := file.ParseRawURI()
 	reader, err := fsOpenReader(fileSystem, path)
@@ -1034,6 +1036,9 @@ func (file File) OpenReader() (ReadCloser, error) {
 	}
 	if f, ok := reader.(iofs.File); ok {
 		return f, nil
+	}
+	if seeker, ok := reader.(io.ReadSeekCloser); ok {
+		return statReadSeekCloser{ReadSeekCloser: seeker, file: file}, nil
 	}
 	return statReadCloser{ReadCloser: reader, file: file}, nil
 }
@@ -1046,6 +1051,17 @@ type statReadCloser struct {
 }
 
 func (r statReadCloser) Stat() (iofs.FileInfo, error) {
+	return r.file.Stat()
+}
+
+// statReadSeekCloser adds a Stat method to an io.ReadSeekCloser
+// to implement io/fs.File without hiding its Seek method.
+type statReadSeekCloser struct {
+	io.ReadSeekCloser
+	file File
+}
+
+func (r statReadSeekCloser) Stat() (iofs.FileInfo, error) {
 	return r.file.Stat()
 }
 

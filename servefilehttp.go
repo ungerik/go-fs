@@ -1,10 +1,15 @@
 package fs
 
 import (
+	"bufio"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 )
 
 // ServeFileHTTPHandler returns a http.Handler that serves the passed file via HTTP,
@@ -29,9 +34,17 @@ func ServeFileHTTPHandler(file FileReader, contentType string) http.Handler {
 // permitted and 500 Internal Server Error for any other error.
 //
 // The content is streamed from OpenReader, it is not read into memory.
-// The size and modification time come from Stat,
-// so HEAD requests don't read the content
-// unless it is needed to deduce the content type.
+// A reader that can seek, like the *os.File of a local file, is passed
+// to http.ServeContent as it is, so net/http can send a local file
+// with sendfile. The size and modification time of a reader that can't
+// seek come from Stat, so HEAD requests don't read the content unless
+// it is needed to deduce the content type. Such a reader serves at most
+// one range, because every range before the previous one would read the
+// file again from the start: a request for multiple ranges gets the full
+// content with the status 200. If Stat reports a negative size, like for
+// an HTTP URL without Content-Length, the content is streamed with the
+// status 200 without Content-Length, without ranges and without evaluating
+// conditional requests, because http.ServeContent needs the size for them.
 func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file FileReader, contentType string) {
 	info, err := file.Stat()
 	if err != nil {
@@ -42,20 +55,68 @@ func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file Fil
 		http.NotFound(response, request)
 		return
 	}
-	content := &httpContent{file: file, size: info.Size()}
-	defer content.Close()
 	// Open the file before ServeContent writes the status code,
 	// so that errors like a missing permission get their status code
-	err = content.open()
+	reader, err := file.OpenReader()
 	if err != nil {
 		serveFileHTTPError(response, request, err)
 		return
 	}
+	// content closes the reader, or the reopened one if it can't seek
+	content := &httpContent{file: file, size: info.Size(), reader: reader}
+	defer content.Close()
 	if contentType != "" {
 		response.Header().Set("Content-Type", contentType)
 	}
+	if seeker, ok := reader.(io.ReadSeeker); ok {
+		// Seek fails for example for the *os.File of a named pipe
+		if _, err = seeker.Seek(0, io.SeekCurrent); err == nil {
+			http.ServeContent(response, request, file.Name(), info.ModTime(), seeker)
+			return
+		}
+	}
+	if info.Size() < 0 {
+		serveUnknownSize(response, request, file.Name(), info.ModTime(), reader)
+		return
+	}
+	if strings.Contains(request.Header.Get("Range"), ",") {
+		// Without the Range header ServeContent sends the full content
+		request = request.Clone(request.Context())
+		request.Header.Del("Range")
+	}
 	http.ServeContent(response, request, file.Name(), info.ModTime(), content)
 }
+
+// serveUnknownSize streams the content of reader with the status 200
+// and without Content-Length. The Content-Type is determined like
+// http.ServeContent does: an already set header is kept, else the type
+// is deduced from the extension of name or from the content.
+func serveUnknownSize(response http.ResponseWriter, request *http.Request, name string, modTime time.Time, reader io.Reader) {
+	header := response.Header()
+	if _, haveType := header["Content-Type"]; !haveType {
+		contentType := mime.TypeByExtension(filepath.Ext(name))
+		if contentType == "" {
+			buffered := bufio.NewReaderSize(reader, sniffLen)
+			// A short or failing read is sniffed as far as it got,
+			// the error is returned again by the next Read
+			start, _ := buffered.Peek(sniffLen)
+			contentType = http.DetectContentType(start)
+			reader = buffered
+		}
+		header.Set("Content-Type", contentType)
+	}
+	if !modTime.IsZero() && !modTime.Equal(time.Unix(0, 0)) {
+		header.Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
+	}
+	response.WriteHeader(http.StatusOK)
+	if request.Method != http.MethodHead {
+		// The status is sent, errors can only end the response
+		_, _ = io.Copy(response, reader)
+	}
+}
+
+// sniffLen is the number of bytes http.DetectContentType considers.
+const sniffLen = 512
 
 // serveFileHTTPError writes the HTTP error status for err.
 func serveFileHTTPError(response http.ResponseWriter, request *http.Request, err error) {
@@ -70,16 +131,20 @@ func serveFileHTTPError(response http.ResponseWriter, request *http.Request, err
 }
 
 // httpContent is the io.ReadSeeker that ServeFileHTTP passes to
-// http.ServeContent. The size is known from Stat, so Seek only sets
-// the position of the next Read. Read streams the file from OpenReader:
-// a reader that can't seek skips forward by reading and is reopened
-// to go back, which ServeContent does only after sniffing the content type.
+// http.ServeContent for a reader that can't seek. The size is known
+// from Stat, so Seek only sets the position of the next Read.
+// Read streams the file from OpenReader: the reader skips forward
+// by reading and is reopened to go back, which ServeContent does only
+// after sniffing the content type for a request with at most one range.
+// Going back a second time is an error, so no request can make
+// the file system read the file more than twice.
 type httpContent struct {
-	file   FileReader
-	size   int64
-	offset int64      // position of the next Read
-	reader ReadCloser // nil until opened
-	pos    int64      // position of reader
+	file     FileReader
+	size     int64
+	offset   int64      // position of the next Read
+	reader   ReadCloser // nil until opened
+	pos      int64      // position of reader
+	reopened bool
 }
 
 // open opens the reader at position zero if it isn't open yet.
@@ -144,6 +209,10 @@ func (c *httpContent) moveReader() error {
 	}
 	if c.offset < c.pos {
 		// The reader can't go back, read again from the start
+		if c.reopened {
+			return errors.New("httpContent: the reader can't seek and was already reopened once")
+		}
+		c.reopened = true
 		err = c.Close()
 		if err != nil {
 			return err

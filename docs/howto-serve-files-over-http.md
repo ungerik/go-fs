@@ -36,9 +36,16 @@ Status codes are handled for you: `404` when the file does not exist or is a
 directory, `403` when reading it is not permitted, `500` for any other error.
 The error bodies are generic status texts, never the underlying error string.
 
-The content is streamed from `OpenReader`, never read into memory, and the
-size and modification time come from `Stat`, so a `HEAD` request doesn't read
-the content unless it is needed to deduce the type.
+The content is streamed from `OpenReader`, never read into memory. A reader
+that can seek, like the `*os.File` of a local file, goes to `http.ServeContent`
+directly, so `net/http` sends a local file with `sendfile`. For a reader that
+can't seek the size and modification time come from `Stat`, so a `HEAD`
+request doesn't read the content unless it is needed to deduce the type.
+Such a reader serves one range at most: a request for several ranges gets the
+full content with status `200`, because each range before the previous one
+would read the file again from the start. If `Stat` reports no size, like for
+an HTTP URL without `Content-Length`, the content is streamed with status `200`
+and without `Content-Length`, ranges and conditional requests.
 
 Both functions take a `fs.FileReader`, so an in-memory file works too:
 
@@ -221,7 +228,8 @@ through `http.ServeContent`.
 
 **Range requests far into a large file are slow** — on a backend whose readers
 can't seek, `ServeFileHTTP` reaches the requested offset by reading and
-discarding the bytes before it. Check the "Seeking reads" row of the support
+discarding the bytes before it, and it answers a request for several ranges
+with the full content. Check the "Seeking reads" row of the support
 matrix in [FileSystem interfaces](reference-filesystem-interfaces.md);
 `azureblobfs`, `sftpfs`, `smbfs` and `webdavfs` seek natively, like the local
 and the memory file systems.
