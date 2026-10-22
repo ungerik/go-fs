@@ -112,14 +112,13 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   `filepath.WalkDir`: the link itself is passed to the callback with
   `IsSymlink` true and `IsDir` false; a link at the start of the listing is
   followed. `CopyRecursive` and moves recreate a link to a directory as a
-  link: within one file system with its verbatim target, between file
-  systems only with a relative target that stays inside the copied tree,
-  written with the separator of the destination. Otherwise, or if the
-  destination can't create links, they fail before writing anything with an
-  error wrapping `errors.ErrUnsupported`; links to files are copied as files.
-  Copies never write through a symbolic link below the destination root, a
-  link where a file or directory is to be written is an error wrapping
-  `os.ErrExist`.
+  link with its verbatim target within one file system instance that
+  supports links. Between different instances, or if the destination can't
+  create links, they fail before writing anything with an error wrapping
+  `errors.ErrUnsupported`; links to files are copied as files. Copies never
+  write through a symbolic link below the destination root, a link where a
+  file or directory is to be written is an error wrapping `os.ErrExist`;
+  this assumes nobody else changes the destination during the copy.
 - **XAttr errors.** `XAttrCreate` on an existing attribute wraps
   `os.ErrExist`; `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing
   attribute wrap `os.ErrNotExist` (Local and MemFileSystem); fstest checks it.
@@ -145,9 +144,12 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   normalization) and moves a file with more than one hard link through a
   temporary `.gofs-move-*` name, so it never removes the only link of a file;
   moves through bind mounts, symbolic links to a parent or a SubFileSystem
-  onto the same file never copy and remove it. Moving a symbolic link onto
-  the file it points to is an error wrapping `os.ErrInvalid`, like `mv`
-  reports "are the same file".
+  onto the same file never copy and remove it, also through the local layers
+  of an `OverlayFileSystem`. Moving a symbolic link onto the file it points
+  to is an error wrapping `os.ErrInvalid`, like `mv` reports "are the same
+  file", in Local, Mem, sftpfs, smbfs and the move emulation; `CopyFile` of a
+  file onto itself through another path is a no-op. `fs.Move` of a directory
+  to a name that only differs in case renames it.
 - `ServeFileHTTP` passes seekable readers to `http.ServeContent` (local files
   use sendfile again), serves multi-range requests only from local files and
   in-memory readers (other readers answer with the whole content, so a
@@ -178,7 +180,8 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   constants, `httpfs.New`/`NewAndRegister`, `smbfs.EnsureRegistered`,
   `dropboxfs.New`, `s3fs.New`, `NewMemFileSystemAndRegister`,
   `sftpfs.Options.HostKeyAlgorithms`, `sftpfs.KeepAliveCountMax`,
-  `fsimpl.RedactURI` and `fsimpl.RedactAddress`.
+  `fsimpl.RedactURI`, `fsimpl.RedactAddress` and
+  `fsimpl.RedactAddressWithoutScheme`.
 - Streaming uploads in s3fs (multipart), azureblobfs (blocks) and dropboxfs
   (upload sessions, also above 150 MiB); multipart copies above 5 GiB in s3fs;
   native `MakeAllDirs` for the zip and tar writers.
