@@ -81,11 +81,13 @@ the path, like
 ### Authentication
 
 `Options.Username` and `Options.Password` are sent as HTTP basic auth and
-override credentials embedded in the base URL. `Options.Header` is added to
-every request, for bearer tokens for example. An `Authorization` header in
-`Options.Header` takes precedence over basic auth: the username and password
-are not sent then, a username only becomes part of the prefix.
-`Options.Client` replaces the `*http.Client` used for all requests:
+override the credentials embedded in the base URL; they are used only
+together, `Options.Password` without `Options.Username` is ignored.
+`Options.Header` is added to every request, for bearer tokens for example. An
+`Authorization` header in `Options.Header` takes precedence over basic auth:
+the username and password are not sent then, a username only becomes part of
+the prefix. `Options.Client` replaces the `*http.Client` used for all
+requests:
 
 ```go
 &webdavfs.Options{

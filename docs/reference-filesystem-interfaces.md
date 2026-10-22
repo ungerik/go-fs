@@ -42,14 +42,15 @@ Every backend implements this. Nothing works without it.
 registered ones and never changes for its lifetime. It is computed at
 construction and must never block, so it can be read from any code path.
 
-Where the backing store has an identifier of its own, that one is used —
-only two of the backends in this repository can: the local file system uses
-the file system id of the root volume, dropboxfs the Dropbox account id.
-Neither SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage exposes such an
-identifier, so those use the coordinates that identify the store instead: the
-bucket, the container, the share, or the user and host of the connection. The
-in-memory, archive and form file systems have no backing store at all and use
-the id passed to their constructor, or a generated one.
+Where the backing store has an identifier of its own, that one is used — only
+two of the backends in this repository can: the local file system uses the
+file system id of the root volume, dropboxfs the Dropbox account id. Neither
+SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage exposes such an identifier,
+so those use the coordinates that identify the store instead: the bucket, the
+container, the share, or the user and host of the connection. The in-memory
+file system has no backing store and uses the id passed to its constructor, or
+a generated one; the archive and form file systems use their prefix with that
+id, like `zip://<id>`.
 
 The format is therefore specific to the implementation and promises nothing
 beyond uniqueness and stability. Use `ID()` to tell two file systems apart,
@@ -270,6 +271,7 @@ Implementations must return errors that satisfy `errors.Is` for:
 | Operation needs a directory                | `ErrIsNotDirectory`, checked with `errors.Is(err, fs.ErrIsNotDirectory{})` |
 | Operation cannot act on a directory        | `ErrIsDirectory`, checked with `errors.Is(err, fs.ErrIsDirectory{})` |
 | `Remove` of a non-empty directory          | `ErrDirectoryNotEmpty`, checked with `errors.Is(err, fs.ErrDirectoryNotEmpty{})` |
+| `Remove` or `RemoveAll` of the root        | `os.ErrInvalid` |
 | Directory moved into itself                | `os.ErrInvalid`                                       |
 | Called after `Close`                       | `ErrFileSystemClosed`                                 |
 | Context cancelled                          | the context error                                     |

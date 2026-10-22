@@ -49,7 +49,8 @@ modules are tagged in lockstep, the `tools` module is not tagged.
   `httpfs.Client` are gone; all `DefaultPermissions`/`DefaultDirPermissions`
   are constants. `httpfs` has an exported `FileSystem` type with
   `New(prefix, *Options)` and `NewAndRegister`, for example to use an
-  authenticating client for `https://api.example.com/`.
+  authenticating client for `https://api.example.com/`; its `Close` unregisters it,
+  `Default` and `DefaultTLS` stay registered.
 - **Error contract.** The typed errors (`ErrDoesNotExist`, `ErrPermission`,
   `ErrAlreadyExists`, `ErrIsDirectory`, `ErrIsNotDirectory` and the new
   `ErrDirectoryNotEmpty`) are created for a `FileReader`; `File()` returns
@@ -122,8 +123,9 @@ modules are tagged in lockstep, the `tools` module is not tagged.
 - **XAttr errors.** `XAttrCreate` on an existing attribute wraps
   `os.ErrExist`; `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing
   attribute wrap `os.ErrNotExist` (Local and MemFileSystem); fstest checks it.
-- **Archive names.** `fs.Zip` and `ZipMemFiles` reject absolute names, `..`
-  and backslashes with an error wrapping `os.ErrInvalid`, so every archive
+- **Archive names.** `fs.Zip` and `ZipMemFiles` reject names that escape
+  with `..`, names with a backslash and absolute names (the leading slash of
+  a `MemFile` name is dropped) with an error wrapping `os.ErrInvalid`, so every archive
   they write unzips with `UnzipToMemFiles`; `zipfs.Reader` skips symbolic
   links, devices and FIFOs like `tarfs`.
 - **Root directories.** `Remove` and `RemoveAll` of the root return an error
@@ -134,8 +136,8 @@ modules are tagged in lockstep, the `tools` module is not tagged.
 - **Paths.** Only a `~` at the start of the first part of a Local path means
   the home directory, a directory named `~` is written `./~`; a SubFileSystem
   stores relative link targets with `..` as paths of the parent; smbfs paths
-  and link targets containing `\` or a drive letter are errors wrapping
-  `os.ErrInvalid`; `TempFile` returns `InvalidFile` for an extension with a
+  and link targets containing `\`, and link targets with a drive letter, are
+  errors wrapping `os.ErrInvalid`; `TempFile` returns `InvalidFile` for an extension with a
   path separator; `StdFS` and SubFileSystems of Local apply the `os.DirFS`
   name rules (Windows device names, `\`, `:`, NUL) to the local file system
   only.
@@ -574,8 +576,6 @@ module only pins development tools and is not tagged.
 - `fs.ReadOnlyBase`, `fs.FullyFeaturedFileSystem`, `fs.RelPathFileSystem`
   (merged into `fs.AbsPathFileSystem`), `s3fs` `Watch` and `VolumeName` stubs,
   `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
-  `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
-- `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
   `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
 - `fs.MemFileSystem.ReadAll` on a directory returns `ErrIsDirectory` instead
   of empty data.

@@ -68,7 +68,7 @@ tests.
 | [zipfs](../zipfs/README.md)                        | Reading and writing ZIP archives                   |
 | [tarfs](../tarfs/README.md)                        | Reading and writing tar, .tar.gz and .tgz archives |
 | [multipartfs](../multipartfs/README.md)            | Uploaded form files as a file system               |
-| [tools](../tools/README.md)                        | The pinned staticcheck and gosec versions          |
+| [tools](../tools/README.md)                        | The pinned staticcheck, gosec and govulncheck versions          |
 
 ## Explanation — why it works this way
 
@@ -88,6 +88,7 @@ useful when something surprises you.
 | ---------------------------- | --------------------------------------- |
 | [README](../README.md)       | Overview and API tour                   |
 | [CHANGELOG](../CHANGELOG.md) | Release history                         |
+| [SECURITY](../SECURITY.md)   | Supported versions, reporting a vulnerability|
 | [V1 roadmap](V1_ROADMAP.md)  | Plan of record for the v1.0 work        |
 | [AGENTS.md](../AGENTS.md)    | Repository conventions for contributors |
 

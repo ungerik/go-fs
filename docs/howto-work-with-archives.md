@@ -189,9 +189,11 @@ if err != nil {
 ```
 
 `fs.Zip` takes any `FileReader`, so local files, remote files and in-memory
-files mix freely. Entries are named by `Name()` — the base name, not the path —
-so files with the same base name from different directories collide. Rename
-first if that matters:
+files mix freely. The entry of a `MemFile` is named after its `FileName`
+without a leading slash, which can be a relative path like `dir/a.txt`; every
+other `FileReader` is named by `Name()` — the base name, not the path — so
+files with the same base name from different directories collide. Rename first
+if that matters:
 
 ```go
 renamed := fs.FileReaderWithName(fs.File("/srv/a/report.pdf"), "a-report.pdf")
@@ -257,9 +259,9 @@ err = fs.CopyRecursive(ctx, zipFS.RootDir(), fs.File("/srv/extracted"))
 
 `CopyRecursive` creates missing destination directories and works across file
 systems, so this also extracts straight into S3, SFTP or a `MemFileSystem`.
-The extracted files keep the read and execute bits of their entries and get
-the owner's write permission; the setuid, setgid and sticky bits are dropped,
-so extracting as root never creates setuid files.
+The extracted files keep the read, write and execute bits of their entries and
+also get the owner's write permission; the setuid, setgid and sticky bits are
+dropped, so extracting as root never creates setuid files.
 
 ## Verification
 
@@ -310,11 +312,12 @@ local file first, or stream with `archive/tar` directly.
 **Symbolic links are missing after extracting a tar** — `tarfs` doesn't expose
 them, see above.
 
-**Entries collide in `fs.Zip`** — entries are named by `Name()`, the base name.
-Use `fs.FileReaderWithName` to give them distinct names.
+**Entries collide in `fs.Zip`** — entries of `File` values and other
+non-`MemFile` readers are named by `Name()`, the base name. Use
+`fs.FileReaderWithName` to give them distinct names.
 
-**Modification times are missing** — `fs.Zip` only records a time for readers
-that have a `Modified()` method, which `MemFile` does not.
+**Modification times are missing** — `fs.Zip` records the `ModTime` of each
+reader's `Stat()`, which is zero for a `MemFile`.
 
 ## Related
 

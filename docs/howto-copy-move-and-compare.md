@@ -343,9 +343,10 @@ if !identical {
 **`file is not a directory`** from `CopyRecursive` or `Move` — a directory is
 copied or moved onto an existing file. Remove the file or pick another path.
 
-**`file already exists`** from `Move` or `Rename` — the destination is an
-existing directory. A move never merges into or deletes a directory; remove it
-first or move into it.
+**`file already exists`** from `Move` or `Rename` — the final path is an
+existing directory: the new name of `Rename`, or the source's name inside the
+destination directory of `Move`. A move never merges into or deletes a
+directory; remove it first or pick another name.
 
 **A failed move left a partial copy at the destination** — `Move` deletes the
 source only after the copy succeeded, so the source is untouched. Remove the

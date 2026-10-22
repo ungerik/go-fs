@@ -46,8 +46,8 @@ the longest match of either wins. The alias is rewritten to the canonical
 prefix before cleaning.
 
 Every file system must produce URIs that satisfy the boundary rule. A
-`MemFileSystem` with a volume, for example, writes a separator between its
-prefix and the volume: `mem://id/C:`.
+`MemFileSystem` with a volume, for example, ends its prefix with a slash
+before the volume: the prefix is `mem://id/` and a URI is `mem://id/C:\dir`.
 
 ## The rule that prevents silent local writes
 

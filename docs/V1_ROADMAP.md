@@ -10,6 +10,11 @@ plus a design pass produced the findings and decisions recorded here.
 
 ## Decisions
 
+> Design of 2026-09. Where it differs, the Beta 2 decisions below and the
+> CHANGELOG win: ctx on Move, Truncate and Rename, `Lstat`, no
+> `RenameFileSystem`/`ListDirMaxFileSystem`/`MustGlob`, `fs.EnsureRegistered`,
+> `MemFileSystemOptions`.
+
 Taken 2026-09-05/06:
 
 - **Context arguments.** The `*Context` twins are dropped. A method takes
@@ -81,6 +86,11 @@ and the `fstest` mocks must be migrated when the interface changes. Hot
 `MemDir`, `StdFS`, `SortBy*`, `Glob`, `FileInfoCache`, `Watch` (1 use).
 
 ## Target architecture
+
+> Design of 2026-09. Where it differs, the Beta 2 decisions below and the
+> CHANGELOG win: ctx on Move, Truncate and Rename, `Lstat`, no
+> `RenameFileSystem`/`ListDirMaxFileSystem`/`MustGlob`, `fs.EnsureRegistered`,
+> `MemFileSystemOptions`.
 
 ### Core `FileSystem` interface (implementer-facing)
 
@@ -609,8 +619,8 @@ changes) found data loss, security and crash bugs and API shapes that would
 be hard to change after the freeze. Decisions taken 2026-10-21:
 
 - **Constructors never register implicitly.** `New…`/`Dial…` return the
-  file system and an error, `…AndRegister` registers and returns only an
-  error. Every constructor whose registration behaviour changed also changed
+  file system, and an error where construction can fail, `…AndRegister`
+  registers and returns only an error. Every constructor whose registration behaviour changed also changed
   its signature, so old call sites fail to compile instead of losing the
   registration silently. Temporary file systems use `New` + `fs.Register` +
   `defer Close`.
@@ -642,10 +652,11 @@ be hard to change after the freeze. Decisions taken 2026-10-21:
 - [x] Generic emulations commit only complete data; File/FileReader/MemFile
       signatures; fsimpl (`WriteAborter`, `RangeReader`), `internal/dirtree`,
       httpfs as `URIFileSystem`, zipfs/tarfs/multipartfs/uuiddir fixes.
-- [x] Mem, Local (all Unix platforms, wasm), Sub, Overlay, Std, Invalid pass
-      the conformance suite; s3fs (transfermanager, streaming), azureblobfs,
-      webdavfs, dropboxfs (offline fake client), sftpfs (Options, keep-alive,
-      safe retries), ftpfs and smbfs (cloudsoda/go-smb2 fork) rework.
+- [x] Mem, Local (all Unix platforms; wasm builds), Sub, Overlay and Std pass
+      the conformance suite, Invalid its error-contract tests; s3fs
+      (transfermanager, streaming), azureblobfs, webdavfs, dropboxfs (offline
+      fake client), sftpfs (Options, keep-alive, safe retries), ftpfs and
+      smbfs (cloudsoda/go-smb2 fork) rework.
 - [x] CI: Go stable, cross-compiles, govulncheck, tidy and `GOWORK=off`
       checks, lint on all OSes, Dependabot, `tag-release.sh`, `SECURITY.md`.
 - [x] Pre-release review of the beta.2 branch (2026-10-22): confinement
@@ -657,8 +668,8 @@ be hard to change after the freeze. Decisions taken 2026-10-21:
       bugs, `RemoveAll` of the root in s3fs, azureblobfs and sftpfs.
       Decided: copies keep only the 9 permission bits of the source unless
       `perm` is passed; overlay layers must be case-sensitive; XAttr flag
-      errors wrap `os.ErrExist`/`os.ErrNotExist`. Deferred items are in
-      `.context/beta2/FOLLOWUPS.md`.
+      errors wrap `os.ErrExist`/`os.ErrNotExist`. Deferred items are
+      tracked outside the repository.
 
 ## Verification (overall)
 

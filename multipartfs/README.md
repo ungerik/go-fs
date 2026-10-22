@@ -88,8 +88,9 @@ The root package also has `fs.ParseRequestMultipartFormMemFiles` and
   kept in memory. If the temporary files can't be removed, `Close` returns
   the error and the next `Close` tries again. Always `defer formFS.Close()`
   in the handler.
-- **URI prefix.** `multipart://` followed by a random id, so concurrent
-  requests each get their own file system. `ID()` is that prefix.
+- **URI prefix.** `multipart://` followed by the id passed to `New` or
+  `NewFromRequest`, a random one if it is empty, so concurrent requests each
+  get their own file system. `ID()` is that prefix.
 
 ## Testing
 

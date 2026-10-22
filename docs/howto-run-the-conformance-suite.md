@@ -160,11 +160,12 @@ public server is gated behind an environment variable.
 
 The go-fs backends do this with the package `internal/dockertest` of the root
 module: `Available` reports whether the Docker daemon answers, `SetupFailed`
-fails the run when Docker is there but the server can't start, and
+fails the run when Docker is there but the server can't start (on Windows,
+where Docker usually can't run the Linux images, it only logs), and
 `ContainerName` adds a random suffix to a container name. It is internal
-because it encodes the test policy of this repository; Go doesn't let
-packages outside of `github.com/ungerik/go-fs/...` import it. The shape for
-your own backend:
+because it encodes the test policy of this repository; Go doesn't let packages
+outside of `github.com/ungerik/go-fs/...` import it. The shape for your own
+backend:
 
 ```go
 func TestMain(m *testing.M) {

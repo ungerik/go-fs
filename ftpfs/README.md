@@ -68,11 +68,13 @@ an unencoded `/`.
 
 `Options.Username` and `Options.Password` override the user info of the
 address. `Options.Credentials` is a `CredentialsCallback` that is called
-instead for the first dial and again for every reconnect; `ftpfs.Password`
-and `ftpfs.UsernameAndPassword` are simple callbacks. Without a username
-the login is anonymous as defined for `ftp://` URLs by RFC 1738: the user
-`anonymous` with `Options.Password` (customarily an e-mail address) or
-`anonymous`, and the URI prefix has no user (`ftp://example.com`).
+instead by every `Dial`, `DialAndRegister` and `EnsureRegistered` call, for
+every reconnect and for the dedicated connection of every `OpenReader`, so it
+should be cheap or cache its result; `ftpfs.Password` and
+`ftpfs.UsernameAndPassword` are simple callbacks. Without a username the login
+is anonymous as defined for `ftp://` URLs by RFC 1738: the user `anonymous`
+with `Options.Password` (customarily an e-mail address) or `anonymous`, and
+the URI prefix has no user (`ftp://example.com`).
 
 Paths and credentials with CR, LF or NUL characters are rejected with an
 error wrapping `os.ErrInvalid`, because they would inject FTP commands.
@@ -107,14 +109,15 @@ internal host.
 ### Connections, retries and cancellation
 
 A dialed file system keeps one control connection that is used by one
-operation at a time. If it breaks, the next operation reconnects. An
-operation that failed because the connection broke is retried once on a new
-connection, but only if nothing was changed on the server yet: after an
-`APPE`, `DELE`, `MKD`, `RMD` or `RNTO` command was sent, the operation
-returns the connection error ("may have been executed") instead of running
-the command twice, because only its reply may have been lost. Before such
-a command, an idle connection is checked with `NOOP`, so a connection that
-the server closed while it was idle is replaced first.
+operation at a time. If it breaks, the next operation reconnects. An operation
+that failed because the connection broke is retried once on a new connection,
+but only if nothing was changed on the server yet: after an `APPE`, `DELE`,
+`MKD`, `RMD` or `RNTO` command was sent, the operation returns the connection
+error ("may have been executed") instead of running the command twice, because
+only its reply may have been lost. `RemoveAll` is retried, because repeating
+it removes nothing that should be kept. Before such a command, an idle
+connection is checked with `NOOP`, so a connection that the server closed
+while it was idle is replaced first.
 
 `OpenReader` dials a dedicated connection for the transfer, so a streaming
 read never blocks other operations.

@@ -31,8 +31,8 @@ _ = data
 
 Every typed error has an `Is` method that matches any value of its own type,
 so `errors.Is(err, fs.ErrIsDirectory{})` is true for an `ErrIsDirectory` about
-any file. Two separately created errors are never `==`, so always compare
-with `errors.Is` or `errors.As`.
+any file. Two separately created errors about a file are never `==`, so always
+compare with `errors.Is` or `errors.As`.
 
 Use `errors.As` only when you need the `File` the error is about:
 

@@ -118,7 +118,7 @@ memFS, err := fs.NewMemFileSystem(nil,
 memFS, err := fs.NewMemFileSystem(&fs.MemFileSystemOptions{
     ID:        "fixtures", // the prefix is mem://fixtures instead of a random one
     Separator: `\`,        // "/" or `\`
-    Volume:    "C:",       // paths like C:\dir, the prefix becomes mem://fixtures/C:
+    Volume:    "C:",       // paths like C:\dir, URIs like mem://fixtures/C:\dir
     ReadOnly:  true,       // every write returns fs.ErrReadOnlyFileSystem
 })
 ```
@@ -197,10 +197,10 @@ like `"/tmp"` fails here.
 system was not registered, or it was already closed. Call `fs.Register` after
 `NewMemFileSystem`.
 
-**`file does not exist` on a path you just wrote** — you probably built the
-path as a string literal like `fs.File("mem://foo/config.json")` with a guessed
-id. Use `memFS.RootDir().Join(...)`; the id is random per instance unless you
-set `MemFileSystemOptions.ID`.
+**The same error on a path you just wrote** — you probably built the path as a
+string literal like `fs.File("mem://foo/config.json")` with a guessed id. Use
+`memFS.RootDir().Join(...)`; the id is random per instance unless you set
+`MemFileSystemOptions.ID`.
 
 **`file does not exist` writing into a sub-directory** — create the parent
 first with `MakeAllDirs`, or seed the file with a slash-separated `MemFile`

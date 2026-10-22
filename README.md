@@ -670,8 +670,8 @@ sub-directory with their own dependencies; the lighter ones (`httpfs`,
 `File` values route to the file system that is registered for their URI
 prefix. The constructors follow one rule:
 
-- `New…` and `Dial…` return the file system and an error, and never register
-  it.
+- `New…` and `Dial…` return the file system, and an error where construction
+  can fail, and never register it.
 - `…AndRegister` registers the file system and returns only an error. It
   exists where the prefix follows from the arguments, so the caller can use
   the URIs without the instance.
@@ -701,9 +701,9 @@ Only `httpfs` registers file systems when it is imported.
 
 The prefixes of `sftpfs`, `ftpfs` and `smbfs` add `:<port>` for a port other
 than the default of the protocol, and a `MemFileSystem` with a volume has the
-prefix `mem://<id>/<volume>`. An empty id of the archive, form, memory,
-standard library, sub and overlay file systems means a random one; the
-`…AndRegister` variants need an id.
+prefix `mem://<id>/`, so the URI of `C:\dir` is `mem://<id>/C:\dir`. An empty
+id of the archive, form, memory, standard library, sub and overlay file
+systems means a random one; the `…AndRegister` variants need an id.
 
 A URI matches a registered prefix only at a boundary: the URI ends after the
 prefix, the prefix ends with a slash, or the prefix is followed by a slash or
@@ -1090,13 +1090,13 @@ uploaded HTML form so files can be consumed using the regular `fs.File`
 API. `multipartfs.New` does the same for a `*multipart.Form` that was
 parsed by the caller. Neither registers the file system.
 
-The form fields with uploaded files are the directories of the file system,
-so it has exactly two levels. Because a path has to identify exactly one
-file, files uploaded under an already used name get a unique name
-(`a.txt`, `a (2).txt`, ...), and names that are not usable as a path element
-(`.`, `..`) become `unnamed`. Uploaded files carry no modification time.
-`Close` removes the temporary files of the form; every method returns
-`fs.ErrFileSystemClosed` afterwards.
+The form fields with uploaded files are the directories of the file system, so
+it has exactly two levels. Because a path has to identify exactly one file,
+files uploaded under an already used name get a unique name (`a.txt`, `a
+(2).txt`, ...), and names that are not usable as a path element (`.`, `..`)
+become `unnamed`. Uploaded files carry no modification time. `Close` removes
+the temporary files of the form; afterwards every method that returns an error
+returns `fs.ErrFileSystemClosed`, `FormValue` and `FormValues` stay usable.
 [multipartfs/README.md](multipartfs/README.md) has the details.
 
 ### MemFileSystem

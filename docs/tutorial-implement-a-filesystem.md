@@ -35,6 +35,7 @@ package dirfs
 // as you go through the steps.
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -281,6 +282,9 @@ func (f *fileSystem) Remove(filePath string) error {
 	if err := f.checkClosed(); err != nil {
 		return err
 	}
+	if filePath == "/" {
+		return fmt.Errorf("%w: can't remove the root directory %s", os.ErrInvalid, f.file(filePath))
+	}
 	err := os.Remove(f.localPath(filePath))
 	if err != nil {
 		if entries, readErr := os.ReadDir(f.localPath(filePath)); readErr == nil && len(entries) > 0 {
@@ -292,7 +296,7 @@ func (f *fileSystem) Remove(filePath string) error {
 }
 ```
 
-Four contract details again:
+Five contract details again:
 
 - **`OpenWriter` must truncate.** `O_TRUNC` is not optional. The `WriteAll`
   emulation relies on it so that writing fewer bytes over a larger file leaves
@@ -305,6 +309,9 @@ Four contract details again:
   `fs.ErrIsDirectory`, and removing a non-empty directory an
   `fs.ErrDirectoryNotEmpty`. The `os` package reports both with
   platform-specific errors, so the methods translate them.
+- **The root is never removed.** `Remove` and `RemoveAll` of `/` return an
+  error wrapping `os.ErrInvalid`, like every go-fs file system; the
+  conformance suite doesn't check it.
 
 That is all 12 methods. Run `go build ./...` — it should compile clean.
 
@@ -424,6 +431,9 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if filePath == "/" {
+		return fmt.Errorf("%w: can't remove the root directory %s", os.ErrInvalid, f.file(filePath))
 	}
 	return os.RemoveAll(f.localPath(filePath))
 }

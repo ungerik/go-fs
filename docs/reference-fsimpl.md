@@ -77,10 +77,10 @@ func newMyFS() *myFS {
 
 Embed it in an unexported type, or keep it in an unexported field and forward
 the methods, like the file systems of go-fs do. Embedded in an exported type
-its fields become mutable API of that type. Methods added to `PathHelper` never
-complete an optional interface of package `fs`, so embedding it can't make a
-file system implement `fs.HiddenFileSystem` or `fs.AbsPathFileSystem` by
-accident.
+its fields become mutable API of that type. Methods added to `PathHelper`
+never complete an optional interface of package `fs` that changes behaviour,
+so embedding it can't make a file system implement `fs.HiddenFileSystem` or
+`fs.AbsPathFileSystem` by accident.
 
 File systems whose paths are URLs in escaped form, where `?` starts a query
 that must not be cleaned, don't fit `PathHelper`. They implement
@@ -176,7 +176,8 @@ embeds it and adds `Write`, `WriteAt`, `Truncate` and `Abort`, so it satisfies
 
 After `Close` (or `Abort`) every method except `Stat`, `Bytes` and `Size`
 returns `os.ErrClosed`, like an `*os.File`, so data written after `Close` is
-an error instead of being dropped silently. `Close` is idempotent.
+an error instead of being dropped silently. `Close` and `Abort` after `Close`
+or `Abort` are no-ops that return nil.
 
 `NewWriteOnCloseFileBuffer` is the one that matters for backends: it hands the
 complete buffer to your `write` callback on `Close`. `Abort` discards the
@@ -216,8 +217,9 @@ It lazily reads the whole file on the first read or write, keeps every
 operation in memory in a `FileBuffer`, and writes the complete content back on
 `Close`. The `close` callback is optional and releases the underlying handle;
 it runs on `Close` and on `Abort`, at most once. `Abort` discards the
-modifications without writing them back, implementing `fs.WriteAborter`.
-After `Close` or `Abort` every method returns `os.ErrClosed`.
+modifications without writing them back, implementing `fs.WriteAborter`. After
+`Close` or `Abort` every other method returns `os.ErrClosed`; `Close` and
+`Abort` return nil.
 
 This is the fallback the package uses for `File.OpenReadWriter` when a backend
 does not implement `fs.ReadWriterFileSystem`.

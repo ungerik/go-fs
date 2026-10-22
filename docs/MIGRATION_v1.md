@@ -73,8 +73,8 @@ Behaviour changes:
   EPSV by default (`Options.DisableEPSV` for PASV) and rejects paths and
   credentials containing CR, LF or NUL with `os.ErrInvalid`.
 - sftpfs, ftpfs and smbfs don't retry operations that can't be repeated
-  (append, remove, move, make dir, symlink, writers) after their request may
-  have reached the server; they return the connection error instead.
+  (append, remove, move, make dir, symlink, and the writers of sftpfs) after
+  their request may have reached the server; they return the connection error instead.
 - smbfs `ReadSymbolicLink` returns the raw target, and a Move onto an
   existing empty directory fails with `os.ErrExist` instead of replacing it.
   smbfs paths and link targets containing `\` fail with `os.ErrInvalid`
@@ -176,8 +176,9 @@ Behaviour changes:
   `os.ErrInvalid` ("are the same file").
 - `LocalFileSystem.Move` of a file with more than one hard link goes through a
   temporary `.gofs-move-*` name in the source directory.
-- `fs.Zip` and `ZipMemFiles` reject absolute names, `..` and names with a
-  backslash; `zipfs.Reader` skips symbolic links, devices and FIFOs.
+- `fs.Zip` and `ZipMemFiles` reject names that escape with `..`, names with a
+  backslash and absolute names (the leading slash of a `MemFile` name is
+  dropped); `zipfs.Reader` skips symbolic links, devices and FIFOs.
 - XAttr: `XAttrCreate` on an existing attribute wraps `os.ErrExist`,
   `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing attribute wrap
   `os.ErrNotExist`.
