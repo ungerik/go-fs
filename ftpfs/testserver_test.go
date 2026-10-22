@@ -37,6 +37,8 @@ type testFTPServer struct {
 	listener net.Listener
 	tlsCfg   *tls.Config
 	logins   atomic.Int64
+	accepted atomic.Int64 // number of accepted control connections
+	open     atomic.Int64 // number of control connections that are not closed yet
 
 	mu       sync.Mutex
 	nodes    map[string]*testFTPNode // clean paths, "/" is the root
@@ -54,6 +56,10 @@ type testFTPServer struct {
 	noEPSV           bool           // EPSV is not implemented
 	pasvHost         string         // host part of PASV replies like "10,1,2,3" instead of the real address
 	rntoNoReplace    bool           // RNTO onto an existing path fails like on servers that don't replace files
+	refuse           map[string]int // the next RNFR, RNTO or RMD commands like "RNFR /path" are refused with 550
+	deleteOnRNFR     string         // RNFR of this path deletes it first, like another client right before
+	dotEntries       bool           // LIST and MLSD list the entries "." and ".." first like most servers
+	maxListings      int            // LIST and MLSD fail with 550 after this many listings if not 0
 	requireTLSReuse  bool           // TLS data connections must resume the TLS session of the control connection
 }
 
@@ -86,6 +92,7 @@ func newTestFTPServerOn(t *testing.T, address string) *testFTPServer {
 
 		dropBefore:  make(map[string]int),
 		dropReplyOf: make(map[string]int),
+		refuse:      make(map[string]int),
 	}
 	go srv.acceptLoop()
 	t.Cleanup(func() { ln.Close() })
@@ -163,6 +170,20 @@ func (s *testFTPServer) exists(p string) bool {
 	return ok
 }
 
+// paths returns the sorted paths of all files and directories except the root.
+func (s *testFTPServer) paths() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var paths []string
+	for p := range s.nodes {
+		if p != "/" {
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // mkdirAll creates a directory and its parents for seeding tests.
 func (s *testFTPServer) mkdirAll(p string) {
 	s.mu.Lock()
@@ -190,8 +211,21 @@ func (s *testFTPServer) acceptLoop() {
 		if err != nil {
 			return // listener closed
 		}
-		go s.handle(conn)
+		s.accepted.Add(1)
+		s.open.Add(1)
+		go func() {
+			defer s.open.Add(-1)
+			s.handle(conn)
+		}()
 	}
+}
+
+// refused reports whether the command verb with the clean path p
+// is refused by the refuse hook and counts the refusal.
+func (s *testFTPServer) refused(verb, p string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return takeHook(s.refuse, verb+" "+p)
 }
 
 // children returns the sorted names of the entries of the directory dir.
@@ -209,11 +243,16 @@ func (s *testFTPServer) children(dir string) []string {
 
 // mlstFact formats the RFC 3659 facts of a node.
 func mlstFact(node *testFTPNode) string {
-	modify := node.modified.UTC().Format("20060102150405")
 	if node.isDir {
-		return fmt.Sprintf("type=dir;modify=%s;", modify)
+		return dirFact("dir", node)
 	}
-	return fmt.Sprintf("type=file;size=%d;modify=%s;", len(node.data), modify)
+	return fmt.Sprintf("type=file;size=%d;modify=%s;", len(node.data), node.modified.UTC().Format("20060102150405"))
+}
+
+// dirFact formats the RFC 3659 facts of a directory node with the type
+// "dir", or "cdir" and "pdir" for the entries "." and ".." of MLSD.
+func dirFact(typ string, node *testFTPNode) string {
+	return fmt.Sprintf("type=%s;modify=%s;", typ, node.modified.UTC().Format("20060102150405"))
 }
 
 // listLine formats a node like ls -l for the LIST command.
@@ -387,6 +426,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		noMLST, noEPSV, pasvHost := s.noMLST, s.noEPSV, s.pasvHost
 		failList := s.failListContains
 		rntoNoReplace := s.rntoNoReplace
+		dotEntries := s.dotEntries
+		tooManyListings := (verb == "LIST" || verb == "MLSD") && s.maxListings > 0 && s.commands["LIST"]+s.commands["MLSD"] > s.maxListings
 		s.mu.Unlock()
 
 		if dropBefore {
@@ -580,9 +621,21 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				reply("550 permission denied")
 				continue
 			}
+			if tooManyListings {
+				reply("550 too many listings")
+				continue
+			}
 			s.mu.Lock()
 			node, ok := s.nodes[p]
 			var lines []string
+			if ok && node.isDir && dotEntries {
+				parent := s.nodes[path.Dir(p)]
+				if verb == "MLSD" {
+					lines = append(lines, dirFact("cdir", node)+" .", dirFact("pdir", parent)+" ..")
+				} else {
+					lines = append(lines, listLine(node, "."), listLine(parent, ".."))
+				}
+			}
 			if ok && node.isDir {
 				for _, name := range s.children(p) {
 					child := s.nodes[path.Join(p, name)]
@@ -619,6 +672,10 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply(`257 "%s" created`, p)
 		case "RMD":
 			p := abs(arg)
+			if s.refused(verb, p) {
+				reply("550 permission denied")
+				continue
+			}
 			s.mu.Lock()
 			node, ok := s.nodes[p]
 			empty := ok && node.isDir && len(s.children(p)) == 0
@@ -646,16 +703,34 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply("250 deleted")
 		case "RNFR":
 			renameFrom = abs(arg)
+			if s.refused(verb, renameFrom) {
+				renameFrom = ""
+				reply("550 permission denied")
+				continue
+			}
 			s.mu.Lock()
+			if s.deleteOnRNFR == renameFrom {
+				delete(s.nodes, renameFrom)
+			}
 			_, ok := s.nodes[renameFrom]
 			s.mu.Unlock()
 			if !ok {
+				renameFrom = ""
 				reply("550 file not found")
 				continue
 			}
 			reply("350 ready for destination")
 		case "RNTO":
 			to := abs(arg)
+			if renameFrom == "" {
+				reply("503 RNFR required first")
+				continue
+			}
+			if s.refused(verb, to) {
+				renameFrom = ""
+				reply("550 permission denied")
+				continue
+			}
 			s.mu.Lock()
 			_, destExists := s.nodes[to]
 			if !destExists || !rntoNoReplace {
@@ -669,6 +744,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				}
 			}
 			s.mu.Unlock()
+			renameFrom = ""
 			if destExists && rntoNoReplace {
 				reply("550 destination exists")
 				continue

@@ -11,6 +11,8 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,6 +54,13 @@ func returnsWithin(t *testing.T, d time.Duration, f func() error) error {
 		t.Fatalf("did not return within %s", d)
 		return nil
 	}
+}
+
+// waitsForConnection reports whether a goroutine waits in acquire
+// for the shared connection of a file system.
+func waitsForConnection() bool {
+	buf := make([]byte, 1<<20)
+	return bytes.Contains(buf[:runtime.Stack(buf, true)], []byte("ftpfs.(*fileSystem).acquire("))
 }
 
 // TestDial_Context verifies that the context limits the server greeting
@@ -395,13 +404,16 @@ func TestClose_AbortsOperation(t *testing.T) {
 	srv.configure(func(s *testFTPServer) { s.hang = "MLST" })
 
 	hung := make(chan error, 2)
-	for range 2 {
-		go func() {
-			_, err := ftpFS.Stat("/file.txt")
-			hung <- err
-		}()
+	stat := func() {
+		_, err := ftpFS.Stat("/file.txt")
+		hung <- err
 	}
-	time.Sleep(100 * time.Millisecond)
+	go stat()
+	// The first Stat holds the connection and waits for the reply
+	require.Eventually(t, func() bool { return srv.count("MLST") == 1 }, 5*time.Second, time.Millisecond)
+	go stat()
+	// The second Stat waits for the connection
+	require.Eventually(t, waitsForConnection, 5*time.Second, time.Millisecond)
 
 	// Operations that don't need the connection don't wait for it
 	err := returnsWithin(t, time.Second, func() error {
@@ -438,7 +450,8 @@ func TestClose_AbortsReconnect(t *testing.T) {
 		_, err := ftpFS.Stat("/file.txt")
 		hung <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
+	// The retry of Stat dialed the silent server and waits for its greeting
+	require.Eventually(t, func() bool { return srv.accepted.Load() == 2 }, 5*time.Second, time.Millisecond)
 	require.NoError(t, returnsWithin(t, time.Second, ftpFS.Close))
 	select {
 	case err := <-hung:
@@ -446,6 +459,54 @@ func TestClose_AbortsReconnect(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Stat did not return after Close")
 	}
+}
+
+// TestClose_DuringOperations is the regression test for a connection that
+// Close left open: release checked whether the file system was closed
+// before it freed the connection, so a Close in between found the
+// connection in use and left closing it to release, which had decided
+// to keep it. The connection leaked then.
+func TestClose_DuringOperations(t *testing.T) {
+	srv := newTestFTPServer(t)
+	srv.writeFile("/file.txt", "x")
+	for range 100 {
+		ftpFS := dialInProcess(t, srv)
+		var stats atomic.Int64
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Go(func() {
+				for {
+					_, err := ftpFS.Stat("/file.txt")
+					if err != nil {
+						assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+						return
+					}
+					stats.Add(1)
+				}
+			})
+		}
+		require.Eventually(t, func() bool { return stats.Load() >= 4 }, 5*time.Second, 100*time.Microsecond)
+		require.NoError(t, ftpFS.Close())
+		wg.Wait()
+	}
+	require.Eventually(t, func() bool { return srv.open.Load() == 0 }, 5*time.Second, time.Millisecond,
+		"every connection is closed, %d remain open", srv.open.Load())
+}
+
+// TestAcquire_Closed verifies that an operation that gets the connection
+// after Close found it in use closes it: Close leaves that to whoever
+// holds the connection next.
+func TestAcquire_Closed(t *testing.T) {
+	srv := newTestFTPServer(t)
+	f := dialInProcess(t, srv)
+	require.Equal(t, int64(1), srv.open.Load())
+
+	// The state after Close found the connection in use
+	f.closed.Store(true)
+	_, err := f.acquire(t.Context())
+	require.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.Nil(t, f.conn)
+	require.Eventually(t, func() bool { return srv.open.Load() == 0 }, 5*time.Second, time.Millisecond, "the connection is closed")
 }
 
 // TestClose_AbortsReader verifies that Close aborts an open reader.

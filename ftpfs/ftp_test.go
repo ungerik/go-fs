@@ -202,6 +202,11 @@ func Test_fileSystem_InProcessConformance(t *testing.T) {
 		{name: "FTP", scheme: "ftp"},
 		{name: "FTPS", scheme: "ftps", configure: func(s *testFTPServer) { s.requireTLSReuse = true }},
 		{name: "FTP without MLST", scheme: "ftp", configure: func(s *testFTPServer) { s.noMLST = true }},
+		{name: "FTP with dot entries", scheme: "ftp", configure: func(s *testFTPServer) { s.dotEntries = true }},
+		{name: "FTP without MLST with dot entries", scheme: "ftp", configure: func(s *testFTPServer) {
+			s.noMLST = true
+			s.dotEntries = true
+		}},
 	} {
 		t.Run(variant.name, func(t *testing.T) {
 			srv := newTestFTPServer(t)
@@ -438,6 +443,65 @@ func TestListDirRecursive_ListingError(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+// TestDotEntries verifies that the entries "." and ".." that most servers
+// list for every directory are skipped. RemoveAll would recurse into the
+// directory itself forever and into its parent, deleting files outside of
+// the removed directory, and ListDirRecursive would never end.
+func TestDotEntries(t *testing.T) {
+	for _, variant := range []struct {
+		name   string
+		noMLST bool
+	}{
+		{"MLSD", false},
+		{"LIST", true},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			ctx := t.Context()
+			srv := newTestFTPServer(t)
+			srv.configure(func(s *testFTPServer) {
+				s.noMLST = variant.noMLST
+				s.dotEntries = true
+				// A walk into "." or ".." would recurse forever,
+				// the test needs less than 20 listings
+				s.maxListings = 100
+			})
+			ftpFS := dialInProcess(t, srv)
+			srv.writeFile("/root/sibling.txt", "keep")
+			srv.writeFile("/root/dir/a.txt", "a")
+			srv.writeFile("/root/dir/sub/b.txt", "b")
+
+			var names []string
+			err := ftpFS.ListDir(ctx, "/root/dir", nil, func(info *fs.FileInfo) error {
+				names = append(names, info.Name)
+				return nil
+			})
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []string{"a.txt", "sub"}, names)
+
+			var files []string
+			err = ftpFS.ListDirRecursive(ctx, "/root/dir", nil, func(info *fs.FileInfo) error {
+				files = append(files, strings.TrimPrefix(string(info.File), ftpFS.Prefix()))
+				return nil
+			})
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []string{"/root/dir/a.txt", "/root/dir/sub/b.txt"}, files)
+
+			// A refused RMD of a directory with only dot entries
+			// is not reported as a directory with entries
+			srv.mkdirAll("/root/empty")
+			srv.configure(func(s *testFTPServer) { s.refuse["RMD /root/empty"] = 1 })
+			err = ftpFS.Remove("/root/empty")
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, fs.ErrDirectoryNotEmpty{})
+			require.NoError(t, ftpFS.Remove("/root/empty"))
+			assert.ErrorIs(t, ftpFS.Remove("/root/dir"), fs.ErrDirectoryNotEmpty{})
+
+			require.NoError(t, ftpFS.RemoveAll(ctx, "/root/dir"))
+			assert.Equal(t, []string{"/root", "/root/sibling.txt"}, srv.paths(), "only the directory is removed")
+		})
+	}
+}
+
 // TestStat_MissingFileWithMLST verifies that Stat of a missing file on a
 // server with MLST support doesn't list the parent directory.
 func TestStat_MissingFileWithMLST(t *testing.T) {
@@ -474,9 +538,68 @@ func TestMove_ServerWithoutReplace(t *testing.T) {
 	require.NoError(t, ftpFS.Move(t.Context(), "/src.txt", "/dest.txt"))
 	assert.Equal(t, "source", string(srv.fileContent("/dest.txt")))
 	assert.False(t, srv.exists("/src.txt"))
+	assert.Equal(t, []string{"/dest.txt"}, srv.paths(), "no temporary file is left")
 
 	err := ftpFS.Move(t.Context(), "/missing.txt", "/other.txt")
 	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.Equal(t, []string{"/dest.txt"}, srv.paths(), "no temporary file is left")
+}
+
+// TestMove_RefusedRenameKeepsDestination is the regression test for Move
+// onto an existing file, which deleted the destination after any failure
+// reply of the rename. The reply doesn't tell whether the server refused
+// RNFR (the source) or RNTO (the destination), so a refused RNFR deleted
+// the destination and left the source where it was.
+func TestMove_RefusedRenameKeepsDestination(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	ftpFS := dialInProcess(t, srv)
+	srv.writeFile("/src.txt", "source")
+	srv.writeFile("/dest.txt", "destination")
+
+	// The server refuses to rename the source, like for missing permissions
+	srv.configure(func(s *testFTPServer) { s.refuse["RNFR /src.txt"] = 100 })
+	require.Error(t, ftpFS.Move(ctx, "/src.txt", "/dest.txt"))
+	assert.Equal(t, "destination", string(srv.fileContent("/dest.txt")), "the destination must be kept")
+	assert.Equal(t, "source", string(srv.fileContent("/src.txt")), "the source must be kept")
+	assert.ElementsMatch(t, []string{"/src.txt", "/dest.txt"}, srv.paths(), "no temporary file is left")
+
+	// The rename onto the destination fails twice: the server refuses
+	// to replace it and then refuses the source in its place, so the
+	// destination is renamed back from its temporary name
+	srv.configure(func(s *testFTPServer) { s.refuse = map[string]int{"RNTO /dest.txt": 2} })
+	require.Error(t, ftpFS.Move(ctx, "/src.txt", "/dest.txt"))
+	assert.Equal(t, "destination", string(srv.fileContent("/dest.txt")), "the destination must be restored")
+	assert.Equal(t, "source", string(srv.fileContent("/src.txt")), "the source must be kept")
+	assert.ElementsMatch(t, []string{"/src.txt", "/dest.txt"}, srv.paths(), "no temporary file is left")
+
+	// If the destination can't be renamed back either,
+	// the error tells where it is
+	srv.configure(func(s *testFTPServer) { s.refuse = map[string]int{"RNTO /dest.txt": 3} })
+	err := ftpFS.Move(ctx, "/src.txt", "/dest.txt")
+	require.Error(t, err)
+	assert.False(t, srv.exists("/dest.txt"))
+	var tmp string
+	for _, p := range srv.paths() {
+		if p != "/src.txt" {
+			tmp = p
+		}
+	}
+	require.NotEmpty(t, tmp, "the replaced file is kept under a temporary name")
+	assert.Equal(t, "destination", string(srv.fileContent(tmp)))
+	assert.Contains(t, err.Error(), tmp, "the error names the temporary file")
+
+	// The source vanished after it was checked: nothing is renamed
+	srv.writeFile("/dest.txt", "destination")
+	require.NoError(t, ftpFS.RemoveAll(ctx, tmp))
+	srv.configure(func(s *testFTPServer) {
+		s.refuse = map[string]int{}
+		s.deleteOnRNFR = "/src.txt"
+	})
+	err = ftpFS.Move(ctx, "/src.txt", "/dest.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.Equal(t, "destination", string(srv.fileContent("/dest.txt")), "the destination must be kept")
+	assert.Equal(t, []string{"/dest.txt"}, srv.paths(), "no temporary file is left")
 }
 
 // TestRemove_Root verifies that the root directory is never removed.

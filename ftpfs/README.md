@@ -133,7 +133,11 @@ and open readers, and afterwards every method returns
   `Move` checks the destination first: an existing directory is an error
   wrapping `os.ErrExist`, an existing file is replaced, a directory can't
   replace a file (`fs.ErrIsNotDirectory`), and a directory can't be moved
-  into itself (`os.ErrInvalid`).
+  into itself (`os.ErrInvalid`). If the server refuses to rename onto an
+  existing file, that file is renamed to a temporary `.gofs-replaced-*` name
+  in its directory and only deleted after the source took its place, or
+  renamed back if the rename fails again. An error that leaves it at the
+  temporary name contains that name.
 - **Permissions.** FTP has no portable permission model. The reported
   permissions are the constants `ftpfs.DefaultPermissions` /
   `ftpfs.DefaultDirPermissions`, and `SetPermissions` is not supported.
@@ -146,9 +150,9 @@ and open readers, and afterwards every method returns
 ## Testing
 
 The tests, including the go-fs conformance suite over FTP, over FTPS with
-TLS session reuse and against a server without MLST, run against an
-in-process FTP server with failure hooks, so they need neither Docker nor a
-network.
+TLS session reuse, against a server without MLST and against servers that
+list the `.` and `..` entries, run against an in-process FTP server with
+failure hooks, so they need neither Docker nor a network.
 
 Tests against public internet FTP servers only run with
 `GOFS_ONLINE_TESTS=1`.

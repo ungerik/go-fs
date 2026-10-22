@@ -29,6 +29,7 @@ package ftpfs
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -219,7 +220,14 @@ func (f *fileSystem) acquire(ctx context.Context) (*conn, error) {
 		return nil, context.Cause(ctx)
 	}
 	if f.closed.Load() {
+		// A Close that found the connection in use left
+		// closing it to the operation that holds it next
+		c := f.conn
+		f.conn = nil
 		<-f.sem
+		if c != nil {
+			_ = c.close()
+		}
 		return nil, fs.ErrFileSystemClosed
 	}
 	if f.conn == nil {
@@ -239,11 +247,32 @@ func (f *fileSystem) acquire(ctx context.Context) (*conn, error) {
 // A broken connection and the connection of a closed file system are closed.
 func (f *fileSystem) release(c *conn) {
 	c.fresh = false
-	if c.broken || f.closed.Load() {
+	if c.broken {
 		f.conn = nil
 		_ = c.close()
 	}
 	<-f.sem
+	// Checked after the connection was freed: a Close before finds it in
+	// use and leaves it to release, a Close after closes it itself
+	if f.closed.Load() {
+		_ = f.closeIdleConn()
+	}
+}
+
+// closeIdleConn closes the shared connection unless an operation holds it,
+// which closes it itself when it finds the file system closed.
+func (f *fileSystem) closeIdleConn() error {
+	select {
+	case f.sem <- struct{}{}:
+		c := f.conn
+		f.conn = nil
+		<-f.sem
+		if c != nil {
+			return c.close()
+		}
+	default:
+	}
+	return nil
 }
 
 // do runs op with the shared connection. If op fails because the
@@ -755,10 +784,15 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 //
 // FTP servers differ in what a rename onto an existing path does,
 // so Move checks the destination first: an existing directory is an
-// error wrapping os.ErrExist, an existing file is replaced (if the server
-// refuses that, the file is deleted and the rename repeated), and a
+// error wrapping os.ErrExist, an existing file is replaced, and a
 // directory can't replace a file. Moving a directory into itself is an
 // error wrapping os.ErrInvalid. The checks and the rename are not atomic.
+//
+// If the server refuses to rename onto an existing file, the file is
+// renamed to a temporary name ".gofs-replaced-*" in its directory, the
+// rename is repeated, and the file is deleted afterwards or renamed back
+// if the rename failed again. An error that leaves the file at its
+// temporary name contains that name.
 //
 // When filePath and destPath resolve to the same location after path
 // cleaning, Move returns nil without contacting the server, matching the
@@ -795,13 +829,38 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 		err = c.Rename(srcPath, dest)
 		if err != nil && replace && fileUnavailable(err) {
 			// Some servers don't rename onto an existing file
-			if err = c.Delete(dest); err != nil {
-				return err
-			}
-			err = c.Rename(srcPath, dest)
+			return f.replaceFile(c, srcPath, dest, err)
 		}
 		return f.notExist(srcPath, err)
 	}, filePath, destPath)
+}
+
+// replaceFile renames the file srcPath onto the existing file dest for
+// servers that refused to rename it onto an existing file with renameErr.
+// That failure reply doesn't tell whether the server refused the RNFR
+// command for the source or the RNTO command for the destination, so the
+// destination is never deleted before the source took its place: it is
+// renamed to a temporary name in its directory and deleted after the
+// source was renamed onto its path, or renamed back if that failed.
+func (f *fileSystem) replaceFile(c *conn, srcPath, dest string, renameErr error) error {
+	if _, err := f.stat(c, srcPath); err != nil {
+		// The source vanished since it was checked
+		return err
+	}
+	tmp := path.Join(path.Dir(dest), ".gofs-replaced-"+rand.Text())
+	if err := c.Rename(dest, tmp); err != nil {
+		return errors.Join(renameErr, err)
+	}
+	if err := c.Rename(srcPath, dest); err != nil {
+		if restoreErr := c.Rename(tmp, dest); restoreErr != nil {
+			return fmt.Errorf("ftpfs: moving %s to %s: %w; the replaced file remains at %s: %w", f.JoinCleanFile(srcPath), f.JoinCleanFile(dest), err, f.JoinCleanFile(tmp), restoreErr)
+		}
+		return err
+	}
+	if err := c.Delete(tmp); err != nil {
+		return fmt.Errorf("ftpfs: moved %s to %s, but the replaced file remains at %s: %w", f.JoinCleanFile(srcPath), f.JoinCleanFile(dest), f.JoinCleanFile(tmp), err)
+	}
+	return nil
 }
 
 // Remove deletes a file with the DELE command
@@ -902,17 +961,6 @@ func (f *fileSystem) Close() error {
 	}
 	fs.Unregister(f)
 	f.cancel(fs.ErrFileSystemClosed)
-	select {
-	case f.sem <- struct{}{}:
-		c := f.conn
-		f.conn = nil
-		<-f.sem
-		if c != nil {
-			return c.close()
-		}
-	default:
-		// The running operation is aborted and
-		// its release closes the connection
-	}
-	return nil
+	// A running operation is aborted and its release closes the connection
+	return f.closeIdleConn()
 }

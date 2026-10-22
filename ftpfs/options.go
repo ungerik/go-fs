@@ -1,6 +1,7 @@
 package ftpfs
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -144,14 +145,11 @@ func parseAddress(address string, opts *Options) (*dialConfig, error) {
 	cfg := &dialConfig{
 		url:      u,
 		hostname: u.Hostname(),
-		port:     u.Port(),
+		port:     cmp.Or(u.Port(), defaultPort),
 		secure:   u.Scheme == "ftps",
 	}
 	if opts != nil {
 		cfg.opts = *opts
-	}
-	if cfg.port == "" {
-		cfg.port = defaultPort
 	}
 	var anonymous bool
 	cfg.username, cfg.password, anonymous, err = cfg.credentials()
@@ -186,20 +184,13 @@ func (cfg *dialConfig) credentials() (username, password string, anonymous bool,
 			return "", "", false, err
 		}
 	} else {
-		username = cfg.opts.Username
-		if username == "" {
-			username = cfg.url.User.Username()
-		}
-		password = cfg.opts.Password
-		if password == "" {
-			password, _ = cfg.url.User.Password()
-		}
+		urlPassword, _ := cfg.url.User.Password()
+		username = cmp.Or(cfg.opts.Username, cfg.url.User.Username())
+		password = cmp.Or(cfg.opts.Password, urlPassword)
 	}
 	if username == "" {
 		username, anonymous = anonymousUser, true
-		if password == "" {
-			password = anonymousUser
-		}
+		password = cmp.Or(password, anonymousUser)
 	}
 	if err = checkCommandArg("username", username, false); err != nil {
 		return "", "", false, err
