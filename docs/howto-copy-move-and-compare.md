@@ -32,9 +32,11 @@ The rules for the destination:
   copy is an `fs.ErrIsDirectory` error.
 - **Missing destination directories are created.** You do not need
   `MakeAllDirs` first.
-- **A failed copy commits nothing.** When reading the source fails or the
+- **A failed upload commits nothing.** When reading the source fails or the
   context is canceled, a destination writer that implements `fs.WriteAborter`,
-  like an S3 upload, is aborted, so no partial data replaces an existing file.
+  like an S3, Azure, Dropbox, WebDAV or FTP upload, is aborted, so no partial
+  data replaces an existing file. Local, in-memory, SFTP and SMB files are
+  written in place, so a failed copy can leave them partial.
 
 When source and destination are on the same file system and it implements
 `CopyFileSystem`, the copy is server-side — S3, Azure, Dropbox and WebDAV never
@@ -214,8 +216,9 @@ More behaviours to rely on:
   wrapping `os.ErrInvalid`, like `os.Rename`, for a local directory also
   through such another path to it.
 - **Symbolic links are moved, not what they point to.** Within one file system
-  a link stays a link and replaces an existing file or link at the
-  destination. A link at the destination is replaced, not its target, and is
+  that implements `fs.SymbolicLinkFileSystem` a link stays a link and replaces
+  an existing file or link at the destination; an `OverlayFileSystem`, which
+  can't create links, copies the file a link points to. A link at the destination is replaced, not its target, and is
   put back if the copy fails. Between file systems a link to a file is
   followed: the file is copied and only the link is deleted. A link to a
   directory, the moved source itself or one below a moved directory, is never

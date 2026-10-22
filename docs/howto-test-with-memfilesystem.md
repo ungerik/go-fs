@@ -116,7 +116,7 @@ memFS, err := fs.NewMemFileSystem(nil,
 
 ```go
 memFS, err := fs.NewMemFileSystem(&fs.MemFileSystemOptions{
-    ID:        "fixtures", // the prefix is mem://fixtures instead of a random one
+    ID:        "fixtures", // the prefix is mem://fixtures/ (a slash because of the volume) instead of a random id
     Separator: `\`,        // "/" or `\`
     Volume:    "C:",       // paths like C:\dir, URIs like mem://fixtures/C:\dir
     ReadOnly:  true,       // every write returns fs.ErrReadOnlyFileSystem

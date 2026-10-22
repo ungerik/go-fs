@@ -209,6 +209,7 @@ Summary of the contract every backend follows:
 | Read or write of a directory       | `errors.Is(err, fs.ErrIsDirectory{})`         |
 | A directory was expected           | `errors.Is(err, fs.ErrIsNotDirectory{})`      |
 | `Remove` of a non-empty directory  | `errors.Is(err, fs.ErrDirectoryNotEmpty{})`   |
+| `Remove` or `RemoveAll` of the root| `errors.Is(err, os.ErrInvalid)`               |
 | Directory moved into itself        | `errors.Is(err, os.ErrInvalid)`               |
 | Write on a read-only file system   | `errors.Is(err, fs.ErrReadOnlyFileSystem)`    |
 | Read on a write-only file system   | `errors.Is(err, fs.ErrWriteOnlyFileSystem)`   |

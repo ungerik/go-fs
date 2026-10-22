@@ -16,7 +16,7 @@ modules are tagged in lockstep, the `tools` module is not tagged.
 ### Changed
 
 - **Constructors never register implicitly.** `New…`/`Dial…` return the file
-  system and an error and don't register it; `…AndRegister` variants register
+  system, and an error where construction can fail, and don't register it; `…AndRegister` variants register
   and return only an `error`. Every constructor that used to register under a
   plain name changed its signature, so old call sites don't compile instead of
   silently losing the registration: `fs.NewMemFileSystem(opts

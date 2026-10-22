@@ -18,7 +18,8 @@ go get github.com/ungerik/go-fs/s3fs   # or sftpfs, ftpfs, smbfs, webdavfs, azur
 
 ## The constructor rule every backend follows
 
-Every backend has the same three kinds of constructors:
+Every backend has the same two kinds of constructors, and sftpfs, ftpfs and
+smbfs a third one:
 
 ```go
 // New or Dial: returns the file system, never registers it
@@ -212,7 +213,8 @@ data, err := fs.File("ftps://user@example.com/pub/notes.txt").ReadAll(ctx)
 
 `ftp://` is plain FTP; `ftps://` is explicit TLS on port 21, or implicit TLS
 with port 990. Server certificates are verified by default. The prefix is
-`ftp://user@host` or `ftps://user@host`.
+`ftp://user@host` or `ftps://user@host`, with `:port` unless it is 21, or
+`ftp://host` for an anonymous login.
 
 ```go
 opts := &ftpfs.Options{
@@ -414,7 +416,8 @@ for _, f := range fs.RegisteredFileSystems() {
 registered for that prefix, so the URI resolved to the `Invalid` file system.
 You used `New` or `Dial` without `fs.Register`, forgot the import, already
 closed it, or the URI doesn't match the prefix: the prefix of `sftpfs`,
-`ftpfs`, `smbfs` and `webdavfs` contains the user, `sftp://user@host` and not
+`ftpfs`, `smbfs` and `webdavfs` contains the username if one is set,
+`sftp://user@host` and not
 `sftp://host`. Check with `errors.Is(err, fs.ErrInvalidFileSystem)`, and list
 the prefixes with `fs.RegisteredFileSystems()`.
 

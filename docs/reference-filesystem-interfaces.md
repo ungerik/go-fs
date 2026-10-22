@@ -34,7 +34,7 @@ Every backend implements this. Nothing works without it.
 | `Stat`             | `Stat(filePath string) (*FileInfo, error)`         | Follows symbolic links. Wraps `os.ErrNotExist` when missing. |
 | `ListDir`          | `ListDir(ctx, dirPath string, patterns []string, callback func(*FileInfo) error) error` | Non-recursive. The `FileInfo` of a symbolic link describes the entry itself, like `Lstat`. A callback error or a cancelled context stops the listing and is returned. |
 | `OpenReader`       | `OpenReader(filePath string) (io.ReadCloser, error)` | `ErrIsDirectory` for a directory, from opening, `Read` or `Close`. |
-| `Close`            | `Close() error`                                    | Unregisters the file system; every method returns `ErrFileSystemClosed` afterwards. Idempotent: calling it more than once returns nil. `fs.Local` only stops its watcher and stays usable. |
+| `Close`            | `Close() error`                                    | Unregisters the file system; every method returns `ErrFileSystemClosed` afterwards. Idempotent: calling it more than once returns nil. `fs.Local` only stops its watcher and stays usable; `Close` of `httpfs.Default` and `httpfs.DefaultTLS` does nothing, they stay registered and usable. |
 
 ### ID
 

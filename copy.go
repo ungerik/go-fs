@@ -37,10 +37,11 @@ const copyBufferSize = 1024 * 1024 * 4
 // with [PermissionsFileSystem.SetPermissions], and file systems that don't
 // implement PermissionsFileSystem copy the data through [File.OpenWriter] with perm.
 //
-// The copied data is only committed if the copy succeeded:
-// when reading the source fails or ctx is canceled, a destination writer
+// When reading the source fails or ctx is canceled, a destination writer
 // that implements [WriteAborter] is aborted, so an upload doesn't
-// replace an existing file with partial data.
+// replace an existing file with partial data. Writers without Abort,
+// like the ones of local, in-memory, SFTP and SMB files, write in place,
+// so a failed copy can leave the destination partial.
 // The error of closing the destination writer, like a failed upload,
 // is returned.
 func CopyFile(ctx context.Context, src FileReader, dest File, perm ...Permissions) error {

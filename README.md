@@ -686,7 +686,7 @@ Only `httpfs` registers file systems when it is imported.
 | `httpfs`      | `http://`, `https://`   | side-effect import: `import _ ".../httpfs"`; `httpfs.New`, `httpfs.NewAndRegister` for a prefix with its own client | yes  | no     |
 | `s3fs`        | `s3://<bucket>`         | `s3fs.New`, `s3fs.NewLoadDefaultConfig`, `s3fs.NewAndRegister` | yes  | yes/ro |
 | `sftpfs`      | `sftp://<user>@<host>`  | `sftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes  |
-| `ftpfs`       | `ftp://<user>@<host>`, `ftps://<user>@<host>` | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
+| `ftpfs`       | `ftp://[<user>@]<host>`, `ftps://[<user>@]<host>` | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
 | `dropboxfs`   | `dropbox://<account id>` | `dropboxfs.New`, `dropboxfs.NewAndRegister`       | yes  | yes    |
 | `webdavfs`    | `webdav://[<user>@]<host><base path>` | `webdavfs.New`, `webdavfs.NewAndRegister` | yes  | yes    |
 | `smbfs`       | `smb://[<user>@]<host>/<share>` | `smbfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes  | yes    |
@@ -737,7 +737,7 @@ expose one, so those use the coordinates that identify the store instead.
 | `zipfs`, `tarfs`, `multipartfs`                    | The prefix of the archive or form: `zip://<id>`, `tar://<id>`, `multipart://<id>` |
 | `s3fs`                                             | Bucket name, or `Options.Prefix` if it was set     |
 | `azureblobfs`                                      | `<host>/<container>`                               |
-| `sftpfs`, `ftpfs`                                  | The connection prefix, `sftp://user@host` / `ftp://user@host` |
+| `sftpfs`, `ftpfs`                                  | The connection prefix, `sftp://user@host` / `ftp://[user@]host` |
 | `smbfs`                                            | `[<user>@]<host>/<share>`                          |
 | `webdavfs`                                         | `[<user>@]<host><base path>`                       |
 | `dropboxfs`                                        | Dropbox account id                                 |
@@ -807,8 +807,8 @@ redacted. An empty path is `fs.ErrEmptyPath`.
 [docs/reference-errors.md](docs/reference-errors.md) has the full list.
 
 Methods only take a `context.Context` when they can take long: reading or
-writing content, listing directories, copying, moving and renaming,
-truncating, and dialing connections.
+writing content, listing directories, removing recursively, copying, moving
+and renaming, truncating, and dialing connections.
 
 ### httpfs
 

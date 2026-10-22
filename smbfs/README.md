@@ -121,8 +121,8 @@ and the requests of open file handles, and afterwards every method returns
   seeking reads. The rest uses the generic emulation of the `fs` package. File
   handles behave like `os.File`: `ReadAt` returns `io.EOF` at the end of the
   file and `Seek` to a negative offset fails. After `Close` of the file system
-  their read, write and seek methods return errors wrapping
-  `fs.ErrFileSystemClosed`, also through `io.Copy` and `io.WriteString`, and
+  their read and write methods, and `Seek` relative to the end, return errors
+  wrapping `fs.ErrFileSystemClosed`, also through `io.Copy` and `io.WriteString`, and
   their `Close` returns nil.
 - **Move.** The SMB rename replaces any existing destination, so `Move`
   checks the destination first: an existing directory is an error wrapping
