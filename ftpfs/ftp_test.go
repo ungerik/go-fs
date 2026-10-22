@@ -667,8 +667,13 @@ func TestRemoveRoot(t *testing.T) {
 	srv := newTestFTPServer(t)
 	ftpFS := dialInProcess(t, srv)
 	srv.writeFile("/file.txt", "content")
-	assert.ErrorIs(t, ftpFS.Remove("/"), os.ErrInvalid, "Remove of the root")
-	assert.ErrorIs(t, ftpFS.RemoveAll(t.Context(), "/"), os.ErrInvalid, "RemoveAll of the root")
+	// Relative paths of the root reached the server as its login directory
+	for _, root := range []string{"/", ".", "./", "dir/.."} {
+		assert.ErrorIs(t, ftpFS.Remove(root), os.ErrInvalid, "Remove(%q)", root)
+		assert.ErrorIs(t, ftpFS.RemoveAll(t.Context(), root), os.ErrInvalid, "RemoveAll(%q)", root)
+	}
+	assert.ErrorIs(t, ftpFS.Remove(""), fs.ErrEmptyPath, `Remove("")`)
+	assert.ErrorIs(t, ftpFS.RemoveAll(t.Context(), ""), fs.ErrEmptyPath, `RemoveAll("")`)
 	_, err := ftpFS.Stat("/file.txt")
 	assert.NoError(t, err, "nothing must be removed")
 }

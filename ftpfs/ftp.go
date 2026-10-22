@@ -868,13 +868,19 @@ func (f *fileSystem) replaceFile(c *conn, srcPath, dest string, renameErr error)
 	return nil
 }
 
+// isRoot reports if filePath is the root directory, also for relative
+// paths like "" or ".", which the server resolves to the login directory.
+func isRoot(filePath string) bool {
+	return path.Clean(Separator+filePath) == Separator
+}
+
 // Remove deletes a file with the DELE command
 // or an empty directory with the RMD command.
 // A non-empty directory is an fs.ErrDirectoryNotEmpty.
 func (f *fileSystem) Remove(filePath string) error {
 	return f.do(context.Background(), func(c *conn) error {
 		filePath := path.Clean(filePath)
-		if filePath == Separator {
+		if isRoot(filePath) {
 			return fmt.Errorf("%w: ftpfs: can't remove the root directory of %s", os.ErrInvalid, f)
 		}
 		info, err := f.stat(c, filePath)
@@ -912,7 +918,7 @@ func hasEntries(entries []*ftp.Entry) bool {
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return f.do(ctx, func(c *conn) error {
 		filePath := path.Clean(filePath)
-		if filePath == Separator {
+		if isRoot(filePath) {
 			return fmt.Errorf("%w: ftpfs: can't remove the root directory of %s", os.ErrInvalid, f)
 		}
 		info, err := f.stat(c, filePath)
