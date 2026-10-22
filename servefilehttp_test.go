@@ -249,20 +249,66 @@ func TestServeFileHTTP_MultipleRanges(t *testing.T) {
 	assert.Equal(t, http.StatusPartialContent, response.Code)
 	assert.Equal(t, "cdef", response.Body.String())
 
-	// The content of a reader that can seek, here an fsimpl.RangeReader
-	// like the ones of azureblobfs and webdavfs, is read for the ranges only
-	rangeFS, rangeRoot := registerRangeReaderTestFS(t, NewMemFile("/a.txt", []byte(content)))
+	// A reader that seeks by opening the content at another offset, like the
+	// fsimpl.RangeReader of azureblobfs and webdavfs, opened the content for
+	// every range, so multipleRanges made 200 requests to the server, each
+	// for the rest of the file from its range on. It serves at most one range too.
+	rangeFS, rangeRoot := registerRangeReaderTestFS(t,
+		NewMemFile("/a.txt", []byte(content)),
+		NewMemFile("/noext", []byte(content)),
+	)
 	response = serveTestRequest(t, http.MethodGet, rangeRoot.Join("a.txt"), "", "Range", multipleRanges)
-	assert.LessOrEqual(t, rangeFS.bytesRead.Load(), int64(200), "only the ranges are read")
+	assert.Equal(t, int64(1), rangeFS.opens.Load(), "the content is opened once")
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.True(t, response.Body.String() == content, "the full content")
+
+	// Sniffing the content type opens the content a second time
+	rangeFS.opens.Store(0)
+	response = serveTestRequest(t, http.MethodGet, rangeRoot.Join("noext"), "", "Range", multipleRanges)
+	assert.LessOrEqual(t, rangeFS.opens.Load(), int64(2), "the content is opened again after sniffing")
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.True(t, response.Body.String() == content, "the full content")
+
+	// A single range is read with one request
+	rangeFS.opens.Store(0)
+	rangeFS.bytesRead.Store(0)
+	response = serveTestRequest(t, http.MethodGet, rangeRoot.Join("a.txt"), "", "Range", "bytes=-4")
+	assert.Equal(t, int64(1), rangeFS.opens.Load(), "the content is opened once")
+	assert.Equal(t, int64(4), rangeFS.bytesRead.Load(), "only the range is read")
 	assert.Equal(t, http.StatusPartialContent, response.Code)
-	assert.True(t, strings.HasPrefix(response.Header().Get("Content-Type"), "multipart/byteranges"), "multipart response")
+	assert.Equal(t, "cdef", response.Body.String())
+}
+
+// TestServeFileHTTP_MultipleRangesSeekable checks that local files and
+// readers that seek in memory, like the ones of MemFile and MemFileSystem,
+// still serve multiple ranges as multipart response.
+func TestServeFileHTTP_MultipleRangesSeekable(t *testing.T) {
+	content := "hello world!"
+	local := File(t.TempDir()).Join("a.txt")
+	require.NoError(t, local.WriteAllString(t.Context(), content))
+	memFS, err := NewMemFileSystem(nil, NewMemFile("/a.txt", []byte(content)))
+	require.NoError(t, err)
+	require.NoError(t, Register(memFS))
+	t.Cleanup(func() {
+		Unregister(memFS)
+		_ = memFS.Close()
+	})
+
+	for _, file := range []FileReader{local, NewMemFile("a.txt", []byte(content)), memFS.RootDir().Join("a.txt")} {
+		response := serveTestRequest(t, http.MethodGet, file, "", "Range", "bytes=0-4,6-10")
+		assert.Equal(t, http.StatusPartialContent, response.Code, "%s", file.Name())
+		assert.True(t, strings.HasPrefix(response.Header().Get("Content-Type"), "multipart/byteranges"), "multipart response for %T", file)
+		assert.Contains(t, response.Body.String(), "\r\n\r\nhello\r\n", "first range")
+		assert.Contains(t, response.Body.String(), "\r\n\r\nworld\r\n", "second range")
+	}
 }
 
 // rangeReaderTestFS wraps a file system so that OpenReader returns an
 // fsimpl.RangeReader, which seeks by opening the content at another offset,
-// and counts the bytes read. The RangeReader has no Stat method.
+// and counts the opened bodies and the bytes read. The RangeReader has no Stat method.
 type rangeReaderTestFS struct {
 	WriteFileSystem
+	opens     atomic.Int64
 	bytesRead atomic.Int64
 }
 
@@ -274,6 +320,7 @@ func (f *rangeReaderTestFS) OpenReader(filePath string) (io.ReadCloser, error) {
 	return &fsimpl.RangeReader{
 		Size: int64(len(data)),
 		Open: func(offset, count int64) (io.ReadCloser, error) {
+			f.opens.Add(1)
 			return io.NopCloser(&countingReader{Reader: bytes.NewReader(data[offset:]), n: &f.bytesRead}), nil
 		},
 	}, nil

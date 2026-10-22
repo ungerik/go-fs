@@ -230,11 +230,17 @@ through `http.ServeContent`.
 
 **Range requests far into a large file are slow** — on a backend whose readers
 can't seek, `ServeFileHTTP` reaches the requested offset by reading and
-discarding the bytes before it, and it answers a request for several ranges
-with the full content. Check the "Seeking reads" row of the support
+discarding the bytes before it. Check the "Seeking reads" row of the support
 matrix in [FileSystem interfaces](reference-filesystem-interfaces.md);
 `azureblobfs`, `sftpfs`, `smbfs` and `webdavfs` seek natively, like the local
 and the memory file systems.
+
+**A request for several ranges gets the full content** — only local files and
+the readers of `MemFile` and `MemFileSystem`, which seek in memory, serve
+multiple ranges as a `multipart/byteranges` response. Every other backend
+serves at most one range and answers a request for several ranges with the
+full content and the status 200, because each range would be another request
+to the server or another read from the start of the file.
 
 **`http.FS` will not accept my file system** — it takes an `io/fs.FS`. Call
 `.StdFS()` on a `File` first; do not pass the `fs.FileSystem` itself.

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"mime"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // ServeFileHTTPHandler returns a http.Handler that serves the passed file via HTTP,
@@ -38,13 +41,19 @@ func ServeFileHTTPHandler(file FileReader, contentType string) http.Handler {
 // to http.ServeContent as it is, so net/http can send a local file
 // with sendfile. The size and modification time of a reader that can't
 // seek come from Stat, so HEAD requests don't read the content unless
-// it is needed to deduce the content type. Such a reader serves at most
-// one range, because every range before the previous one would read the
-// file again from the start: a request for multiple ranges gets the full
-// content with the status 200. If Stat reports a negative size, like for
-// an HTTP URL without Content-Length, the content is streamed with the
-// status 200 without Content-Length, without ranges and without evaluating
+// it is needed to deduce the content type. If Stat reports a negative size,
+// like for an HTTP URL without Content-Length, the content is streamed with
+// the status 200 without Content-Length, without ranges and without evaluating
 // conditional requests, because http.ServeContent needs the size for them.
+//
+// Multiple ranges in one request are served only from a local file and from
+// readers that seek in memory, like the ones of MemFile and MemFileSystem.
+// Every other reader serves at most one range, a request for multiple ranges
+// gets the full content with the status 200: a reader that can't seek would
+// read the file again from the start for every range before the previous one,
+// and a reader that seeks by opening the file at another offset, like the
+// fsimpl.RangeReader of azureblobfs and webdavfs, would send a request
+// to the server for every range.
 func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file FileReader, contentType string) {
 	info, err := file.Stat()
 	if err != nil {
@@ -71,6 +80,9 @@ func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file Fil
 	if seeker, ok := reader.(io.ReadSeeker); ok {
 		// Seek fails for example for the *os.File of a named pipe
 		if _, err = seeker.Seek(0, io.SeekCurrent); err == nil {
+			if !seeksLocally(seeker) {
+				request = withoutMultipleRanges(request)
+			}
 			http.ServeContent(response, request, file.Name(), info.ModTime(), seeker)
 			return
 		}
@@ -79,12 +91,31 @@ func ServeFileHTTP(response http.ResponseWriter, request *http.Request, file Fil
 		serveUnknownSize(response, request, file.Name(), info.ModTime(), reader)
 		return
 	}
-	if strings.Contains(request.Header.Get("Range"), ",") {
-		// Without the Range header ServeContent sends the full content
-		request = request.Clone(request.Context())
-		request.Header.Del("Range")
+	http.ServeContent(response, withoutMultipleRanges(request), file.Name(), info.ModTime(), content)
+}
+
+// seeksLocally reports whether reader is a local file or seeks in memory,
+// so that http.ServeContent can serve multiple ranges from it.
+func seeksLocally(reader io.Reader) bool {
+	if r, ok := reader.(statReadSeekCloser); ok {
+		reader = r.ReadSeekCloser
 	}
-	http.ServeContent(response, request, file.Name(), info.ModTime(), content)
+	switch reader.(type) {
+	case *os.File, *bytes.Reader, *strings.Reader, *fsimpl.ReadonlyFileBuffer, *fsimpl.FileBuffer:
+		return true
+	}
+	return false
+}
+
+// withoutMultipleRanges returns request without its Range header if that
+// asks for multiple ranges, so that http.ServeContent sends the full content.
+func withoutMultipleRanges(request *http.Request) *http.Request {
+	if !strings.Contains(request.Header.Get("Range"), ",") {
+		return request
+	}
+	request = request.Clone(request.Context())
+	request.Header.Del("Range")
+	return request
 }
 
 // serveUnknownSize streams the content of reader with the status 200
