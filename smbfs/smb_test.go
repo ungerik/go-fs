@@ -59,6 +59,12 @@ func TestMain(m *testing.M) {
 		"-d",
 		"--name", testContainerName,
 		"-p", "127.0.0.1::445",
+		// The shares and the session databases of smbd are in memory,
+		// so the tests don't depend on the free space of the Docker disk:
+		// on a full disk smbd starts but fails every open
+		"--tmpfs", "/share",
+		"--tmpfs", "/public",
+		"--tmpfs", "/var/cache/samba",
 		"dperson/samba",
 		"-p",
 		"-u", fmt.Sprintf("%s;%s", testUsername, testPassword),
