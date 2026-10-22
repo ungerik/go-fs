@@ -290,7 +290,8 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // target that stays inside src, because it resolves the names of the target
 // with its own rules, like following a link in the target before a ".."
 // after it, matching names case-insensitively or with another separator.
-// So between file systems, and within one that can't create links,
+// So between file systems, which means two instances, also a SubFileSystem
+// and its parent, and within one that can't create links,
 // CopyRecursive fails before it writes anything with an error wrapping
 // [errors.ErrUnsupported] that names the first link to a directory: src is
 // checked for such links first, which lists the tree twice. Only a link at src
