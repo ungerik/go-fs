@@ -2,8 +2,8 @@
 
 Plan of record for reaching v1.0.0: clean, durable abstractions and a complete
 feature surface for the areas the library touches, so the API can be frozen.
-It replaces the earlier `TODOS.md`; every still-open item from it is folded into
-the phases below. Breaking changes are explicitly allowed before v1.0.0.
+It replaced the earlier `TODOS.md`; every still-open item from it is folded into
+the phases below. The new `TODOS.md` only lists the dependents to update after v1.0.0. Breaking changes are explicitly allowed before v1.0.0.
 
 Two audits of the whole tree (core package, all backends, test infrastructure)
 plus a design pass produced the findings and decisions recorded here.
@@ -546,6 +546,8 @@ One PR per phase unless noted.
       created because everything lands in one PR.
 - [ ] v1.0.0: after the beta iterations in follow-up PRs, tagged with
       `tag-release.sh` (the `tools` module is never tagged).
+- [ ] After v1.0.0: update the ungerik and domonda repositories that use
+      go-fs, listed in `TODOS.md`.
 
 ### Beta iterations (after Phase 6)
 
