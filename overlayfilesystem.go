@@ -66,6 +66,12 @@ var (
 // ListDirRecursiveFileSystem. The overlay can't create links and another file
 // system never gets a copy of a link to a directory, so CopyRecursive and
 // Move of a link to a directory of a layer fail, see CopyRecursive.
+// Copies and moves compare the files of local layers as local files, which
+// can resolve a link to another path than the overlay: a copy of a file onto
+// itself through a link or a hard link of a layer is a no-op, a move of
+// a link onto the file it points to, a move onto another hard link and
+// a rename to another case of the name are errors wrapping os.ErrInvalid,
+// see CopyFile and Move.
 type OverlayFileSystem struct {
 	paths fsimpl.PathHelper
 
@@ -350,6 +356,31 @@ func (o *OverlayFileSystem) statLayer(filePath string) (info *FileInfo, layer Fi
 func (o *OverlayFileSystem) Stat(filePath string) (*FileInfo, error) {
 	info, _, _, err := o.statLayer(filePath)
 	return info, err
+}
+
+// pathLayer returns the layer that holds the overlay path and the path
+// within it, without following a symbolic link at the path: the upper layer
+// if it has an entry at the path, else the base layer if it has one that is
+// not hidden, else the upper layer, where a file written at the path is
+// created. Copies and moves use it to compare the files of local layers,
+// see fsLocalPath.
+func (o *OverlayFileSystem) pathLayer(filePath string) (layer FileSystem, layerPath string, err error) {
+	if err := o.checkPath(filePath); err != nil {
+		return nil, "", err
+	}
+	upperPath := o.upperPath(filePath)
+	_, err = fsLstat(o.upper, upperPath)
+	switch {
+	case err == nil, errors.Is(err, os.ErrNotExist) && o.hidden(filePath):
+		return o.upper, upperPath, nil
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, "", o.overlayErr(o.upper, err)
+	}
+	basePath := o.basePath(filePath)
+	if _, err := fsLstat(o.base, basePath); err != nil {
+		return o.upper, upperPath, nil
+	}
+	return o.base, basePath, nil
 }
 
 // readSymbolicLink returns the target of the symbolic link at the overlay

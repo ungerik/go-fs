@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -611,4 +612,146 @@ func TestOverlayFileSystem_LayerVolume(t *testing.T) {
 	require.ErrorAs(t, err, &isDir)
 	errFile, _ := isDir.File()
 	assert.Equal(t, overlay.RootDir().Join("dir"), errFile, "errors name the file of the overlay")
+}
+
+// newLocalOverlay returns a registered OverlayFileSystem whose layers are
+// registered SubFileSystems of the local directories baseDir and upperDir.
+func newLocalOverlay(t *testing.T, baseDir, upperDir string) *fs.OverlayFileSystem {
+	t.Helper()
+	base, err := fs.NewSubFileSystem(fs.Local, baseDir, "")
+	require.NoError(t, err)
+	register(t, base)
+	upper, err := fs.NewSubFileSystem(fs.Local, upperDir, "")
+	require.NoError(t, err)
+	register(t, upper)
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+	require.NoError(t, err)
+	register(t, overlay)
+	return overlay
+}
+
+// TestOverlayFileSystem_LinkOntoItsTarget is a regression test: through an
+// overlay of local layers, Move of a symbolic link onto the file it points to
+// compared the paths that the overlay resolved, which differ from the file
+// that the local file system resolves for a target that leaves the directory
+// of the layer and comes back, an absolute target through another path to the
+// layer, or a target with another case on a case-insensitive disk. The copy
+// read the file through the link while the writer truncated it, so the file
+// was empty and Move returned nil. CopyFile of the link onto the file
+// truncated it the same way, also for a plain target. Like mv, Move refuses
+// with an error wrapping os.ErrInvalid, and CopyFile is a no-op.
+func TestOverlayFileSystem_LinkOntoItsTarget(t *testing.T) {
+	cases := []struct {
+		name string
+		// layer returns the directory of the upper layer
+		// and the target of the link to the file "f" in it
+		layer func(t *testing.T) (upperDir, target string)
+	}{
+		{"plain target", func(t *testing.T) (string, string) {
+			return t.TempDir(), "f"
+		}},
+		{"relative target through the parent of the layer", func(t *testing.T) (string, string) {
+			upperDir := filepath.Join(t.TempDir(), "up")
+			require.NoError(t, os.Mkdir(upperDir, 0o700))
+			return upperDir, "../up/f"
+		}},
+		{"absolute target through a link to the layer", func(t *testing.T) (string, string) {
+			dir := t.TempDir()
+			upperDir, alias := filepath.Join(dir, "upper"), filepath.Join(dir, "alias")
+			require.NoError(t, os.Mkdir(upperDir, 0o700))
+			if err := os.Symlink(upperDir, alias); err != nil {
+				t.Skipf("can't create symbolic link: %v", err)
+			}
+			return upperDir, filepath.Join(alias, "f")
+		}},
+		{"target with another case", func(t *testing.T) (string, string) {
+			return caseInsensitiveTempDir(t).LocalPath(), "F"
+		}},
+	}
+	// setup returns the overlay over an empty base layer
+	// with the file "f" and the link "l" in the upper layer
+	setup := func(t *testing.T, layer func(t *testing.T) (string, string)) (overlay *fs.OverlayFileSystem, file, link fs.File, target string) {
+		upperDir, target := layer(t)
+		file, link = fs.File(upperDir).Join("f"), fs.File(upperDir).Join("l")
+		require.NoError(t, file.WriteAllString(t.Context(), "precious"))
+		if err := os.Symlink(target, link.LocalPath()); err != nil {
+			t.Skipf("can't create symbolic link: %v", err)
+		}
+		return newLocalOverlay(t, t.TempDir(), upperDir), file, link, target
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Run("Move", func(t *testing.T) {
+				overlay, file, link, target := setup(t, c.layer)
+
+				err := fs.Move(t.Context(), overlay.RootDir().Join("l"), overlay.RootDir().Join("f"))
+				require.ErrorIs(t, err, os.ErrInvalid)
+				requireContent(t, file, "precious")
+				requireLink(t, link, target)
+			})
+			t.Run("CopyFile", func(t *testing.T) {
+				overlay, file, link, target := setup(t, c.layer)
+
+				require.NoError(t, fs.CopyFile(t.Context(), overlay.RootDir().Join("l"), overlay.RootDir().Join("f")), "a no-op")
+				requireContent(t, file, "precious")
+				requireLink(t, link, target)
+			})
+		})
+	}
+}
+
+// TestOverlayFileSystem_HardLinks is a regression test: through an overlay
+// with a local upper layer, Move and CopyFile of a file onto another hard
+// link of it truncated the file with the writer of the copy while reading it,
+// and Move then removed the source link, so the file was empty. The overlay
+// can't tell another hard link from the same directory entry under another
+// spelling of its name without writing to the layer past the overlay, so Move
+// refuses with an error wrapping os.ErrInvalid. CopyFile of a file onto
+// itself is a no-op.
+func TestOverlayFileSystem_HardLinks(t *testing.T) {
+	// setup returns the overlay over an empty base layer
+	// with the hard links "f" and "g" of a file in the upper layer
+	setup := func(t *testing.T) (overlay *fs.OverlayFileSystem, file, other fs.File) {
+		upperDir := t.TempDir()
+		file, other = fs.File(upperDir).Join("f"), fs.File(upperDir).Join("g")
+		require.NoError(t, file.WriteAllString(t.Context(), "precious"))
+		if err := os.Link(file.LocalPath(), other.LocalPath()); err != nil {
+			t.Skipf("can't create hard link: %v", err)
+		}
+		return newLocalOverlay(t, t.TempDir(), upperDir), file, other
+	}
+
+	t.Run("Move", func(t *testing.T) {
+		overlay, file, other := setup(t)
+
+		err := fs.Move(t.Context(), overlay.RootDir().Join("g"), overlay.RootDir().Join("f"))
+		require.ErrorIs(t, err, os.ErrInvalid)
+		requireContent(t, file, "precious")
+		requireContent(t, other, "precious")
+	})
+	t.Run("CopyFile", func(t *testing.T) {
+		overlay, file, other := setup(t)
+
+		require.NoError(t, fs.CopyFile(t.Context(), overlay.RootDir().Join("g"), overlay.RootDir().Join("f")), "a no-op")
+		requireContent(t, file, "precious")
+		requireContent(t, other, "precious")
+	})
+}
+
+// TestOverlayFileSystem_CaseOnlyRename is a regression test: over
+// a case-insensitive local upper layer, Move to a name that only differs in
+// case copied the file onto itself, which truncated it, and then removed
+// the source, the only directory entry of the file. The overlay supports only
+// one case of a name, so the move is refused with an error wrapping
+// os.ErrInvalid instead of renaming the file in the layer past the overlay.
+func TestOverlayFileSystem_CaseOnlyRename(t *testing.T) {
+	upperDir := caseInsensitiveTempDir(t)
+	writeFiles(t, upperDir, map[string]string{"file.txt": "precious"})
+	overlay := newLocalOverlay(t, t.TempDir(), upperDir.LocalPath())
+
+	err := fs.Move(t.Context(), overlay.RootDir().Join("file.txt"), overlay.RootDir().Join("File.txt"))
+	require.ErrorIs(t, err, os.ErrInvalid)
+	requireNames(t, upperDir, "file.txt")
+	requireContent(t, upperDir.Join("file.txt"), "precious")
 }

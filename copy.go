@@ -18,7 +18,9 @@ const copyBufferSize = 1024 * 1024 * 4
 // is created in it, else dest is the path of the copy.
 // An existing file at that path is replaced, an existing directory
 // is an [ErrIsDirectory]. Missing parent directories of the copy are created.
-// Copying a file onto itself is a no-op.
+// Copying a file onto itself is a no-op, for a local file also through
+// another path to it, like a symbolic link, a hard link, a [SubFileSystem]
+// or the local layer of an [OverlayFileSystem].
 // src must exist and must not be a directory ([ErrIsDirectory]).
 //
 // The copy is created with perm, or without perm with the permissions
@@ -142,14 +144,14 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 		if srcFS == destFS && srcPath == destPath {
 			return nil // Copying a file onto itself is a no-op
 		}
-		if srcFS != destFS {
-			// The same local file through a SubFileSystem, else the writer
-			// would truncate the file that is read. The native CopyFile of
-			// LocalFileSystem checks the paths within the file system.
-			srcLocal, destLocal, local := fsLocalPaths(srcFS, srcPath, destFS, destPath)
-			if local && isLocalSameFile(srcLocal, destLocal, os.Stat) {
-				return nil
-			}
+		// The same local file through another path, like a symbolic link,
+		// a hard link, a SubFileSystem or the layer of an OverlayFileSystem,
+		// else the writer would truncate the file that is read. Also within
+		// one file system, because an OverlayFileSystem resolves the links
+		// of its layers to other paths than the local file system.
+		srcLocal, destLocal, _, local := fsLocalPaths(srcFS, srcPath, destFS, destPath)
+		if local && isLocalSameFile(srcLocal, destLocal, os.Stat) {
+			return nil
 		}
 		srcPerm = copyPermissions(srcFS, srcPerm)
 	}
@@ -267,7 +269,8 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // Copying a directory onto itself is a no-op,
 // copying it into one of its sub-directories is an error wrapping [os.ErrInvalid],
 // for a local directory also through another path to it, like through
-// a symbolic link to a parent directory or a [SubFileSystem].
+// a symbolic link to a parent directory, a [SubFileSystem] or the local
+// layer of an [OverlayFileSystem].
 //
 // The filter patterns are applied to the names of files and symbolic links,
 // sub-directories are always copied, like for [File.ListDirRecursive].
@@ -314,9 +317,9 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 			return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
 		}
 	}
-	if srcLocal, destLocal, local := fsLocalPaths(srcFS, srcPath, destFS, destPath); local && isLocalInsideDir(srcLocal, destLocal) {
-		// Through another path to the directory, like a symbolic link
-		// to a parent directory, a bind mount or a SubFileSystem
+	if srcLocal, destLocal, _, local := fsLocalPaths(srcFS, srcPath, destFS, destPath); local && isLocalInsideDir(srcLocal, destLocal) {
+		// Through another path to the directory, like a symbolic link to
+		// a parent directory, a bind mount, a SubFileSystem or an overlay
 		return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
 	}
 	c := newTreeCopier(ctx, srcFS, destFS, patterns)

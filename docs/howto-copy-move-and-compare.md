@@ -38,7 +38,10 @@ The rules for the destination:
 
 When source and destination are on the same file system and it implements
 `CopyFileSystem`, the copy is server-side — S3, Azure, Dropbox and WebDAV never
-move the bytes through your process. Copying a file onto itself is a no-op.
+move the bytes through your process. Copying a file onto itself is a no-op,
+for a local file also through another path to it, like a symbolic link, a hard
+link, a `SubFileSystem` or the local layer of an `OverlayFileSystem`, which
+would otherwise truncate the file while it is read.
 
 When copying between two `File`s and you pass no explicit permissions, the
 source's read, write and execute bits are used. The setuid, setgid and sticky
@@ -177,18 +180,25 @@ More behaviours to rely on:
   and destination resolve to the same place. The fallback also compares local
   paths as files, so two paths of the same file through bind mounts (like
   `docker run -v /data:/a -v /data:/b`), a symbolic link to a parent
-  directory or a `SubFileSystem` are a no-op too, unless the name in the same
-  directory only differs in case: then the file is renamed like by
-  `LocalFileSystem.Move`. Moving a local file onto
-  another hard link of it removes the source link, like a rename onto any
-  other file. A destination that the file system matches to the source's own
-  directory entry, like another case or Unicode normalization of the name on
-  macOS, renames the file. Neither removes the only link of a file.
+  directory, a `SubFileSystem` or the local layer of an `OverlayFileSystem`
+  are a no-op too, unless the name in the same directory only differs in
+  case: then the file is renamed like by `LocalFileSystem.Move`.
+  `LocalFileSystem.Move` of a local file onto another hard link of it removes
+  the source link, like a rename onto any other file. A destination that the
+  file system matches to the source's own directory entry, like another case
+  or Unicode normalization of the name on macOS, renames the file. Neither
+  removes the only link of a file. The copy then delete fallback can't tell
+  these apart without renaming, so it refuses a move onto another hard link
+  with an error wrapping `os.ErrInvalid`, and so does a case-only rename
+  through an `OverlayFileSystem`, which supports only one case of a name.
 - **Moving a symbolic link onto the file it points to** is an error wrapping
   `os.ErrInvalid` on the local and the in-memory file system, with the native
   `Move` of `sftpfs` and `smbfs` and with copy then delete, like
   `mv` reports "are the same file": the link would replace the file and then
-  point to itself. Only a local file with other hard links, which keep it, is
+  point to itself. That includes the local layers of an `OverlayFileSystem`,
+  where the local file system can resolve a link to another path than the
+  overlay, like `../layer/file` or `File` for `file` on a case-insensitive
+  disk. Only a local file with other hard links, which keep it, is
   replaced by the link. On Windows, where the link count is unknown, the move
   is always refused, and so it is over SFTP and SMB, which report no link
   count either.

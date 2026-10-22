@@ -52,15 +52,20 @@ func JoinCleanFilePath(uriParts ...string) File {
 // destroying the file when caller passes identical source and
 // destination. The copy-then-delete fallback also returns nil for two
 // paths of the same local file, like through bind mounts, a symbolic
-// link to a parent directory or a [SubFileSystem], and renames the file for
-// a name in the same directory that only differs in case, like
-// [LocalFileSystem.Move] does it. Moving a local directory into itself
-// through such a path is an error wrapping [os.ErrInvalid].
-// Moving a symbolic link onto the file it points to, which would replace
-// the file with a link to itself, is an error wrapping [os.ErrInvalid] that
-// tells they are the same file, like mv reports it, for [LocalFileSystem.Move],
-// [MemFileSystem.Move] and the copy-then-delete fallback, except for a local
-// file with other hard links that keep it.
+// link to a parent directory, a [SubFileSystem] or the local layer of an
+// [OverlayFileSystem], and renames the file for a name in the same directory
+// that only differs in case, like [LocalFileSystem.Move] does it. Moving
+// a local directory into itself through such a path, a local file onto
+// another hard link of it, and a case-only rename through an
+// OverlayFileSystem, which supports only one case of a name, are errors
+// wrapping [os.ErrInvalid] that the fallback returns without changing
+// anything. Moving a symbolic link onto the file it points to, which would
+// replace the file with a link to itself, is an error wrapping
+// [os.ErrInvalid] that tells they are the same file, like mv reports it,
+// for [LocalFileSystem.Move], [MemFileSystem.Move] and the copy-then-delete
+// fallback, also through the local layers of an OverlayFileSystem, which
+// can resolve the link to another path than the local file system, except
+// for a local file with other hard links that keep it.
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath

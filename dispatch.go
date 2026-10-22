@@ -614,11 +614,13 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // A directory moved into itself within one file system must have been
 // rejected by the caller, see fsMove. Local paths are also compared as
 // files, because two paths can be the same file, like through bind mounts,
-// a symbolic link to a parent directory or a SubFileSystem: moving a file
-// or directory onto itself that way is a no-op, unless the name in the same
-// directory only differs in case, then the file is renamed like by
-// LocalFileSystem.Move, and moving a directory into itself that way
-// is an error wrapping [os.ErrInvalid].
+// a symbolic link to a parent directory, a SubFileSystem or the local layer
+// of an OverlayFileSystem, see fsLocalPath. Moving a file or directory onto
+// itself that way is a no-op, unless the name in the same directory only
+// differs in case: then the file is renamed like by LocalFileSystem.Move.
+// Moving a directory into itself that way, a file onto another hard link
+// of it, and a case-only rename through an OverlayFileSystem, which supports
+// only one case of a name, are errors wrapping [os.ErrInvalid].
 //
 // Within a file system that implements [SymbolicLinkFileSystem],
 // symbolic links are copied as links with their target stored verbatim,
@@ -673,7 +675,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	srcIsDir := srcInfo.IsDir && !srcInfo.IsSymlink
 	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
 
-	if srcLocal, destLocal, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
+	if srcLocal, destLocal, viaOverlay, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
 		switch {
 		case isLocalSameFile(srcLocal, destLocal, os.Lstat):
 			// The copy would be a no-op and removing
@@ -682,17 +684,20 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 				if filepath.Base(srcLocal) == filepath.Base(destLocal) {
 					return nil
 				}
-				// Another case of the name, renamed like by LocalFileSystem.Move
-				srcLocalInfo, err := os.Lstat(srcLocal)
-				if err != nil {
-					return wrapOSErr(srcLocal, err)
+				if !viaOverlay {
+					// Another case of the name, renamed like by LocalFileSystem.Move
+					srcLocalInfo, err := os.Lstat(srcLocal)
+					if err != nil {
+						return wrapOSErr(srcLocal, err)
+					}
+					return moveLocalSameFile(srcLocal, destLocal, srcLocalInfo)
 				}
-				return moveLocalSameFile(srcLocal, destLocal, srcLocalInfo)
 			}
 			// Another hard link of the file, or the same directory entry
 			// under a name that only the file system matches, like another
 			// Unicode normalization on macOS. Without knowing which,
-			// nothing is removed.
+			// nothing is removed. A layer of an overlay is never renamed
+			// past the overlay, which supports only one case of a name.
 			return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
 		case srcIsDir && isLocalInsideDir(srcLocal, destLocal):
 			return fmt.Errorf("%w: can't move directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
@@ -750,13 +755,15 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 // destPath of destFS, an existing file that is no link, which a move of the
 // link would replace with the link: the link would then point to itself and
 // the file would be gone, so mv refuses to move them as the same file.
-// Local paths are compared like by LocalFileSystem.Move, see
-// isLocalLinkOntoTarget, a file with other hard links is kept by them and
-// replaced like any other file. Within one other file system the paths are
-// compared with every symbolic link resolved, see fsEvalSymlinks, a link
-// that can't be resolved is reported as not pointing to destPath.
+// Local paths, also of the local layers of an OverlayFileSystem, are
+// compared like by LocalFileSystem.Move, see isLocalLinkOntoTarget, because
+// the local file system can resolve the link to another path than the
+// overlay, a file with other hard links is kept by them and replaced like
+// any other file. Within one other file system the paths are compared with
+// every symbolic link resolved, see fsEvalSymlinks, a link that can't be
+// resolved is reported as not pointing to destPath.
 func isLinkOntoTarget(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
-	if srcLocal, destLocal, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
+	if srcLocal, destLocal, _, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
 		destInfo, err := os.Lstat(destLocal)
 		return err == nil && isLocalLinkOntoTarget(srcLocal, destInfo)
 	}
@@ -997,29 +1004,40 @@ func fsLinks(fileSystem FileSystem) SymbolicLinkFileSystem {
 }
 
 // fsLocalPaths returns the local paths of aPath of aFS and bPath of bFS
-// and true if both are paths of the local file system,
-// directly or through SubFileSystems.
-func fsLocalPaths(aFS FileSystem, aPath string, bFS FileSystem, bPath string) (aLocal, bLocal string, ok bool) {
-	aLocal, aOK := fsLocalPath(aFS, aPath)
-	bLocal, bOK := fsLocalPath(bFS, bPath)
-	return aLocal, bLocal, aOK && bOK
+// and true if both are paths of the local file system, see fsLocalPath.
+// viaOverlay is true if one of them is a path of an OverlayFileSystem.
+func fsLocalPaths(aFS FileSystem, aPath string, bFS FileSystem, bPath string) (aLocal, bLocal string, viaOverlay, ok bool) {
+	aLocal, aOverlay, aOK := fsLocalPath(aFS, aPath)
+	bLocal, bOverlay, bOK := fsLocalPath(bFS, bPath)
+	return aLocal, bLocal, aOverlay || bOverlay, aOK && bOK
 }
 
 // fsLocalPath returns the local path of filePath of fileSystem and true
-// if it is a path of the local file system, directly or through SubFileSystems.
-func fsLocalPath(fileSystem FileSystem, filePath string) (string, bool) {
+// if it is a path of the local file system, directly or through
+// SubFileSystems and OverlayFileSystems. An OverlayFileSystem is unwrapped
+// to the layer that holds the path, see OverlayFileSystem.pathLayer, and
+// viaOverlay is true then: the local path may only be used to compare
+// files, because a write past the overlay would change its read-only base
+// layer or bring back the base entries that it hides.
+func fsLocalPath(fileSystem FileSystem, filePath string) (localPath string, viaOverlay, ok bool) {
 	for {
 		switch f := fileSystem.(type) {
 		case *LocalFileSystem:
-			return filePath, true
+			return filePath, viaOverlay, true
 		case *SubFileSystem:
 			parentPath, err := f.parentPath(filePath)
 			if err != nil {
-				return "", false
+				return "", false, false
 			}
 			fileSystem, filePath = f.parent, parentPath
+		case *OverlayFileSystem:
+			layer, layerPath, err := f.pathLayer(filePath)
+			if err != nil {
+				return "", false, false
+			}
+			fileSystem, filePath, viaOverlay = layer, layerPath, true
 		default:
-			return "", false
+			return "", false, false
 		}
 	}
 }
