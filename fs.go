@@ -60,9 +60,9 @@ func JoinCleanFilePath(uriParts ...string) File {
 // through such a path is an error wrapping [os.ErrInvalid].
 // Moving a symbolic link onto the file it points to, which would replace
 // the file with a link to itself, is an error wrapping [os.ErrInvalid] that
-// tells they are the same file, like mv reports it, for [LocalFileSystem.Move]
-// and the copy-then-delete fallback, except for a local file with other
-// hard links that keep it.
+// tells they are the same file, like mv reports it, for [LocalFileSystem.Move],
+// [MemFileSystem.Move] and the copy-then-delete fallback, except for a local
+// file with other hard links that keep it.
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath

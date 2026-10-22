@@ -1760,7 +1760,9 @@ func (fs *MemFileSystem) CopyFile(ctx context.Context, srcFile string, destFile 
 //
 // When filePath and destPath are the same file after cleaning,
 // Move returns nil without touching the node, matching the no-op behavior
-// of os.Rename required by the MoveFileSystem contract.
+// of os.Rename required by the MoveFileSystem contract. Moving a symbolic
+// link onto the file it points to is an error wrapping os.ErrInvalid,
+// because the file would be replaced by a link to itself.
 func (fs *MemFileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	if filePath == "" || destPath == "" {
 		return ErrEmptyPath
@@ -1792,6 +1794,14 @@ func (fs *MemFileSystem) Move(ctx context.Context, filePath string, destPath str
 	dest, err := fs.resolveElems(destElems, false)
 	if err != nil {
 		return err
+	}
+	if src.node.IsSymlink() && dest.node != nil {
+		// A link moved onto the file it points to would replace the
+		// file with a link to itself, refused like by GNU mv
+		target, err := fs.resolveElems(srcElems, true)
+		if err == nil && target.node == dest.node {
+			return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, fs.elemsFile(srcElems), fs.elemsFile(destElems))
+		}
 	}
 	switch {
 	case dest.node == src.node:

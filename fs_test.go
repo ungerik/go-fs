@@ -286,6 +286,22 @@ func TestMove_LinkOntoItsTarget(t *testing.T) {
 		requireContent(t, file, "precious")
 		requireLink(t, dir.Join("link"), "file.txt")
 	})
+	t.Run("MemFileSystem", func(t *testing.T) {
+		// The native Move of MemFileSystem
+		memFS, err := fs.NewMemFileSystem(nil, fs.NewMemFile("file.txt", []byte("precious")))
+		require.NoError(t, err)
+		register(t, memFS)
+		root := memFS.RootDir()
+		for _, target := range []string{"/file.txt", "file.txt"} {
+			require.NoError(t, memFS.CreateSymbolicLink(target, "/link"))
+
+			_, err := root.Join("link").Rename(t.Context(), "file.txt")
+			require.ErrorIs(t, err, os.ErrInvalid, "link to %s", target)
+			requireContent(t, root.Join("file.txt"), "precious")
+			requireLink(t, root.Join("link"), target)
+			require.NoError(t, root.Join("link").Remove())
+		}
+	})
 	t.Run("move emulation", func(t *testing.T) {
 		s := newSymlinkMemFS(t)
 		root := s.RootDir()
