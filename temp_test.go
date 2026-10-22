@@ -21,6 +21,16 @@ func TestTempFile(t *testing.T) {
 	require.Equal(t, "", TempFile("").Ext())
 }
 
+// TestTempFile_Separator is a regression test: an ext with a path
+// separator like "/../../x" was joined to the temp directory
+// and pointed outside of it.
+func TestTempFile_Separator(t *testing.T) {
+	for _, ext := range []string{"/../../x", "/sub.txt", ".txt/", "x" + Separator + "y"} {
+		require.Equal(t, InvalidFile, TempFile(ext), "TempFile(%q)", ext)
+	}
+	require.Equal(t, TempDir().LocalPath(), TempFile("..txt").Dir().LocalPath(), "dots without separator stay in the temp directory")
+}
+
 func TestCreateTempFile(t *testing.T) {
 	file, err := CreateTempFile(".txt")
 	require.NoError(t, err)
