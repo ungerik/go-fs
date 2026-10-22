@@ -135,7 +135,9 @@ error string in a 500 response — it leaks paths and internal structure.
 Don't join a name that comes from the client onto a local path: `Join` cleans
 the path, so `../../etc/passwd` below `/srv/data` is `/etc/passwd`. A
 `SubFileSystem` has the directory as its root, and `..` can't leave it, so
-serve such names from one, or from a `StdFS`:
+serve such names from one, or from a `StdFS`. Over `fs.Local` both also
+reject the reserved device names of Windows, like `NUL` or `COM1`, and names
+with a colon, which Windows would open as a device or an alternate data stream:
 
 ```go
 err := fs.NewSubFileSystemAndRegister(fs.Local, "/srv/data", "data")

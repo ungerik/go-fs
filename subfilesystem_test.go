@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -365,6 +366,58 @@ func TestSubFileSystem_ParentSeparator(t *testing.T) {
 	data, err = memFS.ReadAll(ctx, `\root\dir\a.txt`)
 	require.NoError(t, err)
 	assert.Equal(t, "a", string(data))
+}
+
+// TestSubFileSystem_LocalInvalidNames verifies that a view of a local
+// directory rejects the names that filepath.Localize rejects with an error
+// wrapping os.ErrInvalid, like os.DirFS does. The view passed reserved
+// device names like "NUL" or "COM1" to the parent, for which Windows
+// opens the device instead of a file in the directory, and names with
+// a colon, which Windows takes for an alternate data stream of the file
+// named before the colon. A name with a NUL byte is invalid everywhere.
+func TestSubFileSystem_LocalInvalidNames(t *testing.T) {
+	ctx := t.Context()
+	subFS, err := fs.NewSubFileSystem(fs.Local, t.TempDir(), "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(subFS))
+	t.Cleanup(func() { _ = subFS.Close() })
+	require.NoError(t, subFS.MakeDir("/dir", 0))
+
+	invalid := []string{"a\x00b"}
+	windowsInvalid := []string{"NUL", "con", "COM1", "CONIN$", "file.txt:stream"}
+	if runtime.GOOS == "windows" {
+		invalid = append(invalid, windowsInvalid...)
+	}
+	for _, name := range invalid {
+		for _, filePath := range []string{"/" + name, "/dir/" + name, "/" + name + "/file.txt"} {
+			_, err := subFS.Stat(filePath)
+			assert.ErrorIs(t, err, os.ErrInvalid, "Stat(%+q)", filePath)
+			_, err = subFS.OpenReader(filePath)
+			assert.ErrorIs(t, err, os.ErrInvalid, "OpenReader(%+q)", filePath)
+			err = subFS.WriteAll(ctx, filePath, []byte("data"), 0)
+			assert.ErrorIs(t, err, os.ErrInvalid, "WriteAll(%+q)", filePath)
+			assert.ErrorIs(t, subFS.MakeDir(filePath, 0), os.ErrInvalid, "MakeDir(%+q)", filePath)
+			exists, err := subFS.Exists(filePath)
+			assert.NoError(t, err, "Exists(%+q)", filePath)
+			assert.False(t, exists, "a name that the parent can't represent does not exist: %+q", filePath)
+		}
+		// A relative link target is checked element by element too
+		err := subFS.CreateSymbolicLink(name, "/link")
+		assert.ErrorIs(t, err, os.ErrInvalid, "CreateSymbolicLink(%+q)", name)
+	}
+
+	if runtime.GOOS != "windows" {
+		// The Windows names are files on other platforms
+		for _, name := range windowsInvalid {
+			require.NoError(t, subFS.WriteAll(ctx, "/dir/"+name, []byte(name), 0), "WriteAll(%q)", name)
+			data, err := subFS.ReadAll(ctx, "/dir/"+name)
+			require.NoError(t, err, "ReadAll(%q)", name)
+			assert.Equal(t, name, string(data))
+		}
+	}
+	files, err := subFS.Dir().ListDirMax(ctx, -1)
+	require.NoError(t, err)
+	assert.Equal(t, []fs.File{subFS.Dir().Join("dir")}, files, "nothing else written to the directory")
 }
 
 // TestSubFileSystem_MoveRoot verifies that the root directory of the view

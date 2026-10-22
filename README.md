@@ -1126,8 +1126,10 @@ html, err := fs.File("stdfs://templates/templates/index.html").ReadAllString(ctx
 `SubFileSystem` is a view of a directory of another file system as a file
 system of its own. Every operation is forwarded to the parent with
 translated paths, so the parent's native implementations are used and
-paths can't escape the directory. The parent must stay registered while the
-view is used:
+paths can't escape the directory. Over `fs.Local` the names that
+`filepath.Localize` rejects, like `NUL`, `COM1` or `a:b` on Windows,
+are an error wrapping `os.ErrInvalid`, as with `os.DirFS`.
+The parent must stay registered while the view is used:
 
 ```go
 err := fs.NewSubFileSystemAndRegister(fs.Local, "/srv/data", "data")

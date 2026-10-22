@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 
@@ -46,8 +47,11 @@ var (
 // Paths can't escape the directory: ".." elements are cleaned away
 // at the root of the view, and a name that the parent would split
 // into several elements, like `..\x` for a parent with the separator `\`,
-// is an error wrapping os.ErrInvalid. Symbolic links that already exist
-// in the parent are followed by the parent wherever they point to.
+// is an error wrapping os.ErrInvalid. So is, for a view of [Local],
+// a name that [filepath.Localize] rejects, like a name with a NUL byte,
+// and on Windows a name with a colon or a reserved device name like "NUL".
+// Symbolic links that already exist in the parent are followed
+// by the parent wherever they point to.
 //
 // The parent must stay registered while the view is used,
 // because emulated operations go through the File API.
@@ -133,23 +137,46 @@ func (s *SubFileSystem) Dir() File {
 // so a name like `..\secret.txt` is a single element of the view.
 // A parent with the separator `\` would split that name into the
 // elements ".." and "secret.txt" and resolve the path outside of the
-// root directory, so a name containing the separator of the parent
-// is an error wrapping os.ErrInvalid.
+// root directory, so a name that the parent can't represent as one
+// element, see validName, is an error wrapping os.ErrInvalid.
 func (s *SubFileSystem) parentPath(filePath string) (string, error) {
 	names := s.paths.SplitPath(s.CleanPath(filePath))
 	for _, name := range names {
-		if !isValidName(s.parent, name) {
+		if !s.validName(name) {
 			return "", s.errInvalidName(filePath, name)
 		}
 	}
 	return s.parent.CleanPath(append([]string{s.dir}, names...)...), nil
 }
 
+// validName reports if the parent can represent name as one element
+// of a path: the name must not contain the separator of the parent.
+// For a LocalFileSystem parent the name must also pass filepath.Localize,
+// which rejects the names that os.DirFS rejects: on Windows names with
+// a colon, which Windows takes for an alternate data stream, or a reserved
+// device name like "NUL" or "COM1", which opens the device instead of
+// a file in the directory, and on every platform names with a NUL byte.
+func (s *SubFileSystem) validName(name string) bool {
+	if !isValidName(s.parent, name) {
+		return false
+	}
+	if _, isLocal := s.parent.(*LocalFileSystem); isLocal {
+		if _, err := filepath.Localize(name); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // errInvalidName returns an error wrapping os.ErrInvalid
 // for a name in filePath that the parent can't represent.
 func (s *SubFileSystem) errInvalidName(filePath, name string) error {
-	return fmt.Errorf("%w: the name %q in %s contains the separator %q of the parent file system",
-		os.ErrInvalid, name, s.paths.JoinCleanURI(filePath), s.parent.Separator())
+	if sep := s.parent.Separator(); strings.Contains(name, sep) {
+		return fmt.Errorf("%w: the name %q in %s contains the separator %q of the parent file system",
+			os.ErrInvalid, name, s.paths.JoinCleanURI(filePath), sep)
+	}
+	return fmt.Errorf("%w: the name %q in %s is not valid for the parent %s",
+		os.ErrInvalid, name, s.paths.JoinCleanURI(filePath), s.parent.Name())
 }
 
 // linkTarget translates the target of a symbolic link at linkPath
@@ -166,8 +193,8 @@ func (s *SubFileSystem) errInvalidName(filePath, name string) error {
 // "../../x" of "/d/up/d/up/link" would point above the root directory.
 //
 // A relative target that would leave the view, like "../x" for a link
-// in the root directory, or that contains a name with the separator
-// of the parent is an error wrapping os.ErrInvalid.
+// in the root directory, or that contains a name the parent can't
+// represent, see validName, is an error wrapping os.ErrInvalid.
 func (s *SubFileSystem) linkTarget(targetPath, linkPath string) (string, error) {
 	if strings.HasPrefix(targetPath, "/") {
 		return s.parentPath(targetPath)
@@ -183,7 +210,7 @@ func (s *SubFileSystem) linkTarget(targetPath, linkPath string) (string, error) 
 			hasDotDot = true
 			depth--
 		default:
-			if !isValidName(s.parent, name) {
+			if !s.validName(name) {
 				return "", s.errInvalidName(targetPath, name)
 			}
 			depth++
