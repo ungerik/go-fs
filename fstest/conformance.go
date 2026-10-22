@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"runtime/debug"
 	"slices"
@@ -65,12 +66,7 @@ const escapedSeedName = "100%25 a%20b.txt"
 
 // files returns the sorted names of the seed files.
 func (s Seed) files() []string {
-	names := make([]string, 0, len(s))
-	for name := range s {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(s))
 }
 
 // dirs returns the sorted set of directories implied by the seed,

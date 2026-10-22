@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	iofs "io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -265,6 +266,51 @@ func Test_Enum_NoStatPerEntry(t *testing.T) {
 	err = Enum(ctx, baseDir, func(fs.File, [16]byte) error { calls++; return stop })
 	assert.ErrorIs(t, err, stop)
 	assert.Equal(t, 1, calls)
+}
+
+// Test_Enum_SymlinkedDirs is a regression test: Enum skipped symbolic links
+// to directories, because the FileInfo of a listing describes a link itself.
+// It used to decide with File.IsDir, which follows links.
+func Test_Enum_SymlinkedDirs(t *testing.T) {
+	ctx := t.Context()
+	tempDir := t.TempDir()
+	baseDir := fs.File(filepath.Join(tempDir, "base"))
+	elsewhere := fs.File(filepath.Join(tempDir, "elsewhere"))
+	symlink := func(target, link fs.File) {
+		t.Helper()
+		require.NoError(t, link.Dir().MakeAllDirs())
+		if err := os.Symlink(target.LocalPath(), link.LocalPath()); err != nil {
+			t.Skipf("symbolic links not available: %s", err)
+		}
+	}
+
+	// The first level directory of a UUID is a link
+	levelLinked := mustParseUUID("ced14f11-83f6-4908-b502-8971ff464608")
+	parts := Split(levelLinked)
+	require.NoError(t, elsewhere.Join("level", parts[1], parts[2], parts[3], parts[4]).MakeAllDirs())
+	symlink(elsewhere.Join("level"), baseDir.Join(parts[0]))
+
+	// The UUID directory itself is a link
+	leafLinked := mustParseUUID("4717a9b7-17d8-4c12-89e1-c998fb34e9ac")
+	parts = Split(leafLinked)
+	require.NoError(t, elsewhere.Join("leaf").MakeAllDirs())
+	symlink(elsewhere.Join("leaf"), baseDir.Join(parts...))
+
+	// Links to a file and to a missing path are skipped like files
+	require.NoError(t, elsewhere.Join("file.txt").Touch())
+	symlink(elsewhere.Join("file.txt"), baseDir.Join("ab"))
+	symlink(elsewhere.Join("missing"), baseDir.Join("cd"))
+
+	got := map[fs.File][16]byte{}
+	err := Enum(ctx, baseDir, func(uuidDir fs.File, uuid [16]byte) error {
+		got[uuidDir] = uuid
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[fs.File][16]byte{
+		Join(baseDir, levelLinked): levelLinked,
+		Join(baseDir, leafLinked):  leafLinked,
+	}, got, "the UUID directories are found through the links")
 }
 
 func findUUIDs(ctx context.Context, baseDir fs.File) map[[16]byte]struct{} {

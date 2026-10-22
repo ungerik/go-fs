@@ -88,8 +88,10 @@ const levels = 5
 //
 // It walks the five levels of the layout with File.ListDirInfo, so the
 // FileInfo of the listing decides whether an entry is a directory,
-// without another Stat per entry. Hidden entries, files and leaf
-// directories whose path doesn't parse as UUID are skipped.
+// without another Stat per entry. Only symbolic links are followed
+// with a Stat, so a link to a directory is walked like a directory.
+// Hidden entries, files and leaf directories whose path doesn't parse
+// as UUID are skipped.
 func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) error {
 	return enumLevel(ctx, baseDir, 1, callback)
 }
@@ -98,7 +100,16 @@ func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, u
 // of the layout, and descends into them until the UUID directories.
 func enumLevel(ctx context.Context, dir fs.File, level int, callback func(uuidDir fs.File, uuid [16]byte) error) error {
 	return dir.ListDirInfo(ctx, func(info *fs.FileInfo) error {
-		if !info.IsDir || info.IsHidden {
+		if info.IsHidden {
+			return nil
+		}
+		isDir := info.IsDir
+		if info.IsSymlink && !isDir {
+			// The FileInfo of a listing describes a link itself,
+			// IsDir is only set if the target is known to be a directory
+			isDir = info.File.IsDir()
+		}
+		if !isDir {
 			return nil
 		}
 		if level < levels {

@@ -223,6 +223,25 @@ func TestCopyRecursive_RejectsEscapingNames(t *testing.T) {
 	require.Empty(t, written, "no file must be written")
 }
 
+// TestCopy_RedactsDestinationPassword verifies that the errors of CopyFile
+// and CopyRecursive don't contain the password of the destination URI.
+// The destination has no registered file system, so making its directory
+// fails with an error that names the directory.
+func TestCopy_RedactsDestinationPassword(t *testing.T) {
+	src := newMinimalMemFS(t, fs.NewMemFile("/src/a.txt", []byte("a")))
+	dest := fs.File("ftpunregistered://user:secret@host/dir/sub")
+
+	err := fs.CopyFile(t.Context(), src.RootDir().Join("src", "a.txt"), dest.Join("a.txt"))
+	require.ErrorIs(t, err, fs.ErrInvalidFileSystem)
+	require.Contains(t, err.Error(), "can't make directory", "the error names the directory")
+	require.NotContains(t, err.Error(), "secret", "CopyFile must redact the password")
+
+	err = fs.CopyRecursive(t.Context(), src.RootDir().Join("src"), dest)
+	require.ErrorIs(t, err, fs.ErrInvalidFileSystem)
+	require.Contains(t, err.Error(), "can't make directory", "the error names the directory")
+	require.NotContains(t, err.Error(), "secret", "CopyRecursive must redact the password")
+}
+
 func TestCopyRecursive_MergesIntoExistingDirectory(t *testing.T) {
 	m := newMinimalMemFS(t)
 	root := m.RootDir()

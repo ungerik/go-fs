@@ -2,11 +2,14 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
+	stdfstest "testing/fstest"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -203,15 +206,121 @@ func TestEnsureRegistered(t *testing.T) {
 	assert.False(t, IsRegistered(memFS), "the last free unregisters")
 	assert.False(t, memFS.RootDir().Exists(), "the last free closes")
 
-	// A file system created with the wrong prefix is closed and rejected
-	_, _, err := EnsureRegistered(t.Context(), "mem://other-prefix", create)
-	assert.Error(t, err)
-
 	// A canceled context fails without creating
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, _, err = EnsureRegistered(ctx, prefix, create)
+	_, _, err := EnsureRegistered(ctx, prefix, create)
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// TestEnsureRegistered_CreatorCanceled checks that a waiting call with a
+// live ctx doesn't fail with the cancellation of the ctx of the call that
+// runs create, but runs create itself. The synctest bubble makes sure
+// that the waiter is waiting for the in-flight call when it fails.
+func TestEnsureRegistered_CreatorCanceled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const prefix = "mem://ensure-registered-creator-canceled"
+		var created atomic.Int32
+		create := func(ctx context.Context) (FileSystem, error) {
+			if created.Add(1) == 1 {
+				// The first call fails with the end of its ctx
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return NewMemFileSystem(&MemFileSystemOptions{ID: "ensure-registered-creator-canceled"})
+		}
+
+		creatorCtx, cancelCreator := context.WithCancel(t.Context())
+		creatorErr := make(chan error, 1)
+		go func() {
+			_, _, err := EnsureRegistered(creatorCtx, prefix, create)
+			creatorErr <- err
+		}()
+		synctest.Wait() // The creator blocks in create
+
+		type result struct {
+			fileSystem FileSystem
+			free       func() error
+			err        error
+		}
+		waiterResult := make(chan result, 1)
+		go func() {
+			fileSystem, free, err := EnsureRegistered(t.Context(), prefix, create)
+			waiterResult <- result{fileSystem, free, err}
+		}()
+		synctest.Wait() // The waiter waits for the in-flight call
+
+		cancelCreator()
+		assert.ErrorIs(t, <-creatorErr, context.Canceled, "the creator gets the end of its own ctx")
+		waiter := <-waiterResult
+		require.NoError(t, waiter.err, "the waiter's ctx is still alive")
+		assert.Equal(t, prefix, waiter.fileSystem.Prefix())
+		assert.Equal(t, int32(2), created.Load(), "the waiter must run create itself")
+		assert.True(t, IsRegistered(waiter.fileSystem))
+		require.NoError(t, waiter.free())
+		assert.False(t, IsRegistered(waiter.fileSystem), "the last free unregisters")
+	})
+}
+
+// TestEnsureRegistered_CreateError checks that all calls waiting for a
+// create call that fails with an error of its own get that error
+// without calling create again, and that the failure isn't remembered.
+func TestEnsureRegistered_CreateError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const prefix = "mem://ensure-registered-create-error"
+		errCreate := errors.New("create failed")
+		release := make(chan struct{})
+		var created atomic.Int32
+		failingCreate := func(context.Context) (FileSystem, error) {
+			created.Add(1)
+			<-release
+			return nil, errCreate
+		}
+
+		const n = 10
+		errs := make(chan error, n)
+		for range n {
+			go func() {
+				_, _, err := EnsureRegistered(t.Context(), prefix, failingCreate)
+				errs <- err
+			}()
+		}
+		synctest.Wait() // One call runs create, the others wait for it
+		close(release)
+		for range n {
+			assert.ErrorIs(t, <-errs, errCreate)
+		}
+		assert.Equal(t, int32(1), created.Load(), "the waiters must not run create again")
+		assert.Nil(t, GetFileSystemByPrefixOrNil(prefix))
+
+		// A later call runs create again
+		fileSystem, free, err := EnsureRegistered(t.Context(), prefix, func(context.Context) (FileSystem, error) {
+			return NewMemFileSystem(&MemFileSystemOptions{ID: "ensure-registered-create-error"})
+		})
+		require.NoError(t, err)
+		assert.Equal(t, prefix, fileSystem.Prefix())
+		require.NoError(t, free())
+	})
+}
+
+// TestEnsureRegistered_WrongPrefix checks that a file system that create
+// returns with another prefix than the requested one is closed
+// and not registered.
+func TestEnsureRegistered_WrongPrefix(t *testing.T) {
+	var memFS *MemFileSystem
+	_, _, err := EnsureRegistered(t.Context(), "mem://ensure-registered-requested", func(context.Context) (FileSystem, error) {
+		var err error
+		memFS, err = NewMemFileSystem(&MemFileSystemOptions{ID: "ensure-registered-other"})
+		return memFS, err
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mem://ensure-registered-other")
+	require.NotNil(t, memFS)
+	assert.False(t, IsRegistered(memFS), "the rejected file system must not be registered")
+	assert.Nil(t, GetFileSystemByPrefixOrNil("mem://ensure-registered-requested"))
+	assert.Nil(t, GetFileSystemByPrefixOrNil("mem://ensure-registered-other"))
+	_, err = memFS.Stat("/")
+	assert.ErrorIs(t, err, ErrFileSystemClosed, "the rejected file system must be closed")
 }
 
 // TestEnsureRegistered_Registered checks that a file system registered
@@ -231,6 +340,71 @@ func TestEnsureRegistered_Registered(t *testing.T) {
 	require.NoError(t, free())
 	assert.True(t, IsRegistered(memFS), "free must not unregister a file system registered with Register")
 	assert.True(t, memFS.RootDir().Exists(), "free must not close a file system registered with Register")
+}
+
+// TestAndRegisterConstructors checks the ...AndRegister constructors:
+// the registered file system resolves the URIs of its prefix, and a
+// second call with the same prefix fails with ErrAlreadyRegistered and
+// discards the new instance, so the first one stays registered.
+func TestAndRegisterConstructors(t *testing.T) {
+	// newMemFS returns a MemFileSystem with the file /dir/a.txt
+	newMemFS := func(t *testing.T, content string) *MemFileSystem {
+		t.Helper()
+		memFS, err := NewMemFileSystem(nil, NewMemFile("/dir/a.txt", []byte(content)))
+		require.NoError(t, err)
+		require.NoError(t, Register(memFS))
+		t.Cleanup(func() { _ = memFS.Close() })
+		return memFS
+	}
+	tests := []struct {
+		name     string
+		uri      string // of the file with the registered content
+		register func(t *testing.T, content string) error
+	}{
+		{
+			name: "NewStdFileSystemAndRegister",
+			uri:  StdFileSystemPrefix + "and-register-std/a.txt",
+			register: func(t *testing.T, content string) error {
+				fsys := stdfstest.MapFS{"a.txt": {Data: []byte(content)}}
+				return NewStdFileSystemAndRegister(fsys, "and-register-std")
+			},
+		},
+		{
+			name: "NewSubFileSystemAndRegister",
+			uri:  SubFileSystemPrefix + "and-register-sub/a.txt",
+			register: func(t *testing.T, content string) error {
+				return NewSubFileSystemAndRegister(newMemFS(t, content), "/dir", "and-register-sub")
+			},
+		},
+		{
+			name: "NewOverlayFileSystemAndRegister",
+			uri:  OverlayFileSystemPrefix + "and-register-overlay/dir/a.txt",
+			register: func(t *testing.T, content string) error {
+				base := newMemFS(t, content)
+				upper := newMemFS(t, content)
+				return NewOverlayFileSystemAndRegister(base, upper, "and-register-overlay")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, tt.register(t, "first"))
+			file := File(tt.uri)
+			registered := file.FileSystem()
+			require.True(t, IsRegistered(registered), "the URI %s resolves to the registered file system", file)
+			t.Cleanup(func() { _ = registered.Close() })
+			data, err := file.ReadAllString(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, "first", data)
+
+			err = tt.register(t, "second")
+			require.ErrorIs(t, err, ErrAlreadyRegistered, "a second file system with the same prefix")
+			assert.Equal(t, registered, file.FileSystem(), "the first file system stays registered")
+			data, err = file.ReadAllString(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, "first", data, "the second file system is discarded")
+		})
+	}
 }
 
 // TestInvalidFileSystem_Errors checks that files with an unregistered

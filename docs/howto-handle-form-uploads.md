@@ -164,6 +164,16 @@ for field, memFiles := range filesByField {
 parsed. Use these for small uploads; use `multipartfs` when the upload may be
 large or when you want to stream it somewhere without buffering.
 
+`maxMemory` doesn't bound the memory here: every file is read into a `MemFile`,
+including the ones that `ParseMultipartForm` spilled to temp files, so the
+whole upload ends up in memory. Limit the request body with
+`http.MaxBytesReader` before calling it:
+
+```go
+r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+filesByField, err := fs.ParseRequestMultipartFormMemFiles(r, maxUploadSize)
+```
+
 ## How the file system is laid out
 
 It has exactly two levels: **the form field names are the directories**, and

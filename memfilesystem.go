@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -876,16 +876,6 @@ func (fs *MemFileSystem) ReadSymbolicLink(linkPath string) (string, error) {
 	return r.node.SymlinkTarget, nil
 }
 
-// sortedNames returns the names of the entries of the directory node in sorted order.
-func sortedNames(dir *memFileNode) []string {
-	names := make([]string, 0, len(dir.Dir))
-	for name := range dir.Dir {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 // ListDir calls the callback for every file in the directory that
 // matches any of the patterns, or for all files if no patterns are passed,
 // in the order of the names. A symbolic link to a directory is listed
@@ -955,7 +945,7 @@ func (fs *MemFileSystem) dirInfoSnapshot(dirPath string, patterns []string) ([]*
 	}
 	dirResolved := dir.path()
 	infos := make([]*FileInfo, 0, len(dir.node.Dir))
-	for _, name := range sortedNames(dir.node) {
+	for _, name := range slices.Sorted(maps.Keys(dir.node.Dir)) {
 		matched, err := fsimpl.MatchAnyPattern(name, patterns)
 		if err != nil {
 			return nil, err
@@ -1027,7 +1017,7 @@ func (fs *MemFileSystem) walkDirInfoRecursive(dir *memFileNode, elems, resolved,
 	visiting[dir] = true
 	defer delete(visiting, dir)
 
-	for _, name := range sortedNames(dir) {
+	for _, name := range slices.Sorted(maps.Keys(dir.Dir)) {
 		child := memResolved{node: dir.Dir[name], parent: dir, dir: resolved, name: name}
 		childElems := append(slices.Clone(elems), name)
 		target, targetResolved := child.node, child.path()
@@ -1196,19 +1186,11 @@ func (fs *MemFileSystem) ListXAttr(filePath string, followSymlinks bool) ([]stri
 	if err != nil {
 		return nil, err
 	}
-	if len(node.XAttrs) == 0 {
-		return nil, nil
-	}
-	names := make([]string, 0, len(node.XAttrs))
-	for name := range node.XAttrs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
+	return slices.Sorted(maps.Keys(node.XAttrs)), nil
 }
 
 // GetXAttr returns a copy of the bytes stored for the named extended attribute.
-// If the attribute is not set, an error is returned.
+// If the attribute is not set, an error wrapping os.ErrNotExist is returned.
 // If followSymlinks is true, a symbolic link is resolved to its target.
 func (fs *MemFileSystem) GetXAttr(filePath string, name string, followSymlinks bool) ([]byte, error) {
 	if filePath == "" {
@@ -1226,14 +1208,15 @@ func (fs *MemFileSystem) GetXAttr(filePath string, name string, followSymlinks b
 	}
 	value, ok := node.XAttrs[name]
 	if !ok {
-		return nil, fmt.Errorf("xattr %q not found on %s", name, fs.fileOf(filePath))
+		return nil, fs.errXAttrNotExist(filePath, name)
 	}
 	return bytes.Clone(value), nil
 }
 
 // SetXAttr stores a copy of data under the named extended attribute.
-// The flags argument honors XAttrCreate (fail if the attribute already
-// exists) and XAttrReplace (fail if it does not).
+// The flags argument honors XAttrCreate (fail with an error wrapping
+// os.ErrExist if the attribute already exists) and XAttrReplace
+// (fail with an error wrapping os.ErrNotExist if it does not).
 // If followSymlinks is true, a symbolic link is resolved to its target.
 func (fs *MemFileSystem) SetXAttr(filePath string, name string, data []byte, flags XAttrFlags, followSymlinks bool) error {
 	if filePath == "" {
@@ -1251,10 +1234,10 @@ func (fs *MemFileSystem) SetXAttr(filePath string, name string, data []byte, fla
 	}
 	_, exists := node.XAttrs[name]
 	if flags&XAttrCreate != 0 && exists {
-		return fmt.Errorf("xattr %q already exists on %s", name, fs.fileOf(filePath))
+		return fmt.Errorf("xattr %q already exists on %s: %w", name, fs.fileOf(filePath), os.ErrExist)
 	}
 	if flags&XAttrReplace != 0 && !exists {
-		return fmt.Errorf("xattr %q not found on %s", name, fs.fileOf(filePath))
+		return fs.errXAttrNotExist(filePath, name)
 	}
 	if node.XAttrs == nil {
 		node.XAttrs = make(map[string][]byte, 1)
@@ -1266,7 +1249,7 @@ func (fs *MemFileSystem) SetXAttr(filePath string, name string, data []byte, fla
 }
 
 // RemoveXAttr removes the named extended attribute from the node. It
-// returns an error if the attribute is not set.
+// returns an error wrapping os.ErrNotExist if the attribute is not set.
 // If followSymlinks is true, a symbolic link is resolved to its target.
 func (fs *MemFileSystem) RemoveXAttr(filePath string, name string, followSymlinks bool) error {
 	if filePath == "" {
@@ -1283,12 +1266,19 @@ func (fs *MemFileSystem) RemoveXAttr(filePath string, name string, followSymlink
 		return err
 	}
 	if _, exists := node.XAttrs[name]; !exists {
-		return fmt.Errorf("xattr %q not found on %s", name, fs.fileOf(filePath))
+		return fs.errXAttrNotExist(filePath, name)
 	}
 	delete(node.XAttrs, name)
 	node.Modified = time.Now()
 	fs.emitEvent(filePath, EventChmod)
 	return nil
+}
+
+// errXAttrNotExist returns the error of an extended attribute
+// that is not set, which wraps os.ErrNotExist like on the other
+// file systems, see XAttrFileSystem.
+func (fs *MemFileSystem) errXAttrNotExist(filePath, name string) error {
+	return fmt.Errorf("xattr %q not found on %s: %w", name, fs.fileOf(filePath), os.ErrNotExist)
 }
 
 // Touch creates an empty file if it does not exist,

@@ -164,9 +164,12 @@ not implement them, because there is nothing sensible to emulate.
 
 `Lstat` describes a symbolic link itself, with `FileInfo.IsSymlink` set,
 where `Stat` follows it. `SetXAttr` takes `XAttrFlags`: `XAttrCreate` fails
-if the attribute exists, `XAttrReplace` if it doesn't, and zero flags create
-or replace it. The local file system emulates the flags on platforms whose
-extended attributes have none.
+with an error wrapping `os.ErrExist` if the attribute exists, `XAttrReplace`
+with an error wrapping `os.ErrNotExist` if it doesn't, and zero flags create
+or replace it. `GetXAttr` and `RemoveXAttr` of a missing attribute also fail
+with an error wrapping `os.ErrNotExist`, on every file system and platform.
+The local file system emulates the flags on platforms whose extended
+attributes have none.
 
 `Watch` calls the callback of one watch serially, in the order of the events,
 on a goroutine of the file system, so a slow callback only delays the later

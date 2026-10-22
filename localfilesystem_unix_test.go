@@ -62,3 +62,38 @@ func TestLocalFileSystem_WatchAddError(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrPermission, "Watch of a directory without permissions")
 	requireWatchGoroutines(t, local, 0, "a failed first Watch must not leave the watcher running")
 }
+
+// TestLocalFileSystem_XAttrFlags checks that the errors of the XAttr flags
+// and of a missing attribute wrap os.ErrExist and os.ErrNotExist like on
+// the other file systems. A missing attribute used to be reported as the
+// platform error ENOATTR or ENODATA, which doesn't match os.ErrNotExist.
+// It also checks that XAttrCreate follows a symbolic link: on darwin
+// XAttrCreate has the value of XATTR_NOFOLLOW, so passing the flags
+// without translation would set the attribute of the link itself.
+func TestLocalFileSystem_XAttrFlags(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file.txt")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	err := Local.SetXAttr(file, "user.gofs-test", []byte("value"), 0, true)
+	if err != nil {
+		t.Skipf("extended attributes not available: %s", err)
+	}
+
+	err = Local.SetXAttr(file, "user.gofs-test", []byte("other"), XAttrCreate, true)
+	assert.ErrorIs(t, err, os.ErrExist, "XAttrCreate of an existing attribute")
+	err = Local.SetXAttr(file, "user.gofs-missing", []byte("x"), XAttrReplace, true)
+	assert.ErrorIs(t, err, os.ErrNotExist, "XAttrReplace of a missing attribute")
+	_, err = Local.GetXAttr(file, "user.gofs-missing", true)
+	assert.ErrorIs(t, err, os.ErrNotExist, "GetXAttr of a missing attribute")
+	err = Local.RemoveXAttr(file, "user.gofs-missing", true)
+	assert.ErrorIs(t, err, os.ErrNotExist, "RemoveXAttr of a missing attribute")
+
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(file, link); err != nil {
+		t.Skipf("symbolic links not available: %s", err)
+	}
+	require.NoError(t, Local.SetXAttr(link, "user.gofs-created", []byte("created"), XAttrCreate, true))
+	value, err := Local.GetXAttr(file, "user.gofs-created", true)
+	require.NoError(t, err, "XAttrCreate through the link must set the attribute of the target")
+	assert.Equal(t, "created", string(value))
+}

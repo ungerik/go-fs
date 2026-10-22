@@ -556,7 +556,9 @@ err = file.RemoveXAttr("user.origin")
 
 These methods follow symbolic links; `LSetXAttr`, `LGetXAttr`, `LListXAttr`
 and `LRemoveXAttr` act on the link itself. On Linux the names need a namespace
-like `user.`.
+like `user.`. The error of `XAttrCreate` wraps `os.ErrExist`, the errors of
+`XAttrReplace` and of getting or removing a missing attribute wrap
+`os.ErrNotExist`.
 
 Watching files
 --------------

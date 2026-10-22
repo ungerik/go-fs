@@ -173,9 +173,12 @@ Several callers can independently want the same connection. That is what
 `fs.EnsureRegistered` is for: it returns the file system registered for a
 prefix, or creates and registers it, and counts the references. Concurrent
 calls for the same prefix share one creation, which runs without blocking the
-resolution of other URIs. Every caller gets a `free` function, and the last
-`free` unregisters and closes a file system that `EnsureRegistered` created; a
-file system registered with plain `Register` is never closed by it.
+resolution of other URIs. If the creation fails, every waiting caller gets its
+error; only a creation that failed because the context of its own caller ended
+is retried by a waiting caller whose context is still alive. Every caller gets
+a `free` function, and the last `free` unregisters and closes a file system
+that `EnsureRegistered` created; a file system registered with plain `Register`
+is never closed by it.
 `sftpfs.EnsureRegistered` builds directly on it:
 
 ```go

@@ -363,6 +363,30 @@ func TestPrefixWithHost(t *testing.T) {
 	assert.Equal(t, "HTTP "+prefix, apiFS.String())
 }
 
+// TestNewAndRegister verifies that NewAndRegister registers a file system
+// that the URIs of its prefix resolve to, and that a second call with
+// the same prefix fails with fs.ErrAlreadyRegistered and discards the
+// new instance, so the first one stays registered.
+func TestNewAndRegister(t *testing.T) {
+	prefix := "http://" + newFileTestServer(t) + "/"
+	require.NoError(t, NewAndRegister(prefix, nil))
+	registered := fs.GetFileSystemByPrefixOrNil(prefix)
+	require.NotNil(t, registered)
+	t.Cleanup(func() { fs.Unregister(registered) })
+
+	file := fs.File(prefix + "README.md")
+	assert.Same(t, registered, file.FileSystem(), "the URI resolves to the registered file system instead of Default")
+	data, err := file.ReadAllString(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, testFileContent, data)
+
+	err = NewAndRegister(prefix, nil)
+	require.ErrorIs(t, err, fs.ErrAlreadyRegistered, "a second file system with the same prefix")
+	assert.Same(t, registered, fs.GetFileSystemByPrefixOrNil(prefix), "the first file system stays registered")
+	assert.ErrorIs(t, NewAndRegister(Prefix, nil), fs.ErrAlreadyRegistered, "the prefix of Default is taken")
+	assert.Error(t, NewAndRegister("ftp://example.com/", nil), "not an HTTP prefix")
+}
+
 func TestNew(t *testing.T) {
 	_, err := New("ftp://example.com/", nil)
 	assert.Error(t, err, "not an HTTP prefix")

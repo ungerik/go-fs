@@ -466,3 +466,44 @@ func TestZipWriter_ReadRejected(t *testing.T) {
 	_, err = zipWriter.OpenWriter("/other.txt", 0)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 }
+
+// TestZipReader_Symlinks verifies that symbolic link entries are not
+// exposed, like tarfs and fs.UnzipToMemFiles skip them. The reader
+// used to list a link as regular file whose content was the link target.
+func TestZipReader_Symlinks(t *testing.T) {
+	ctx := t.Context()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	addEntry := func(name string, mode os.FileMode, content string) {
+		header := &zip.FileHeader{Name: name, Method: zip.Store}
+		header.SetMode(mode)
+		w, err := zw.CreateHeader(header)
+		require.NoError(t, err)
+		_, err = io.WriteString(w, content)
+		require.NoError(t, err)
+	}
+	addEntry("target.txt", 0o644, "target content")
+	addEntry("link.txt", os.ModeSymlink|0o777, "target.txt")
+	addEntry("dir/", os.ModeDir|0o755, "")
+	addEntry("dir/link-to-parent", os.ModeSymlink|0o777, "..")
+	addEntry("fifo", os.ModeNamedPipe|0o644, "")
+	require.NoError(t, zw.Close())
+
+	reader := openReader(t, fs.NewMemFile("links.zip", buf.Bytes()))
+	root := reader.RootDir()
+	for _, name := range []string{"link.txt", "dir/link-to-parent", "fifo"} {
+		assert.False(t, root.Join(name).Exists(), "%s must not be exposed", name)
+		_, err := root.Join(name).Stat()
+		assert.ErrorIs(t, err, os.ErrNotExist, "Stat of %s", name)
+		_, err = root.Join(name).ReadAll(ctx)
+		assert.ErrorIs(t, err, os.ErrNotExist, "ReadAll of %s", name)
+	}
+	data, err := root.Join("target.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "target content", data, "regular files are read")
+	assert.True(t, root.Join("dir").IsDir(), "directories are read")
+
+	files, err := root.ListDirRecursiveMax(ctx, -1)
+	require.NoError(t, err)
+	assert.Equal(t, []fs.File{root.Join("target.txt")}, files, "only the regular file is listed")
+}

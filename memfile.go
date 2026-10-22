@@ -585,6 +585,8 @@ func (i memFileInfo) Sys() any           { return nil }
 
 // ReadMultipartFormMemFiles reads the multipart form
 // and returns a map of form field name to MemFiles.
+// Every file of the form is read into memory, also the files
+// that were spilled to disk when the form was parsed.
 func ReadMultipartFormMemFiles(ctx context.Context, form *multipart.Form) (map[string][]MemFile, error) {
 	memFiles := make(map[string][]MemFile, len(form.File))
 	for fieldName, files := range form.File {
@@ -613,8 +615,14 @@ func readMultipartMemFile(ctx context.Context, file *multipart.FileHeader) (MemF
 
 // ParseRequestMultipartFormMemFiles parses the multipart form from the request
 // and returns a map of form field name to MemFiles.
+//
+// maxMemory doesn't bound the memory that is needed: it is passed to
+// http.Request.ParseMultipartForm, which spills the files beyond it to disk,
+// but then every file is read into memory, see ReadMultipartFormMemFiles.
+// Callers must limit the size of the request body,
+// for example with http.MaxBytesReader.
 func ParseRequestMultipartFormMemFiles(request *http.Request, maxMemory int64) (map[string][]MemFile, error) {
-	err := request.ParseMultipartForm(maxMemory) //#nosec G120 -- caller bounds memory via maxMemory parameter
+	err := request.ParseMultipartForm(maxMemory) //#nosec G120 -- maxMemory doesn't bound memory, callers must limit the body with http.MaxBytesReader as documented
 	if err != nil {
 		return nil, err
 	}

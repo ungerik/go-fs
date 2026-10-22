@@ -3,6 +3,7 @@ package dirtree
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,6 +163,21 @@ func TestCleanName(t *testing.T) {
 		assert.Equal(t, want, got, "CleanName(%q)", name)
 		_, err := Elements(got)
 		assert.NoError(t, err, "a cleaned name %q must be valid", got)
+	}
+}
+
+// TestCleanName_ValidNames verifies that CleanName of a name that
+// Elements accepts is its elements joined with slashes. The writers
+// of tarfs and zipfs rely on that to name the entries of paths
+// that were validated with Elements.
+func TestCleanName_ValidNames(t *testing.T) {
+	for _, name := range []string{
+		"", ".", "/", "//", "a", "/a", "a/", "/a/b/", "a//b", "./a/./b/.", "a/.b/..c/c..",
+		"a%20b/100%25.md", "a:b/c d", "dir/sub/file.txt",
+	} {
+		elements, err := Elements(name)
+		require.NoError(t, err, "Elements(%q)", name)
+		assert.Equal(t, strings.Join(elements, "/"), CleanName(name), "CleanName(%q)", name)
 	}
 }
 

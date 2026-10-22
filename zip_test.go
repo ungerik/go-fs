@@ -72,6 +72,48 @@ func TestZip_EntryNames(t *testing.T) {
 	}
 }
 
+// TestZip_InsecureNames is a regression test: Zip only rejected empty names
+// and names starting with "..", so it wrote archives with names like
+// `dir\a.txt` or "/abs.txt" that UnzipToMemFiles rejects with
+// zip.ErrInsecurePath. Zip now rejects every name that can't be unzipped.
+func TestZip_InsecureNames(t *testing.T) {
+	data := NewMemFile("data.txt", []byte("x"))
+	for _, file := range []FileReader{
+		NewMemFile(`dir\a.txt`, []byte("x")),
+		NewMemFile(`..\evil.txt`, []byte("x")),
+		FileReaderWithName(data, "/abs.txt"),
+		FileReaderWithName(data, "a/../../evil.txt"),
+		FileReaderWithName(data, `dir\a.txt`),
+		FileReaderWithName(data, "."),
+	} {
+		t.Run(file.Name(), func(t *testing.T) {
+			zipped, err := Zip(t.Context(), file)
+			if err == nil {
+				// Show what made the archive unusable
+				_, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", zipped))
+				t.Fatalf("Zip wrote the entry %q, UnzipToMemFiles returns %v", zipEntryNamesOf(t, zipped), err)
+			}
+			require.ErrorIs(t, err, os.ErrInvalid)
+		})
+	}
+
+	// Valid names survive the round trip
+	files := []MemFile{
+		NewMemFile("a.txt", []byte("a")),
+		NewMemFile("dir/sub/b.txt", []byte("b")),
+		NewMemFile("dir/./c..txt", []byte("c")),
+	}
+	zipped, err := ZipMemFiles(files...)
+	require.NoError(t, err)
+	unzipped, err := UnzipToMemFiles(t.Context(), NewMemFile("x.zip", zipped))
+	require.NoError(t, err)
+	require.Equal(t, []MemFile{
+		NewMemFile("a.txt", []byte("a")),
+		NewMemFile("dir/sub/b.txt", []byte("b")),
+		NewMemFile("dir/c..txt", []byte("c")),
+	}, unzipped)
+}
+
 // TestZip_Modified checks that Zip takes the modification time from Stat.
 func TestZip_Modified(t *testing.T) {
 	file := File(t.TempDir()).Join("a.txt")

@@ -16,6 +16,8 @@
 //     extracting the archive would, also when one of them is a file and
 //     the other a directory. Directories that are only implied by the
 //     paths of other entries exist without an entry of their own.
+//   - Regular files and directories are read.
+//     Symbolic links, devices and FIFOs are not exposed.
 //   - The permissions of an entry are read from its header, entries
 //     without permission bits get DefaultPermissions or DefaultDirPermissions.
 //
@@ -127,6 +129,10 @@ func NewReader(file fs.FileReader, id string) (*Reader, error) {
 		// the root, which are skipped, so that one bad entry doesn't
 		// make the whole archive unreadable.
 		isDir := strings.HasSuffix(zipFile.Name, "/")
+		if !isDir && !zipFile.Mode().IsRegular() {
+			// Symbolic links, devices and other entries are not exposed
+			continue
+		}
 		size := int64(zipFile.UncompressedSize64) //#nosec G115 -- sizes beyond int64 can't be read anyway
 		if isDir {
 			size = 0
@@ -470,13 +476,6 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	}
 }
 
-// entryName returns the archive entry name of a file system path
-// that was validated with checkNewLocked or dirtree.Elements.
-func entryName(filePath string) string {
-	elements, _ := dirtree.Elements(filePath)
-	return strings.Join(elements, Separator)
-}
-
 // Stat is not possible for an archive that is being written.
 func (f *Writer) Stat(filePath string) (*fs.FileInfo, error) {
 	if err := f.checkClosed(); err != nil {
@@ -512,7 +511,7 @@ func (f *Writer) writeFile(filePath string, data []byte, perm fs.Permissions) er
 		return err
 	}
 	header := &zip.FileHeader{
-		Name:     entryName(filePath),
+		Name:     dirtree.CleanName(filePath),
 		Method:   zip.Deflate,
 		Modified: time.Now(),
 	}
@@ -530,9 +529,11 @@ func (f *Writer) writeFile(filePath string, data []byte, perm fs.Permissions) er
 }
 
 // writeDirLocked writes a directory entry. f.mtx must be held.
+// dirPath must be validated with checkNewLocked or dirtree.Elements,
+// then dirtree.CleanName returns its elements joined with slashes.
 func (f *Writer) writeDirLocked(dirPath string, perm fs.Permissions) error {
 	header := &zip.FileHeader{
-		Name:     entryName(dirPath) + Separator,
+		Name:     dirtree.CleanName(dirPath) + Separator,
 		Modified: time.Now(),
 	}
 	header.SetMode(perm.OrDefault(DefaultDirPermissions).FileMode(true))

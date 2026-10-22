@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -29,7 +30,9 @@ const zipCopyBufferSize = 32 * 1024
 // the entry of every other FileReader after its Name.
 // So ZipMemFiles and Zip name the entries of MemFiles the same way and
 // UnzipToMemFiles returns them with the same FileName.
-// A name that is empty or escapes with ".." is an error.
+// A name that UnzipToMemFiles would reject, because it is empty, ".",
+// absolute, escapes with "..", or contains a backslash, is an error
+// wrapping os.ErrInvalid, so every archive of Zip can be unzipped.
 // Directories are added as directory entries without content.
 //
 // The context is checked while copying the content of the files.
@@ -94,26 +97,12 @@ func zipFileReader(ctx context.Context, zipWriter *zip.Writer, file FileReader, 
 	if err != nil {
 		return fmt.Errorf("failed to open reader for %s: %w", name, err)
 	}
-	_, err = io.CopyBuffer(w, ctxCheckingReader{ctx: ctx, reader: r}, copyBuf)
+	err = copyBuffer(ctx, w, r, copyBuf)
 	err = errors.Join(err, r.Close())
 	if err != nil {
 		return fmt.Errorf("failed to zip file %s: %w", name, err)
 	}
 	return nil
-}
-
-// ctxCheckingReader returns the error of its context
-// from Read once the context is done.
-type ctxCheckingReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r ctxCheckingReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.reader.Read(p)
 }
 
 // zipEntryName returns the name of the zip entry for file,
@@ -128,10 +117,19 @@ func zipEntryName(file FileReader) (string, error) {
 	default:
 		name = file.Name()
 	}
-	if name == "" || name == "." || name == ".." || strings.HasPrefix(name, "../") {
-		return "", fmt.Errorf("invalid zip entry name %q for %s", name, file)
+	if name == "." || !isLocalZipName(name) {
+		return "", fmt.Errorf("%w: zip entry name %q for %s is not a local slash separated path", os.ErrInvalid, name, errSubject(file))
 	}
 	return name, nil
+}
+
+// isLocalZipName reports if the zip entry name is a relative,
+// slash separated path that stays within the directory
+// it is extracted to, see archive/zip.ErrInsecurePath.
+// Zip and UnzipToMemFiles use the same rule,
+// so that every archive of Zip can be unzipped.
+func isLocalZipName(name string) bool {
+	return filepath.IsLocal(name) && !strings.Contains(name, `\`)
 }
 
 // UnzipToMemFiles unzips the passed zipFile as MemFiles.
@@ -170,7 +168,7 @@ func unzipToMemFiles(ctx context.Context, zipFile FileReader, maxSize int64) ([]
 		if !entry.Mode().IsRegular() {
 			continue
 		}
-		if !filepath.IsLocal(entry.Name) || strings.Contains(entry.Name, `\`) {
+		if !isLocalZipName(entry.Name) {
 			return nil, fmt.Errorf("%w: zip entry %q of %s", zip.ErrInsecurePath, entry.Name, zipFile.Name())
 		}
 		if entry.UncompressedSize64 > uint64(remaining) { //#nosec G115 -- remaining is never negative

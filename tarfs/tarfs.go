@@ -661,7 +661,7 @@ func (f *Writer) writeFile(filePath string, data []byte, perm fs.Permissions) er
 	now := time.Now()
 	err := f.tarWriter.WriteHeader(&tar.Header{
 		Typeflag: tar.TypeReg,
-		Name:     entryName(filePath),
+		Name:     dirtree.CleanName(filePath),
 		Size:     int64(len(data)),
 		Mode:     int64(perm.OrDefault(DefaultPermissions)),
 		ModTime:  now,
@@ -678,11 +678,13 @@ func (f *Writer) writeFile(filePath string, data []byte, perm fs.Permissions) er
 }
 
 // writeDirLocked writes a directory entry. f.mtx must be held.
+// dirPath must be validated with checkNewLocked or dirtree.Elements,
+// then dirtree.CleanName returns its elements joined with slashes.
 func (f *Writer) writeDirLocked(dirPath string, perm fs.Permissions) error {
 	now := time.Now()
 	err := f.tarWriter.WriteHeader(&tar.Header{
 		Typeflag: tar.TypeDir,
-		Name:     entryName(dirPath) + Separator,
+		Name:     dirtree.CleanName(dirPath) + Separator,
 		Mode:     int64(perm.OrDefault(DefaultDirPermissions)),
 		ModTime:  now,
 	})
@@ -691,13 +693,6 @@ func (f *Writer) writeDirLocked(dirPath string, perm fs.Permissions) error {
 	}
 	_, err = f.tree.Add(dirPath, true, 0, now, nil)
 	return err
-}
-
-// entryName returns the archive entry name of a file system path
-// that was validated with checkNewLocked or dirtree.Elements.
-func entryName(filePath string) string {
-	elements, _ := dirtree.Elements(filePath)
-	return strings.Join(elements, Separator)
 }
 
 // WriteAll writes a file entry to the archive.

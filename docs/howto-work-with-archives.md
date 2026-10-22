@@ -64,7 +64,9 @@ it to a local temp file first if that is too much.
 
 `zipfs.Reader` provides `Exists`, `ReadAll` and `ListDirRecursive` natively
 and synthesizes the directories implied by the entry names. Entries are
-decompressed on demand.
+decompressed on demand. Only regular files and directories are exposed,
+symbolic links, devices and FIFOs are skipped like by `tarfs` and
+`fs.UnzipToMemFiles`.
 
 ## Write a ZIP archive
 
@@ -216,6 +218,9 @@ data, err := fs.ZipMemFiles(
 ```
 
 Both use `flate.BestCompression` and build the whole archive in memory.
+An entry name that `fs.UnzipToMemFiles` would reject, because it is absolute,
+escapes with `..` or contains a backslash, is an error wrapping
+`os.ErrInvalid`, so every archive they write can be unzipped again.
 
 ## Unzip in memory
 

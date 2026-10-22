@@ -41,9 +41,13 @@ type registryEntry struct {
 
 // registryCall is an in-flight create call of EnsureRegistered
 // that concurrent callers for the same prefix wait for.
+// ctxEnded is true if create failed after the ctx of the calling
+// goroutine ended, then err is that caller's own cancellation
+// and the waiters try again with their ctx.
 type registryCall struct {
-	done chan struct{}
-	err  error
+	done     chan struct{}
+	err      error
+	ctxEnded bool
 }
 
 var (
@@ -159,6 +163,9 @@ func unregisterLocked(fileSystem FileSystem) bool {
 // Concurrent calls for the same prefix share one call of create,
 // which runs without blocking the resolution of other URIs.
 // While waiting for another call of create, the passed ctx is honored.
+// If that call of create fails, the waiting calls return its error,
+// unless it failed after the ctx of its caller ended: then a waiting
+// call whose ctx is still alive calls create itself.
 // The file system returned by create must have the passed prefix.
 //
 // Every successful call must be paired with a call of the returned free function,
@@ -191,10 +198,11 @@ func EnsureRegistered(ctx context.Context, prefix string, create func(context.Co
 		registryMtx.Unlock()
 
 		// Wait for the in-flight create call of another goroutine,
-		// then try again to get its registered file system
+		// then try again to get its registered file system,
+		// or to create it if the ctx of the other goroutine ended
 		select {
 		case <-call.done:
-			if call.err != nil {
+			if call.err != nil && !call.ctxEnded {
 				return nil, nil, call.err
 			}
 		case <-ctx.Done():
@@ -214,6 +222,7 @@ func ensureRegisteredCreate(ctx context.Context, prefix string, call *registryCa
 
 	fileSystem, err = create(ctx)
 	if err != nil {
+		call.ctxEnded = ctx.Err() != nil
 		return nil, nil, err
 	}
 	if fileSystem.Prefix() != prefix {

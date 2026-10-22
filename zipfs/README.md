@@ -77,6 +77,9 @@ set of files into a byte slice without a file system.
   emulation of the `fs` package. Entries are decompressed on demand. The
   archive is opened with `OpenReadSeeker`, which reads the whole archive into
   memory if the file system of the archive has no seekable readers, like S3.
+- **Entry types.** Regular files and directories are read. Symbolic links,
+  devices and FIFOs are skipped: they don't exist in the file system and are
+  missing when the archive is extracted with `fs.CopyRecursive`.
 - **Entry names.** Backslashes become slashes and `..` elements that would
   leave the archive are removed when reading, like `archive/zip` does for its
   `io/fs` view, so no entry can be extracted outside of the destination. A

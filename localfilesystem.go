@@ -1267,6 +1267,7 @@ func (local *LocalFileSystem) ListXAttr(filePath string, followSymlinks bool) ([
 
 // GetXAttr returns the value of the named extended attribute via the [xattr]
 // package ([xattr.Get] when followSymlinks is true, [xattr.LGet] otherwise).
+// The error of a missing attribute wraps os.ErrNotExist.
 func (local *LocalFileSystem) GetXAttr(filePath string, name string, followSymlinks bool) ([]byte, error) {
 	if filePath == "" {
 		return nil, ErrEmptyPath
@@ -1274,10 +1275,16 @@ func (local *LocalFileSystem) GetXAttr(filePath string, name string, followSymli
 	if !xattr.XATTR_SUPPORTED {
 		return nil, NewErrUnsupported(local, "GetXAttr")
 	}
+	var (
+		value []byte
+		err   error
+	)
 	if followSymlinks {
-		return xattr.Get(filePath, name)
+		value, err = xattr.Get(filePath, name)
+	} else {
+		value, err = xattr.LGet(filePath, name)
 	}
-	return xattr.LGet(filePath, name)
+	return value, wrapXAttrErr(err)
 }
 
 // SetXAttr sets the value of the named extended attribute via the [xattr]
@@ -1285,6 +1292,8 @@ func (local *LocalFileSystem) GetXAttr(filePath string, name string, followSymli
 // [xattr.LSetWithFlags]). The flags are translated to the platform values
 // of XATTR_CREATE and XATTR_REPLACE, on platforms without them
 // they are emulated by checking for an existing attribute first.
+// XAttrCreate fails with an error wrapping os.ErrExist,
+// XAttrReplace with an error wrapping os.ErrNotExist.
 func (local *LocalFileSystem) SetXAttr(filePath string, name string, data []byte, flags XAttrFlags, followSymlinks bool) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -1304,13 +1313,14 @@ func (local *LocalFileSystem) SetXAttr(filePath string, name string, data []byte
 		}
 	}
 	if followSymlinks {
-		return xattr.SetWithFlags(filePath, name, data, nativeFlags)
+		return wrapXAttrErr(xattr.SetWithFlags(filePath, name, data, nativeFlags))
 	}
-	return xattr.LSetWithFlags(filePath, name, data, nativeFlags)
+	return wrapXAttrErr(xattr.LSetWithFlags(filePath, name, data, nativeFlags))
 }
 
 // RemoveXAttr removes the named extended attribute via the [xattr]
 // package ([xattr.Remove] when followSymlinks is true, [xattr.LRemove] otherwise).
+// The error of a missing attribute wraps os.ErrNotExist.
 func (local *LocalFileSystem) RemoveXAttr(filePath string, name string, followSymlinks bool) error {
 	if filePath == "" {
 		return ErrEmptyPath
@@ -1319,9 +1329,22 @@ func (local *LocalFileSystem) RemoveXAttr(filePath string, name string, followSy
 		return NewErrUnsupported(local, "RemoveXAttr")
 	}
 	if followSymlinks {
-		return xattr.Remove(filePath, name)
+		return wrapXAttrErr(xattr.Remove(filePath, name))
 	}
-	return xattr.LRemove(filePath, name)
+	return wrapXAttrErr(xattr.LRemove(filePath, name))
+}
+
+// wrapXAttrErr makes the error of a missing extended attribute wrap
+// os.ErrNotExist like on the other file systems, see XAttrFileSystem.
+// The platforms report a missing attribute as [xattr.ENOATTR],
+// which is ENODATA on Linux and ENOATTR on darwin and the BSDs,
+// and doesn't match os.ErrNotExist. An existing attribute
+// is reported as EEXIST, which already matches os.ErrExist.
+func wrapXAttrErr(err error) error {
+	if err != nil && errors.Is(err, xattr.ENOATTR) && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %w", err, os.ErrNotExist)
+	}
+	return err
 }
 
 // eventFromFSNotify maps the operations of an fsnotify event to an Event.

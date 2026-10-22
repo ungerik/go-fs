@@ -580,6 +580,30 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 		value, err := xfs.GetXAttr(path, "user.gofs-test", true)
 		mustNoError(t, err, "GetXAttr")
 		checkBytes(t, []byte("value"), value, "GetXAttr")
+
+		// The flags fail with errors that every file system wraps the same way
+		err = xfs.SetXAttr(path, "user.gofs-test", []byte("created"), fs.XAttrCreate, true)
+		checkErrorIs(t, err, os.ErrExist, "SetXAttr with XAttrCreate of an existing attribute")
+		err = xfs.SetXAttr(path, "user.gofs-test", []byte("replaced"), fs.XAttrReplace, true)
+		if checkNoError(t, err, "SetXAttr with XAttrReplace of an existing attribute") {
+			value, err = xfs.GetXAttr(path, "user.gofs-test", true)
+			mustNoError(t, err, "GetXAttr after XAttrReplace")
+			checkBytes(t, []byte("replaced"), value, "GetXAttr after XAttrReplace")
+		}
+		err = xfs.SetXAttr(path, "user.gofs-missing", []byte("x"), fs.XAttrReplace, true)
+		checkErrorIs(t, err, os.ErrNotExist, "SetXAttr with XAttrReplace of a missing attribute")
+		_, err = xfs.GetXAttr(path, "user.gofs-missing", true)
+		checkErrorIs(t, err, os.ErrNotExist, "GetXAttr of a missing attribute")
+		err = xfs.RemoveXAttr(path, "user.gofs-missing", true)
+		checkErrorIs(t, err, os.ErrNotExist, "RemoveXAttr of a missing attribute")
+		err = xfs.SetXAttr(path, "user.gofs-created", []byte("created"), fs.XAttrCreate, true)
+		if checkNoError(t, err, "SetXAttr with XAttrCreate of a missing attribute") {
+			value, err = xfs.GetXAttr(path, "user.gofs-created", true)
+			mustNoError(t, err, "GetXAttr after XAttrCreate")
+			checkBytes(t, []byte("created"), value, "GetXAttr after XAttrCreate")
+			checkNoError(t, xfs.RemoveXAttr(path, "user.gofs-created", true), "RemoveXAttr of the created attribute")
+		}
+
 		mustNoError(t, xfs.RemoveXAttr(path, "user.gofs-test", true), "RemoveXAttr")
 		names, err = xfs.ListXAttr(path, true)
 		mustNoError(t, err, "ListXAttr after RemoveXAttr")

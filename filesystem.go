@@ -443,10 +443,12 @@ type SymbolicLinkFileSystem interface {
 type XAttrFlags uint8
 
 const (
-	// XAttrCreate makes SetXAttr fail if the attribute already exists.
+	// XAttrCreate makes SetXAttr fail with an error wrapping
+	// os.ErrExist if the attribute already exists.
 	XAttrCreate XAttrFlags = 1 << iota
 
-	// XAttrReplace makes SetXAttr fail if the attribute does not exist.
+	// XAttrReplace makes SetXAttr fail with an error wrapping
+	// os.ErrNotExist if the attribute does not exist.
 	XAttrReplace
 )
 
@@ -462,16 +464,20 @@ type XAttrFileSystem interface {
 	ListXAttr(filePath string, followSymlinks bool) ([]string, error)
 
 	// GetXAttr returns the value of the named extended attribute.
+	// The error for a missing attribute wraps os.ErrNotExist.
 	// If followSymlinks is true, symlinks are resolved to their target.
 	GetXAttr(filePath string, name string, followSymlinks bool) ([]byte, error)
 
 	// SetXAttr sets the value of the named extended attribute.
 	// The flags control what happens if the attribute exists or not,
 	// zero flags create or replace the attribute.
+	// XAttrCreate fails with an error wrapping os.ErrExist,
+	// XAttrReplace with an error wrapping os.ErrNotExist.
 	// If followSymlinks is true, symlinks are resolved to their target.
 	SetXAttr(filePath string, name string, data []byte, flags XAttrFlags, followSymlinks bool) error
 
 	// RemoveXAttr removes the named extended attribute from the file.
+	// The error for a missing attribute wraps os.ErrNotExist.
 	// If followSymlinks is true, symlinks are resolved to their target.
 	RemoveXAttr(filePath string, name string, followSymlinks bool) error
 }

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	stdfstest "testing/fstest"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -2169,6 +2170,33 @@ func TestMemFileSystem_ErrorFilesOfUnregisteredFileSystem(t *testing.T) {
 
 	err = memFS.WriteAll(t.Context(), "/no/such/dir.txt", nil, 0)
 	require.ErrorContains(t, err, "mem://unregistered-errors/no/such")
+}
+
+// TestMemFileSystem_CloseWithActiveWatch checks that Close doesn't wait for
+// a blocked watch callback and drops the queued events of the watch, so the
+// callback is not called again after it returns. The synctest bubble makes
+// sure that the callback blocks and the second event is queued before Close.
+func TestMemFileSystem_CloseWithActiveWatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		memFS, err := NewMemFileSystem(nil)
+		require.NoError(t, err)
+		delivered := make(chan string, 2)
+		release := make(chan struct{})
+		_, err = memFS.Watch("/", func(file File, _ Event) {
+			delivered <- file.Name()
+			<-release
+		})
+		require.NoError(t, err)
+		require.NoError(t, memFS.Touch("/first.txt", 0))
+		require.NoError(t, memFS.Touch("/second.txt", 0))
+		synctest.Wait() // The first callback blocks, the second event is queued
+		require.Equal(t, "first.txt", <-delivered)
+
+		require.NoError(t, memFS.Close(), "Close must not wait for the blocked callback")
+		close(release)
+		synctest.Wait() // The delivering goroutine exits
+		assert.Empty(t, delivered, "the queued event must be dropped by Close")
+	})
 }
 
 func TestMemFileSystem_WatchSerialOrder(t *testing.T) {
