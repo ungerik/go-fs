@@ -58,6 +58,12 @@ system for the bare `ftp://` and `ftps://` prefixes, so a URI with a
 password like `ftp://user:secret@host/path` doesn't resolve: dial the
 address `ftp://user:secret@host` and use URIs without the password.
 
+A `/`, `?` or `#` in the username or password of an address must be
+percent-encoded (`%2F`, `%3F`, `%23`). A path in the address is ignored,
+but an `@` in it must be percent-encoded too (`%40`): an address with an
+`@` after the host is rejected, because that `@` can end a password with
+an unencoded `/`.
+
 ### Credentials
 
 `Options.Username` and `Options.Password` override the user info of the

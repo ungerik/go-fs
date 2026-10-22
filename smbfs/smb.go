@@ -87,6 +87,10 @@ type fileSystem struct {
 // Dial connects to an SMB share and returns its file system without
 // registering it. The address has the form [smb://][user[:password]@]host[:port]/share;
 // the default port is 445. See Options for the credentials.
+// A '/', '?' or '#' of the username or password must be percent-encoded,
+// like "%2F" for '/', and so must an '@' of the share ("%40"): an address
+// with an '@' after the host is rejected, because that '@' can be the end
+// of a password with an unencoded '/', '?' or '#'.
 // The URI prefix is "smb://user@host/share", or "smb://host/share"
 // for an anonymous session.
 //

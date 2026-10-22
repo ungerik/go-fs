@@ -63,6 +63,14 @@ form is `webdav://<host><base path>/<path>`. The password never appears in
 the prefix, in `String()` or in error messages. `davFS.ID()` is the prefix
 without the scheme.
 
+A `/`, `?` or `#` in the username or password of the base URL must be
+percent-encoded (`%2F`, `%3F`, `%23`). An `@` in the path of a base URL
+without user info whose host has a port must be percent-encoded too (`%40`),
+like `https://cloud.example.com:8443/remote.php/dav/files/alice%40example.com`,
+else `New` rejects the URL: `url.Parse` would read a username with a password
+of digits and an unencoded `/`, like `alice:1234/5678@host`, as the host
+`alice` with the port `1234`.
+
 ### Authentication
 
 `Options.Username` and `Options.Password` are sent as HTTP basic auth and

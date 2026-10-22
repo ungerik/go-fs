@@ -106,18 +106,54 @@ func Test_parseAddress_Errors(t *testing.T) {
 	}
 }
 
-// Test_redactAddress checks the redaction of passwords
-// in addresses that url.Parse may reject.
-func Test_redactAddress(t *testing.T) {
-	for address, want := range map[string]string{
-		"ftp://u:S3cret@bad host/path": "ftp://u:xxxxx@bad host/path",
-		"u:S3cret@host":                "u:xxxxx@host",
-		"u:S3cret@host/a@b":            "u:xxxxx@host/a@b",
-		"ftp://u@host":                 "ftp://u@host",
-		"ftp://host/a:b@c":             "ftp://host/a:b@c",
-		"host":                         "host",
+// Test_parseAddress_SpecialCharactersInPassword is a regression test:
+// url.Parse ends the user info at an unencoded '/', '?' or '#' of
+// a password. It then rejected the rest of the password as port and
+// repeated it in its error, like "ftpfs: invalid address ftp://user:xxxxx@host:
+// invalid port ":s3cretpart" after host" for "ftp://user:s3cretpart/r3st@host",
+// or took a password of digits for the port of the host "user".
+func Test_parseAddress_SpecialCharactersInPassword(t *testing.T) {
+	for address, secrets := range map[string][]string{
+		"ftp://user:s3cretpart/r3st@host": {"s3cretpart", "r3st"},
+		"ftp://user:s3cretpart?r3st@host": {"s3cretpart", "r3st"},
+		"ftp://user:s3cretpart#r3st@host": {"s3cretpart", "r3st"},
+		"ftp://user:1234/r3st@host":       {"1234", "r3st"},
+		"ftp://user:1234?r3st@host":       {"1234", "r3st"},
+		"ftp://user:1234#r3st@host":       {"1234", "r3st"},
+		"ftp://user:/r3st@host":           {"r3st"},
+		"user:s3cretpart/r3st@host:2121":  {"s3cretpart", "r3st"},
+		// An unencoded '@' and '/' of a password
+		"ftp://user:s3c@r3t/part@host": {"s3c", "r3t", "part"},
+		// url.Parse repeats an invalid escape of the password in its error
+		"ftp://user:s3c%zzr3t@host": {"s3c", "%zz", "r3t"},
 	} {
-		assert.Equal(t, want, redactAddress(address), address)
+		t.Run(address, func(t *testing.T) {
+			_, err := parseAddress(address, nil)
+			require.Error(t, err)
+			for _, secret := range secrets {
+				assert.NotContains(t, err.Error(), secret, "the error must not contain the password")
+			}
+		})
+	}
+}
+
+// Test_parseAddress_Redacted checks that the errors of parseAddress name
+// the address with the password redacted by fsimpl.RedactAddress, which
+// takes everything up to the last '@' for the user info.
+func Test_parseAddress_Redacted(t *testing.T) {
+	for address, redacted := range map[string]string{
+		"ftp://u:S3cret@bad host/path": "ftp://u:xxxxx@bad host/path",
+		"u:S3cret@bad host":            "ftp://u:xxxxx@bad host",
+		"sftp://u:S3cret@host":         "sftp://u:xxxxx@host",
+		"ftp://u:S3c/ret@host":         "ftp://u:xxxxx@host",
+		"ftp://u:S3cret@host/a@b":      "ftp://u:xxxxx@b",
+		"ftp://host/a:b@c":             "ftp://xxxxx@c", // no telling the username apart
+	} {
+		t.Run(address, func(t *testing.T) {
+			_, err := parseAddress(address, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), redacted)
+		})
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/cloudsoda/go-smb2"
+
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 const (
@@ -67,20 +69,23 @@ func parseAddress(address string, opts *Options) (*dialConfig, error) {
 	if !strings.Contains(address, "://") {
 		address = Prefix + address
 	}
+	// url.Parse ends the user info at the first '/', '?' or '#'. An '@' after
+	// it means that the password contains one of them unencoded, and url.Parse
+	// would take parts of the password for the port, share, query or fragment.
+	_, rest, _ := strings.Cut(address, "://")
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 && strings.Contains(rest[end:], "@") {
+		return nil, fmt.Errorf("smbfs: invalid address %s: '@' after the host, percent-encode a '/', '?' or '#' of the username or password and an '@' of the share", fsimpl.RedactAddress(address))
+	}
 	u, err := url.Parse(address)
 	if err != nil {
-		// The url.Error repeats the address with the password
-		if urlErr, ok := errors.AsType[*url.Error](err); ok {
-			err = urlErr.Err
-		}
-		return nil, fmt.Errorf("smbfs: invalid address %s: %w", redactAddress(address), err)
+		return nil, invalidAddressErr(address)
 	}
 	if u.Scheme != "smb" {
-		return nil, fmt.Errorf("smbfs: not an smb:// address: %s", redactAddress(address))
+		return nil, fmt.Errorf("smbfs: not an smb:// address: %s", fsimpl.RedactAddress(address))
 	}
 	share := strings.Trim(u.Path, "/")
 	if u.Hostname() == "" || share == "" || strings.Contains(share, "/") {
-		return nil, fmt.Errorf("smbfs: address must have the form [smb://][user[:password]@]host[:port]/share: %s", redactAddress(address))
+		return nil, fmt.Errorf("smbfs: address must have the form [smb://][user[:password]@]host[:port]/share: %s", fsimpl.RedactAddress(address))
 	}
 	cfg := &dialConfig{share: share}
 	if opts != nil {
@@ -144,28 +149,18 @@ func (cfg *dialConfig) dialContext(ctx context.Context, network, addr string) (n
 	return dialer.DialContext(ctx, network, addr)
 }
 
-// redactAddress returns address with the password of its user info
-// replaced by "xxxxx". It works on addresses that url.Parse rejects.
-func redactAddress(address string) string {
-	authority := address
-	scheme, rest, found := strings.Cut(address, "://")
-	if found {
-		authority = rest
+// invalidAddressErr returns the error for an address that url.Parse rejects.
+// The errors of url.Parse repeat parts of the address, which can be parts
+// of the password, so the reason is the error of parsing the address with
+// the redacted password. If that one is valid, the user info is invalid.
+func invalidAddressErr(address string) error {
+	redacted := fsimpl.RedactAddress(address)
+	_, reason := url.Parse(redacted)
+	if urlErr, ok := errors.AsType[*url.Error](reason); ok {
+		reason = urlErr.Err // without the repeated address
 	}
-	if i := strings.IndexAny(authority, "/?#"); i >= 0 {
-		authority = authority[:i]
+	if reason == nil {
+		reason = errors.New("invalid username or password, special characters must be percent-encoded")
 	}
-	at := strings.LastIndex(authority, "@")
-	if at < 0 {
-		return address
-	}
-	user, _, hasPassword := strings.Cut(authority[:at], ":")
-	if !hasPassword {
-		return address
-	}
-	redacted := user + ":xxxxx" + authority[at:]
-	if found {
-		return scheme + "://" + redacted + rest[len(authority):]
-	}
-	return redacted + address[len(authority):]
+	return fmt.Errorf("smbfs: invalid address %s: %w", redacted, reason)
 }

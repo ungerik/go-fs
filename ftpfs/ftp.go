@@ -107,6 +107,11 @@ func newFileSystem(cfg *dialConfig) *fileSystem {
 // The address has the form [ftp[s]://][user[:password]@]host[:port];
 // without a scheme "ftp://" is used, without a port 21. See Options for
 // the credentials; without a username the login is anonymous.
+// A '/', '?' or '#' of the username or password must be percent-encoded,
+// like "%2F" for '/'. A path, query or fragment of the address is ignored,
+// but an '@' in it must be percent-encoded too ("%40"): an address with
+// an '@' after the host is rejected, because that '@' can be the end
+// of a password with an unencoded '/', '?' or '#'.
 // The URI prefix of the file system is the address without the password
 // and without the default port 21, like "ftp://user@host".
 //

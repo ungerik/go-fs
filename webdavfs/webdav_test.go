@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,6 +88,61 @@ func TestNew_PasswordNotInErrors(t *testing.T) {
 		require.Error(t, err, baseURL)
 		assert.NotContains(t, err.Error(), "topsecret", "password leaked in the error for %s", baseURL)
 	}
+}
+
+// TestNew_SpecialCharactersInPassword is a regression test: url.Parse ends
+// the user info of the base URL at an unencoded '/', '?' or '#' of a password.
+// It then rejected the rest of the password as port and New repeated it in
+// its error, like "webdavfs: invalid base URL: invalid port \":s3cretpart\"
+// after host", or url.Parse took a password of digits for the port of the
+// host "alice" and New sent a request there with the rest of the password
+// in the path, which the error contained too.
+func TestNew_SpecialCharactersInPassword(t *testing.T) {
+	var dialed atomic.Int64
+	opts := &Options{Client: &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialed.Add(1)
+			return nil, errors.New("must not dial " + addr)
+		},
+	}}}
+	for baseURL, secrets := range map[string][]string{
+		"http://alice:s3cretpart/r3st@127.0.0.1:1/dav": {"s3cretpart", "r3st"},
+		"http://alice:s3cretpart?r3st@127.0.0.1:1/dav": {"s3cretpart", "r3st"},
+		"http://alice:s3cretpart#r3st@127.0.0.1:1/dav": {"s3cretpart", "r3st"},
+		"http://alice:1234/r3st@127.0.0.1:1/dav":       {"1234", "r3st"},
+		"http://alice:1234?r3st@127.0.0.1:1/dav":       {"1234", "r3st"},
+		"http://alice:1234#r3st@127.0.0.1:1/dav":       {"1234", "r3st"},
+		"http://alice:/r3st@127.0.0.1:1/dav":           {"r3st"},
+		// url.Parse repeats an invalid escape of the password in its error
+		"http://alice:s3c%zzr3t@127.0.0.1:1/dav":  {"s3c", "%zz", "r3t"},
+		"http://alice:1234/r3%zz@127.0.0.1:1/dav": {"1234", "r3", "%zz"},
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			_, err := New(t.Context(), baseURL, opts)
+			require.Error(t, err)
+			for _, secret := range secrets {
+				assert.NotContains(t, err.Error(), secret, "the error must not contain the password")
+			}
+		})
+	}
+	assert.Zero(t, dialed.Load(), "a base URL with a misplaced password must not be dialed")
+
+	// An '@' in the path of a base URL with a user info or without a port
+	// can't end a password, an encoded one never does
+	for _, baseURL := range []string{
+		"http://cloud.example.com/remote.php/dav/files/alice@example.com",
+		"http://alice:secret@cloud.example.com:8080/remote.php/dav/files/alice@example.com",
+		"http://cloud.example.com:8080/remote.php/dav/files/alice%40example.com",
+	} {
+		_, err := New(t.Context(), baseURL, opts)
+		require.Error(t, err, baseURL)
+		assert.Contains(t, err.Error(), "must not dial cloud.example.com:", baseURL)
+	}
+	// Without a user info the host and port "cloud.example.com:8080" can be
+	// a username with a password that starts with "8080/"
+	_, err := New(t.Context(), "http://cloud.example.com:8080/remote.php/dav/files/alice@example.com", opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'@' after the host")
 }
 
 // TestPrefix checks that a username is part of the prefix

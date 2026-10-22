@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 const (
@@ -127,20 +129,23 @@ type dialConfig struct {
 func parseAddress(address string, opts *Options) (*dialConfig, error) {
 	if !strings.HasPrefix(address, Prefix) && !strings.HasPrefix(address, PrefixTLS) {
 		if strings.Contains(address, "://") {
-			return nil, fmt.Errorf("ftpfs: not an ftp:// or ftps:// address: %s", redactAddress(address))
+			return nil, fmt.Errorf("ftpfs: not an ftp:// or ftps:// address: %s", fsimpl.RedactAddress(address))
 		}
 		address = Prefix + address
 	}
+	// url.Parse ends the user info at the first '/', '?' or '#'. An '@' after
+	// it means that the password contains one of them unencoded, and url.Parse
+	// would take parts of the password for the port, path, query or fragment.
+	_, rest, _ := strings.Cut(address, "://")
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 && strings.Contains(rest[end:], "@") {
+		return nil, fmt.Errorf("ftpfs: invalid address %s: '@' after the host, percent-encode a '/', '?' or '#' of the username or password and an '@' of the path", fsimpl.RedactAddress(address))
+	}
 	u, err := url.Parse(address)
 	if err != nil {
-		// The url.Error repeats the address with the password
-		if urlErr, ok := errors.AsType[*url.Error](err); ok {
-			err = urlErr.Err
-		}
-		return nil, fmt.Errorf("ftpfs: invalid address %s: %w", redactAddress(address), err)
+		return nil, invalidAddressErr(address)
 	}
 	if u.Hostname() == "" {
-		return nil, fmt.Errorf("ftpfs: address without host: %s", redactAddress(address))
+		return nil, fmt.Errorf("ftpfs: address without host: %s", fsimpl.RedactAddress(address))
 	}
 	cfg := &dialConfig{
 		url:      u,
@@ -258,28 +263,18 @@ func checkCommandArg(what, s string, secret bool) error {
 	return fmt.Errorf("%w: ftpfs %s %q contains a CR, LF or NUL character", os.ErrInvalid, what, s)
 }
 
-// redactAddress returns address with the password of its user info
-// replaced by "xxxxx". It works on addresses that url.Parse rejects.
-func redactAddress(address string) string {
-	authority := address
-	scheme, rest, found := strings.Cut(address, "://")
-	if found {
-		authority = rest
+// invalidAddressErr returns the error for an address that url.Parse rejects.
+// The errors of url.Parse repeat parts of the address, which can be parts
+// of the password, so the reason is the error of parsing the address with
+// the redacted password. If that one is valid, the user info is invalid.
+func invalidAddressErr(address string) error {
+	redacted := fsimpl.RedactAddress(address)
+	_, reason := url.Parse(redacted)
+	if urlErr, ok := errors.AsType[*url.Error](reason); ok {
+		reason = urlErr.Err // without the repeated address
 	}
-	if i := strings.IndexAny(authority, "/?#"); i >= 0 {
-		authority = authority[:i]
+	if reason == nil {
+		reason = errors.New("invalid username or password, special characters must be percent-encoded")
 	}
-	at := strings.LastIndex(authority, "@")
-	if at < 0 {
-		return address
-	}
-	user, _, hasPassword := strings.Cut(authority[:at], ":")
-	if !hasPassword {
-		return address
-	}
-	redacted := user + ":xxxxx" + authority[at:]
-	if found {
-		return scheme + "://" + redacted + rest[len(authority):]
-	}
-	return redacted + address[len(authority):]
+	return fmt.Errorf("ftpfs: invalid address %s: %w", redacted, reason)
 }

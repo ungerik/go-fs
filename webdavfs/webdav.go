@@ -127,14 +127,22 @@ type fileSystem struct {
 // "/remote.php/webdav" show every user their own files at the same URL.
 // Without a username the prefix is "webdav://" + host + base path.
 // The password is never part of the prefix or of error messages.
+//
+// A '/', '?' or '#' of the username or password in baseURL must be
+// percent-encoded, like "%2F" for '/'. An '@' in the path, query or
+// fragment of a baseURL without user info whose host has a port must be
+// percent-encoded too ("%40"), else baseURL is rejected: url.Parse would
+// take a username with a password of digits and an unencoded '/', '?'
+// or '#', like "alice:1234/5678@host", for the host and port "alice:1234".
 func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
-		// The error of url.Parse quotes the URL with its password
-		if urlErr, ok := errors.AsType[*url.Error](err); ok {
-			err = urlErr.Err
-		}
-		return nil, fmt.Errorf("webdavfs: invalid base URL: %w", err)
+		return nil, invalidBaseURLErr(baseURL)
+	}
+	// fsimpl.RedactURI changes a URL without user info only
+	// if it takes an '@' after the host for the end of a password
+	if u.User == nil && fsimpl.RedactURI(baseURL) != baseURL {
+		return nil, fmt.Errorf("webdavfs: invalid base URL %s: '@' after the host and port, percent-encode a '/', '?' or '#' of the username or password and an '@' of the path", fsimpl.RedactAddress(baseURL))
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("webdavfs: base URL must use http or https: %s", u.Redacted())
@@ -177,6 +185,25 @@ func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, err
 		return nil, fmt.Errorf("webdavfs: %s is not a WebDAV collection", u.Redacted())
 	}
 	return f, nil
+}
+
+// invalidBaseURLErr returns the error for a base URL that url.Parse rejects.
+// The errors of url.Parse repeat parts of the URL, which can be parts
+// of the password, so the reason is the error of parsing the URL with
+// the redacted password. If that one is valid, the user info is invalid.
+// The URL is redacted like an address of the other backends, with
+// everything up to the last '@' taken for the user info, because
+// the rejected URL can't tell whether an '@' after the host ends it.
+func invalidBaseURLErr(baseURL string) error {
+	redacted := fsimpl.RedactAddress(baseURL)
+	_, reason := url.Parse(redacted)
+	if urlErr, ok := errors.AsType[*url.Error](reason); ok {
+		reason = urlErr.Err // without the repeated URL
+	}
+	if reason == nil {
+		reason = errors.New("invalid username or password, special characters must be percent-encoded")
+	}
+	return fmt.Errorf("webdavfs: invalid base URL %s: %w", redacted, reason)
 }
 
 // NewAndRegister creates a file system for the WebDAV server at

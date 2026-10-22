@@ -56,6 +56,10 @@ The default port is 445. File URIs have the form
 `smb://user@host:port/share/path`; the port is omitted if it is 445, and
 `smb://user@host:445/share/path` is accepted as well. URIs, `FileInfo.File`,
 error messages and `String()` never contain the password.
+A `/`, `?` or `#` in the username or password of an address must be
+percent-encoded (`%2F`, `%3F`, `%23`), and so must an `@` in the share
+(`%40`): an address with an `@` after the host is rejected, because that
+`@` can end a password with an unencoded `/`.
 `smbFS.ID()` is the prefix without the scheme.
 
 ### Authentication
