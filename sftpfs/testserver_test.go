@@ -2,7 +2,9 @@ package sftpfs
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -37,6 +39,19 @@ type testServerConfig struct {
 	// publicKey is accepted for the public key authentication if not nil.
 	publicKey ssh.PublicKey
 
+	// ecdsaHostKey adds an ECDSA host key to the ED25519 key of
+	// testServer.hostKey. x/crypto prefers ECDSA host keys by default.
+	ecdsaHostKey bool
+
+	// globalRequestDelay delays the answers to global requests
+	// like the keep-alives, which are answered one after the other.
+	globalRequestDelay time.Duration
+
+	// fail, if not nil, is called before the in-memory file system executes
+	// a request. A non-nil error is sent as status reply instead of executing
+	// the request, see the statusFromError function of pkg/sftp.
+	fail func(r *sftp.Request) error
+
 	// after, if not nil, is called after the in-memory file system executed
 	// a request, before the response is sent. Killing the connections in
 	// after simulates a connection lost after the server executed a request.
@@ -52,8 +67,9 @@ type testServer struct {
 
 	handlers sftp.Handlers // of the in-memory file system
 
-	accepted atomic.Int64 // network connections accepted
-	open     atomic.Int64 // SSH connections after the handshake that are not closed
+	accepted       atomic.Int64 // network connections accepted
+	open           atomic.Int64 // SSH connections after the handshake that are not closed
+	globalRequests atomic.Int64 // global requests answered, like keep-alives
 
 	mtx      sync.Mutex
 	netConns map[net.Conn]struct{}
@@ -72,6 +88,17 @@ func startTestServer(t *testing.T, cfg testServerConfig) *testServer {
 	}
 	config := &ssh.ServerConfig{}
 	config.AddHostKey(signer)
+	if cfg.ecdsaHostKey {
+		ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ecdsaSigner, err := ssh.NewSignerFromKey(ecdsaKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.AddHostKey(ecdsaSigner)
+	}
 	if !cfg.noPassword {
 		config.PasswordCallback = func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 			if meta.User() == testServerUser && string(password) == testServerPassword {
@@ -100,7 +127,7 @@ func startTestServer(t *testing.T, cfg testServerConfig) *testServer {
 		netConns: make(map[net.Conn]struct{}),
 	}
 	s.handlers = sftp.InMemHandler()
-	if cfg.after != nil {
+	if cfg.fail != nil || cfg.after != nil {
 		s.handlers = s.hookHandlers(s.handlers)
 	}
 	t.Cleanup(func() {
@@ -139,8 +166,7 @@ func (s *testServer) handle(netConn net.Conn, config *ssh.ServerConfig) {
 	defer sshConn.Close()
 	s.open.Add(1)
 	defer s.open.Add(-1)
-	// Answers the keep-alive requests with a failure, like OpenSSH
-	go ssh.DiscardRequests(reqs)
+	go s.answerGlobalRequests(reqs)
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
 			_ = newChannel.Reject(ssh.UnknownChannelType, "only sessions")
@@ -151,6 +177,18 @@ func (s *testServer) handle(netConn net.Conn, config *ssh.ServerConfig) {
 			continue
 		}
 		go s.session(channel, channelReqs)
+	}
+}
+
+// answerGlobalRequests answers the global requests like the keep-alives
+// with a failure, like OpenSSH, after s.cfg.globalRequestDelay.
+func (s *testServer) answerGlobalRequests(reqs <-chan *ssh.Request) {
+	for req := range reqs {
+		time.Sleep(s.cfg.globalRequestDelay)
+		if req.WantReply {
+			_ = req.Reply(false, nil)
+		}
+		s.globalRequests.Add(1)
 	}
 }
 
@@ -244,30 +282,54 @@ func (f *fileSystem) currentConn() *conn {
 	return f.conn
 }
 
-// hookHandlers returns handlers that call s.cfg.after
-// after every request that the handlers executed.
+// hookHandlers returns handlers that call s.cfg.fail before
+// and s.cfg.after after every request that the handlers execute.
 func (s *testServer) hookHandlers(handlers sftp.Handlers) sftp.Handlers {
-	after := func(r *sftp.Request) { s.cfg.after(s, r) }
-	return sftp.Handlers{
-		FileGet:  hookGet{handlers.FileGet, after},
-		FilePut:  hookPut{handlers.FilePut.(sftp.OpenFileWriter), after},
-		FileCmd:  hookCmd{handlers.FileCmd.(sftp.PosixRenameFileCmder), after},
-		FileList: hookList{handlers.FileList.(listLinker), after},
+	h := hook{
+		fail: func(r *sftp.Request) error {
+			if s.cfg.fail == nil {
+				return nil
+			}
+			return s.cfg.fail(r)
+		},
+		after: func(r *sftp.Request) {
+			if s.cfg.after != nil {
+				s.cfg.after(s, r)
+			}
+		},
 	}
+	return sftp.Handlers{
+		FileGet:  hookGet{handlers.FileGet, h},
+		FilePut:  hookPut{handlers.FilePut.(sftp.OpenFileWriter), h},
+		FileCmd:  hookCmd{handlers.FileCmd.(sftp.PosixRenameFileCmder), h},
+		FileList: hookList{handlers.FileList.(listLinker), h},
+	}
+}
+
+// hook has the functions that the hooked handlers call around a request.
+type hook struct {
+	fail  func(*sftp.Request) error
+	after func(*sftp.Request)
 }
 
 type hookCmd struct {
 	inner sftp.PosixRenameFileCmder
-	after func(*sftp.Request)
+	hook
 }
 
 func (h hookCmd) Filecmd(r *sftp.Request) error {
+	if err := h.fail(r); err != nil {
+		return err
+	}
 	err := h.inner.Filecmd(r)
 	h.after(r)
 	return err
 }
 
 func (h hookCmd) PosixRename(r *sftp.Request) error {
+	if err := h.fail(r); err != nil {
+		return err
+	}
 	err := h.inner.PosixRename(r)
 	h.after(r)
 	return err
@@ -275,10 +337,13 @@ func (h hookCmd) PosixRename(r *sftp.Request) error {
 
 type hookGet struct {
 	inner sftp.FileReader
-	after func(*sftp.Request)
+	hook
 }
 
 func (h hookGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	if err := h.fail(r); err != nil {
+		return nil, err
+	}
 	reader, err := h.inner.Fileread(r)
 	h.after(r)
 	return reader, err
@@ -286,16 +351,22 @@ func (h hookGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 
 type hookPut struct {
 	inner sftp.OpenFileWriter
-	after func(*sftp.Request)
+	hook
 }
 
 func (h hookPut) Filewrite(r *sftp.Request) (io.WriterAt, error) {
+	if err := h.fail(r); err != nil {
+		return nil, err
+	}
 	w, err := h.inner.Filewrite(r)
 	h.after(r)
 	return w, err
 }
 
 func (h hookPut) OpenFile(r *sftp.Request) (sftp.WriterAtReaderAt, error) {
+	if err := h.fail(r); err != nil {
+		return nil, err
+	}
 	f, err := h.inner.OpenFile(r)
 	h.after(r)
 	return f, err
@@ -309,16 +380,22 @@ type listLinker interface {
 
 type hookList struct {
 	inner listLinker
-	after func(*sftp.Request)
+	hook
 }
 
 func (h hookList) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
+	if err := h.fail(r); err != nil {
+		return nil, err
+	}
 	l, err := h.inner.Filelist(r)
 	h.after(r)
 	return l, err
 }
 
 func (h hookList) Lstat(r *sftp.Request) (sftp.ListerAt, error) {
+	if err := h.fail(r); err != nil {
+		return nil, err
+	}
 	l, err := h.inner.Lstat(r)
 	h.after(r)
 	return l, err

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -37,6 +39,9 @@ func TestParseAddress(t *testing.T) {
 		{"sftp://user@[::1]:22", "[::1]:22", "[::1]", true},
 		{"sftp://user@[::1]:2222", "[::1]:2222", "[::1]:2222", false},
 		{"sftp://user@[fe80::1%25eth0]", "[fe80::1%eth0]:22", "[fe80::1%25eth0]", true},
+		// url.Parse ends the user info at the last '@' before the host
+		{"sftp://user:p@ss@host", "host:22", "host", true},
+		{"sftp://user@host/%40.txt", "host:22", "host", true},
 	} {
 		t.Run(test.address, func(t *testing.T) {
 			target, err := parseAddress(test.address)
@@ -47,27 +52,95 @@ func TestParseAddress(t *testing.T) {
 		})
 	}
 
-	for _, address := range []string{
-		"ftp://host",
-		"sftp://",
-		"sftp://user:secret@",
-		"sftp://user:secret@ho st",
-		"user:secret@[::1",
+	for _, test := range []struct {
+		address string
+		secrets []string // parts of the password
+	}{
+		{"ftp://host", nil},
+		{"sftp://", nil},
+		{"sftp://user:secret@", []string{"secret"}},
+		{"sftp://user:secret@ho st", []string{"secret"}},
+		{"user:secret@[::1", []string{"secret"}},
+		// url.Parse repeats an invalid escape of the password in its error
+		{"sftp://user:sec%zzret@host", []string{"sec", "%zz"}},
+		// An unencoded '/', '?' or '#' of a password ends the user info
+		// for url.Parse, which then fails on the port "ab" or takes "12"
+		// for the port and the rest of the password for the path,
+		// query or fragment. The password is "ab/cd", "12/34" and so on.
+		{"sftp://bob:ab/cd@host", []string{"ab", "cd"}},
+		{"sftp://bob:12/34@127.0.0.1", []string{"12/", "/34", "34@"}},
+		{"sftp://bob:ab?cd@host", []string{"ab", "cd"}},
+		{"sftp://bob:12?34@host", []string{"12", "34"}},
+		{"sftp://bob:ab#cd@host", []string{"ab", "cd"}},
+		{"sftp://bob:12#34@host", []string{"12", "34"}},
+		{"bob:12/34@host:2222", []string{"12/", "/34", "34@"}},
+		// An unencoded '@' and '/' of a password
+		{"sftp://bob:a@b/cd@host", []string{"a@b", "b/cd", "cd@"}},
 	} {
-		t.Run(address, func(t *testing.T) {
-			_, err := parseAddress(address)
+		t.Run(test.address, func(t *testing.T) {
+			_, err := parseAddress(test.address)
 			require.Error(t, err)
-			assert.NotContains(t, err.Error(), "secret", "the error must not contain the password")
+			for _, secret := range test.secrets {
+				assert.NotContains(t, err.Error(), secret, "the error must not contain the password")
+			}
 		})
 	}
 }
 
 func TestRedactAddress(t *testing.T) {
-	assert.Equal(t, "sftp://user:xxxxx@host", redactAddress("sftp://user:secret@host"))
-	assert.Equal(t, "sftp://user@host", redactAddress("sftp://user@host"))
-	assert.Equal(t, "sftp://xxxxx@ho st/path", redactAddress("sftp://user:secret@ho st/path"))
-	assert.Equal(t, "sftp://xxxxx@[::1", redactAddress("sftp://user:secret@[::1"))
-	assert.Equal(t, "sftp://ho st", redactAddress("sftp://ho st"))
+	for address, want := range map[string]string{
+		"sftp://user:secret@host":          "sftp://user:xxxxx@host",
+		"sftp://user@host":                 "sftp://user@host",
+		"sftp://user@host/path":            "sftp://user@host/path",
+		"sftp://user:secret@ho st/path":    "sftp://user:xxxxx@ho st/path",
+		"sftp://user:secret@[::1":          "sftp://user:xxxxx@[::1",
+		"sftp://ho st":                     "sftp://ho st",
+		"user:secret@host":                 "user:xxxxx@host",
+		"sftp://:secret@host":              "sftp://:xxxxx@host",
+		"sftp://bob:ab/cd@host":            "sftp://bob:xxxxx@host",
+		"sftp://bob:12/34@127.0.0.1":       "sftp://bob:xxxxx@127.0.0.1",
+		"sftp://bob:12?34@host":            "sftp://bob:xxxxx@host",
+		"sftp://bob:ab#cd@host":            "sftp://bob:xxxxx@host",
+		"sftp://bob:a@b/c@host":            "sftp://bob:xxxxx@host",
+		"sftp://bob:ab/cd@host:22/path":    "sftp://bob:xxxxx@host:22/path",
+		"sftp://ali/ce:secret@host":        "sftp://xxxxx@host", // no telling the username apart
+		"sftp://host/dir/name@example.com": "sftp://xxxxx@example.com",
+	} {
+		assert.Equal(t, want, redactAddress(address), address)
+	}
+}
+
+// TestPasswordWithSpecialCharactersNotInErrors dials addresses whose
+// password contains an unencoded '/', '?' or '#': the errors of Dial
+// and EnsureRegistered must not contain any part of the password,
+// and nothing must be dialed with a part of the password as host.
+func TestPasswordWithSpecialCharactersNotInErrors(t *testing.T) {
+	var dialed atomic.Int64
+	opts := &Options{
+		HostKeyCallback: AcceptAnyHostKey,
+		ConnectRetries:  -1,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialed.Add(1)
+			return nil, errors.New("must not dial " + addr)
+		},
+	}
+	for address, secrets := range map[string][]string{
+		"sftp://bob:ab/cd@host":      {"ab", "cd"},
+		"sftp://bob:12/34@127.0.0.1": {"12/", "/34", "34@"},
+		"sftp://bob:12?34@127.0.0.1": {"12?", "?34", "34@"},
+		"sftp://bob:12#34@127.0.0.1": {"12#", "#34", "34@"},
+	} {
+		_, err := Dial(t.Context(), address, opts)
+		require.Error(t, err, address)
+		free, ensureErr := EnsureRegistered(t.Context(), address, opts)
+		require.Error(t, ensureErr, address)
+		require.NoError(t, free())
+		for _, secret := range secrets {
+			assert.NotContains(t, err.Error(), secret, "Dial error of %s", address)
+			assert.NotContains(t, ensureErr.Error(), secret, "EnsureRegistered error of %s", address)
+		}
+	}
+	assert.Zero(t, dialed.Load(), "an address with a misplaced password must not be dialed")
 }
 
 func TestPrefixAndNames(t *testing.T) {
@@ -114,6 +187,10 @@ func TestCredentials(t *testing.T) {
 	_, creds, err := newFS(t, "sftp://alice:fromURL@host", &Options{})
 	require.NoError(t, err)
 	assert.Equal(t, credentials{"alice", "fromURL"}, creds, "credentials of the address")
+
+	_, creds, err = newFS(t, "sftp://alice:a%2Fb%3Fc%23d@e@host", &Options{})
+	require.NoError(t, err)
+	assert.Equal(t, credentials{"alice", "a/b?c#d@e"}, creds, "a percent-encoded password")
 
 	_, creds, err = newFS(t, "sftp://alice:fromURL@host", &Options{Username: "bob", Password: "fromOptions"})
 	require.NoError(t, err)
@@ -510,13 +587,15 @@ func TestKeepAlive(t *testing.T) {
 	s := startTestServer(t, testServerConfig{})
 	proxy := startTestProxy(t, s.addr)
 	opts := s.testOptions()
-	opts.KeepAlive = 100 * time.Millisecond
+	opts.KeepAlive = 200 * time.Millisecond
 	f, err := Dial(t.Context(), proxy.addr, opts)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = f.Close() })
 	first := f.(*fileSystem).currentConn()
 
-	time.Sleep(350 * time.Millisecond)
+	// Waiting for answers instead of a fixed time, a slow test runner only
+	// closes the connection if it delays an answer by KeepAliveCountMax intervals
+	waitFor(t, func() bool { return s.globalRequests.Load() >= 3 }, "three answered keep-alives")
 	require.False(t, first.isLost(), "answered keep-alives keep the connection")
 
 	proxy.freeze()
@@ -524,6 +603,111 @@ func TestKeepAlive(t *testing.T) {
 	_, err = f.Stat("/")
 	require.NoError(t, err, "the next operation reconnects")
 	assert.NotSame(t, first, f.(*fileSystem).currentConn())
+}
+
+// TestKeepAliveSlowAnswer answers every keep-alive request after one and
+// a half intervals, like a server whose answer queues behind the data
+// of a download on a slow link: that must not close the connection.
+func TestKeepAliveSlowAnswer(t *testing.T) {
+	const interval = 200 * time.Millisecond
+	s := startTestServer(t, testServerConfig{globalRequestDelay: interval * 3 / 2})
+	opts := s.testOptions()
+	opts.KeepAlive = interval
+	f := s.dial(t, opts)
+	first := f.currentConn()
+
+	waitFor(t, func() bool { return s.globalRequests.Load() >= 3 || first.isLost() }, "three answered keep-alives")
+	require.False(t, first.isLost(), "slow answers must not close the connection")
+	_, err := f.Stat("/")
+	require.NoError(t, err)
+	assert.Same(t, first, f.currentConn())
+	assert.Equal(t, int64(1), s.accepted.Load(), "no reconnect")
+}
+
+// TestStatusErrorKeepsConnection checks that a status reply of the server
+// is never taken for a lost connection, also if its message reads like one
+// or pkg/sftp makes io.EOF of it: the reply proves that the connection works,
+// and dropping it would fail every open reader and writer of the file system.
+func TestStatusErrorKeepsConnection(t *testing.T) {
+	failures := map[string]error{
+		"/reset.txt": errors.New("write: connection reset by peer"),
+		"/pipe.txt":  errors.New("write: broken pipe"),
+		"/eof.txt":   io.EOF, // sent as SSH_FX_EOF status, which pkg/sftp returns as io.EOF
+	}
+	s := startTestServer(t, testServerConfig{fail: func(r *sftp.Request) error {
+		if r.Method == "Lstat" {
+			return failures[r.Filepath]
+		}
+		return nil
+	}})
+	f := s.dial(t, nil)
+	writeTestFile(t, f, "/file.txt", "content")
+	reader, err := f.OpenReader("/file.txt")
+	require.NoError(t, err)
+	defer reader.Close()
+	first := f.currentConn()
+
+	for name, failure := range failures {
+		_, err := f.Stat(name)
+		require.Error(t, err, name)
+		if failure == io.EOF {
+			assert.ErrorIs(t, err, io.EOF, name)
+		} else {
+			assert.ErrorContains(t, err, failure.Error(), name)
+		}
+	}
+	assert.Same(t, first, f.currentConn(), "a status reply must not drop the connection")
+	assert.Equal(t, int64(1), s.accepted.Load(), "no reconnect")
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err, "the open reader must still work")
+	assert.Equal(t, "content", string(data))
+}
+
+// TestEOFOfLostConnection checks that io.EOF, which is only a hint for a
+// lost connection, still drops a connection that is lost and retries the operation.
+func TestEOFOfLostConnection(t *testing.T) {
+	s := startTestServer(t, testServerConfig{})
+	f := s.dial(t, nil)
+	first := f.currentConn()
+	calls := 0
+	err := f.run(t.Context(), func(c *conn, _ func()) error {
+		calls++
+		if calls == 1 {
+			// The server is gone, like a channel closed under a request
+			s.killConns()
+			waitFor(t, c.isLost, "the client to notice the lost connection")
+			return io.EOF
+		}
+		_, err := f.stat(c.sftp, "/")
+		return err
+	})
+	require.NoError(t, err, "retried with a new connection")
+	assert.Equal(t, 2, calls)
+	assert.NotSame(t, first, f.currentConn())
+}
+
+// TestDialHostKeyAlgorithms dials a server with an ECDSA and an ED25519
+// host key with a HostKeyCallback that only knows the ED25519 key, like a
+// known_hosts file with only that key: x/crypto negotiates ECDSA first and
+// fails with a key mismatch unless Options.HostKeyAlgorithms asks for
+// ED25519 (golang/go#29286).
+func TestDialHostKeyAlgorithms(t *testing.T) {
+	s := startTestServer(t, testServerConfig{ecdsaHostKey: true})
+	opts := s.testOptions()
+	opts.ConnectRetries = -1
+	_, err := Dial(t.Context(), s.addr, opts)
+	require.ErrorContains(t, err, "host key mismatch", "x/crypto prefers the ECDSA key of the server")
+
+	opts.HostKeyAlgorithms = []string{ssh.KeyAlgoED25519}
+	f, err := Dial(t.Context(), s.addr, opts)
+	require.NoError(t, err, "HostKeyAlgorithms must reach the ssh.ClientConfig")
+	opts.HostKeyAlgorithms[0] = ssh.KeyAlgoECDSA256 // must not change the reconnects of f
+	first := f.(*fileSystem).currentConn()
+	s.killConns()
+	waitFor(t, first.isLost, "the client to notice the lost connection")
+	_, err = f.Stat("/")
+	require.NoError(t, err, "the reconnect uses the HostKeyAlgorithms of the dial")
+	require.NoError(t, f.Close())
 }
 
 // TestPasswordNotInErrorsAndLogs dials an address with a password,
@@ -708,4 +892,7 @@ func TestIsConnectionError(t *testing.T) {
 	assert.True(t, isConnectionError(os.ErrDeadlineExceeded), "a timed out connection attempt")
 	assert.True(t, isConnectionError(fmt.Errorf("read: %w", net.ErrClosed)))
 	assert.True(t, isConnectionError(errors.New("write: connection reset by peer")))
+	assert.True(t, isConnectionError(sftp.ErrSSHFxConnectionLost))
+	assert.False(t, isConnectionError(fmt.Errorf("write: connection reset by peer: %w", &sftp.StatusError{Code: uint32(sftp.ErrSSHFxFailure)})),
+		"a status reply of the server is no connection error, whatever its message says")
 }

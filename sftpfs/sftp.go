@@ -19,6 +19,7 @@ package sftpfs
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -198,7 +199,9 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 
 // ListDirRecursive walks the directory tree with one connection
 // and calls callback for every file (not directory) matching the patterns.
-// A lost connection is only retried before the first callback.
+// A symbolic link at dirPath is followed, the files of the directory
+// it points to are listed below dirPath. Symbolic links in the tree are
+// not followed. A lost connection is only retried before the first callback.
 func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	err := f.run(ctx, func(c *conn, noRetry func()) error {
 		info, err := c.sftp.Stat(dirPath)
@@ -208,37 +211,50 @@ func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patte
 		if !info.IsDir() {
 			return fs.NewErrIsNotDirectory(f.file(dirPath))
 		}
-		walker := c.sftp.Walk(dirPath)
-		for walker.Step() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := walker.Err(); err != nil {
-				return f.pathErr(err, walker.Path())
-			}
-			info := walker.Stat()
-			if info.IsDir() {
-				continue
-			}
-			match, err := fsimpl.MatchAnyPattern(info.Name(), patterns)
-			if err != nil {
-				return err
-			}
-			if !match {
-				continue
-			}
-			noRetry()
-			err = callback(fs.NewFileInfo(f.file(walker.Path()), info, isHidden(info.Name())))
-			if err != nil {
-				return callbackError{err}
-			}
-		}
-		return nil
+		return f.walk(ctx, c.sftp, dirPath, patterns, noRetry, callback)
 	})
 	if cbErr, ok := errors.AsType[callbackError](err); ok {
 		return cbErr.err
 	}
 	return err
+}
+
+// walk calls callback for the files below the directory dirPath matching
+// the patterns, depth first in the order of the listings. Unlike the walk
+// of pkg/sftp, which takes the Lstat of its root, walk lists the directory
+// that a symbolic link at dirPath points to. noRetry is called before
+// every callback, the errors of callback are returned as callbackError.
+func (f *fileSystem) walk(ctx context.Context, client *sftp.Client, dirPath string, patterns []string, noRetry func(), callback func(*fs.FileInfo) error) error {
+	entries, err := client.ReadDirContext(ctx, dirPath)
+	if err != nil {
+		return f.pathErr(err, dirPath)
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entryPath := path.Join(dirPath, entry.Name())
+		if entry.IsDir() {
+			err = f.walk(ctx, client, entryPath, patterns, noRetry, callback)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		match, err := fsimpl.MatchAnyPattern(entry.Name(), patterns)
+		if err != nil {
+			return err
+		}
+		if !match {
+			continue
+		}
+		noRetry()
+		err = callback(fs.NewFileInfo(f.file(entryPath), entry, isHidden(entry.Name())))
+		if err != nil {
+			return callbackError{err}
+		}
+	}
+	return nil
 }
 
 // sftpFile is a file opened by openFile.
@@ -460,8 +476,15 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 // posix-rename@openssh.com extension if the server supports it.
 // Without the extension the file at destPath is removed before the
 // rename, so for a moment neither file is at destPath, and if the
-// rename fails, the file at destPath is gone.
+// rename fails, the file at destPath is gone. If destPath may be the
+// file at filePath under another name, see maybeSameFile, that file is
+// renamed to a temporary name in the directory of destPath first, and
+// destPath is only removed if it still exists then.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
+	// The checks before f.run need no request, but must not answer after Close
+	if err := f.checkOpen(ctx); err != nil {
+		return err
+	}
 	filePath = path.Clean(filePath)
 	destPath = path.Clean(destPath)
 	if filePath == destPath {
@@ -492,12 +515,64 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 		if c.posixRename {
 			return f.pathErr(c.sftp.PosixRename(filePath, destPath), filePath)
 		}
+		if maybeSameFile(filePath, destPath, srcInfo, destInfo) {
+			return f.moveViaTemp(c.sftp, filePath, destPath)
+		}
 		err = c.sftp.Remove(destPath)
 		if err != nil {
 			return f.pathErr(err, destPath)
 		}
 		return f.pathErr(c.sftp.Rename(filePath, destPath), filePath)
 	})
+}
+
+// maybeSameFile reports whether filePath and destPath with the Lstat infos
+// srcInfo and destInfo may be the same file under two names: names that
+// only differ in case on a case-insensitive server, or a path through a
+// symbolic link to the directory of the other path. SFTP has no inode
+// numbers to tell, so equal attributes are taken for the same file.
+func maybeSameFile(filePath, destPath string, srcInfo, destInfo os.FileInfo) bool {
+	if strings.EqualFold(filePath, destPath) {
+		return true
+	}
+	if srcInfo.Mode() != destInfo.Mode() || srcInfo.Size() != destInfo.Size() || !srcInfo.ModTime().Equal(destInfo.ModTime()) {
+		return false
+	}
+	srcStat, srcOK := srcInfo.Sys().(*sftp.FileStat)
+	destStat, destOK := destInfo.Sys().(*sftp.FileStat)
+	return !srcOK || !destOK || (srcStat.UID == destStat.UID && srcStat.GID == destStat.GID)
+}
+
+// moveViaTemp moves filePath to an existing destPath without the
+// posix-rename extension if destPath may be filePath under another name.
+// Removing destPath first would remove filePath then, so filePath is
+// renamed to a temporary name in the directory of destPath first. If
+// destPath still exists after that, it is another file and removed.
+// If a later step fails, the file is renamed back to filePath.
+func (f *fileSystem) moveViaTemp(client *sftp.Client, filePath, destPath string) error {
+	tempPath := path.Join(path.Dir(destPath), ".sftpfs-move-"+rand.Text())
+	err := client.Rename(filePath, tempPath)
+	if err != nil {
+		return f.pathErr(err, filePath)
+	}
+	_, err = client.Lstat(destPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// destPath was filePath under another name
+		err = client.Rename(tempPath, destPath)
+	case err == nil:
+		err = client.Remove(destPath)
+		if err == nil {
+			err = client.Rename(tempPath, destPath)
+		}
+	}
+	if err == nil {
+		return nil
+	}
+	if backErr := client.Rename(tempPath, filePath); backErr != nil {
+		return fmt.Errorf("%w, and renaming %s back failed, it is at %s: %w", f.pathErr(err, destPath), f.file(filePath), f.file(tempPath), backErr)
+	}
+	return f.pathErr(err, destPath)
 }
 
 // Remove removes a file or an empty directory.
@@ -526,7 +601,14 @@ func (f *fileSystem) Remove(filePath string) error {
 
 // RemoveAll removes the file or directory tree over one connection.
 // Symbolic links are removed, not followed. A missing path is not an error.
+// The root directory is never removed, that is an error wrapping os.ErrInvalid.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
+	if path.Clean(filePath) == Separator {
+		if err := f.checkOpen(ctx); err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: can't remove the root directory of %s", os.ErrInvalid, f)
+	}
 	return f.run(ctx, func(c *conn, _ func()) error {
 		info, err := c.sftp.Lstat(filePath)
 		if errors.Is(err, os.ErrNotExist) {

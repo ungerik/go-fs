@@ -345,6 +345,127 @@ func TestMoveWithoutPosixRename(t *testing.T) {
 	err = f.Move(t.Context(), root+"/file.txt", root+"/dir")
 	assert.ErrorIs(t, err, os.ErrExist)
 	assert.FileExists(t, root+"/file.txt")
+
+	// Another file with the same size, permissions and modification time
+	// might be the source under another name, so the source is moved away
+	// before that file is removed
+	modTime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	for name, content := range map[string]string{"/a.txt": "aaa", "/b.txt": "bbb"} {
+		require.NoError(t, os.WriteFile(root+name, []byte(content), 0o600))
+		require.NoError(t, os.Chtimes(root+name, modTime, modTime))
+	}
+	require.NoError(t, f.Move(t.Context(), root+"/a.txt", root+"/b.txt"))
+	data, err = os.ReadFile(root + "/b.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "aaa", string(data))
+	assert.Equal(t, []string{"b.txt", "dest.txt", "dir", "file.txt"}, dirNames(t, root), "no temporary file")
+}
+
+// TestMoveCaseOnlyWithoutPosixRename changes the case of a file name
+// without the posix-rename@openssh.com extension on a case-insensitive
+// file system, where the destination is the source under another name:
+// removing the destination before the rename removed the source.
+func TestMoveCaseOnlyWithoutPosixRename(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(root+"/file.txt", []byte("content"), 0o600))
+	if _, err := os.Stat(root + "/FILE.TXT"); err != nil {
+		t.Skip("the temporary directory is on a case-sensitive file system")
+	}
+	s := startTestServer(t, testServerConfig{root: root})
+	f := s.dial(t, nil)
+	f.currentConn().posixRename = false
+
+	require.NoError(t, f.Move(t.Context(), root+"/file.txt", root+"/File.txt"))
+	data, err := os.ReadFile(root + "/File.txt")
+	require.NoError(t, err, "the file must still exist")
+	assert.Equal(t, "content", string(data))
+	assert.Equal(t, []string{"File.txt"}, dirNames(t, root), "the file has the new name, no temporary file is left")
+}
+
+// TestMoveAliasWithoutPosixRename moves a file without the
+// posix-rename@openssh.com extension to a destination path that reaches
+// the same file through a symbolic link to its directory.
+func TestMoveAliasWithoutPosixRename(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(root+"/dir", 0o700))
+	require.NoError(t, os.Symlink("dir", root+"/link"))
+	require.NoError(t, os.WriteFile(root+"/dir/file.txt", []byte("content"), 0o600))
+	s := startTestServer(t, testServerConfig{root: root})
+	f := s.dial(t, nil)
+	f.currentConn().posixRename = false
+
+	require.NoError(t, f.Move(t.Context(), root+"/dir/file.txt", root+"/link/file.txt"))
+	data, err := os.ReadFile(root + "/dir/file.txt")
+	require.NoError(t, err, "the file must still exist")
+	assert.Equal(t, "content", string(data))
+	assert.Equal(t, []string{"file.txt"}, dirNames(t, root+"/dir"), "no temporary file is left")
+}
+
+// TestMoveAliasRenamesBack fails the last rename of a move through a
+// temporary name: the source must be renamed back.
+func TestMoveAliasRenamesBack(t *testing.T) {
+	s := startTestServer(t, testServerConfig{fail: func(r *sftp.Request) error {
+		if r.Method == "Rename" && r.Target == "/dest.txt" {
+			return errors.New("injected rename failure")
+		}
+		return nil
+	}})
+	f := s.dial(t, nil)
+	f.currentConn().posixRename = false
+	writeTestFile(t, f, "/src.txt", "content")
+	// A hard link is the same file under another name
+	require.NoError(t, f.currentConn().sftp.Link("/src.txt", "/dest.txt"))
+
+	err := f.Move(t.Context(), "/src.txt", "/dest.txt")
+	require.ErrorContains(t, err, "injected rename failure")
+	r, err := f.OpenReader("/src.txt")
+	require.NoError(t, err, "the source must be renamed back")
+	data, err := io.ReadAll(r)
+	require.NoError(t, errors.Join(err, r.Close()))
+	assert.Equal(t, "content", string(data))
+	var names []string
+	require.NoError(t, f.ListDir(t.Context(), "/", nil, func(info *fs.FileInfo) error {
+		names = append(names, info.Name)
+		return nil
+	}))
+	assert.Equal(t, []string{"src.txt"}, names, "no temporary file is left")
+}
+
+// TestListDirRecursiveSymlink lists a symbolic link to a directory:
+// the files of the directory are listed below the path of the link.
+func TestListDirRecursiveSymlink(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(root+"/dir/sub", 0o700))
+	require.NoError(t, os.WriteFile(root+"/dir/a.txt", []byte("a"), 0o600))
+	require.NoError(t, os.WriteFile(root+"/dir/sub/b.txt", []byte("b"), 0o600))
+	require.NoError(t, os.Symlink("dir", root+"/link"))
+	s := startTestServer(t, testServerConfig{root: root})
+	f := s.dial(t, nil)
+
+	var listed []fs.File
+	require.NoError(t, f.ListDirRecursive(t.Context(), root+"/link", nil, func(info *fs.FileInfo) error {
+		listed = append(listed, info.File)
+		assert.False(t, info.IsDir, "%s is no directory", info.File)
+		return nil
+	}))
+	// The server lists the entries in the order of the directory
+	assert.ElementsMatch(t, []fs.File{f.JoinCleanFile(root, "link/a.txt"), f.JoinCleanFile(root, "link/sub/b.txt")}, listed)
+}
+
+// TestRemoveAllRoot checks that RemoveAll refuses the root directory
+// instead of removing every file of the server.
+func TestRemoveAllRoot(t *testing.T) {
+	s := startTestServer(t, testServerConfig{})
+	f := s.dial(t, nil)
+	writeTestFile(t, f, "/file.txt", "content")
+
+	for _, root := range []string{"/", "//", "/.", "/dir/.."} {
+		err := f.RemoveAll(t.Context(), root)
+		assert.ErrorIs(t, err, os.ErrInvalid, root)
+		assert.ErrorContains(t, err, "can't remove the root directory", root)
+	}
+	_, err := f.Stat("/file.txt")
+	assert.NoError(t, err, "the files of the root directory must not be removed")
 }
 
 // TestOpenReaderReturnsNilInterface checks that the opening methods
@@ -638,6 +759,18 @@ func TestTypedErrors(t *testing.T) {
 	assert.NoError(t, f.Touch("/touched.txt", 0o600))
 	assert.NoError(t, f.RemoveAll(t.Context(), "/dir"))
 	assert.NoError(t, f.RemoveAll(t.Context(), "/dir"), "RemoveAll of a missing path")
+}
+
+// dirNames returns the sorted names of the entries of a local directory.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	return names
 }
 
 // writeTestFile writes a file with content to f.

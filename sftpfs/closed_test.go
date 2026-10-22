@@ -56,9 +56,23 @@ func TestClosedFileSystem(t *testing.T) {
 	err = f.Move(t.Context(), "/a", "/b")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
+	// Moves that need no request to the server
+	err = f.Move(t.Context(), "/a", "/a")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "Move onto itself")
+	err = f.Move(t.Context(), "/a", "/a/b")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "Move into itself")
+
+	err = f.RemoveAll(t.Context(), "/dir")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	err = f.RemoveAll(t.Context(), "/")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "RemoveAll of the root directory")
+
 	err = f.Remove("/file")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 
 	err = f.ListDir(t.Context(), "/dir", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+
+	err = f.ListDirRecursive(t.Context(), "/dir", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 }

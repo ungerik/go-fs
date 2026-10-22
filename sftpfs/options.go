@@ -29,6 +29,11 @@ const (
 	DefaultKeepAlive = 30 * time.Second
 )
 
+// KeepAliveCountMax is the number of keep-alive intervals in a row
+// that may end without an answer of the server before the connection
+// is closed, like ServerAliveCountMax of OpenSSH. See Options.KeepAlive.
+const KeepAliveCountMax = 3
+
 // Options configure the connection of a file system
 // dialed by Dial, DialAndRegister or EnsureRegistered.
 //
@@ -67,6 +72,20 @@ type Options struct {
 	// and is only meant for tests.
 	HostKeyCallback ssh.HostKeyCallback
 
+	// HostKeyAlgorithms are the host key algorithms that the client accepts,
+	// in the order of preference, like ssh.KeyAlgoED25519,
+	// see ssh.ClientConfig.HostKeyAlgorithms.
+	// If empty, the defaults of golang.org/x/crypto/ssh are used,
+	// which prefer ECDSA and RSA keys to ED25519 keys.
+	//
+	// Set it if HostKeyCallback only knows some keys of the server,
+	// like a known_hosts file with only the ED25519 key of a server that
+	// also has an ECDSA key: else the server presents its ECDSA key and the
+	// dial fails with a key mismatch (golang/go#29286). The callback of
+	// knownhosts.New has no list of the algorithms of a host, the
+	// HostKeyAlgorithms method of github.com/skeema/knownhosts has one.
+	HostKeyAlgorithms []string
+
 	// Logger, if not nil, logs connection events like dialing, retries,
 	// lost connections and reconnects. Passwords are never logged.
 	Logger fs.Logger
@@ -93,8 +112,10 @@ type Options struct {
 	// KeepAlive is the interval of SSH keep-alive requests that detect a
 	// connection that is dead without the network connection knowing it,
 	// for example after a NAT router or a firewall dropped it.
-	// A connection that does not answer within the interval is closed,
-	// and the next operation reconnects.
+	// At most one request is outstanding. A connection that leaves
+	// KeepAliveCountMax intervals in a row without an answer is closed,
+	// and the next operation reconnects. Slower answers keep the
+	// connection, like on a slow link busy with a download.
 	// Zero means DefaultKeepAlive, a negative value disables keep-alives.
 	KeepAlive time.Duration
 
@@ -105,49 +126,29 @@ type Options struct {
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
-// connectRetries returns the effective Options.ConnectRetries.
-func (o *Options) connectRetries() int {
+// effective returns the effective value of the Options field v
+// with the default def: def for zero, zero for a negative v.
+func effective[T int | time.Duration](v, def T) T {
 	switch {
-	case o.ConnectRetries == 0:
-		return DefaultConnectRetries
-	case o.ConnectRetries < 0:
+	case v == 0:
+		return def
+	case v < 0:
 		return 0
 	}
-	return o.ConnectRetries
+	return v
 }
+
+// connectRetries returns the effective Options.ConnectRetries.
+func (o *Options) connectRetries() int { return effective(o.ConnectRetries, DefaultConnectRetries) }
 
 // retryBackoff returns the effective Options.RetryBackoff.
-func (o *Options) retryBackoff() time.Duration {
-	switch {
-	case o.RetryBackoff == 0:
-		return DefaultRetryBackoff
-	case o.RetryBackoff < 0:
-		return 0
-	}
-	return o.RetryBackoff
-}
+func (o *Options) retryBackoff() time.Duration { return effective(o.RetryBackoff, DefaultRetryBackoff) }
 
 // timeout returns the effective Options.Timeout, zero for no timeout.
-func (o *Options) timeout() time.Duration {
-	switch {
-	case o.Timeout == 0:
-		return DefaultTimeout
-	case o.Timeout < 0:
-		return 0
-	}
-	return o.Timeout
-}
+func (o *Options) timeout() time.Duration { return effective(o.Timeout, DefaultTimeout) }
 
 // keepAlive returns the effective Options.KeepAlive, zero for no keep-alives.
-func (o *Options) keepAlive() time.Duration {
-	switch {
-	case o.KeepAlive == 0:
-		return DefaultKeepAlive
-	case o.KeepAlive < 0:
-		return 0
-	}
-	return o.KeepAlive
-}
+func (o *Options) keepAlive() time.Duration { return effective(o.KeepAlive, DefaultKeepAlive) }
 
 // dialContext returns the effective Options.DialContext.
 func (o *Options) dialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {

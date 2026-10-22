@@ -75,7 +75,10 @@ defer free() // the last free closes the connection
 The address is `host`, `host:port` or `user@host:port`, with or without the
 `sftp://` scheme. IPv6 addresses are written in brackets (`[::1]`,
 `sftp://user@[::1]:2222`). The port defaults to 22. A path in the address is
-ignored.
+ignored. A `/`, `?` or `#` in the username or password must be
+percent-encoded (`%2F`, `%3F`, `%23`), and so must an `@` in the path
+(`%40`): an address with an `@` after the host is rejected, because that
+`@` can end a password with an unencoded `/`.
 
 File URIs have the form `sftp://user@host/path`; `:22` is accepted and
 trimmed, other ports stay part of the prefix. `sftpFS.ID()` is the URI
@@ -90,11 +93,12 @@ prefix of the connection (`sftp://user@host`), `sftpFS.String()` is
 | `Credentials` | callback for the username and password, called when the file system is dialed and again before every reconnect (rotated secrets) | not used |
 | `Auth` | `ssh.AuthMethod`s tried before the password: `ssh.PublicKeys`, an SSH agent via `ssh.PublicKeysCallback`, `ssh.KeyboardInteractive` | none |
 | `HostKeyCallback` | verifies the server, **required** | dialing fails |
+| `HostKeyAlgorithms` | accepted host key algorithms in order of preference, like `ssh.KeyAlgoED25519`; set it if the callback knows only some keys of the server, see [Host keys](#host-keys) | defaults of `x/crypto/ssh` |
 | `Logger` | logs dials, retries, lost connections and reconnects | no logging |
 | `ConnectRetries` | retries of a failed connection attempt, so a dial makes up to 1+N attempts; only network errors and timeouts are retried, not authentication or host key errors | `DefaultConnectRetries` (3), negative: no retries |
 | `RetryBackoff` | wait before the first retry, doubled for every further retry | `DefaultRetryBackoff` (100 ms) |
 | `Timeout` | limit of every connection attempt: TCP connect, SSH handshake and start of the SFTP session | `DefaultTimeout` (30 s), negative: none |
-| `KeepAlive` | interval of SSH keep-alive requests; a connection that does not answer within the interval is closed | `DefaultKeepAlive` (30 s), negative: off |
+| `KeepAlive` | interval of SSH keep-alive requests, at most one outstanding; a connection that leaves `KeepAliveCountMax` (3) intervals in a row without an answer is closed, a slower answer keeps it | `DefaultKeepAlive` (30 s), negative: off |
 | `DialContext` | opens the network connection, for example through a proxy | `net.Dialer` |
 
 ### Credentials in URIs
@@ -112,6 +116,15 @@ plain `sftp://` scheme anymore that dials a connection per operation.
 Use `knownhosts.New` or `ssh.FixedHostKey` in production;
 `sftpfs.AcceptAnyHostKey` skips the check and is only meant for tests.
 
+`x/crypto/ssh` asks the server for an ECDSA or RSA host key before an
+ED25519 key. If the callback only knows the ED25519 key of a server that
+has an ECDSA key too, like a `known_hosts` file with only that key, the dial
+fails with `ssh: host key mismatch`
+([golang/go#29286](https://github.com/golang/go/issues/29286)). Set
+`Options.HostKeyAlgorithms` to the algorithms of the known keys, for example
+`[]string{ssh.KeyAlgoED25519}`, or take them from the `HostKeyAlgorithms`
+method of [github.com/skeema/knownhosts](https://github.com/skeema/knownhosts).
+
 ### Connections
 
 A file system keeps one SSH connection with one SFTP session. `Close`
@@ -122,7 +135,11 @@ If the connection is lost, the next operation reconnects with the stored
 options. A reconnect runs without holding a lock, so a server that does not
 answer blocks neither `Close` nor operations, which stop waiting when their
 context ends. A canceled or timed out context of an operation never drops
-the connection.
+the connection, and neither does a status reply of the server, whatever its
+message says: the reply proves that the connection works. `io.EOF`, which
+`pkg/sftp` returns for a closed channel and for an `SSH_FX_EOF` reply, only
+drops the connection if its SFTP session ended or it does not answer a
+keep-alive request.
 
 An operation that fails because the connection was lost while it ran is
 retried once on a new connection if repeating it can't change the result:
@@ -149,9 +166,19 @@ they are.
   with the `posix-rename@openssh.com` extension (OpenSSH). Without the
   extension the destination file is removed before the rename, so for a
   moment neither file exists there, and if the rename fails the destination
-  is gone. An existing directory at the destination is an error wrapping
-  `os.ErrExist`, a directory onto a file is an `fs.ErrIsNotDirectory`, a
-  directory into itself an error wrapping `os.ErrInvalid`.
+  is gone. If the destination may be the source under another name, like
+  for a case-only rename on a case-insensitive server or a path through a
+  symbolic link to the directory of the source, the source is renamed to a
+  temporary name in the destination directory first, the destination is
+  only removed if it still exists then, and the source is renamed back if a
+  later step fails. An existing directory at the destination is an error
+  wrapping `os.ErrExist`, a directory onto a file is an
+  `fs.ErrIsNotDirectory`, a directory into itself an error wrapping
+  `os.ErrInvalid`.
+- **Recursive operations.** `ListDirRecursive` of a symbolic link to a
+  directory lists the files of that directory below the path of the link,
+  symbolic links in the tree are not followed. `RemoveAll` refuses the root
+  directory `/` with an error wrapping `os.ErrInvalid`.
 - **Permissions.** Unix permission bits, set with `SetPermissions`.
 - **Errors.** Missing files wrap `os.ErrNotExist` (`fs.ErrDoesNotExist`
   with the file URI), `MakeDir` on an existing path wraps `os.ErrExist`,
