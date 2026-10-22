@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -488,6 +489,81 @@ func Test_expandTilde_HonorsEnv(t *testing.T) {
 	require.Equal(t, filepath.Join(fakeHome, "foo"), expandTilde("~/foo"))
 	require.Equal(t, filepath.Join(fakeHome, "Documents/test/file.txt"),
 		expandTilde("~/Documents/test/file.txt"))
+}
+
+// TestLocalFileSystem_CleanPathTilde is a regression test: CleanPath
+// expanded the tilde after joining and cleaning all parts, so a name
+// below a relative directory reached the home directory, like the name
+// "~/private.txt" of File(".").StdFS(), the path "/~/private.txt"
+// of a SubFileSystem rooted at "." or File(".").Join("~", "private.txt").
+func TestLocalFileSystem_CleanPathTilde(t *testing.T) {
+	ctx := t.Context()
+	home := t.TempDir()
+	t.Setenv(homeEnvVar(), home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "private.txt"), []byte("private"), 0o600))
+	work := t.TempDir()
+	t.Chdir(work)
+
+	// Only a tilde that starts the first part is the home directory
+	assert.Equal(t, home, Local.CleanPath("~"))
+	assert.Equal(t, filepath.Join(home, "x"), Local.CleanPath("~/x"))
+	assert.Equal(t, filepath.Join(home, "x"), Local.CleanPath("~", "x"))
+	assert.Equal(t, filepath.Join(home, "x"), Local.CleanPath(LocalPrefix+"~/x"))
+	assert.Equal(t, filepath.Dir(home), Local.CleanPath("~/.."), "the tilde is expanded before cleaning")
+	// A directory named "~" stays relative, also when the path is cleaned again
+	literal := "." + Separator + filepath.Join("~", "x")
+	assert.Equal(t, literal, Local.CleanPath(".", "~", "x"))
+	assert.Equal(t, literal, Local.CleanPath(".", "~/x"))
+	assert.Equal(t, literal, Local.CleanPath("./~/x"))
+	assert.Equal(t, literal, Local.CleanPath("a", "..", "~", "x"))
+	assert.Equal(t, literal, Local.CleanPath(literal))
+	assert.Equal(t, "."+Separator+"~", Local.CleanPath(".", "~"))
+	assert.Equal(t, filepath.Join(work, "~", "x"), Local.CleanPath(work, "~", "x"))
+
+	stdFS := File(".").StdFS()
+	subFS, err := NewSubFileSystem(Local, ".", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = subFS.Close() })
+	joined := File(".").Join("~", "private.txt")
+
+	_, err = iofs.ReadFile(stdFS, "~/private.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "StdFS must not reach the home directory")
+	_, err = subFS.ReadAll(ctx, "/~/private.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "SubFileSystem must not reach the home directory")
+	assert.False(t, joined.Exists(), "%s must not be in the home directory", joined)
+
+	// A directory named "~" in the working directory is reachable
+	require.NoError(t, os.Mkdir(filepath.Join(work, "~"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "~", "private.txt"), []byte("work"), 0o600))
+	data, err := iofs.ReadFile(stdFS, "~/private.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "work", string(data))
+	data, err = subFS.ReadAll(ctx, "/~/private.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "work", string(data))
+	data, err = joined.ReadAll(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "work", string(data))
+
+	// The files listed in such a directory are below it, not in the home directory
+	var listed []File
+	require.NoError(t, joined.Dir().ListDir(ctx, func(file File) error {
+		listed = append(listed, file)
+		return nil
+	}))
+	require.Equal(t, []File{joined}, listed)
+	data, err = listed[0].ReadAll(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "work", string(data))
+	info, err := Local.Stat(filepath.Join("~", "private.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, joined, info.File, "the File of the FileInfo of a path starting with ~")
+	var subListed []File
+	require.NoError(t, subFS.ListDir(ctx, "/~", nil, func(info *FileInfo) error {
+		subListed = append(subListed, info.File)
+		return nil
+	}))
+	assert.Equal(t, []File{File(subFS.Prefix() + "/~/private.txt")}, subListed)
 }
 
 func TestLocalFileSystem_URL(t *testing.T) {

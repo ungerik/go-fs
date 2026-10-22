@@ -130,17 +130,17 @@ func wrapOSErr(filePath string, err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, syscall.EISDIR):
-		return NewErrIsDirectory(File(filePath))
+		return NewErrIsDirectory(localFile(filePath))
 	case errors.Is(err, os.ErrNotExist):
 		// Checked before ENOTDIR, because on Windows syscall.ENOTDIR
 		// is ERROR_PATH_NOT_FOUND, the error of a missing parent directory
-		return NewErrDoesNotExist(File(filePath))
+		return NewErrDoesNotExist(localFile(filePath))
 	case errors.Is(err, syscall.ENOTDIR):
-		return NewErrIsNotDirectory(File(filePath))
+		return NewErrIsNotDirectory(localFile(filePath))
 	case errors.Is(err, os.ErrExist):
-		return NewErrAlreadyExists(File(filePath))
+		return NewErrAlreadyExists(localFile(filePath))
 	case errors.Is(err, os.ErrPermission):
-		return NewErrPermission(File(filePath))
+		return NewErrPermission(localFile(filePath))
 	default:
 		return err
 	}
@@ -153,10 +153,33 @@ func wrapOSErr(filePath string, err error) error {
 func wrapFileOpErr(filePath string, err error) error {
 	if err != nil && !errors.Is(err, syscall.EISDIR) && !errors.Is(err, os.ErrNotExist) {
 		if info, statErr := os.Stat(filePath); statErr == nil && info.IsDir() {
-			return NewErrIsDirectory(File(filePath))
+			return NewErrIsDirectory(localFile(filePath))
 		}
 	}
 	return wrapOSErr(filePath, err)
+}
+
+// hasTildePrefix reports if path is "~" or begins with "~"
+// followed by a separator, see expandTilde.
+func hasTildePrefix(path string) bool {
+	return path == "~" || strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+Separator)
+}
+
+// literalTilde returns a relative path that begins with a directory
+// named "~" with a leading "./", so that the path stays below the
+// current directory when CleanPath cleans it again. Other paths are
+// returned unchanged.
+func literalTilde(path string) string {
+	if hasTildePrefix(path) {
+		return "." + Separator + path
+	}
+	return path
+}
+
+// localFile returns the File of a local path,
+// which is relative to a directory named "~" if it begins with one.
+func localFile(filePath string) File {
+	return File(literalTilde(filePath))
 }
 
 // expandTilde replaces a leading "~" of path with the home
@@ -164,7 +187,7 @@ func wrapFileOpErr(filePath string, err error) error {
 // "~" followed by a separator. Paths like "~name" are returned
 // unchanged, the home directories of other users are not looked up.
 func expandTilde(path string) string {
-	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, "~"+Separator) {
+	if !hasTildePrefix(path) {
 		return path
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
@@ -246,20 +269,26 @@ func (local *LocalFileSystem) URL(cleanPath string) string {
 }
 
 // CleanPath strips a leading [LocalPrefix] from the first element,
-// joins the parts with [filepath.Join], cleans the result, and finally
-// expands "~" and a leading "~" followed by a separator to the home
-// directory of the current user. It is the only method that expands the tilde.
+// expands a first element that is "~" or begins with "~" followed
+// by a separator to the home directory of the current user,
+// and joins the parts with [filepath.Join], which cleans the result.
+// It is the only method that expands the tilde.
+//
+// Only the tilde at the start of the first element is expanded,
+// so a "~" after a relative directory, like in CleanPath(".", "~", "x"),
+// is a directory named "~". Such a path starting with "~" after
+// cleaning is returned with a leading "./", like "./~/x",
+// so cleaning it again doesn't expand it either.
+//
 // URL escapes are not decoded, that is done by
 // [ParseRawURI] for URIs with the [LocalPrefix].
 func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
-	var cleanPath string
-	if len(uriParts) > 0 {
-		// Don't modify the passed slice
-		cleanPath = filepath.Join(append([]string{strings.TrimPrefix(uriParts[0], LocalPrefix)}, uriParts[1:]...)...)
+	if len(uriParts) == 0 {
+		return "."
 	}
-	cleanPath = filepath.Clean(cleanPath)
-	cleanPath = expandTilde(cleanPath)
-	return cleanPath
+	// Don't modify the passed slice
+	first := expandTilde(strings.TrimPrefix(uriParts[0], LocalPrefix))
+	return literalTilde(filepath.Clean(filepath.Join(append([]string{first}, uriParts[1:]...)...)))
 }
 
 // SplitPath trims an optional [LocalPrefix] and splits on [Separator].
@@ -333,7 +362,7 @@ func (local *LocalFileSystem) Stat(filePath string) (*FileInfo, error) {
 			return nil, wrapOSErr(filePath, err)
 		}
 	}
-	fileInfo := NewFileInfo(File(filePath), info, localIsHidden(filePath, linkInfo))
+	fileInfo := NewFileInfo(localFile(filePath), info, localIsHidden(filePath, linkInfo))
 	fileInfo.IsSymlink = linkInfo.Mode()&os.ModeSymlink != 0
 	return fileInfo, nil
 }
@@ -369,7 +398,7 @@ func (local *LocalFileSystem) Lstat(filePath string) (*FileInfo, error) {
 	if err != nil {
 		return nil, wrapOSErr(filePath, err)
 	}
-	fileInfo := NewFileInfo(File(filePath), info, localIsHidden(filePath, info))
+	fileInfo := NewFileInfo(localFile(filePath), info, localIsHidden(filePath, info))
 	fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
 	return fileInfo, nil
 }
@@ -429,7 +458,7 @@ func (local *LocalFileSystem) ListDir(ctx context.Context, dirPath string, patte
 		return err
 	}
 	if !info.IsDir {
-		return NewErrIsNotDirectory(File(dirPath))
+		return NewErrIsNotDirectory(localFile(dirPath))
 	}
 
 	f, err := os.Open(dirPath) //#nosec G304
@@ -469,7 +498,7 @@ func (local *LocalFileSystem) ListDir(ctx context.Context, dirPath string, patte
 				return fmt.Errorf("error from fs.DirEntry.Info: %w", err)
 			}
 			filePath := filepath.Join(dirPath, name)
-			err = callback(NewFileInfo(File(filePath), info, localIsHidden(filePath, info)))
+			err = callback(NewFileInfo(localFile(filePath), info, localIsHidden(filePath, info)))
 			if err != nil {
 				return err
 			}
@@ -573,7 +602,7 @@ func (local *LocalFileSystem) MakeAllDirs(dirPath string, perm Permissions) erro
 	err := os.MkdirAll(dirPath, p.FileMode(true))
 	if err != nil {
 		if info, statErr := os.Stat(dirPath); statErr == nil && !info.IsDir() {
-			return NewErrIsNotDirectory(File(dirPath))
+			return NewErrIsNotDirectory(localFile(dirPath))
 		}
 		return wrapOSErr(dirPath, err)
 	}
@@ -603,7 +632,7 @@ func openFileReader(filePath string) (*os.File, os.FileInfo, error) {
 	}
 	if info.IsDir() {
 		_ = f.Close()
-		return nil, nil, NewErrIsDirectory(File(filePath))
+		return nil, nil, NewErrIsDirectory(localFile(filePath))
 	}
 	return f, info, nil
 }
@@ -748,7 +777,7 @@ func (local *LocalFileSystem) Truncate(ctx context.Context, filePath string, new
 		return err
 	}
 	if info.IsDir {
-		return NewErrIsDirectory(File(filePath))
+		return NewErrIsDirectory(localFile(filePath))
 	}
 	if info.Size == newSize {
 		return nil
@@ -919,7 +948,7 @@ func (local *LocalFileSystem) Remove(filePath string) error {
 	if errors.Is(err, os.ErrExist) {
 		// rmdir reports a non-empty directory with ENOTEMPTY or EEXIST,
 		// Windows with ERROR_DIR_NOT_EMPTY, all of them match os.ErrExist
-		return NewErrDirectoryNotEmpty(File(filePath))
+		return NewErrDirectoryNotEmpty(localFile(filePath))
 	}
 	return wrapOSErr(filePath, err)
 }
@@ -1189,7 +1218,7 @@ func (local *LocalFileSystem) callWatchCallback(lw *localWatcher, w *localWatch,
 			logger.Printf("watch callback panic: %v", p)
 		}
 	}()
-	w.onEvent(File(event.Name), eventFromFSNotify(event.Op))
+	w.onEvent(localFile(event.Name), eventFromFSNotify(event.Op))
 }
 
 // Close stops the watcher started by Watch, if one is running:

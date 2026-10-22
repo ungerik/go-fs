@@ -72,6 +72,7 @@ Work with `Local` directly:
 ```go
 fs.Local.Separator()         // Either `/` or `\`
 fs.Local.CleanPath("~/file") // A leading "~/" expands to the home directory
+fs.Local.CleanPath(".", "~") // "./~", only the first part expands the tilde
 ```
 
 For example, create a `FileSystem` from a multi-part
