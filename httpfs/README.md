@@ -72,14 +72,15 @@ err := httpfs.NewAndRegister("https://api.example.com/", &httpfs.Options{
   `Size` is -1 if the server reports no size at all, `Modified` comes from
   `Last-Modified`.
 - **Reading.** `OpenReader` streams the response body of a `GET` without
-  buffering the whole file in memory; `ReadAll` is native.
+  buffering the whole file in memory; `ReadAll` is native and allocates
+  its buffer once for the `Content-Length`, up to 16 MiB.
 - **No directories.** HTTP has no directory listing, so `ListDir` returns
   an error wrapping `errors.ErrUnsupported`.
 - **Read-only.** Every write operation returns `fs.ErrReadOnlyFileSystem`.
 - **Errors.** 404 and 410 wrap `os.ErrNotExist`. Other error statuses and
   transport failures are errors that don't, because the existence of the URL
-  is unknown then. The messages of status errors omit the query and the
-  password of the URL.
+  is unknown then. The messages of status and transport errors omit the
+  query and the password of the URL.
 
 ## Testing
 

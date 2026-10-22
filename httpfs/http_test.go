@@ -1,10 +1,16 @@
 package httpfs
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -64,6 +70,76 @@ func TestReadAll(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, r.Close())
 	assert.Equal(t, data, data3)
+}
+
+// TestReadAll_ContentLength checks that ReadAll allocates the buffer
+// for the body once from the Content-Length. It used to start with
+// 512 bytes and grow the buffer while reading.
+func TestReadAll_ContentLength(t *testing.T) {
+	ctx := t.Context()
+	content := strings.Repeat("go-fs ", 50_000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := content
+		if r.URL.Path == "/empty" {
+			body = ""
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(server.Close)
+	addr := strings.TrimPrefix(server.URL, Prefix)
+
+	data, err := Default.ReadAll(ctx, addr+"/file")
+	require.NoError(t, err)
+	assert.Equal(t, content, string(data))
+	assert.LessOrEqual(t, cap(data), len(content)+bytes.MinRead, "the buffer is allocated for the Content-Length")
+
+	data, err = Default.ReadAll(ctx, addr+"/empty")
+	require.NoError(t, err)
+	assert.Empty(t, data)
+}
+
+// TestReadAll_Canceled checks that canceling the context ends ReadAll
+// while it reads a body with Content-Length, which the transport
+// does for the body of a request with the context.
+func TestReadAll_Canceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		_, _ = io.WriteString(w, "start")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // the rest of the body never comes
+	}))
+	t.Cleanup(server.Close)
+
+	time.AfterFunc(50*time.Millisecond, cancel)
+	_, err := Default.ReadAll(ctx, strings.TrimPrefix(server.URL, Prefix)+"/file")
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// Test_readAll checks that the size is only a hint:
+// bodies shorter and longer than it are read completely,
+// and a huge size doesn't allocate a huge buffer.
+func Test_readAll(t *testing.T) {
+	ctx := t.Context()
+	long := strings.Repeat("x", 10_000)
+	for _, tt := range []struct {
+		body string
+		size int64
+	}{
+		{body: "", size: 0},
+		{body: "short", size: 5},
+		{body: "short", size: 1000},
+		{body: long, size: 10},
+		{body: long, size: -1},
+		{body: "x", size: math.MaxInt64},
+	} {
+		data, err := readAll(ctx, strings.NewReader(tt.body), tt.size)
+		require.NoError(t, err, "size %d", tt.size)
+		assert.Equal(t, tt.body, string(data), "size %d", tt.size)
+		assert.LessOrEqual(t, cap(data), max(len(tt.body), maxSizeHint)+bytes.MinRead, "size %d", tt.size)
+	}
 }
 
 // recordingServer is a test server that records the
@@ -442,6 +518,86 @@ func TestErrorsRedacted(t *testing.T) {
 	_, err = fs.File(uri).ReadAll(t.Context())
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "topsecret")
+}
+
+// roundTripFunc is an http.RoundTripper function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+// TestTransportErrorsRedacted is a regression test: net/http reports
+// transport errors as *url.Error with the complete URL, so the error
+// of a request to an unreachable server contained the query with
+// the signature of a presigned URL, and the error of an URL that
+// can't be parsed also the password.
+func TestTransportErrorsRedacted(t *testing.T) {
+	ctx := t.Context()
+	server := httptest.NewServer(http.NewServeMux())
+	addr := strings.TrimPrefix(server.URL, Prefix)
+	server.Close() // nothing is listening anymore
+	query := "?X-Amz-Signature=topsecret"
+	file := fs.File(Prefix + addr + "/key" + query)
+
+	checkErr := func(err error, op string) {
+		t.Helper()
+		var urlErr *url.Error
+		require.ErrorAs(t, err, &urlErr, op)
+		assert.NotContains(t, err.Error(), "topsecret", op)
+		assert.Contains(t, err.Error(), addr+"/key", "%s must name the URL", op)
+	}
+	_, err := file.Stat()
+	checkErr(err, "Stat")
+	_, err = file.ReadAll(ctx)
+	checkErr(err, "ReadAll")
+	_, err = file.OpenReader()
+	checkErr(err, "OpenReader")
+	_, err = Default.Exists(addr + "/key" + query)
+	checkErr(err, "Exists")
+
+	// The GET for the first byte after a HEAD that is not allowed
+	noGet := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodHead {
+			return &http.Response{StatusCode: http.StatusMethodNotAllowed, Body: http.NoBody, Request: request}, nil
+		}
+		return nil, errors.New("connection refused")
+	})
+	noGetFS, err := New(Prefix, &Options{Client: &http.Client{Transport: noGet}})
+	require.NoError(t, err)
+	_, err = noGetFS.Stat(addr + "/key" + query)
+	checkErr(err, "Stat with GET for the first byte")
+
+	// An URL that can't be parsed
+	invalid := strings.Replace(server.URL, Prefix, Prefix+"user:topsecret@", 1) + "/key%zz" + query
+	_, err = fs.File(invalid).Stat()
+	checkErr(err, "Stat of an invalid URL")
+	_, err = fs.File(invalid).ReadAll(ctx)
+	checkErr(err, "ReadAll of an invalid URL")
+}
+
+// Test_redactURL checks the redaction of the query and the password,
+// also of URLs that url.Parse rejects. The URLs are listed without
+// the "http://" prefix. A password with "?" was cut at the query
+// and its start was kept, an URL that url.Parse rejected kept the
+// whole password.
+func Test_redactURL(t *testing.T) {
+	for uri, want := range map[string]string{
+		"host/key":                         "host/key",
+		"host/key?X-Amz-Signature=x":       "host/key?…",
+		"host/key#fragment":                "host/key?…",
+		"user@host/key?x":                  "user@host/key?…",
+		"user:topsecret@host/key?x":        "user:xxxxx@host/key?…",
+		"user:topsecret@host/key%zz?x":     "user:xxxxx@host/key%zz?…",
+		"user:topsecret@host:port/key":     "user:xxxxx@host:port/key",
+		"user:top?secret@host/key":         "user:xxxxx@host/key",
+		"user:top/secret@host/key%zz":      "user:xxxxx@host/key%zz",
+		"host/key%zz?mail=a@b":             "host/key%zz?…",
+		"host/key?mail=a@b":                "host/key?…",
+		"user:topsecret@host/key%zz?m=a@b": "user:xxxxx@host/key%zz?…",
+	} {
+		assert.Equal(t, Prefix+want, redactURL(Prefix+uri), "redactURL(%q)", Prefix+uri)
+	}
 }
 
 // TestFile_ExtTrimExt_query checks that the extension of an HTTP file

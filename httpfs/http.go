@@ -13,7 +13,9 @@
 package httpfs
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -276,17 +278,65 @@ func (f *FileSystem) String() string {
 // redactURL returns rawURL for error messages and logs: without the
 // query and fragment, which can carry secrets like the signature of a
 // presigned URL, and with a password replaced by "xxxxx".
+// The password is also replaced in an URL that url.Parse rejects.
 func redactURL(rawURL string) string {
-	withoutQuery, query := splitQuery(rawURL)
-	if u, err := url.Parse(withoutQuery); err == nil && u.User != nil {
-		if _, hasPassword := u.User.Password(); hasPassword {
-			withoutQuery = u.Redacted()
+	if strings.Contains(rawURL, "@") {
+		u, err := url.Parse(rawURL)
+		switch {
+		case err != nil:
+			rawURL = redactPassword(rawURL)
+		case u.User != nil:
+			if _, hasPassword := u.User.Password(); hasPassword {
+				rawURL = u.Redacted()
+			}
 		}
 	}
+	withoutQuery, query := splitQuery(rawURL)
 	if query != "" {
 		withoutQuery += "?…"
 	}
 	return withoutQuery
+}
+
+// redactPassword replaces the password of the user info of an URL
+// that url.Parse rejects with "xxxxx", like the redaction of the fs
+// package. The authority ends with the first "/", "?" or "#" after
+// the scheme. If it contains no "@", the password itself may contain
+// one of them, then the user info ends with the last "@" of rawURL,
+// which redacts too much rather than too little. The password is
+// everything between the first ":" of the user info and its end.
+func redactPassword(rawURL string) string {
+	scheme, rest, found := strings.Cut(rawURL, "://")
+	if !found {
+		return rawURL
+	}
+	authority := rest
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		authority = rest[:i]
+	}
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		at = strings.LastIndex(rest, "@")
+	}
+	if at < 0 {
+		return rawURL
+	}
+	colon := strings.Index(rest[:at], ":")
+	if colon < 0 {
+		return rawURL
+	}
+	return scheme + "://" + rest[:colon+1] + "xxxxx" + rest[at:]
+}
+
+// redactErr redacts the URL of a *url.Error in err, see redactURL.
+// net/http returns the errors of requests as *url.Error
+// with the complete URL including the query.
+func redactErr(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		urlErr.URL = redactURL(urlErr.URL)
+	}
+	return err
 }
 
 // info determines whether filePath exists and, if so, returns its FileInfo.
@@ -310,11 +360,11 @@ func (f *FileSystem) info(filePath string) (fs.FileInfo, error) {
 	uri := f.URIFromPath(filePath)
 	request, err := http.NewRequest(http.MethodHead, uri, nil)
 	if err != nil {
-		return fs.FileInfo{}, fmt.Errorf("httpfs: %w", err)
+		return fs.FileInfo{}, fmt.Errorf("httpfs: %w", redactErr(err))
 	}
 	response, err := f.client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
-		return fs.FileInfo{}, err
+		return fs.FileInfo{}, redactErr(err)
 	}
 	_ = response.Body.Close() // HEAD response body is empty; close error is irrelevant
 
@@ -344,12 +394,12 @@ func (f *FileSystem) rangeInfo(filePath string) (fs.FileInfo, error) {
 	uri := f.URIFromPath(filePath)
 	request, err := http.NewRequest(http.MethodGet, uri, nil)
 	if err != nil {
-		return fs.FileInfo{}, fmt.Errorf("httpfs: %w", err)
+		return fs.FileInfo{}, fmt.Errorf("httpfs: %w", redactErr(err))
 	}
 	request.Header.Set("Range", "bytes=0-0")
 	response, err := f.client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
-		return fs.FileInfo{}, err
+		return fs.FileInfo{}, redactErr(err)
 	}
 	// Never read more than a few bytes, a server that ignores the
 	// range sends the whole content. Draining a short body lets the
@@ -471,11 +521,11 @@ func (f *FileSystem) get(ctx context.Context, filePath string) (*http.Response, 
 	uri := f.URIFromPath(filePath)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
-		return nil, fmt.Errorf("httpfs: %w", err)
+		return nil, fmt.Errorf("httpfs: %w", redactErr(err))
 	}
 	response, err := f.client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
 	if err != nil {
-		return nil, err
+		return nil, redactErr(err)
 	}
 	switch {
 	case isNotExistStatus(response.StatusCode):
@@ -489,13 +539,39 @@ func (f *FileSystem) get(ctx context.Context, filePath string) (*http.Response, 
 }
 
 // ReadAll downloads the URL with a GET request using ctx.
+// The buffer for the body is allocated once for the Content-Length
+// of the response, up to 16 MiB, a longer body grows it.
 func (f *FileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	response, err := f.get(ctx, filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
-	return fs.ReadAll(ctx, response.Body)
+	data, err := readAll(ctx, response.Body, response.ContentLength)
+	return data, redactErr(err)
+}
+
+// maxSizeHint caps the buffer that ReadAll allocates up front
+// for the Content-Length, so a wrong or hostile header can't
+// allocate a huge buffer before any data arrived.
+// A longer body grows the buffer while it is read.
+const maxSizeHint = 16 << 20 // 16 MiB
+
+// readAll reads r until EOF like fs.ReadAll. Like os.ReadFile,
+// a size that is not negative is used as hint for the buffer,
+// capped at maxSizeHint. A shorter or longer r is read completely.
+// ctx is checked before reading, the transport cancels the body
+// of a request with ctx while it is read.
+func readAll(ctx context.Context, r io.Reader, size int64) ([]byte, error) {
+	if size < 0 {
+		return fs.ReadAll(ctx, r)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, min(size, maxSizeHint)+bytes.MinRead))
+	_, err := buf.ReadFrom(r)
+	return buf.Bytes(), err
 }
 
 // OpenReader streams the body of a GET request.
