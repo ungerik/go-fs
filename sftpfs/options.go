@@ -44,8 +44,9 @@ type Options struct {
 	// If empty, the password of the address is used.
 	Password string
 
-	// Credentials, if not nil, is called with the parsed address when
-	// the file system is dialed and again before every reconnect,
+	// Credentials, if not nil, is called with the parsed address by every
+	// Dial, DialAndRegister and EnsureRegistered call, because the username
+	// is part of the URI prefix, and again before every reconnect,
 	// so it can return rotated credentials.
 	// A non-empty username or password it returns
 	// is used instead of Username or Password.

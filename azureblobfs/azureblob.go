@@ -132,7 +132,8 @@ func New(ctx context.Context, client *container.Client, opts *Options) (fs.FileS
 // NewAndRegister creates a file system for the container of the client
 // with New and registers it. It returns an error wrapping
 // fs.ErrAlreadyRegistered if another file system is registered for
-// the container. Close the file system to unregister it.
+// the container. Close the file system to unregister it,
+// for example with fs.GetFileSystemByPrefixOrNil(prefix).Close().
 func NewAndRegister(ctx context.Context, client *container.Client, opts *Options) error {
 	f, err := New(ctx, client, opts)
 	if err != nil {

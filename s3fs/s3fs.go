@@ -219,7 +219,8 @@ func New(client *s3.Client, bucketName string, opts *Options) (fs.FileSystem, er
 // and registers it. It returns an error wrapping fs.ErrAlreadyRegistered
 // if another file system is registered with the same prefix,
 // for example for a bucket with the same name, see Options.Prefix.
-// Close the file system to unregister it.
+// Close the file system to unregister it, for example with
+// fs.GetFileSystemByPrefixOrNil("s3://bucket-name").Close().
 func NewAndRegister(client *s3.Client, bucketName string, opts *Options) error {
 	f, err := New(client, bucketName, opts)
 	if err != nil {
@@ -278,7 +279,8 @@ func (s *fileSystem) ReadableWritable() (readable, writable bool) {
 	return true, !s.readOnly
 }
 
-// RootDir returns "s3://bucket-name/" as File.
+// RootDir returns the URI prefix ("s3://bucket-name" or Options.Prefix)
+// followed by a slash as File.
 func (s *fileSystem) RootDir() fs.File {
 	return fs.File(s.URIPrefix + Separator)
 }

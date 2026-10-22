@@ -4,10 +4,11 @@
 // one control connection that is used by one operation at a time. If the
 // connection breaks, the next operation reconnects. An operation that fails
 // because the connection broke is retried once on a new connection, unless
-// it may already have changed something on the server: after a command like
-// APPE, DELE, MKD, RMD or RNTO was sent, the operation returns the connection
-// error instead of repeating the command, because only its reply may have
-// been lost. OpenReader dials a dedicated connection for the transfer, so a
+// it may already have changed something on the server: after a command that
+// must not run twice, like APPE, DELE, MKD, RMD or RNTO, was sent, the
+// operation returns the connection error instead of repeating the command,
+// because only its reply may have been lost. RemoveAll is retried, because
+// repeating it removes nothing that should be kept. OpenReader dials a dedicated connection for the transfer, so a
 // streaming read never blocks other operations.
 //
 // Operations with a context are aborted when the context is done, and Close

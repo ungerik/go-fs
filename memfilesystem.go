@@ -1509,12 +1509,13 @@ func (fs *MemFileSystem) OpenReadWriter(filePath string, perm Permissions) (Read
 }
 
 // Watch registers onEvent for changes to filePath. Events are synthesized
-// from every mutation that goes through the MemFileSystem API
-// (Touch, WriteAll, OpenWriter close, Append, Truncate, Rename, Move,
-// Remove, MakeDir, SetPermissions, SetUser, SetGroup, SetXAttr,
-// RemoveXAttr, CreateSymbolicLink), for the path that was passed
-// to the mutating method. Direct mutation of a MemFile.FileData
-// byte slice obtained outside the API is not observable and emits no event.
+// from the mutating methods of the FileSystem interfaces
+// (Touch, WriteAll, OpenWriter, OpenAppendWriter and OpenReadWriter close,
+// Append, Truncate, CopyFile, Move, Remove, RemoveAll, MakeDir, MakeAllDirs,
+// SetPermissions, SetUser, SetGroup, SetXAttr, RemoveXAttr,
+// CreateSymbolicLink), for the path that was passed to the mutating method.
+// AddMemFile and Clear emit no events, and direct mutation of a
+// MemFile.FileData byte slice obtained outside the API is not observable.
 //
 // When filePath is a directory the callback fires for events on its
 // direct children (not deeper sub-directories), matching the

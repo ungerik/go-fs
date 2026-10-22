@@ -62,8 +62,10 @@ type Options struct {
 
 	// Credentials, if not nil, is called to get the username and password
 	// instead of using Username, Password and the user info of the address.
-	// It is called when the file system is dialed and again for every
-	// reconnect after a connection loss.
+	// It is called by every Dial, DialAndRegister and EnsureRegistered call,
+	// because the username is part of the URI prefix, for every reconnect
+	// after a connection loss, and for the dedicated connection of every
+	// OpenReader, so it should be cheap or cache its result.
 	Credentials CredentialsCallback
 
 	// TLSConfig is used for FTPS connections. If nil, a configuration

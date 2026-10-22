@@ -73,14 +73,14 @@ type Permissions uint32
 // The setuid, setgid and sticky bits (04000, 02000, 01000)
 // are mapped to os.ModeSetuid, os.ModeSetgid and os.ModeSticky.
 func (perm Permissions) FileMode(isDir bool) os.FileMode {
-	m := os.FileMode(perm & 0777)
-	if perm&0o4000 != 0 {
+	m := os.FileMode(perm & 0o777)
+	if perm&permSetuid != 0 {
 		m |= os.ModeSetuid
 	}
-	if perm&0o2000 != 0 {
+	if perm&permSetgid != 0 {
 		m |= os.ModeSetgid
 	}
-	if perm&0o1000 != 0 {
+	if perm&permSticky != 0 {
 		m |= os.ModeSticky
 	}
 	if isDir {
@@ -145,13 +145,20 @@ func PermissionsFromStdFileInfo(info iofs.FileInfo) Permissions {
 func PermissionsFromFileMode(mode os.FileMode) Permissions {
 	perm := Permissions(mode.Perm())
 	if mode&os.ModeSetuid != 0 {
-		perm |= 0o4000
+		perm |= permSetuid
 	}
 	if mode&os.ModeSetgid != 0 {
-		perm |= 0o2000
+		perm |= permSetgid
 	}
 	if mode&os.ModeSticky != 0 {
-		perm |= 0o1000
+		perm |= permSticky
 	}
 	return perm
 }
+
+// The setuid, setgid and sticky bits of Unix permissions
+const (
+	permSetuid Permissions = 0o4000
+	permSetgid Permissions = 0o2000
+	permSticky Permissions = 0o1000
+)

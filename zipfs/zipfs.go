@@ -53,7 +53,7 @@ import (
 )
 
 const (
-	// Prefix of zipfs URIs, followed by a random id
+	// Prefix of zipfs URIs, followed by the id
 	Prefix = "zip://"
 
 	// Separator used in zipfs paths

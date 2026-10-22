@@ -277,8 +277,10 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 	c.run(t, "Metadata", c.testMetadata)
 	c.run(t, "Paths", c.testPaths)
 
-	if c.writable {
-		c.run(t, "WriteSeed", c.writeSeed)
+	if c.writable && !c.run(t, "WriteSeed", c.writeSeed) {
+		// Every later sub-test needs the seed and would only
+		// repeat the failure of WriteSeed
+		t.Fatal("the seed could not be written, see the WriteSeed failure")
 	}
 	if c.readable {
 		c.run(t, "ReadSeed", c.testReadSeed)

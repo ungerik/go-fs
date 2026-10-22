@@ -155,7 +155,7 @@ func (f *fileSystem) Stat(filePath string) (info *fs.FileInfo, err error) {
 	return info, nil
 }
 
-// ListDir lists the directory with one SFTP request and calls
+// ListDir lists the directory with one ReadDir call and calls
 // callback after the listing, so that a lost connection never
 // repeats a callback.
 func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
@@ -172,7 +172,7 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 				return fs.NewErrDoesNotExist(f.file(dirPath))
 			}
 		}
-		return err
+		return f.pathErr(err, dirPath)
 	})
 	if err != nil {
 		return err
@@ -533,7 +533,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 			return nil
 		}
 		if err != nil {
-			return err
+			return f.pathErr(err, filePath)
 		}
 		return removeAll(ctx, c.sftp, filePath, info)
 	})

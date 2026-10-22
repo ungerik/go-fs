@@ -905,44 +905,44 @@ func TestGlob_Errors(t *testing.T) {
 	})
 }
 
-// noRenameMoveFS wraps a FileSystem but only exposes the base FileSystem
-// interface, deliberately hiding any Rename or Move methods of the wrapped
-// implementation. This forces File.Rename into its default copy-and-remove
-// fallback branch for file systems that implement neither RenameFileSystem
-// nor MoveFileSystem (for example s3fs).
+// noRenameMoveFS wraps a FileSystem but only exposes the WriteFileSystem
+// interface, deliberately hiding the Move method of the wrapped
+// implementation. This forces File.Rename into the copy-and-remove
+// emulation moveByCopy in dispatch.go, used by file systems
+// that don't implement MoveFileSystem (for example s3fs).
 type noRenameMoveFS struct {
 	WriteFileSystem
 }
 
 // registerNoRenameMoveFS creates an in-memory file system with the given
 // initial files, re-registers it wrapped so that it routes through the
-// default Rename branch, and returns the wrapped file system's root dir.
+// move emulation, and returns the wrapped file system's root dir.
 func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
 	t.Helper()
 	memFS, err := RegisteredTestMemFileSystem(nil, initialFiles...)
 	require.NoError(t, err)
-	// Replace the registered *MemFileSystem (which implements Rename and
-	// Move) with a wrapper that only exposes the base FileSystem interface.
+	// Replace the registered *MemFileSystem (which implements Move)
+	// with a wrapper that only exposes the WriteFileSystem interface.
 	Unregister(memFS)
 	wrapped := &noRenameMoveFS{WriteFileSystem: memFS}
-	Register(wrapped)
+	require.NoError(t, Register(wrapped))
 	t.Cleanup(func() {
 		Unregister(wrapped)
 		_ = memFS.Close()
 	})
 	// Guard the test's premise: the wrapper must not satisfy the optional
-	// rename/move interfaces, otherwise the default branch is never reached.
+	// move interface, otherwise the emulation is never reached.
 	if _, ok := any(wrapped).(MoveFileSystem); ok {
 		t.Fatal("noRenameMoveFS must not implement MoveFileSystem")
 	}
 	return wrapped.RootDir()
 }
 
-// TestFile_Rename_DefaultBranch covers the fallback used by file systems that
-// implement neither RenameFileSystem nor MoveFileSystem. The previous
-// implementation created an empty directory and then tried file.Remove(),
-// which silently discarded a non-empty directory's contents and failed to
-// remove the source. See file.go Rename default case.
+// TestFile_Rename_DefaultBranch covers the move emulation used by file systems
+// that don't implement MoveFileSystem. A previous implementation created
+// an empty directory and then tried file.Remove(), which silently discarded
+// a non-empty directory's contents and failed to remove the source.
+// See moveByCopy in dispatch.go.
 func TestFile_Rename_DefaultBranch(t *testing.T) {
 	t.Run("non-empty directory keeps all contents", func(t *testing.T) {
 		root := registerNoRenameMoveFS(t,

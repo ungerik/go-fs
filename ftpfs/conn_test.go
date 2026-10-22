@@ -457,9 +457,7 @@ func TestClose_AbortsReader(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ftpFS.Close())
 	// The abort runs in the background
-	for !r.(*fileReader).conn.isAborted() {
-		time.Sleep(time.Millisecond)
-	}
+	require.Eventually(t, r.(*fileReader).conn.isAborted, 5*time.Second, time.Millisecond, "Close must abort the open reader")
 	_, err = io.ReadAll(r)
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "reading after Close of the file system")
 	assert.NoError(t, r.Close())

@@ -43,7 +43,6 @@ type registryEntry struct {
 // that concurrent callers for the same prefix wait for.
 type registryCall struct {
 	done chan struct{}
-	fs   FileSystem
 	err  error
 }
 
@@ -229,7 +228,6 @@ func ensureRegisteredCreate(ctx context.Context, prefix string, call *registryCa
 	if err != nil {
 		return nil, nil, joinCloseErr(err, fileSystem)
 	}
-	call.fs = fileSystem
 	return fileSystem, entryFreeFunc(entry), nil
 }
 
@@ -334,11 +332,15 @@ func prefixMatchLen(uri, prefix, separator string) int {
 
 // fsPrefixMatchLen returns the length of the longest prefix
 // or prefix alias of fileSystem that uri starts with at a boundary, or -1.
+// It doesn't use fsPrefixes, because it runs for every registered
+// file system on every URI lookup and must not allocate.
 func fsPrefixMatchLen(fileSystem FileSystem, uri string) int {
-	longest := -1
 	separator := fileSystem.Separator()
-	for _, prefix := range fsPrefixes(fileSystem) {
-		longest = max(longest, prefixMatchLen(uri, prefix, separator))
+	longest := prefixMatchLen(uri, fileSystem.Prefix(), separator)
+	if aliasFS, ok := fileSystem.(PrefixAliasFileSystem); ok {
+		for _, alias := range aliasFS.PrefixAliases() {
+			longest = max(longest, prefixMatchLen(uri, alias, separator))
+		}
 	}
 	return longest
 }

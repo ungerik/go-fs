@@ -107,6 +107,10 @@ func (t *Tree) Add(name string, isDir bool, size int64, modified time.Time, sys 
 			child = &Node{Name: element, Size: size}
 		case child == nil || !child.IsDir:
 			child = &Node{Name: element, IsDir: true, Modified: modified}
+		default:
+			// An existing directory keeps its path and children
+			current = child
+			continue
 		}
 		if current.children == nil {
 			current.children = make(map[string]*Node)

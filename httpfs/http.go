@@ -252,7 +252,9 @@ func (*FileSystem) RootDir() fs.File {
 	return fs.InvalidFile
 }
 
-// ID returns the prefix without "://".
+// ID returns the prefix without a trailing "://",
+// so "http" or "https" for Default and DefaultTLS
+// and the whole prefix for a prefix with a host.
 func (f *FileSystem) ID() string {
 	return strings.TrimSuffix(f.prefix, "://")
 }

@@ -15,7 +15,6 @@ import (
 
 // NTSTATUS codes of SMB responses, see [MS-ERREF]
 const (
-	statusInvalidDeviceRequest  = 0xC0000010
 	statusFileIsADirectory      = 0xC00000BA
 	statusDirectoryNotEmpty     = 0xC0000101
 	statusNotADirectory         = 0xC0000103

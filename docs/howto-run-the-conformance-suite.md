@@ -244,7 +244,7 @@ external server.
 `ReadableWritable` reports `writable == true` but the type does not implement
 `OpenWriter`, `MakeDir` and `Remove`. Fix one or the other.
 
-**`WriteSeed` fails immediately** — `TestDir` is not empty, is not writable,
+**`WriteSeed` fails immediately** and the suite stops after it — `TestDir` is not empty, is not writable,
 or its parent directories are missing. The suite creates `TestDir` itself with
 one `MakeDir`, not recursively, and it requires a missing-path `Stat` to return
 an error wrapping `os.ErrNotExist`. If `TestDir` exists but is a file, the

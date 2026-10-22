@@ -16,8 +16,9 @@ const cacheMaxEntries = 10_000
 // The keys are the lower case paths, because Dropbox paths are
 // case-insensitive. The cache is bounded: expired entries are evicted
 // when entries are added, at most once per timeout, and if the cache
-// holds maxEntries, the expired entries and if necessary arbitrary
-// other ones are evicted before an entry is added.
+// holds maxEntries, the expired entries and if necessary a tenth of
+// the other entries are evicted before an entry is added, so that
+// the next entries are added without evicting again.
 type fileInfoCache struct {
 	mtx        sync.Mutex
 	infos      map[string]fileInfoCacheEntry
@@ -65,11 +66,15 @@ func (cache *fileInfoCache) Put(path string, info *fs.FileInfo) {
 		cache.evictExpired(now)
 		cache.nextSweep = now.Add(cache.timeout)
 	}
-	for key := range cache.infos {
-		if len(cache.infos) < cache.maxEntries {
-			break
+	if len(cache.infos) >= cache.maxEntries {
+		evict := len(cache.infos) - cache.maxEntries + 1 + cache.maxEntries/10
+		for key := range cache.infos {
+			if evict == 0 {
+				break
+			}
+			delete(cache.infos, key)
+			evict--
 		}
-		delete(cache.infos, key)
 	}
 	cache.infos[cacheKey(path)] = fileInfoCacheEntry{
 		info:    *info,

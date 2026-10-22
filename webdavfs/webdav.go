@@ -36,6 +36,10 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
+// maxRedirects is the number of redirects followed per request,
+// like by the default CheckRedirect of net/http
+const maxRedirects = 10
+
 const (
 	// Prefix of webdavfs URIs, followed by the user, host
 	// and base path of the server, see New
@@ -199,8 +203,8 @@ func newClient(client *http.Client) *http.Client {
 		if next != nil {
 			return next(req, via)
 		}
-		if len(via) >= 10 {
-			return errors.New("stopped after 10 redirects")
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
 		}
 		return nil
 	}

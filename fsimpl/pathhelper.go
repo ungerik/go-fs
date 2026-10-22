@@ -19,9 +19,10 @@ import (
 // The zero value is not usable, at least URIPrefix must be set.
 //
 // Methods added to PathHelper must never complete an optional interface
-// of package fs, like fs.HiddenFileSystem or fs.AbsPathFileSystem,
-// because every file system embedding a PathHelper would then
-// implement it by accident and change its behaviour.
+// of package fs that changes behaviour, like fs.HiddenFileSystem or
+// fs.AbsPathFileSystem, because every file system embedding a PathHelper
+// would then implement it by accident. PrefixAliases is the exception:
+// it implements fs.PrefixAliasFileSystem and is harmless without AltPrefixes.
 type PathHelper struct {
 	// URIPrefix is the prefix of all URIs of the file system,
 	// for example "s3://bucket" or "file://".

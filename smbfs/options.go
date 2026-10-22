@@ -40,7 +40,7 @@ type Options struct {
 
 	// Timeout limits dialing a session: the TCP connect, the SMB
 	// negotiation, the authentication and mounting the share.
-	// Zero means 30 seconds. The context passed to Dial or to
+	// Zero or a negative value means 30 seconds. The context passed to Dial or to
 	// an operation that reconnects can only shorten it.
 	Timeout time.Duration
 
@@ -51,14 +51,13 @@ type Options struct {
 // dialConfig is the parsed address of a file system
 // together with its options, used for every dial.
 type dialConfig struct {
-	opts      Options
-	hostPort  string // host:port to dial
-	share     string
-	username  string
-	password  string
-	prefix    string   // URI prefix like "smb://user@host/share", never with a password
-	aliases   []string // the prefix with the default port
-	anonymous bool
+	opts     Options
+	hostPort string // host:port to dial
+	share    string
+	username string
+	password string
+	prefix   string   // URI prefix like "smb://user@host/share", never with a password
+	aliases  []string // the prefix with the default port
 }
 
 // parseAddress parses an address of the form [smb://][user[:password]@]host[:port]/share.
@@ -94,7 +93,6 @@ func parseAddress(address string, opts *Options) (*dialConfig, error) {
 	if cfg.password == "" {
 		cfg.password, _ = u.User.Password()
 	}
-	cfg.anonymous = cfg.username == "" && cfg.password == ""
 
 	port := u.Port()
 	if port == "" {

@@ -132,7 +132,9 @@ func DialAndRegister(ctx context.Context, address string, opts *Options) error {
 // it, later calls for the same URI prefix share it; concurrent calls dial
 // only once. Every call increases a reference count. The returned free
 // function decreases it and closes and unregisters the file system after
-// the last reference. free is never nil and can be called more than once.
+// the last reference if EnsureRegistered dialed it. A file system that was
+// registered otherwise, for example by DialAndRegister, is never closed
+// by free. free is never nil and can be called more than once.
 // The options are only used if the file system is dialed.
 func EnsureRegistered(ctx context.Context, address string, opts *Options) (free func() error, err error) {
 	cfg, err := parseAddress(address, opts)
@@ -305,7 +307,6 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 			continue
 		}
 		fileInfo := fs.NewFileInfo(f.file(f.CleanPath(dirPath, info.Name())), info, strings.HasPrefix(info.Name(), "."))
-		fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
 		if err = callback(fileInfo); err != nil {
 			return err
 		}
@@ -565,7 +566,6 @@ func (f *fileSystem) Lstat(filePath string) (*fs.FileInfo, error) {
 			return f.wrapErr(filePath, err)
 		}
 		fileInfo = fs.NewFileInfo(f.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
-		fileInfo.IsSymlink = info.Mode()&os.ModeSymlink != 0
 		return nil
 	})
 	return fileInfo, err

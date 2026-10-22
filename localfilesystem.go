@@ -39,8 +39,7 @@ const (
 // or DefaultCreateDirPermissions field of the LocalFileSystem are set.
 const localDefaultPermissions = UserAndGroupReadWrite
 
-// localID is the file system id of the root directory
-// formatted as hex, or "/" if it can't be determined.
+// localID is the file system id returned by LocalFileSystem.ID.
 var localID = sync.OnceValue(localFileSystemID)
 
 var (

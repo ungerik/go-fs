@@ -45,16 +45,16 @@ type testFTPServer struct {
 	lastPass string
 
 	// Hooks, guarded by mu
-	failListContains string // LIST and MLSD of a path containing it fail with 550
+	failListContains string         // LIST and MLSD of a path containing it fail with 550
 	dropBefore       map[string]int // the next commands with the verb close the connection without executing them
 	dropReplyOf      map[string]int // the next commands with the verb are executed, then the connection closes instead of the final reply
-	hang             string // commands with this verb are never answered
-	silent           bool   // new connections get no greeting
-	noMLST           bool   // MLST and MLSD are not supported, listings use LIST
-	noEPSV           bool   // EPSV is not implemented
-	pasvHost         string // host part of PASV replies like "10,1,2,3" instead of the real address
-	rntoNoReplace    bool   // RNTO onto an existing path fails like on servers that don't replace files
-	requireTLSReuse  bool   // TLS data connections must resume the TLS session of the control connection
+	hang             string         // commands with this verb are never answered
+	silent           bool           // new connections get no greeting
+	noMLST           bool           // MLST and MLSD are not supported, listings use LIST
+	noEPSV           bool           // EPSV is not implemented
+	pasvHost         string         // host part of PASV replies like "10,1,2,3" instead of the real address
+	rntoNoReplace    bool           // RNTO onto an existing path fails like on servers that don't replace files
+	requireTLSReuse  bool           // TLS data connections must resume the TLS session of the control connection
 }
 
 type testFTPNode struct {

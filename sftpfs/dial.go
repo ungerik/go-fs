@@ -20,9 +20,14 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-// posixRenameExtension is the name of the OpenSSH extension
-// for a rename that replaces an existing file atomically.
-const posixRenameExtension = "posix-rename@openssh.com"
+const (
+	// posixRenameExtension is the name of the OpenSSH extension
+	// for a rename that replaces an existing file atomically.
+	posixRenameExtension = "posix-rename@openssh.com"
+
+	// defaultPort is the SSH port used if an address has none
+	defaultPort = "22"
+)
 
 // Dial connects to the SFTP server at address
 // and returns the file system without registering it.
@@ -81,7 +86,7 @@ func DialAndRegister(ctx context.Context, address string, opts *Options) error {
 // Every successful call must be paired with a call of free; the free
 // call that releases the last reference closes the file system if it
 // was dialed by EnsureRegistered. A file system that was registered
-// otherwise, for example by DialAndRegister, is returned as it is,
+// otherwise, for example by DialAndRegister, is used as it is,
 // with the options it was dialed with, and never closed by free.
 // free is safe to call more than once and never nil, also on error.
 //
@@ -144,11 +149,11 @@ func parseAddress(address string) (*target, error) {
 	port := u.Port()
 	switch port {
 	case "":
-		port = "22"
+		port = defaultPort
 		t.prefixHost = strings.TrimSuffix(u.Host, ":") // "host:" has an empty port
 		t.defaultPort = true
-	case "22":
-		t.prefixHost = strings.TrimSuffix(u.Host, ":22")
+	case defaultPort:
+		t.prefixHost = strings.TrimSuffix(u.Host, ":"+defaultPort)
 		t.defaultPort = true
 	}
 	// u.Hostname has no brackets and no escapes, JoinHostPort adds the brackets
@@ -243,7 +248,7 @@ func newFileSystem(address string, opts *Options) (*fileSystem, credentials, err
 	f.PathHelper = fsimpl.PathHelper{URIPrefix: prefix, Rooted: true}
 	if t.defaultPort {
 		// URIs with the default port resolve too
-		f.AltPrefixes = []string{prefix + ":22"}
+		f.AltPrefixes = []string{prefix + ":" + defaultPort}
 	}
 	f.life, f.cancel = context.WithCancel(context.Background())
 	return f, creds, nil

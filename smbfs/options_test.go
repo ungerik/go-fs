@@ -12,23 +12,22 @@ import (
 // port, the dialed address and the credentials of an address and options.
 func Test_parseAddress(t *testing.T) {
 	for _, tc := range []struct {
-		address   string
-		opts      *Options
-		prefix    string
-		aliases   []string
-		hostPort  string
-		share     string
-		user      string
-		password  string
-		anonymous bool
+		address  string
+		opts     *Options
+		prefix   string
+		aliases  []string
+		hostPort string
+		share    string
+		user     string
+		password string
 	}{
 		{
 			address: "nas/share", prefix: "smb://nas/share", aliases: []string{"smb://nas:445/share"},
-			hostPort: "nas:445", share: "share", anonymous: true,
+			hostPort: "nas:445", share: "share",
 		},
 		{
 			address: "smb://nas:445/share/", prefix: "smb://nas/share", aliases: []string{"smb://nas:445/share"},
-			hostPort: "nas:445", share: "share", anonymous: true,
+			hostPort: "nas:445", share: "share",
 		},
 		{
 			address: "smb://alice:secret@nas:1445/share", prefix: "smb://alice@nas:1445/share",
@@ -68,7 +67,6 @@ func Test_parseAddress(t *testing.T) {
 			assert.Equal(t, tc.share, cfg.share, "share")
 			assert.Equal(t, tc.user, cfg.username, "username")
 			assert.Equal(t, tc.password, cfg.password, "password")
-			assert.Equal(t, tc.anonymous, cfg.anonymous, "anonymous")
 			initiator := cfg.initiator()
 			assert.Equal(t, tc.user, initiator.User)
 			assert.Equal(t, tc.password, initiator.Password)
