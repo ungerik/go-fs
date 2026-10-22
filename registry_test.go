@@ -433,7 +433,10 @@ func (f *prefixTestFS) Prefix() string { return f.prefix }
 // TestRedactURI_Errors is a regression test: the error messages
 // that name a URI contained the password if url.Parse rejected the URI,
 // or if url.Parse took a password of digits or an empty one with an
-// unencoded '/' or '?' for a port, see fsimpl.RedactURI.
+// unencoded '/' or '?' for a port, see fsimpl.RedactURI. They contained
+// the end of a password with an unencoded '@' followed by a '/' or '?',
+// like "hunter2/x" of "x@hunter2/x", which url.Parse takes for the host
+// and the path.
 func TestRedactURI_Errors(t *testing.T) {
 	for _, uri := range []string{
 		"ftp-unregistered://user:hunter2@host/dir/100%.txt",
@@ -442,6 +445,8 @@ func TestRedactURI_Errors(t *testing.T) {
 		"ftp-unregistered://user:hunter2/x@host/dir/file.txt",
 		"ftp-unregistered://user:/hunter2@host/dir/file.txt",
 		"ftp-unregistered://user:123?hunter2@host/dir/file.txt",
+		"ftp-unregistered://user:x@hunter2/x@host/dir/file.txt",
+		"ftp-unregistered://user:x@hunter2?x@host/dir/file.txt",
 	} {
 		assert.NotContains(t, NewErrDoesNotExist(File(uri)).Error(), "hunter2", "ErrDoesNotExist for %q", uri)
 

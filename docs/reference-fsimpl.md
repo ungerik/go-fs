@@ -260,20 +260,35 @@ so every package redacts the same way.
 `RedactURI` is for URIs whose path may contain an `@`, like the URI of a file.
 The user info ends with the last `@` of the authority, unless a password with
 an unencoded `/`, `?` or `#` moved its end behind the authority: then the last
-`@` of the URI ends it. That is the case if the host or port is invalid, like
-`user:secret` of `ftp://user:secret/x@host`, or if the authority has no user
-info and looks like a host with a port, like `u:123` of `ftp://u:123/x@host`,
-which `url.Parse` takes for the host `u` with the port `123`. A URI without
-`://` is returned unchanged. The doc comment of `RedactURI` lists every rule.
+`@` of the URI ends it. That is the case if the user info of the authority has
+a password, like `user:S3cr` of `sftp://user:S3cr@et/Pw@host/x`, which
+`url.Parse` takes for the host `et` with the path `/Pw@host/x`. An `@` in the
+path of a URI with a password can't be told apart from one of the password,
+so the host is redacted too: `sftp://user:secret@host/me@example.com` becomes
+`sftp://user:xxxxx@example.com`. Error messages lose the host, never a
+password. A URI with a username only, like `sftp://user@host/me@example.com`,
+keeps its `@` in the path. The last `@` also ends the user info if the host or
+port is invalid or the port is empty, like `user:secret` of
+`ftp://user:secret/x@host` and `user:` of `ftp://user:/%zz@host`, or if the
+authority has no user info and looks like a host with a port, like `u:123` of
+`ftp://u:123/x@host`, which `url.Parse` takes for the host `u` with the port
+`123`. A URI without `://` is returned unchanged. The doc comment of
+`RedactURI` lists every rule in the order it applies them.
 
 `RedactAddress` is for the address of a file system that is rejected because
-it has an `@` after the host: everything up to the last `@` is the user info.
-It also redacts an address without scheme like `user:secret@host`.
+it has an `@` after the host or is no URL of the file system: everything up
+to the last `@` is the user info. It also redacts an address without scheme
+like `user:secret@host`. A `://` ends a scheme only after a valid scheme, a
+letter followed by letters, digits, `+`, `-` or `.`, so the password `pa://ss`
+of `user:pa://ss@host` is redacted too.
 
 ```go
-fsimpl.RedactURI("ftp://user:secret@host/me@example.com.txt") // "ftp://user:xxxxx@host/me@example.com.txt"
+fsimpl.RedactURI("ftp://user:secret@host/me@example.com.txt") // "ftp://user:xxxxx@example.com.txt"
+fsimpl.RedactURI("ftp://user@host/me@example.com.txt")        // "ftp://user@host/me@example.com.txt"
+fsimpl.RedactURI("sftp://user:S3cr@et/Pw@host/x")             // "sftp://user:xxxxx@host/x"
 fsimpl.RedactURI("ftp://u:123/x@host/dir")                    // "ftp://u:xxxxx@host/dir"
 fsimpl.RedactAddress("sftp://bob:a@b/c@host")                 // "sftp://bob:xxxxx@host"
+fsimpl.RedactAddress("user:pa://ss@host")                     // "user:xxxxx@host"
 ```
 
 ## Content hashing

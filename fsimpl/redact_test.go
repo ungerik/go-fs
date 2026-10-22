@@ -64,14 +64,39 @@ func TestRedactURI(t *testing.T) {
 		"ftp://u:123/x@host/dir/100%.txt":        "ftp://u:xxxxx@host/dir/100%.txt",
 		"http://localhost:8080/me@example.com":   "http://localhost:xxxxx@example.com",
 		"http://localhost:8080/me%40example.com": "http://localhost:8080/me%40example.com",
+		// A password that starts with a '/', '?' or '#' and has an invalid
+		// escape was kept, because the user info would be invalid. An empty
+		// port, which url.Parse takes "user:" for, is never written for a host.
+		"sftp://user:/%zz@host/x": "sftp://user:xxxxx@host/x",
+		"sftp://user:?%@host/x":   "sftp://user:xxxxx@host/x",
+		"sftp://user:#a%@host/x":  "sftp://user:xxxxx@host/x",
+		"http://host:/a%zz@b":     "http://host:xxxxx@b",
 
 		// A password with an unencoded '@' and '/' of a URI that url.Parse rejects
 		"s3://user:se@cr/et@minio.example.com/b%zz": "s3://user:xxxxx@minio.example.com/b%zz",
-		// but not if the user info would be invalid up to the last '@'
-		"http://user:topsecret@host/key%zz?m=a@b": "http://user:xxxxx@host/key%zz?m=a@b",
-		// A URI that url.Parse accepts is redacted as parsed
-		"sftp://bob:a@b/c@host":                  "sftp://bob:xxxxx@b/c@host",
-		"sftp://user:secret@host/me@example.com": "sftp://user:xxxxx@host/me@example.com",
+
+		// A password with an unencoded '@' followed by a '/', '?' or '#'.
+		// url.Parse accepts the URI, takes the host from the password and
+		// the rest of the password for the path, query or fragment, which
+		// was kept, like "sftp://user:xxxxx@et/Pw@host/x".
+		"sftp://user:S3cr@et/Pw@host/x":       "sftp://user:xxxxx@host/x",
+		"sftp://user:S3cr@et?Pw@host/x":       "sftp://user:xxxxx@host/x",
+		"sftp://user:S3cr@et#Pw@host/x":       "sftp://user:xxxxx@host/x",
+		"sftp://user:S3cr@et/Pw@host:22/x":    "sftp://user:xxxxx@host:22/x",
+		"sftp://user:S3cr@et/Pw@[::1]:22/x":   "sftp://user:xxxxx@[::1]:22/x",
+		"sftp://user:@/@host/x":               "sftp://user:xxxxx@host/x",
+		"sftp://bob:a@b/c@host":               "sftp://bob:xxxxx@host",
+		"ftp://user:S3cr@et/Pw@host/100%.txt": "ftp://user:xxxxx@host/100%.txt",
+		// An '@' in the path, query or fragment of a URI with a password
+		// can't be told apart from one in the password, so everything up to
+		// the last '@' is replaced, also the host and the start of the path
+		"sftp://user:secret@host/me@example.com":  "sftp://user:xxxxx@example.com",
+		"http://user:topsecret@host/key%zz?m=a@b": "http://user:xxxxx@b",
+		"http://user:topsecret@host/key#a@b":      "http://user:xxxxx@b",
+		// but not of a URI with a username only or without user info
+		"sftp://user@host/me@example.com":    "sftp://user@host/me@example.com",
+		"sftp://host/me@example.com":         "sftp://host/me@example.com",
+		"ftp://alice@host:21/me@example.com": "ftp://alice@host:21/me@example.com",
 	} {
 		assert.Equal(t, want, RedactURI(uri), "RedactURI(%q)", uri)
 	}
@@ -104,6 +129,13 @@ func TestRedactAddress(t *testing.T) {
 		"sftp://bob:a@b/c@host":         "sftp://bob:xxxxx@host",
 		"sftp://bob:ab/cd@host:22/path": "sftp://bob:xxxxx@host:22/path",
 		"u:S3cret@host/a@b":             "u:xxxxx@b",
+		// A password with "://" of an address without scheme was kept,
+		// the "://" is the end of a scheme only after a valid scheme
+		"user:pa://ss@host":        "user:xxxxx@host",
+		"u:S3c://ret@host/share":   "u:xxxxx@host/share",
+		"user:p/a://ss@host":       "user:xxxxx@host",
+		"sftp://user:pa://ss@host": "sftp://user:xxxxx@host",
+		"1sftp://user:pa@host":     "1sftp:xxxxx@host",
 		// A username with a '/', '?' or '#' can't be told apart from the host and path
 		"sftp://ali/ce:secret@host":        "sftp://xxxxx@host",
 		"sftp://host/dir/name@example.com": "sftp://xxxxx@example.com",

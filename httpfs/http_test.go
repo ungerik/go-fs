@@ -610,21 +610,31 @@ func TestTransportErrorsRedacted(t *testing.T) {
 // in the path were replaced.
 func Test_redactURL(t *testing.T) {
 	for uri, want := range map[string]string{
-		"host/key":                         "host/key",
-		"host/key?X-Amz-Signature=x":       "host/key?…",
-		"host/key#fragment":                "host/key?…",
-		"user@host/key?x":                  "user@host/key?…",
-		"user:topsecret@host/key?x":        "user:xxxxx@host/key?…",
-		"user:topsecret@host/key%zz?x":     "user:xxxxx@host/key%zz?…",
-		"user:topsecret@host:port/key":     "user:xxxxx@host:port/key",
-		"user:top?secret@host/key":         "user:xxxxx@host/key",
-		"user:top/secret@host/key%zz":      "user:xxxxx@host/key%zz",
-		"host/key%zz?mail=a@b":             "host/key%zz?…",
-		"host/key?mail=a@b":                "host/key?…",
-		"user:topsecret@host/key%zz?m=a@b": "user:xxxxx@host/key%zz?…",
-		"user:/topsecret@host/key?x":       "user:xxxxx@host/key?…",
-		"user:123?topsecret@host/key":      "user:xxxxx@host/key",
-		"host:8080/a%zz@b/key":             "host:8080/a%zz@b/key",
+		"host/key":                     "host/key",
+		"host/key?X-Amz-Signature=x":   "host/key?…",
+		"host/key#fragment":            "host/key?…",
+		"user@host/key?x":              "user@host/key?…",
+		"user:topsecret@host/key?x":    "user:xxxxx@host/key?…",
+		"user:topsecret@host/key%zz?x": "user:xxxxx@host/key%zz?…",
+		"user:topsecret@host:port/key": "user:xxxxx@host:port/key",
+		"user:top?secret@host/key":     "user:xxxxx@host/key",
+		"user:top/secret@host/key%zz":  "user:xxxxx@host/key%zz",
+		"host/key%zz?mail=a@b":         "host/key%zz?…",
+		"host/key?mail=a@b":            "host/key?…",
+		"user:/topsecret@host/key?x":   "user:xxxxx@host/key?…",
+		"user:123?topsecret@host/key":  "user:xxxxx@host/key",
+		"host:8080/a%zz@b/key":         "host:8080/a%zz@b/key",
+		// A password with an unencoded '@' followed by a '/', '?' or '#',
+		// whose end url.Parse took for the host and the path, query or
+		// fragment, which was kept, like "user:xxxxx@secret/x@host/key?…"
+		"user:top@secret/x@host/key?x": "user:xxxxx@host/key?…",
+		"user:top@secret?x@host/key":   "user:xxxxx@host/key",
+		"user:top@secret#x@host/key":   "user:xxxxx@host/key",
+		// An '@' after the host of an URL with a password can't be
+		// told apart from one in the password, so the host is replaced too
+		"user:topsecret@host/key%zz?m=a@b": "user:xxxxx@b",
+		"user:topsecret@host/me@example":   "user:xxxxx@example",
+		"user@host/me@example":             "user@host/me@example",
 	} {
 		assert.Equal(t, Prefix+want, redactURL(Prefix+uri), "redactURL(%q)", Prefix+uri)
 	}
@@ -650,6 +660,12 @@ func TestErrorMessage_noQuery(t *testing.T) {
 	// start of a password with an unencoded '?' remained
 	err = fs.NewErrDoesNotExist(fs.File("https://user:top?secret@example.com/key.txt"))
 	assert.NotContains(t, err.Error(), "top")
+	assert.NotContains(t, err.Error(), "secret")
+	assert.Contains(t, err.Error(), "https://user:xxxxx@example.com/key.txt")
+
+	// url.Parse took the end of a password with an unencoded '@'
+	// followed by a '/' for the host and the path, which was kept
+	err = fs.NewErrDoesNotExist(fs.File("https://user:top@secret/x@example.com/key.txt"))
 	assert.NotContains(t, err.Error(), "secret")
 	assert.Contains(t, err.Error(), "https://user:xxxxx@example.com/key.txt")
 }

@@ -147,11 +147,13 @@ func parseAddress(address string) (*target, error) {
 	if err != nil {
 		return nil, invalidAddressErr(address)
 	}
+	// u.Redacted keeps the password of an address that url.Parse takes for
+	// an opaque URL, like "user:pa://ss@host" with the scheme "user"
 	if u.Scheme != "sftp" {
-		return nil, fmt.Errorf("not an SFTP address: %s", u.Redacted())
+		return nil, fmt.Errorf("not an SFTP address: %s", fsimpl.RedactAddress(address))
 	}
 	if u.Hostname() == "" {
-		return nil, fmt.Errorf("no host in SFTP address: %s", u.Redacted())
+		return nil, fmt.Errorf("no host in SFTP address: %s", fsimpl.RedactAddress(address))
 	}
 	t := &target{url: u, prefixHost: u.Host}
 	port := u.Port()

@@ -83,6 +83,11 @@ func TestNew_PasswordNotInErrors(t *testing.T) {
 		"ftp://alice:topsecret@example.com/dav",  // wrong scheme
 		"http://alice:topsecret@[::1/dav",        // parse error
 		"http://alice:topsecret@/dav",            // no host
+		// url.Parse takes the username for the scheme of a password with "://"
+		// and a URL without "//" for an opaque one without user info, whose
+		// errors repeated the whole password
+		"alice:topsecret://x@example.com/dav",  // wrong scheme
+		"http:alice:topsecret@example.com/dav", // no host
 	} {
 		_, err := New(t.Context(), baseURL, nil)
 		require.Error(t, err, baseURL)
@@ -125,14 +130,41 @@ func TestNew_SpecialCharactersInPassword(t *testing.T) {
 			}
 		})
 	}
+
+	// url.Parse takes the host from a password with an unencoded '@'
+	// followed by a '/', '?' or '#' and the rest of the password for the
+	// path, query or fragment. New dialed the host "et", and the prefix,
+	// String and the errors contained the rest of the password.
+	// An '@' after the host of a base URL with a password can't be told
+	// apart from one in the password, so New rejects every such URL.
+	for baseURL, secrets := range map[string][]string{
+		"http://alice:s3cr@et/Pw@127.0.0.1:1/dav":                                           {"s3cr", "et/Pw"},
+		"http://alice:s3cr@et?Pw@127.0.0.1:1/dav":                                           {"s3cr", "et?Pw"},
+		"http://alice:s3cr@et#Pw@127.0.0.1:1/dav":                                           {"s3cr", "et#Pw"},
+		"http://alice:s3cr3t@cloud.example.com:8080/remote.php/dav/files/alice@example.com": {"s3cr3t"},
+		"http://alice:s3cr3t@cloud.example.com/dav?user=alice@example.com":                  {"s3cr3t"},
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			_, err := New(t.Context(), baseURL, opts)
+			require.Error(t, err)
+			for _, secret := range secrets {
+				assert.NotContains(t, err.Error(), secret, "the error must not contain the password")
+			}
+			assert.ErrorIs(t, err, os.ErrInvalid)
+			assert.ErrorContains(t, err, "Options.Password", "the error must tell how to pass the password")
+		})
+	}
 	assert.Zero(t, dialed.Load(), "a base URL with a misplaced password must not be dialed")
 
-	// An '@' in the path of a base URL with a user info or without a port
+	// An '@' in the path of a base URL with a username only, like the email
+	// address of a Nextcloud user, or without user info and without a port
 	// can't end a password, an encoded one never does
 	for _, baseURL := range []string{
 		"http://cloud.example.com/remote.php/dav/files/alice@example.com",
-		"http://alice:secret@cloud.example.com:8080/remote.php/dav/files/alice@example.com",
+		"http://alice@cloud.example.com:8080/remote.php/dav/files/alice@example.com",
+		"http://alice%40example.com@cloud.example.com/remote.php/dav/files/alice@example.com",
 		"http://cloud.example.com:8080/remote.php/dav/files/alice%40example.com",
+		"http://alice:secret@cloud.example.com:8080/remote.php/dav/files/alice%40example.com",
 	} {
 		_, err := New(t.Context(), baseURL, opts)
 		require.Error(t, err, baseURL)

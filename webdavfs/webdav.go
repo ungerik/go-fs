@@ -134,6 +134,15 @@ type fileSystem struct {
 // percent-encoded too ("%40"), else baseURL is rejected: url.Parse would
 // take a username with a password of digits and an unencoded '/', '?'
 // or '#', like "alice:1234/5678@host", for the host and port "alice:1234".
+// A baseURL with a password and an unencoded '@' after the host is
+// rejected with an error wrapping os.ErrInvalid: url.Parse would take
+// the host from a password with an '@' followed by a '/', '?' or '#',
+// like "et" of "alice:s3cr@et/Pw@host", and the rest of the password for
+// the path. Pass the password with Options.Password and the username with
+// Options.Username then, which New uses only together. The '@' of
+// a baseURL with a username only, like the email address of a Nextcloud
+// user in "https://alice@cloud.example.com/remote.php/dav/files/alice@example.com",
+// can't end a password.
 func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -144,11 +153,22 @@ func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, err
 	if u.User == nil && fsimpl.RedactURI(baseURL) != baseURL {
 		return nil, fmt.Errorf("webdavfs: invalid base URL %s: '@' after the host and port, percent-encode a '/', '?' or '#' of the username or password and an '@' of the path", fsimpl.RedactAddress(baseURL))
 	}
+	// url.Parse takes the host from a password with an '@' followed by
+	// a '/', '?' or '#', like "et" of "alice:s3cr@et/Pw", and the rest
+	// of the password for the path, query or fragment
+	if _, hasPassword := u.User.Password(); hasPassword {
+		_, rest, _ := strings.Cut(baseURL, "://")
+		if end := strings.IndexAny(rest, "/?#"); end >= 0 && strings.Contains(rest[end:], "@") {
+			return nil, fmt.Errorf("%w: webdavfs: invalid base URL %s: '@' after the host of a URL with a password, which can be part of the password, pass the password with Options.Password and the username with Options.Username instead", os.ErrInvalid, fsimpl.RedactAddress(baseURL))
+		}
+	}
+	// u.Redacted keeps the password of a URL that url.Parse takes for an
+	// opaque one, like "alice:pa://ss@host" with the scheme "alice"
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("webdavfs: base URL must use http or https: %s", u.Redacted())
+		return nil, fmt.Errorf("webdavfs: base URL must use http or https: %s", fsimpl.RedactAddress(baseURL))
 	}
 	if u.Host == "" {
-		return nil, fmt.Errorf("webdavfs: base URL without host: %s", u.Redacted())
+		return nil, fmt.Errorf("webdavfs: base URL without host: %s", fsimpl.RedactAddress(baseURL))
 	}
 	f := &fileSystem{
 		baseURL: url.URL{

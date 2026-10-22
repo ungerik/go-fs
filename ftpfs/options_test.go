@@ -126,6 +126,10 @@ func Test_parseAddress_SpecialCharactersInPassword(t *testing.T) {
 		"ftp://user:s3c@r3t/part@host": {"s3c", "r3t", "part"},
 		// url.Parse repeats an invalid escape of the password in its error
 		"ftp://user:s3c%zzr3t@host": {"s3c", "%zz", "r3t"},
+		// A "://" of a password without the ftp:// prefix makes the address
+		// "not an ftp:// address", which repeated the whole password
+		"user:s3c://r3t@host":      {"s3c", "r3t"},
+		"user:s3c://r3t@host:2121": {"s3c", "r3t"},
 	} {
 		t.Run(address, func(t *testing.T) {
 			_, err := parseAddress(address, nil)
@@ -147,6 +151,7 @@ func Test_parseAddress_Redacted(t *testing.T) {
 		"sftp://u:S3cret@host":         "sftp://u:xxxxx@host",
 		"ftp://u:S3c/ret@host":         "ftp://u:xxxxx@host",
 		"ftp://u:S3cret@host/a@b":      "ftp://u:xxxxx@b",
+		"u:S3c://ret@host":             "ftpfs: not an ftp:// or ftps:// address: u:xxxxx@host",
 		"ftp://host/a:b@c":             "ftp://xxxxx@c", // no telling the username apart
 	} {
 		t.Run(address, func(t *testing.T) {

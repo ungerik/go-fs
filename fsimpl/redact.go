@@ -10,20 +10,31 @@ const redactedPassword = "xxxxx"
 
 // RedactURI returns uri for error messages and logs with the password
 // of its user info replaced by "xxxxx", also if url.Parse rejects uri
-// or misreads a password with an unencoded '/', '?' or '#'.
+// or misreads a password with an unencoded '/', '?', '#' or '@'.
 // A uri without "://" has no user info and is returned unchanged.
 //
 // The user info ends with the last '@' of the authority, which ends with
 // the first '/', '?' or '#' after "://", and the password starts after the
 // first ':' of the user info. A password with an unencoded '/', '?' or '#'
 // ends the authority early and moves the end of its user info behind it.
-// So if the last '@' of uri follows the authority, and the authority has
-// a ':' that can start a password, outside of an IPv6 address in brackets,
-// that '@' is taken for the end of the user info, decided in this order:
+// So if the last '@' of uri follows the authority, that '@' is taken for
+// the end of the user info, decided in this order:
 //
-//   - It is if the host or port of the authority is invalid, like
-//     "user:secret" of "ftp://user:secret/x@host/dir": the password
-//     explains the error.
+//   - It is if the user info of the authority has a password, like
+//     "user:S3cr" of "sftp://user:S3cr@et/Pw@host/x", which url.Parse
+//     takes for the user info of the host "et" with the path "/Pw@host/x":
+//     the password may contain an '@' followed by a '/', '?' or '#'.
+//     An '@' in the path, query or fragment of a URI with a password can't
+//     be told apart from one of the password, so the host and the start of
+//     the path are redacted too, like "sftp://user:xxxxx@example.com" for
+//     "sftp://user:secret@host/me@example.com".
+//   - It is not if the authority has no ':' that can start a password,
+//     outside of an IPv6 address in brackets, like "user@host" of
+//     "sftp://user@host/me@example.com".
+//   - It is if the host or port of the authority is invalid or the port
+//     is empty, like "user:secret" of "ftp://user:secret/x@host/dir" and
+//     "user:" of "ftp://user:/%zz@host/dir": the password explains the
+//     error or starts with a '/', '?' or '#'.
 //   - It is not if the user info up to the '@' would be invalid even with
 //     its '/', '?', '#' and '@' percent-encoded, like "host:22/a%zz" of
 //     "sftp://host:22/a%zz@b".
@@ -31,14 +42,11 @@ const redactedPassword = "xxxxx"
 //     "ftp://u:123/x@host/dir", which url.Parse takes for the host "u"
 //     with the port "123" and the path "/x@host/dir". A username with
 //     a password of digits can't be told apart from a host and port.
-//   - It is if the authority has a user info with a password and url.Parse
-//     rejects uri, like "s3://user:se@cr/et@host/b%zz", because the password
-//     may contain an '@' and a '/'.
 //
 // Otherwise the '@' is part of the path, query or fragment, like in
-// "sftp://user:secret@host/me@example.com", which is redacted as url.Parse
-// parses it. That can redact more than the password, like the port and path
-// of "http://localhost:8080/a@b", never less.
+// "ftp://alice@host:21/me@example.com". The rules can redact more than
+// the password, like the host, port and path of "http://localhost:8080/a@b",
+// so that error messages lose the host, never a password.
 func RedactURI(uri string) string {
 	_, rest, found := strings.Cut(uri, "://")
 	if !found {
@@ -53,7 +61,12 @@ func RedactURI(uri string) string {
 		authority = rest[:i]
 	}
 	end := strings.LastIndexByte(authority, '@')
-	if last > len(authority) && lastAtEndsUserInfo(uri, authority, rest[:last]) {
+	switch {
+	case end >= 0 && strings.Contains(rest[:end], ":"):
+		// The user info has a password, which can contain an '@'
+		// followed by a '/', '?' or '#'
+		end = last
+	case last > len(authority) && lastAtEndsUserInfo(authority, rest[:last]):
 		end = last
 	}
 	if end < 0 {
@@ -67,29 +80,26 @@ func RedactURI(uri string) string {
 	return uri[:start+colon+1] + redactedPassword + rest[end:]
 }
 
-// lastAtEndsUserInfo reports whether the last '@' of uri ends its user info
-// although it follows the authority, see RedactURI. userInfo is the part
-// of uri between "://" and that '@'.
-func lastAtEndsUserInfo(uri, authority, userInfo string) bool {
-	user, hostPort := "", authority
+// lastAtEndsUserInfo reports whether the last '@' of a URI ends its user info
+// although it follows the authority, which has no user info with a password,
+// see RedactURI. userInfo is the part of the URI between "://" and that '@'.
+func lastAtEndsUserInfo(authority, userInfo string) bool {
+	hostPort := authority
 	at := strings.LastIndexByte(authority, '@')
 	if at >= 0 {
-		user, hostPort = authority[:at], authority[at+1:]
+		hostPort = authority[at+1:]
 	}
-	userColon := strings.Contains(user, ":")
-	portColon := strings.Contains(hostPort, ":") && !strings.HasPrefix(hostPort, "[")
 	switch {
-	case !userColon && !portColon:
+	case !strings.Contains(hostPort, ":") || strings.HasPrefix(hostPort, "["):
 		return false
-	case !isValidHostPort(hostPort):
+	case !isValidHostPort(hostPort) || strings.HasSuffix(hostPort, ":"):
+		// An empty port is the start of a password
+		// that begins with a '/', '?' or '#'
 		return true
 	case !isValidUserInfo(userInfo):
 		return false
-	case at < 0:
-		return true
 	}
-	_, err := url.Parse(uri)
-	return err != nil && userColon
+	return at < 0
 }
 
 // isValidHostPort reports whether url.Parse accepts hostPort
@@ -116,8 +126,13 @@ func isValidUserInfo(userInfo string) bool {
 //
 // It is meant for the address of a file system that is rejected because
 // it has an '@' after the host, which can end a password with an unencoded
-// '/', '?' or '#'. A URI whose path may contain an '@', like the one of
-// a file, is redacted with RedactURI.
+// '/', '?' or '#', or because it is no URL of the file system. A URI whose
+// path may contain an '@', like the one of a file, is redacted with RedactURI.
+//
+// The first "://" ends a scheme only if it follows a valid scheme, a letter
+// followed by letters, digits, '+', '-' or '.' as defined by RFC 3986.
+// Else it is part of the password of an address without scheme,
+// like "pa://ss" of "user:pa://ss@host".
 //
 // The username before the first ':' is kept unless it contains a '/', '?'
 // or '#'. Then it can't be told apart from the host and path,
@@ -128,7 +143,7 @@ func RedactAddress(address string) string {
 		return address
 	}
 	start := 0
-	if i := strings.Index(address[:at], "://"); i >= 0 {
+	if i := strings.Index(address[:at], "://"); i >= 0 && isScheme(address[:i]) {
 		start = i + len("://")
 	}
 	username, _, hasPassword := strings.Cut(address[start:at], ":")
@@ -139,4 +154,21 @@ func RedactAddress(address string) string {
 		return address[:start] + username + ":" + redactedPassword + address[at:]
 	}
 	return address
+}
+
+// isScheme reports whether s is a URI scheme as defined by RFC 3986:
+// a letter followed by letters, digits, '+', '-' or '.'.
+func isScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z':
+		case i > 0 && ('0' <= c && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
 }

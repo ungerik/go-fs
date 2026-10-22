@@ -69,7 +69,14 @@ without user info whose host has a port must be percent-encoded too (`%40`),
 like `https://cloud.example.com:8443/remote.php/dav/files/alice%40example.com`,
 else `New` rejects the URL: `url.Parse` would read a username with a password
 of digits and an unencoded `/`, like `alice:1234/5678@host`, as the host
-`alice` with the port `1234`.
+`alice` with the port `1234`. A base URL with a password and an unencoded
+`@` after the host is rejected with an error wrapping `os.ErrInvalid`, because
+`url.Parse` would read a password with an `@` followed by a `/`, like
+`s3cr@et/Pw` of `https://alice:s3cr@et/Pw@host/dav`, as the host `et` and the
+path `/Pw@host/dav`. Pass the password with `Options.Password` and the
+username with `Options.Username` then. A base URL with a username only may have an `@` in
+the path, like
+`https://alice@cloud.example.com/remote.php/dav/files/alice@example.com`.
 
 ### Authentication
 

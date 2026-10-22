@@ -76,6 +76,11 @@ func TestParseAddress(t *testing.T) {
 		{"bob:12/34@host:2222", []string{"12/", "/34", "34@"}},
 		// An unencoded '@' and '/' of a password
 		{"sftp://bob:a@b/cd@host", []string{"a@b", "b/cd", "cd@"}},
+		// A "://" of a password of an address without scheme. url.Parse
+		// takes the username for the scheme, "not an SFTP address" and
+		// "no host in SFTP address" repeated the whole password.
+		{"bob:s3c://r3t@host", []string{"s3c", "r3t"}},
+		{"sftp:bob:s3c://r3t@host", []string{"s3c", "r3t"}},
 	} {
 		t.Run(test.address, func(t *testing.T) {
 			_, err := parseAddress(test.address)

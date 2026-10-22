@@ -139,6 +139,10 @@ func Test_parseAddress_SpecialCharactersInPassword(t *testing.T) {
 		"smb://alice:s3c@r3t/part@host/share": {"s3c", "r3t", "part"},
 		// url.Parse repeats an invalid escape of the password in its error
 		"smb://alice:s3c%zzr3t@host/share": {"s3c", "%zz", "r3t"},
+		// A "://" of a password without the smb:// prefix makes the address
+		// "not an smb:// address", which repeated the whole password
+		"alice:s3c://r3t@host/share": {"s3c", "r3t"},
+		"alice:s3c://r3t@host":       {"s3c", "r3t"},
 	} {
 		t.Run(address, func(t *testing.T) {
 			_, err := parseAddress(address, nil)
@@ -160,6 +164,7 @@ func Test_parseAddress_Redacted(t *testing.T) {
 		"ftp://u:S3cret@host/share":     "ftp://u:xxxxx@host/share",
 		"smb://u:S3cret@host":           "smb://u:xxxxx@host",
 		"smb://u:S3c/ret@host/share":    "smb://u:xxxxx@host/share",
+		"u:S3c://ret@host/share":        "smbfs: not an smb:// address: u:xxxxx@host/share",
 		"smb://host/a:b@c":              "smb://xxxxx@c", // no telling the username apart
 	} {
 		t.Run(address, func(t *testing.T) {
