@@ -5,6 +5,7 @@ import (
 	iofs "io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
@@ -127,6 +128,63 @@ func TestStdFS_InvalidNames(t *testing.T) {
 			_, err = iofs.ReadFile(sub, "../a.txt")
 			assert.ErrorIs(t, err, iofs.ErrInvalid, "the sub tree can't be left either")
 		})
+	}
+}
+
+// TestStdFS_LocalNames is a regression test: the Windows rules for names,
+// no backslash and no colon, were applied to every file system, so the key
+// "10:00.json" of an S3 bucket couldn't be opened on Windows. Local didn't
+// reject the names that os.DirFS rejects: reserved device names like "NUL"
+// on Windows, which open the device instead of a file in the directory,
+// and names with a NUL byte on every platform.
+func TestStdFS_LocalNames(t *testing.T) {
+	ctx := t.Context()
+	windowsNames := []string{"10:00.json", `a\b.json`, "NUL", "CON", "COM1", "LPT1", "sub/AUX"}
+
+	// Other file systems accept the names that Windows rejects
+	memFS, err := RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memFS.Close() })
+	require.NoError(t, memFS.MakeDir("/sub", 0))
+	memStdFS := memFS.RootDir().StdFS()
+	for _, name := range windowsNames {
+		require.NoError(t, memFS.WriteAll(ctx, "/"+name, []byte(name), 0))
+		data, err := iofs.ReadFile(memStdFS, name)
+		require.NoError(t, err, "ReadFile(%q)", name)
+		assert.Equal(t, name, string(data))
+	}
+
+	// Local rejects the names that os.DirFS rejects on the platform
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))
+	localStdFS := File(dir).StdFS()
+	invalid := []string{"a\x00b", "sub/a\x00b"}
+	if runtime.GOOS == "windows" {
+		invalid = append(invalid, windowsNames...)
+	}
+	for _, name := range invalid {
+		_, err := iofs.ReadFile(os.DirFS(dir), name)
+		require.ErrorIs(t, err, iofs.ErrInvalid, "os.DirFS ReadFile(%q)", name)
+
+		_, err = localStdFS.Stat(name)
+		assert.ErrorIs(t, err, iofs.ErrInvalid, "Stat(%q)", name)
+		_, err = localStdFS.Sub(name)
+		assert.ErrorIs(t, err, iofs.ErrInvalid, "Sub(%q)", name)
+		_, err = localStdFS.Open(name)
+		assert.ErrorIs(t, err, iofs.ErrInvalid, "Open(%q)", name)
+		_, err = localStdFS.ReadFile(name)
+		assert.ErrorIs(t, err, iofs.ErrInvalid, "ReadFile(%q)", name)
+		_, err = localStdFS.ReadDir(name)
+		assert.ErrorIs(t, err, iofs.ErrInvalid, "ReadDir(%q)", name)
+	}
+	if runtime.GOOS != "windows" {
+		// The names that Windows rejects are files in the directory elsewhere
+		for _, name := range windowsNames {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0o600))
+			data, err := iofs.ReadFile(localStdFS, name)
+			require.NoError(t, err, "ReadFile(%q)", name)
+			assert.Equal(t, name, string(data))
+		}
 	}
 }
 

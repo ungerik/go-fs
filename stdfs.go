@@ -5,7 +5,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"os"
-	"runtime"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -174,18 +174,29 @@ func stdReadDir(dir File) ([]iofs.DirEntry, error) {
 
 // checkName validates name like the io/fs package does,
 // so files like "dir/.gitignore" are accepted.
-// Like os.DirFS it rejects backslashes and colons on Windows,
-// and on every platform it rejects names containing the separator
-// of the file system of f.File if that is not a slash,
-// because io/fs names are always slash separated and an element
-// like `..\x` must not be split by the underlying file system.
+// It rejects names containing the separator of the file system
+// of f.File if that is not a slash, because io/fs names are always
+// slash separated and an element like `..\x` must not be split
+// by the underlying file system.
+// For the local file system it also rejects the names that os.DirFS
+// rejects with filepath.Localize: on Windows names with a backslash,
+// a colon or a reserved device name like "NUL" or "COM1",
+// and on every platform names with a NUL byte.
+// Other file systems accept these names, so an S3 key like
+// "10:00.json" can be opened on Windows too.
 // op is the operation reported by the *io/fs.PathError.
 func (f StdFS) checkName(op, name string) error {
-	if !iofs.ValidPath(name) || runtime.GOOS == "windows" && strings.ContainsAny(name, `\:`) {
+	if !iofs.ValidPath(name) {
 		return &iofs.PathError{Op: op, Path: name, Err: iofs.ErrInvalid}
 	}
-	if sep := f.File.FileSystem().Separator(); sep != "/" && strings.Contains(name, sep) {
+	fileSystem := f.File.FileSystem()
+	if sep := fileSystem.Separator(); sep != "/" && strings.Contains(name, sep) {
 		return &iofs.PathError{Op: op, Path: name, Err: iofs.ErrInvalid}
+	}
+	if _, isLocal := fileSystem.(*LocalFileSystem); isLocal {
+		if _, err := filepath.Localize(name); err != nil {
+			return &iofs.PathError{Op: op, Path: name, Err: iofs.ErrInvalid}
+		}
 	}
 	return nil
 }
