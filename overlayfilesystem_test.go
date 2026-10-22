@@ -653,7 +653,7 @@ func TestOverlayFileSystem_LinkOntoItsTarget(t *testing.T) {
 		{"relative target through the parent of the layer", func(t *testing.T) (string, string) {
 			upperDir := filepath.Join(t.TempDir(), "up")
 			require.NoError(t, os.Mkdir(upperDir, 0o700))
-			return upperDir, "../up/f"
+			return upperDir, filepath.Join("..", "up", "f")
 		}},
 		{"absolute target through a link to the layer", func(t *testing.T) (string, string) {
 			dir := t.TempDir()
