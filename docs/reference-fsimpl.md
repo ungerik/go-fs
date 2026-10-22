@@ -250,9 +250,10 @@ fsimpl.Ext("image.png/file", "")   // ".png/file"   empty separator searches the
 ```go
 func RedactURI(uri string) string
 func RedactAddress(address string) string
+func RedactAddressWithoutScheme(address string) string
 ```
 
-Both return their argument for error messages and logs with the password of
+They return their argument for error messages and logs with the password of
 the user info replaced by `xxxxx`, also if `url.Parse` rejects it. The `fs`
 package, `httpfs`, `s3fs`, `sftpfs`, `ftpfs`, `smbfs` and `webdavfs` use them,
 so every package redacts the same way.
@@ -282,6 +283,15 @@ like `user:secret@host`. A `://` ends a scheme only after a valid scheme, a
 letter followed by letters, digits, `+`, `-` or `.`, so the password `pa://ss`
 of `user:pa://ss@host` is redacted too.
 
+`RedactAddressWithoutScheme` is for an address that is rejected because it
+doesn't have the scheme of the file system. Its text before `://` can be a
+username with a password that starts with `//`, like `alice` with the password
+`//S3cret` of `alice://S3cret@host`, which `RedactAddress` takes for the scheme
+`alice` followed by the username `S3cret`. So it redacts as if there were no
+scheme, from the first `:` to the last `@`: `alice:xxxxx@host`. A URI with
+another scheme loses its username, like `ftp:xxxxx@host` for
+`ftp://user:secret@host`.
+
 ```go
 fsimpl.RedactURI("ftp://user:secret@host/me@example.com.txt") // "ftp://user:xxxxx@example.com.txt"
 fsimpl.RedactURI("ftp://user@host/me@example.com.txt")        // "ftp://user@host/me@example.com.txt"
@@ -289,6 +299,8 @@ fsimpl.RedactURI("sftp://user:S3cr@et/Pw@host/x")             // "sftp://user:xx
 fsimpl.RedactURI("ftp://u:123/x@host/dir")                    // "ftp://u:xxxxx@host/dir"
 fsimpl.RedactAddress("sftp://bob:a@b/c@host")                 // "sftp://bob:xxxxx@host"
 fsimpl.RedactAddress("user:pa://ss@host")                     // "user:xxxxx@host"
+fsimpl.RedactAddress("alice://S3cret@host")                   // "alice://S3cret@host"
+fsimpl.RedactAddressWithoutScheme("alice://S3cret@host")      // "alice:xxxxx@host"
 ```
 
 ## Content hashing

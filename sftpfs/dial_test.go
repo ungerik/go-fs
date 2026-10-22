@@ -110,6 +110,36 @@ func TestParseAddress_Redacted(t *testing.T) {
 	}
 }
 
+// TestParseAddress_NotSFTP is a regression test: the error of an address
+// without the scheme sftp named the address redacted by fsimpl.RedactAddress,
+// which takes the text before "://" for a scheme. The username alice with
+// the password "//S3cret" of the address "alice://S3cret@host" without
+// scheme was taken for the scheme alice and the username S3cret, so the
+// error contained the password. Such an address is redacted as one
+// without scheme, also if it has an '@' after the host or url.Parse
+// rejects it, which were checked before the scheme.
+func TestParseAddress_NotSFTP(t *testing.T) {
+	for address, redacted := range map[string]string{
+		"alice://S3cret@host":      "alice:xxxxx@host",
+		"alice://@S3cret@host":     "alice:xxxxx@host",
+		"a1.b+c-d://S3cret@host":   "a1.b+c-d:xxxxx@host",
+		"alice://S3cret:x/y@host":  "alice:xxxxx@host",
+		"alice://S3cr%zzet@host":   "alice:xxxxx@host",
+		"ftp://u:S3cret@host":      "ftp:xxxxx@host",
+		"bob:S3c://ret@host":       "bob:xxxxx@host",
+		"sftp:bob:S3c://ret@host":  "sftp:xxxxx@host",
+		"alice://S3cret@host/a@b":  "alice:xxxxx@b",
+		"alice://host/S3cret@host": "alice:xxxxx@host",
+	} {
+		_, err := parseAddress(address)
+		require.Error(t, err, address)
+		assert.Equal(t, "not an SFTP address: "+redacted, err.Error(), address)
+	}
+	// The scheme is case-insensitive
+	_, err := parseAddress("SFTP://user@host")
+	assert.NoError(t, err)
+}
+
 // TestPasswordWithSpecialCharactersNotInErrors dials addresses whose
 // password contains an unencoded '/', '?' or '#': the errors of Dial
 // and EnsureRegistered must not contain any part of the password,

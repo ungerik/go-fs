@@ -95,6 +95,34 @@ func TestNew_PasswordNotInErrors(t *testing.T) {
 	}
 }
 
+// TestNew_NotHTTP is a regression test: the error of a base URL without the
+// scheme http or https named the URL redacted by fsimpl.RedactAddress,
+// which takes the text before "://" for a scheme. The username alice with
+// the password "//S3cret" of "alice://S3cret@host/dav" without scheme was
+// taken for the scheme alice and the username S3cret, so the error
+// contained the password. Such a URL is redacted as one without scheme,
+// also if it has an '@' after the host or url.Parse rejects it, which
+// were checked before the scheme.
+func TestNew_NotHTTP(t *testing.T) {
+	for baseURL, redacted := range map[string]string{
+		"alice://S3cret@host/dav":      "alice:xxxxx@host/dav",
+		"alice://@S3cret@host/dav":     "alice:xxxxx@host/dav",
+		"a1.b+c-d://S3cret@host/dav":   "a1.b+c-d:xxxxx@host/dav",
+		"alice://S3cret:x/y@host/dav":  "alice:xxxxx@host/dav",
+		"alice://S3cr%zzet@host/dav":   "alice:xxxxx@host/dav",
+		"alice://host:1/S3cret@host":   "alice:xxxxx@host",
+		"ftp://u:S3cret@host/dav":      "ftp:xxxxx@host/dav",
+		"alice:S3c://ret@host/dav":     "alice:xxxxx@host/dav",
+		"alice:S3cret@host/dav":        "alice:xxxxx@host/dav",
+		"alice://S3cret@host/dav/a@b":  "alice:xxxxx@b",
+		"alice://host/dav/S3cret@host": "alice:xxxxx@host",
+	} {
+		_, err := New(t.Context(), baseURL, nil)
+		require.Error(t, err, baseURL)
+		assert.Equal(t, "webdavfs: base URL must use http or https: "+redacted, err.Error(), baseURL)
+	}
+}
+
 // TestNew_SpecialCharactersInPassword is a regression test: url.Parse ends
 // the user info of the base URL at an unencoded '/', '?' or '#' of a password.
 // It then rejected the rest of the password as port and New repeated it in

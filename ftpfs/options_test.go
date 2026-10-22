@@ -148,7 +148,7 @@ func Test_parseAddress_Redacted(t *testing.T) {
 	for address, redacted := range map[string]string{
 		"ftp://u:S3cret@bad host/path": "ftp://u:xxxxx@bad host/path",
 		"u:S3cret@bad host":            "ftp://u:xxxxx@bad host",
-		"sftp://u:S3cret@host":         "sftp://u:xxxxx@host",
+		"sftp://u:S3cret@host":         "ftpfs: not an ftp:// or ftps:// address: sftp:xxxxx@host",
 		"ftp://u:S3c/ret@host":         "ftp://u:xxxxx@host",
 		"ftp://u:S3cret@host/a@b":      "ftp://u:xxxxx@b",
 		"u:S3c://ret@host":             "ftpfs: not an ftp:// or ftps:// address: u:xxxxx@host",
@@ -159,6 +159,29 @@ func Test_parseAddress_Redacted(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), redacted)
 		})
+	}
+}
+
+// Test_parseAddress_NotFTP is a regression test: the error of an address
+// without the prefix ftp:// or ftps:// named the address redacted by
+// fsimpl.RedactAddress, which takes the text before "://" for a scheme.
+// The username alice with the password "//S3cret" of the address
+// "alice://S3cret@host" without scheme was taken for the scheme alice
+// and the username S3cret, so the error contained the password.
+// Such an address is redacted as one without scheme.
+func Test_parseAddress_NotFTP(t *testing.T) {
+	for address, redacted := range map[string]string{
+		"alice://S3cret@host":     "alice:xxxxx@host",
+		"alice://@S3cret@host":    "alice:xxxxx@host",
+		"a1.b+c-d://S3cret@host":  "a1.b+c-d:xxxxx@host",
+		"alice://S3cret:x/y@host": "alice:xxxxx@host",
+		"alice://S3cr%zzet@host":  "alice:xxxxx@host",
+		"sftp://u:S3cret@host":    "sftp:xxxxx@host",
+		"FTP://u:S3cret@host":     "FTP:xxxxx@host",
+	} {
+		_, err := parseAddress(address, nil)
+		require.Error(t, err, address)
+		assert.Equal(t, "ftpfs: not an ftp:// or ftps:// address: "+redacted, err.Error(), address)
 	}
 }
 

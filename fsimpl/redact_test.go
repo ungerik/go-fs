@@ -144,3 +144,33 @@ func TestRedactAddress(t *testing.T) {
 		assert.Equal(t, want, RedactAddress(address), "RedactAddress(%q)", address)
 	}
 }
+
+// TestRedactAddressWithoutScheme checks the redaction of addresses that are
+// rejected because they don't have the scheme of the file system. Their text
+// before "://" can be a username with a password that starts with "//", like
+// alice with the password "//S3cret" of "alice://S3cret@host", which
+// RedactAddress takes for the scheme alice and the username S3cret.
+func TestRedactAddressWithoutScheme(t *testing.T) {
+	for address, want := range map[string]string{
+		"alice://S3cret@host":        "alice:xxxxx@host",
+		"alice://S3c:ret@host":       "alice:xxxxx@host",
+		"alice://@S3cret@host/share": "alice:xxxxx@host/share",
+		"alice://S3c/ret@host":       "alice:xxxxx@host",
+		"a1.b+c-d://S3cret@host":     "a1.b+c-d:xxxxx@host",
+		// A real scheme loses the username
+		"ftp://u:S3cret@host/share": "ftp:xxxxx@host/share",
+		// Like RedactAddress for an address without "://" before the last '@'
+		"user:secret@host":     "user:xxxxx@host",
+		"user:pa://ss@host":    "user:xxxxx@host",
+		"u:S3cret@host/a@b":    "u:xxxxx@b",
+		"host":                 "host",
+		"user@host":            "user@host",
+		"alice://host":         "alice://host",
+		"alice://host/a://b":   "alice://host/a://b",
+		"ali/ce://S3cret@host": "xxxxx@host",
+		"host/dir@example.com": "xxxxx@example.com",
+	} {
+		assert.Equal(t, want, RedactAddressWithoutScheme(address), "RedactAddressWithoutScheme(%q)", address)
+	}
+	assert.Equal(t, "alice://S3cret@host", RedactAddress("alice://S3cret@host"), "RedactAddress keeps the username of a real scheme")
+}

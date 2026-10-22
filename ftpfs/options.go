@@ -129,7 +129,9 @@ type dialConfig struct {
 func parseAddress(address string, opts *Options) (*dialConfig, error) {
 	if !strings.HasPrefix(address, Prefix) && !strings.HasPrefix(address, PrefixTLS) {
 		if strings.Contains(address, "://") {
-			return nil, fmt.Errorf("ftpfs: not an ftp:// or ftps:// address: %s", fsimpl.RedactAddress(address))
+			// The text before "://" can be a username with a password
+			// that starts with "//", like alice of "alice://S3cret@host"
+			return nil, fmt.Errorf("ftpfs: not an ftp:// or ftps:// address: %s", fsimpl.RedactAddressWithoutScheme(address))
 		}
 		address = Prefix + address
 	}

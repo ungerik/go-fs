@@ -136,21 +136,24 @@ func parseAddress(address string) (*target, error) {
 	if !strings.Contains(address, "://") {
 		address = Prefix + address
 	}
+	// The text before the first "://" of an address without the scheme sftp
+	// can be a username with a password that starts with "//", like alice
+	// of "alice://S3cret@host", so it is redacted as one without scheme.
+	// u.Redacted would keep the password of an address that url.Parse takes
+	// for an opaque URL, like "user:pa://ss@host" with the scheme "user".
+	scheme, rest, _ := strings.Cut(address, "://")
+	if !strings.EqualFold(scheme, "sftp") {
+		return nil, fmt.Errorf("not an SFTP address: %s", fsimpl.RedactAddressWithoutScheme(address))
+	}
 	// url.Parse ends the user info at the first '/', '?' or '#'. An '@' after
 	// it means that the password contains one of them unencoded, and url.Parse
 	// would take parts of the password for the port, path, query or fragment.
-	_, rest, _ := strings.Cut(address, "://")
 	if end := strings.IndexAny(rest, "/?#"); end >= 0 && strings.Contains(rest[end:], "@") {
 		return nil, fmt.Errorf("invalid SFTP address %s: '@' after the host, percent-encode a '/', '?' or '#' of the username or password and an '@' of the path", fsimpl.RedactAddress(address))
 	}
 	u, err := url.Parse(address)
 	if err != nil {
 		return nil, invalidAddressErr(address)
-	}
-	// u.Redacted keeps the password of an address that url.Parse takes for
-	// an opaque URL, like "user:pa://ss@host" with the scheme "user"
-	if u.Scheme != "sftp" {
-		return nil, fmt.Errorf("not an SFTP address: %s", fsimpl.RedactAddress(address))
 	}
 	if u.Hostname() == "" {
 		return nil, fmt.Errorf("no host in SFTP address: %s", fsimpl.RedactAddress(address))

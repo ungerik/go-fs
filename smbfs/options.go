@@ -69,19 +69,22 @@ func parseAddress(address string, opts *Options) (*dialConfig, error) {
 	if !strings.Contains(address, "://") {
 		address = Prefix + address
 	}
+	// The text before the first "://" of an address without the scheme smb
+	// can be a username with a password that starts with "//", like alice
+	// of "alice://S3cret@host/share", so it is redacted as one without scheme
+	scheme, rest, _ := strings.Cut(address, "://")
+	if !strings.EqualFold(scheme, "smb") {
+		return nil, fmt.Errorf("smbfs: not an smb:// address: %s", fsimpl.RedactAddressWithoutScheme(address))
+	}
 	// url.Parse ends the user info at the first '/', '?' or '#'. An '@' after
 	// it means that the password contains one of them unencoded, and url.Parse
 	// would take parts of the password for the port, share, query or fragment.
-	_, rest, _ := strings.Cut(address, "://")
 	if end := strings.IndexAny(rest, "/?#"); end >= 0 && strings.Contains(rest[end:], "@") {
 		return nil, fmt.Errorf("smbfs: invalid address %s: '@' after the host, percent-encode a '/', '?' or '#' of the username or password and an '@' of the share", fsimpl.RedactAddress(address))
 	}
 	u, err := url.Parse(address)
 	if err != nil {
 		return nil, invalidAddressErr(address)
-	}
-	if u.Scheme != "smb" {
-		return nil, fmt.Errorf("smbfs: not an smb:// address: %s", fsimpl.RedactAddress(address))
 	}
 	share := strings.Trim(u.Path, "/")
 	if u.Hostname() == "" || share == "" || strings.Contains(share, "/") {

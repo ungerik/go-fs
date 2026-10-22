@@ -161,7 +161,7 @@ func Test_parseAddress_Redacted(t *testing.T) {
 	for address, redacted := range map[string]string{
 		"smb://u:S3cret@bad host/share": "smb://u:xxxxx@bad host/share",
 		"u:S3cret@bad host/share":       "smb://u:xxxxx@bad host/share",
-		"ftp://u:S3cret@host/share":     "ftp://u:xxxxx@host/share",
+		"ftp://u:S3cret@host/share":     "smbfs: not an smb:// address: ftp:xxxxx@host/share",
 		"smb://u:S3cret@host":           "smb://u:xxxxx@host",
 		"smb://u:S3c/ret@host/share":    "smb://u:xxxxx@host/share",
 		"u:S3c://ret@host/share":        "smbfs: not an smb:// address: u:xxxxx@host/share",
@@ -173,6 +173,34 @@ func Test_parseAddress_Redacted(t *testing.T) {
 			assert.Contains(t, err.Error(), redacted)
 		})
 	}
+}
+
+// Test_parseAddress_NotSMB is a regression test: the error of an address
+// without the scheme smb named the address redacted by fsimpl.RedactAddress,
+// which takes the text before "://" for a scheme. The username alice with
+// the password "//S3cret" of the address "alice://S3cret@host/share"
+// without scheme was taken for the scheme alice and the username S3cret,
+// so the error contained the password. Such an address is redacted as one
+// without scheme, also if it has an '@' after the host or url.Parse
+// rejects it, which were checked before the scheme.
+func Test_parseAddress_NotSMB(t *testing.T) {
+	for address, redacted := range map[string]string{
+		"alice://S3cret@host/share":      "alice:xxxxx@host/share",
+		"alice://@S3cret@host/share":     "alice:xxxxx@host/share",
+		"a1.b+c-d://S3cret@host/share":   "a1.b+c-d:xxxxx@host/share",
+		"alice://S3cret:x/y@host/share":  "alice:xxxxx@host/share",
+		"alice://S3cr%zzet@host/share":   "alice:xxxxx@host/share",
+		"ftp://u:S3cret@host/share":      "ftp:xxxxx@host/share",
+		"alice:S3c://ret@host/share":     "alice:xxxxx@host/share",
+		"alice://host/S3cret@host/share": "alice:xxxxx@host/share",
+	} {
+		_, err := parseAddress(address, nil)
+		require.Error(t, err, address)
+		assert.Equal(t, "smbfs: not an smb:// address: "+redacted, err.Error(), address)
+	}
+	// The scheme is case-insensitive
+	_, err := parseAddress("SMB://user@host/share", nil)
+	assert.NoError(t, err)
 }
 
 // Test_dialConfig_timeout checks the default timeout.

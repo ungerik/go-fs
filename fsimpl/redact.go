@@ -137,6 +137,9 @@ func isValidUserInfo(userInfo string) bool {
 // The username before the first ':' is kept unless it contains a '/', '?'
 // or '#'. Then it can't be told apart from the host and path,
 // and the whole user info is replaced.
+//
+// An address that is rejected because it doesn't have the scheme of the
+// file system is redacted with RedactAddressWithoutScheme.
 func RedactAddress(address string) string {
 	at := strings.LastIndexByte(address, '@')
 	if at < 0 {
@@ -146,6 +149,31 @@ func RedactAddress(address string) string {
 	if i := strings.Index(address[:at], "://"); i >= 0 && isScheme(address[:i]) {
 		start = i + len("://")
 	}
+	return redactUserInfo(address, start, at)
+}
+
+// RedactAddressWithoutScheme is RedactAddress for an address that is
+// rejected because it doesn't have the scheme of the file system: it takes
+// everything up to the last '@' for the user info, also a scheme before
+// "://", and replaces the password from the first ':' to that '@'.
+//
+// The text before "://" can be a username with a password that starts with
+// "//", like alice with the password "//S3cret" of the address without scheme
+// "alice://S3cret@host", which RedactAddress takes for the scheme alice
+// followed by the username S3cret, so it keeps the password. Such an address
+// is redacted to "alice:xxxxx@host", a URI with another scheme loses its
+// username, like "ftp:xxxxx@host" for "ftp://user:secret@host".
+func RedactAddressWithoutScheme(address string) string {
+	at := strings.LastIndexByte(address, '@')
+	if at < 0 {
+		return address
+	}
+	return redactUserInfo(address, 0, at)
+}
+
+// redactUserInfo returns address with the password of the user info
+// address[start:at] replaced, see RedactAddress.
+func redactUserInfo(address string, start, at int) string {
 	username, _, hasPassword := strings.Cut(address[start:at], ":")
 	switch {
 	case strings.ContainsAny(username, "/?#"):

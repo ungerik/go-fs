@@ -144,6 +144,13 @@ type fileSystem struct {
 // user in "https://alice@cloud.example.com/remote.php/dav/files/alice@example.com",
 // can't end a password.
 func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, error) {
+	// The text before the first "://" of a URL without the scheme http or
+	// https can be a username with a password that starts with "//", like
+	// alice of "alice://S3cret@host/dav", so it is redacted as one without
+	// scheme, also if it has an '@' after the host or url.Parse rejects it
+	if scheme, _, found := strings.Cut(baseURL, "://"); found && !strings.EqualFold(scheme, "http") && !strings.EqualFold(scheme, "https") {
+		return nil, notHTTPErr(baseURL)
+	}
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, invalidBaseURLErr(baseURL)
@@ -162,10 +169,9 @@ func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, err
 			return nil, fmt.Errorf("%w: webdavfs: invalid base URL %s: '@' after the host of a URL with a password, which can be part of the password, pass the password with Options.Password and the username with Options.Username instead", os.ErrInvalid, fsimpl.RedactAddress(baseURL))
 		}
 	}
-	// u.Redacted keeps the password of a URL that url.Parse takes for an
-	// opaque one, like "alice:pa://ss@host" with the scheme "alice"
+	// A URL without "://", like "alice:secret@host/dav"
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("webdavfs: base URL must use http or https: %s", fsimpl.RedactAddress(baseURL))
+		return nil, notHTTPErr(baseURL)
 	}
 	if u.Host == "" {
 		return nil, fmt.Errorf("webdavfs: base URL without host: %s", fsimpl.RedactAddress(baseURL))
@@ -205,6 +211,15 @@ func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, err
 		return nil, fmt.Errorf("webdavfs: %s is not a WebDAV collection", u.Redacted())
 	}
 	return f, nil
+}
+
+// notHTTPErr returns the error for a base URL without the scheme http
+// or https. u.Redacted would keep the password of a URL that url.Parse
+// takes for an opaque one, like "alice:pa://ss@host" with the scheme
+// "alice", and fsimpl.RedactAddress that of "alice://S3cret@host",
+// which it takes for the scheme alice followed by the username S3cret.
+func notHTTPErr(baseURL string) error {
+	return fmt.Errorf("webdavfs: base URL must use http or https: %s", fsimpl.RedactAddressWithoutScheme(baseURL))
 }
 
 // invalidBaseURLErr returns the error for a base URL that url.Parse rejects.

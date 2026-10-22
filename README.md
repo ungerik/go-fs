@@ -1198,8 +1198,9 @@ can do it more efficiently. `fsimpl.PathHelper` provides the path methods
 for a URI prefix, `fsimpl.NewWriteOnCloseFileBuffer` a writer for backends
 without random access that implements `fs.WriteAborter`,
 `fsimpl.RangeReader` a seekable reader for backends that read with byte
-range requests (`webdavfs`, `azureblobfs`), `fsimpl.RedactURI` and
-`fsimpl.RedactAddress` the password redaction for error messages, and `fstest.RunConformance`
+range requests (`webdavfs`, `azureblobfs`), `fsimpl.RedactURI`,
+`fsimpl.RedactAddress` and `fsimpl.RedactAddressWithoutScheme` the password
+redaction for error messages, and `fstest.RunConformance`
 verifies a backend against the contract of every method:
 
 ```go
