@@ -101,6 +101,9 @@ func setupS3MockServer(ctx context.Context) bool {
 		"-d",
 		"--name", containerName,
 		"-p", "127.0.0.1::"+s3MockPort,
+		// The objects are stored below /tmp, in memory they don't
+		// depend on free space on the Docker disk and are never left behind
+		"--tmpfs", "/tmp:rw,mode=1777,size=1g",
 		"-e", "COM_ADOBE_TESTING_S3MOCK_STORE_REGION="+testRegion,
 		s3MockImage,
 	)
