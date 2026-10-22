@@ -339,9 +339,11 @@ func TestLocalFileSystem_MoveCrossDevice(t *testing.T) {
 
 // TestLocalFileSystem_MoveSameFileCrossDevice verifies that Move doesn't
 // fall back to copying when the source and the destination are the same
-// file. rename(2) fails with EXDEV for the paths of a file through two
-// bind mounts of its directory on Linux. Copying the file onto itself
-// and removing the source destroyed it.
+// file or directory. rename(2) fails with EXDEV for the paths of a file
+// through two bind mounts of its directory on Linux, like
+// docker run -v /data:/a -v /data:/b. Copying the file onto itself and
+// removing the source destroyed it. A symbolic link to the directory
+// stands in for the bind mount.
 func TestLocalFileSystem_MoveSameFileCrossDevice(t *testing.T) {
 	crossDevice := error(syscall.EXDEV)
 	if runtime.GOOS == "windows" {
@@ -351,17 +353,26 @@ func TestLocalFileSystem_MoveSameFileCrossDevice(t *testing.T) {
 		return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: crossDevice}
 	}
 	t.Cleanup(func() { osRename = os.Rename })
-
-	// A symbolic link to the directory stands in for the bind mount
 	dir := setupLocalMove(t)
-	src := filepath.Join(dir, "srcdir", "child.txt")
-	link := filepath.Join(dir, "link")
-	if err := os.Symlink(filepath.Join(dir, "srcdir"), link); err != nil {
+	srcdir, alias := filepath.Join(dir, "srcdir"), filepath.Join(dir, "alias")
+	if err := os.Symlink(srcdir, alias); err != nil {
 		t.Skipf("can't create symbolic link: %v", err)
 	}
-	err := Local.Move(t.Context(), src, filepath.Join(link, "child.txt"))
-	assert.ErrorIs(t, err, crossDevice, "the rename error, no copy")
-	requireLocalContent(t, src, "child")
+	require.NoError(t, os.Mkdir(filepath.Join(srcdir, "sub"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(srcdir, "sub", "file.txt"), []byte("file"), 0o600))
+
+	err := Local.Move(t.Context(), filepath.Join(srcdir, "child.txt"), filepath.Join(alias, "child.txt"))
+	assert.ErrorIs(t, err, crossDevice, "a file onto itself: the rename error, no copy")
+	requireLocalContent(t, filepath.Join(srcdir, "child.txt"), "child")
+
+	err = Local.Move(t.Context(), filepath.Join(alias, "sub"), filepath.Join(srcdir, "sub"))
+	assert.ErrorIs(t, err, crossDevice, "a directory onto itself: the rename error, no copy")
+	requireLocalContent(t, filepath.Join(srcdir, "sub", "file.txt"), "file")
+
+	err = Local.Move(t.Context(), filepath.Join(alias, "sub"), filepath.Join(srcdir, "sub", "inner"))
+	require.ErrorIs(t, err, os.ErrInvalid, "a directory into itself")
+	requireLocalContent(t, filepath.Join(srcdir, "sub", "file.txt"), "file")
+	assert.NoDirExists(t, filepath.Join(srcdir, "sub", "inner"), "nothing must be copied")
 }
 
 func TestLocalFileSystem_DirectoryErrors(t *testing.T) {

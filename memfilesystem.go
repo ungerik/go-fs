@@ -962,9 +962,11 @@ func (fs *MemFileSystem) dirInfoSnapshot(dirPath string, patterns []string) ([]*
 
 // ListDirRecursive calls callback for every file (not directory) in
 // dirPath and its sub-directories. Pattern matching applies only to
-// files; sub-directories are always descended into, also through symbolic
-// links to directories unless that would list a directory twice
-// on one path. Entries are visited in sorted name order for determinism.
+// files; sub-directories are always descended into. A symbolic link at
+// dirPath is followed, the links below it are listed like files and never
+// followed, with IsDir false also for a link to a directory, see
+// ListDirRecursiveFileSystem. Entries are visited in sorted name order
+// for determinism.
 func (fs *MemFileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1000,39 +1002,24 @@ func (fs *MemFileSystem) dirInfoSnapshotRecursive(dirPath string, patterns []str
 		return nil, err
 	}
 	var infos []*FileInfo
-	visiting := make(map[*memFileNode]bool)
-	if err := fs.walkDirInfoRecursive(dir.node, elems, dir.path(), patterns, visiting, &infos); err != nil {
+	if err := fs.walkDirInfoRecursive(dir.node, elems, dir.path(), patterns, &infos); err != nil {
 		return nil, err
 	}
 	return infos, nil
 }
 
-// walkDirInfoRecursive appends a FileInfo for every file (not directory) in
-// the directory node and its sub-directories to infos, visiting names in
-// sorted order. elems are the elements of the path of the directory as listed,
-// resolved its elements without symbolic links. Directories in visiting are
-// on the path that is walked, a symbolic link to one of them is skipped.
-// Must be called with fs.mtx held for reading.
-func (fs *MemFileSystem) walkDirInfoRecursive(dir *memFileNode, elems, resolved, patterns []string, visiting map[*memFileNode]bool, infos *[]*FileInfo) error {
-	visiting[dir] = true
-	defer delete(visiting, dir)
-
+// walkDirInfoRecursive appends a FileInfo for every entry that is not
+// a directory in the directory node and its sub-directories to infos,
+// visiting names in sorted order. elems are the elements of the path of the
+// directory as listed, resolved its elements without symbolic links.
+// Symbolic links are not followed, the FileInfo of a link to a directory
+// has IsDir false. Must be called with fs.mtx held for reading.
+func (fs *MemFileSystem) walkDirInfoRecursive(dir *memFileNode, elems, resolved, patterns []string, infos *[]*FileInfo) error {
 	for _, name := range slices.Sorted(maps.Keys(dir.Dir)) {
 		child := memResolved{node: dir.Dir[name], parent: dir, dir: resolved, name: name}
 		childElems := append(slices.Clone(elems), name)
-		target, targetResolved := child.node, child.path()
-		if child.node.IsSymlink() {
-			if t, err := fs.resolveElems(targetResolved, true); err == nil {
-				target, targetResolved = t.node, t.path()
-			} else {
-				target = nil
-			}
-		}
-		if target.IsDir() {
-			if visiting[target] {
-				continue // A symbolic link to a directory of the walked path
-			}
-			if err := fs.walkDirInfoRecursive(target, childElems, targetResolved, patterns, visiting, infos); err != nil {
+		if child.node.IsDir() {
+			if err := fs.walkDirInfoRecursive(child.node, childElems, child.path(), patterns, infos); err != nil {
 				return err
 			}
 			continue
@@ -1044,7 +1031,9 @@ func (fs *MemFileSystem) walkDirInfoRecursive(dir *memFileNode, elems, resolved,
 		if !matched {
 			continue
 		}
-		*infos = append(*infos, memNodeInfo(fs.elemsFile(childElems), name, child.node, target))
+		info := memNodeInfo(fs.elemsFile(childElems), name, child.node, fs.linkTarget(child))
+		info.IsDir = false
+		*infos = append(*infos, info)
 	}
 	return nil
 }

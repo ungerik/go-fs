@@ -82,27 +82,44 @@ func TestMove_CrossFileSystemOverwriteSemantics(t *testing.T) {
 	})
 }
 
+// TestMove_CrossFileSystemSymlinks checks the move of a directory with a
+// symbolic link to a directory to another file system: the link is copied
+// as link if the destination can create links, else the move fails before
+// anything is copied. It used to copy the directory that the link points to.
 func TestMove_CrossFileSystemSymlinks(t *testing.T) {
-	// The source file system has no RemoveAll,
-	// so the emulation removes the source.
-	m := newMinimalLocalFS(t)
-	tree, outside := symlinkTree(t, fs.File(m.URL(t.TempDir())), os.Symlink)
-	dest := newMinimalMemFS(t).RootDir().Join("moved")
+	t.Run("destination without symbolic links", func(t *testing.T) {
+		// The source file system has no RemoveAll,
+		// so the emulation would remove the source.
+		m := newMinimalLocalFS(t)
+		tree, outside := symlinkTree(t, fs.File(m.URL(t.TempDir())), os.Symlink)
+		dest := newMinimalMemFS(t).RootDir().Join("moved")
 
-	require.NoError(t, tree.MoveTo(t.Context(), dest))
-	require.False(t, tree.Exists(), "the source must be removed")
-	requireContent(t, dest.Join("file.txt"), "file")
-	requireContent(t, dest.Join("link", "precious.txt"), "precious")
-	requireContent(t, outside.Join("precious.txt"), "precious")
+		err := tree.MoveTo(t.Context(), dest)
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		requireMissing(t, dest)
+		requireContent(t, tree.Join("file.txt"), "file")
+		require.True(t, tree.Join("link").IsSymbolicLink(), "the link must be kept")
+		requireContent(t, outside.Join("precious.txt"), "precious")
+	})
+	t.Run("destination with symbolic links", func(t *testing.T) {
+		tree, outside := symlinkTree(t, fs.File(t.TempDir()), os.Symlink)
+		dest := newLinkMemFS(t).RootDir().Join("moved")
+
+		require.NoError(t, tree.MoveTo(t.Context(), dest))
+		requireMissing(t, tree)
+		requireContent(t, dest.Join("file.txt"), "file")
+		requireLink(t, dest.Join("link"), outside.Path())
+		requireContent(t, outside.Join("precious.txt"), "precious")
+	})
 }
 
 // TestMove_CrossFileSystemFollowedLink checks the move of a symbolic link
-// to another file system: what the link points to is copied and only the
-// link is removed. A failed copy keeps the link and its target.
+// to another file system: for a link to a file the file is copied and only
+// the link is removed, a link to a directory is copied as link. A failed
+// copy keeps the link and its target.
 func TestMove_CrossFileSystemFollowedLink(t *testing.T) {
 	setup := func(t *testing.T) (dirLink, fileLink, outside fs.File) {
-		m := newMinimalLocalFS(t)
-		dir := fs.File(m.URL(t.TempDir()))
+		dir := fs.File(t.TempDir())
 		writeFiles(t, dir, map[string]string{"outside/precious.txt": "precious"})
 		outside = dir.Join("outside")
 		dirLink, fileLink = dir.Join("dir-link"), dir.Join("file-link")
@@ -115,25 +132,38 @@ func TestMove_CrossFileSystemFollowedLink(t *testing.T) {
 
 	t.Run("commit", func(t *testing.T) {
 		dirLink, fileLink, outside := setup(t)
-		dest := newMinimalMemFS(t).RootDir()
+		dest := newLinkMemFS(t).RootDir()
 
 		require.NoError(t, fs.Move(t.Context(), dirLink, dest.Join("dir")))
 		require.NoError(t, fs.Move(t.Context(), fileLink, dest.Join("file.txt")))
-		requireContent(t, dest.Join("dir", "precious.txt"), "precious")
+		requireLink(t, dest.Join("dir"), outside.Path())
 		requireContent(t, dest.Join("file.txt"), "precious")
+		require.False(t, dest.Join("file.txt").IsSymbolicLink(), "the file must be copied")
 		requireMissing(t, dirLink)
 		requireMissing(t, fileLink)
 		requireContent(t, outside.Join("precious.txt"), "precious")
 	})
-	t.Run("abort", func(t *testing.T) {
+	t.Run("destination without symbolic links", func(t *testing.T) {
 		dirLink, fileLink, outside := setup(t)
+		dest := newMinimalMemFS(t).RootDir()
+
+		err := fs.Move(t.Context(), dirLink, dest.Join("dir"))
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		require.ErrorContains(t, err, dirLink.String(), "the error must name the link")
+		requireMissing(t, dest.Join("dir"))
+		require.True(t, dirLink.IsSymbolicLink(), "the link must be kept")
+		require.NoError(t, fs.Move(t.Context(), fileLink, dest.Join("file.txt")))
+		requireContent(t, dest.Join("file.txt"), "precious")
+		requireMissing(t, fileLink)
+		requireContent(t, outside.Join("precious.txt"), "precious")
+	})
+	t.Run("abort", func(t *testing.T) {
+		_, fileLink, outside := setup(t)
 		m := newMinimalMemFS(t)
 		m.closeErr = errors.New("upload failed")
 		dest := m.RootDir()
 
-		require.ErrorIs(t, fs.Move(t.Context(), dirLink, dest.Join("dir")), m.closeErr)
 		require.ErrorIs(t, fs.Move(t.Context(), fileLink, dest.Join("file.txt")), m.closeErr)
-		require.True(t, dirLink.IsSymbolicLink(), "the link must be kept")
 		require.True(t, fileLink.IsSymbolicLink(), "the link must be kept")
 		requireContent(t, outside.Join("precious.txt"), "precious")
 	})
@@ -143,16 +173,58 @@ func TestMove_CrossFileSystemFollowedLink(t *testing.T) {
 // with a symbolic link to itself to another file system copied the directory
 // into itself until the path had too many links.
 func TestMove_CrossFileSystemSymlinkLoop(t *testing.T) {
+	setup := func(t *testing.T) fs.File {
+		src := newSymlinkMemFS(t).RootDir()
+		writeFiles(t, src, map[string]string{"dir/a.txt": "a", "dir/sub/b.txt": "b"})
+		require.NoError(t, src.Join("dir", "loop").CreateSymbolicLink(src.Join("dir")))
+		return src
+	}
+
+	t.Run("destination with symbolic links", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		src := setup(t)
+		dest := newLinkMemFS(t).RootDir()
+
+		require.NoError(t, fs.Move(ctx, src.Join("dir"), dest.Join("dir")))
+		requireFiles(t, dest.Join("dir"), "a.txt", "loop", "sub/b.txt")
+		requireLink(t, dest.Join("dir", "loop"), "/dir")
+		requireMissing(t, src.Join("dir"))
+	})
+	t.Run("destination without symbolic links", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		src := setup(t)
+		dest := newMinimalMemFS(t).RootDir()
+
+		err := fs.Move(ctx, src.Join("dir"), dest.Join("dir"))
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		requireMissing(t, dest.Join("dir"))
+		requireFiles(t, src.Join("dir"), "a.txt", "loop", "sub/b.txt")
+	})
+}
+
+// TestMove_SameFileThroughSubFileSystem is a regression test: moving a local
+// file onto itself through a SubFileSystem truncated the file with the copy
+// and then removed it as the source of the move, and moving a directory into
+// itself through a SubFileSystem copied it into itself again and again.
+func TestMove_SameFileThroughSubFileSystem(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	src := newSymlinkMemFS(t).RootDir()
-	writeFiles(t, src, map[string]string{"dir/a.txt": "a", "dir/sub/b.txt": "b"})
-	require.NoError(t, src.Join("dir", "loop").CreateSymbolicLink(src.Join("dir")))
-	dest := newMinimalMemFS(t).RootDir()
+	dir := fs.File(t.TempDir())
+	writeFiles(t, dir, map[string]string{"file.txt": "precious", "sub/a.txt": "a"})
+	sub, err := fs.NewSubFileSystem(fs.Local, dir.LocalPath(), "")
+	require.NoError(t, err)
+	register(t, sub)
 
-	require.NoError(t, fs.Move(ctx, src.Join("dir"), dest.Join("dir")))
-	requireFiles(t, dest.Join("dir"), "a.txt", "sub/b.txt")
-	requireMissing(t, src.Join("dir"))
+	require.NoError(t, fs.Move(ctx, sub.RootDir().Join("file.txt"), dir.Join("file.txt")), "a no-op")
+	requireContent(t, dir.Join("file.txt"), "precious")
+
+	// The destination is an existing directory, the source
+	// itself, so the source is moved into itself
+	err = fs.Move(ctx, dir.Join("sub"), sub.RootDir().Join("sub"))
+	require.ErrorIs(t, err, os.ErrInvalid)
+	requireFiles(t, dir.Join("sub"), "a.txt")
 }
 
 func TestRemoveFiles(t *testing.T) {

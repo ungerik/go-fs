@@ -332,7 +332,8 @@ type MoveFileSystem interface {
 	// (an [ErrIsNotDirectory] if filePath is a directory),
 	// an existing directory at destPath is an error wrapping [os.ErrExist].
 	// Moving a directory into itself or one of its sub-directories
-	// is an error wrapping [os.ErrInvalid].
+	// is an error wrapping [os.ErrInvalid]. A symbolic link is moved
+	// as link like by [os.Rename], not what it points to.
 	//
 	// When filePath and destPath are the same, Move must be a no-op
 	// and return nil, matching the behavior of [os.Rename].
@@ -349,15 +350,15 @@ type ListDirRecursiveFileSystem interface {
 	// If any patterns are passed, then only files (not directories) with a name that matches
 	// at least one of the patterns are returned.
 	//
-	// Symbolic links to directories are followed, except a link to dirPath
-	// or to one of the directories between dirPath and the link, which is
-	// skipped, so that a link cycle doesn't list the same files again and
-	// again. The directories are compared with the links in their paths
-	// resolved. Other links, also dangling ones, are listed like files.
-	// The emulation for file systems without ListDirRecursive works the
-	// same, but a file system that can't read the targets of its links
-	// can't tell where a link points to, so it follows a link cycle until
-	// it reports an error about too many links.
+	// Symbolic links are never followed, like by filepath.WalkDir: a link,
+	// also to a directory or a dangling one, is passed to the callback like
+	// a file, and the files of the directory that a link points to are not
+	// listed below the link. The FileInfo of a link describes the directory
+	// entry like for ListDir with IsSymlink set, but IsDir is always false,
+	// the callback never gets a FileInfo with IsDir set. Stat a link to tell
+	// if it points to a directory. Only a link at dirPath is followed, its
+	// directory is listed with the files below the path of the link.
+	// The emulation for file systems without ListDirRecursive works the same.
 	ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error
 }
 

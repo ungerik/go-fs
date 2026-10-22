@@ -37,16 +37,23 @@ func JoinCleanFilePath(uriParts ...string) File {
 // Else source is copied to the destination and removed
 // after the copy completely succeeded, so a failed or canceled copy,
 // for example a failed upload, never deletes the source.
-// Between different file systems symbolic links are followed:
-// the destination gets a copy of what they point to,
-// but only the links are removed from the source.
+// Between different file systems a symbolic link to a file is followed:
+// the destination gets a copy of the file, but only the link is removed
+// from the source. A symbolic link to a directory, as source or below a
+// moved directory, is copied as link with its target stored verbatim if the
+// destination file system implements [SymbolicLinkFileSystem], like by
+// [CopyRecursive]. Else Move fails before anything is copied with an error
+// wrapping [errors.ErrUnsupported] that names the link.
 //
 // When source and destination resolve to the same location on the same
 // FileSystem, Move returns nil without touching the file. This matches
 // the [os.Rename] no-op behavior required by the [MoveFileSystem]
 // contract and protects against the copy-then-delete fallback path
 // destroying the file when caller passes identical source and
-// destination.
+// destination. The copy-then-delete fallback also returns nil for two
+// paths of the same local file, like through bind mounts, a symbolic
+// link to a parent directory or a [SubFileSystem], and moving a local
+// directory into itself through such a path is an error wrapping [os.ErrInvalid].
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath

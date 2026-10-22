@@ -536,10 +536,24 @@ resolve the same way regardless of where it is read from.
 
 The `FileInfo` of a directory listing describes the entry itself, like
 `Lstat`: for a link `IsSymlink` is true and `IsDir` and `IsRegular` describe
-the target as far as the file system knows it cheaply. `ListDirRecursive` and
-`fs.CopyRecursive` follow links to directories, except a link back to the
-directory they started in or one between it and the link, so a link cycle
-doesn't make them go around in circles.
+the target as far as the file system knows it cheaply.
+
+Recursive operations never descend into a link to a directory, like
+`filepath.WalkDir`, so a link cycle or a link to `/` can't make them walk
+the same files again or the whole disk:
+
+- `ListDirRecursive` lists a link to a directory like a file, with
+  `IsSymlink` true and `IsDir` false, and doesn't list the files of the
+  directory it points to. Only a link you start the listing at is followed.
+- `fs.CopyRecursive` copies a link to a file as a file with the target's
+  content, and a link to a directory as a link with the same target if the
+  destination file system implements `SymbolicLinkFileSystem`. Otherwise it
+  fails before it writes anything, with an error wrapping
+  `errors.ErrUnsupported` that names the link.
+- `fs.Move` between file systems copies links the same way, also a link that
+  is the moved source itself, and only removes the source after the copy.
+  Within one file system that supports symbolic links, a move keeps every
+  link a link, like `os.Rename`.
 
 Extended attributes
 -------------------

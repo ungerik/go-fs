@@ -451,3 +451,33 @@ func TestMockFullyFeaturedFileSystem_Move(t *testing.T) {
 	_, err = m.Stat(dir + "/srcdir")
 	checkErrorIs(t, err, os.ErrNotExist, "Move of a directory must remove the source")
 }
+
+// TestMockFullyFeaturedFileSystem_ListDirRecursiveLinks checks that the
+// emulated ListDirRecursive lists a symbolic link to a directory as an entry
+// with IsDir false and doesn't list the directory it points to.
+func TestMockFullyFeaturedFileSystem_ListDirRecursiveLinks(t *testing.T) {
+	entries := map[string][]*fs.FileInfo{
+		"/":    {{Name: "dir", IsDir: true}, {Name: "link", IsDir: true, IsSymlink: true}},
+		"/dir": {{Name: "file.txt", IsRegular: true}},
+	}
+	m := &MockFullyFeaturedFileSystem{MockFileSystem: MockFileSystem{
+		MockListDir: func(_ context.Context, dirPath string, _ []string, callback func(*fs.FileInfo) error) error {
+			for _, entry := range entries[dirPath] {
+				info := *entry
+				if err := callback(&info); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}}
+
+	var listed []string
+	err := m.ListDirRecursive(t.Context(), "/", nil, func(info *fs.FileInfo) error {
+		listed = append(listed, info.Name)
+		checkFalse(t, info.IsDir, "ListDirRecursive must not list a directory, got %q", info.Name)
+		return nil
+	})
+	mustNoError(t, err, "ListDirRecursive")
+	checkStrings(t, []string{"file.txt", "link"}, listed, "ListDirRecursive")
+}

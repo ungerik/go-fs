@@ -1923,16 +1923,24 @@ func TestMemFileSystem_SymlinkResolution(t *testing.T) {
 		require.NoError(t, err, "a link to a directory must be walkable")
 		require.Equal(t, []string{"/dlink/f.txt", "/dlink/sub/g.txt"}, paths)
 
-		// A link to a directory inside the walked tree is followed,
-		// a link back to a directory of the walked path is not
+		// The links inside the walked tree are listed and not followed,
+		// also a link back to a directory of the walked path
 		require.NoError(t, memFS.CreateSymbolicLink("..", "/d/sub/up"))
 		paths = nil
 		err = memFS.ListDirRecursive(ctx, "/", nil, func(info *FileInfo) error {
 			paths = append(paths, info.File.Path())
+			switch info.Name {
+			case "dlink", "up":
+				require.True(t, info.IsSymlink, "%s is listed as link", info.File)
+				require.False(t, info.IsDir, "a link to a directory is listed with IsDir false")
+			case "flink":
+				require.True(t, info.IsSymlink, "%s is listed as link", info.File)
+				require.True(t, info.IsRegular, "IsRegular describes the target of a link")
+			}
 			return nil
 		})
 		require.NoError(t, err)
-		require.Equal(t, []string{"/d/f.txt", "/d/sub/g.txt", "/dlink/f.txt", "/dlink/sub/g.txt", "/flink"}, paths)
+		require.Equal(t, []string{"/d/f.txt", "/d/sub/g.txt", "/d/sub/up", "/dlink", "/flink"}, paths)
 		require.NoError(t, memFS.Remove("/d/sub/up"))
 	})
 

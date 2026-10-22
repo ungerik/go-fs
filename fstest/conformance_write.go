@@ -562,6 +562,7 @@ func (c *conformance) testOptionalWrite(t *testing.T) {
 	})
 
 	c.run(t, "SymbolicLink", c.testSymbolicLink)
+	c.run(t, "SymbolicLinkToDirectory", c.testSymbolicLinkToDirectory)
 
 	c.run(t, "XAttr", func(t *testing.T) {
 		xfs, ok := c.fs.(fs.XAttrFileSystem)
@@ -692,6 +693,64 @@ func (c *conformance) testSymbolicLink(t *testing.T) {
 		checkTrue(t, isSymlink, "the ListDir FileInfo of a link must have IsSymlink set")
 	}
 	checkFalse(t, listed["target.txt"], "the ListDir FileInfo of the link target must not have IsSymlink set")
+}
+
+// testSymbolicLinkToDirectory checks that recursive listings don't follow
+// a symbolic link to a directory, see fs.ListDirRecursiveFileSystem:
+// the link is listed as an entry with IsSymlink set and IsDir false,
+// and the files of its directory are only listed below the directory.
+// A listing that starts at the link lists the directory.
+func (c *conformance) testSymbolicLinkToDirectory(t *testing.T) {
+	slfs, ok := c.fs.(fs.SymbolicLinkFileSystem)
+	if !ok {
+		t.Skipf("%T does not implement fs.SymbolicLinkFileSystem", c.fs)
+	}
+	c.put(t, "dirlink/dir/file.txt", "file")
+	base := c.wpath("dirlink")
+	link := c.wpath("dirlink/link")
+	err := slfs.CreateSymbolicLink(c.wpath("dirlink/dir"), link)
+	if errors.Is(err, errors.ErrUnsupported) || errors.Is(err, os.ErrPermission) {
+		t.Skipf("symbolic links not available: %v", err)
+	}
+	mustNoError(t, err, "CreateSymbolicLink to a directory")
+	if info, err := c.fs.Stat(link); err != nil || !info.IsDir {
+		t.Skipf("the link to a directory doesn't resolve to the directory: %v", err)
+	}
+
+	// check checks the entries that list passes to its callback
+	// relative to dir against want
+	check := func(what, dir string, want []string, list func(callback func(*fs.FileInfo) error) error) {
+		t.Helper()
+		var got []string
+		err := list(func(info *fs.FileInfo) error {
+			rel, err := relPath(dir, info.File.Path(), c.fs.Separator())
+			mustNoError(t, err, "%s: listed %q must be below %q", what, info.File, dir)
+			checkFalse(t, info.IsDir, "%s must not list a directory, got %q", what, info.File)
+			if rel == "link" {
+				checkTrue(t, info.IsSymlink, "%s must list the link with IsSymlink set", what)
+			}
+			got = append(got, rel)
+			return nil
+		})
+		mustNoError(t, err, "%s", what)
+		slices.Sort(got)
+		checkStrings(t, want, got, "%s of %q", what, dir)
+	}
+	want := []string{"dir/file.txt", "link"}
+	if ldrfs, ok := c.fs.(fs.ListDirRecursiveFileSystem); ok {
+		check("ListDirRecursive", base, want, func(callback func(*fs.FileInfo) error) error {
+			return ldrfs.ListDirRecursive(c.ctx, base, nil, callback)
+		})
+		check("ListDirRecursive starting at the link", link, []string{"file.txt"}, func(callback func(*fs.FileInfo) error) error {
+			return ldrfs.ListDirRecursive(c.ctx, link, nil, callback)
+		})
+	}
+	check("File.ListDirInfoRecursive", base, want, func(callback func(*fs.FileInfo) error) error {
+		return c.wfile("dirlink").ListDirInfoRecursive(c.ctx, callback)
+	})
+	check("File.ListDirInfoRecursive starting at the link", link, []string{"file.txt"}, func(callback func(*fs.FileInfo) error) error {
+		return c.wfile("dirlink/link").ListDirInfoRecursive(c.ctx, callback)
+	})
 }
 
 // testAbort checks writers implementing fs.WriteAborter:

@@ -1,6 +1,7 @@
 package fs_test
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -487,6 +488,8 @@ func TestOverlayFileSystem_LayerSeparator(t *testing.T) {
 // the recursive listing followed a link of the base layer to a directory
 // of the listed path again and again until the path had too many links,
 // because the overlay couldn't tell where the link points to.
+// The links of the layers are listed as entries and not followed,
+// and a copy recreates them with the targets read from the layers.
 func TestOverlayFileSystem_ListDirRecursiveSymlinkLoop(t *testing.T) {
 	base, err := fs.RegisteredTestMemFileSystem(nil, fs.NewMemFile("/dir/a.txt", []byte("a")))
 	require.NoError(t, err)
@@ -509,12 +512,27 @@ func TestOverlayFileSystem_ListDirRecursiveSymlinkLoop(t *testing.T) {
 		return files
 	}
 
-	assert.Equal(t, []string{"/dir/a.txt"}, listFiles(), "a link of the base")
+	assert.Equal(t, []string{"/dir/a.txt", "/dir/loop"}, listFiles(), "a link of the base")
 
-	// The links of the upper layer are read from the upper layer
 	require.NoError(t, upper.MakeDir("/dir", 0))
 	require.NoError(t, upper.CreateSymbolicLink("..", "/dir/up"))
-	assert.Equal(t, []string{"/dir/a.txt"}, listFiles(), "a relative link of the upper layer")
+	assert.Equal(t, []string{"/dir/a.txt", "/dir/loop", "/dir/up"}, listFiles(), "a relative link of the upper layer")
+
+	// The links of both layers are copied with their targets
+	dest, err := fs.RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = dest.Close() })
+	require.NoError(t, fs.CopyRecursive(t.Context(), overlay.RootDir().Join("dir"), dest.RootDir().Join("copy")))
+	for link, target := range map[string]string{"loop": "/dir", "up": ".."} {
+		got, err := dest.ReadSymbolicLink("/copy/" + link)
+		require.NoError(t, err, "the copy of %s must be a link", link)
+		assert.Equal(t, target, got, "the target of the copy of %s", link)
+	}
+
+	// The overlay can't create links, the copy fails before it writes anything
+	err = fs.CopyRecursive(t.Context(), overlay.RootDir().Join("dir"), overlay.RootDir().Join("copy"))
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+	assert.False(t, overlay.RootDir().Join("copy").Exists(), "nothing must be copied")
 }
 
 // TestOverlayFileSystem_CopyUpPermissions is a regression test: a base file

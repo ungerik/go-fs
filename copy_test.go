@@ -414,28 +414,39 @@ func requireFiles(t *testing.T, dir fs.File, relPaths ...string) {
 	require.ElementsMatch(t, relPaths, listed, "files below %s", dir)
 }
 
+// newLinkMemFS returns a registered MemFileSystem with the initialFiles.
+func newLinkMemFS(t *testing.T, initialFiles ...fs.MemFile) *fs.MemFileSystem {
+	t.Helper()
+	mem, err := fs.RegisteredTestMemFileSystem(nil, initialFiles...)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mem.Close() })
+	return mem
+}
+
 // TestCopyRecursive_SymlinkLoop is a regression test: CopyRecursive followed
-// a symbolic link to the copied directory into itself and wrote nested copies
-// until the path had too many links. A link to a directory outside of the
-// copied tree is still followed.
+// symbolic links to directories, a link to the copied directory into itself
+// writing nested copies until the path had too many links. A link to a
+// directory is copied as link with the same target if the destination can
+// create links, else the copy fails before it writes anything.
 func TestCopyRecursive_SymlinkLoop(t *testing.T) {
 	t.Run("MemFileSystem", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		mem, err := fs.RegisteredTestMemFileSystem(nil,
+		mem := newLinkMemFS(t,
 			fs.NewMemFile("/src/a.txt", []byte("a")),
 			fs.NewMemFile("/src/sub/b.txt", []byte("b")),
 			fs.NewMemFile("/outside/c.txt", []byte("c")),
 		)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = mem.Close() })
 		require.NoError(t, mem.CreateSymbolicLink("/src", "/src/loop"))
 		require.NoError(t, mem.CreateSymbolicLink("..", "/src/sub/up"))
 		require.NoError(t, mem.CreateSymbolicLink("/outside", "/src/ext"))
-		dest := newMinimalMemFS(t).RootDir().Join("dest")
+		dest := newLinkMemFS(t).RootDir().Join("dest")
 
 		require.NoError(t, fs.CopyRecursive(ctx, mem.RootDir().Join("src"), dest))
-		requireFiles(t, dest, "a.txt", "ext/c.txt", "sub/b.txt")
+		requireFiles(t, dest, "a.txt", "ext", "loop", "sub/b.txt", "sub/up")
+		requireLink(t, dest.Join("loop"), "/src")
+		requireLink(t, dest.Join("sub", "up"), "..")
+		requireLink(t, dest.Join("ext"), "/outside")
 	})
 	t.Run("LocalFileSystem", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -448,11 +459,98 @@ func TestCopyRecursive_SymlinkLoop(t *testing.T) {
 		}
 		require.NoError(t, os.Symlink("..", src.Join("sub", "up").LocalPath()))
 		require.NoError(t, os.Symlink(dir.Join("outside").LocalPath(), src.Join("ext").LocalPath()))
-		dest := newMinimalMemFS(t).RootDir().Join("dest")
+		dest := dir.Join("dest")
 
 		require.NoError(t, fs.CopyRecursive(ctx, src, dest))
-		requireFiles(t, dest, "a.txt", "ext/c.txt", "sub/b.txt")
+		requireFiles(t, dest, "a.txt", "ext", "loop", "sub/b.txt", "sub/up")
+		requireLink(t, dest.Join("loop"), src.LocalPath())
+		requireLink(t, dest.Join("sub", "up"), "..")
+		requireLink(t, dest.Join("ext"), dir.Join("outside").LocalPath())
 	})
+	t.Run("destination without symbolic links", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		mem := newLinkMemFS(t, fs.NewMemFile("/src/a.txt", []byte("a")), fs.NewMemFile("/src/sub/b.txt", []byte("b")))
+		require.NoError(t, mem.CreateSymbolicLink("..", "/src/sub/up"))
+		dest := newMinimalMemFS(t).RootDir().Join("dest")
+
+		err := fs.CopyRecursive(ctx, mem.RootDir().Join("src"), dest)
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		require.ErrorContains(t, err, mem.RootDir().Join("src", "sub", "up").String(), "the error must name the link")
+		requireMissing(t, dest)
+	})
+}
+
+// TestCopyRecursive_LinksToFiles checks that a symbolic link to a file
+// is copied as a file with the content and permissions of its target,
+// and that the patterns also select the links to directories.
+func TestCopyRecursive_LinksToFiles(t *testing.T) {
+	mem := newLinkMemFS(t, fs.NewMemFile("/src/a.txt", []byte("a")), fs.NewMemFile("/outside/doc.txt", []byte("doc")))
+	require.NoError(t, mem.SetPermissions("/src/a.txt", fs.UserReadWrite|fs.UserExecute))
+	require.NoError(t, mem.CreateSymbolicLink("a.txt", "/src/link.txt"))
+	require.NoError(t, mem.CreateSymbolicLink("/outside", "/src/docs"))
+	dest := newMinimalMemFS(t).RootDir().Join("dest")
+
+	// The link to a directory doesn't match, so the destination doesn't need links
+	require.NoError(t, fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), dest, "*.txt"))
+	requireFiles(t, dest, "a.txt", "link.txt")
+	requireContent(t, dest.Join("link.txt"), "a")
+	require.Equal(t, fs.UserReadWrite|fs.UserExecute, dest.Join("link.txt").Permissions(), "the copy gets the permissions of the target")
+}
+
+// TestCopyRecursive_LinkErrorRedactsPassword checks that the error
+// about a link that can't be copied names it without the password
+// of the URI of its file system.
+func TestCopyRecursive_LinkErrorRedactsPassword(t *testing.T) {
+	src := newSymlinkMemFS(t)
+	fs.Unregister(src)
+	src.URIPrefix = "minimal://user:secret@" + src.id
+	register(t, src)
+	writeFiles(t, src.RootDir(), map[string]string{"dir/a.txt": "a"})
+	require.NoError(t, src.CreateSymbolicLink("/dir", "/dir/loop"))
+	dest := newMinimalMemFS(t).RootDir().Join("dest")
+
+	err := fs.CopyRecursive(t.Context(), src.RootDir().Join("dir"), dest)
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+	require.NotContains(t, err.Error(), "secret")
+	require.ErrorContains(t, err, "minimal://user:xxxxx@"+src.id+"/dir/loop")
+	requireMissing(t, dest)
+}
+
+// TestCopyRecursive_IntoItselfThroughLink is a regression test: copying a
+// local directory into itself through a symbolic link to a parent directory
+// passed the check of the paths and copied the directory into its copy
+// again and again until the path was too long.
+func TestCopyRecursive_IntoItselfThroughLink(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	dir := fs.File(t.TempDir())
+	writeFiles(t, dir, map[string]string{"real/sub/a.txt": "a"})
+	alias := dir.Join("alias")
+	if err := os.Symlink(dir.Join("real").LocalPath(), alias.LocalPath()); err != nil {
+		t.Skipf("can't create symbolic link: %v", err)
+	}
+
+	err := fs.CopyRecursive(ctx, alias.Join("sub"), dir.Join("real", "sub", "copy"))
+	require.ErrorIs(t, err, os.ErrInvalid)
+	requireFiles(t, dir.Join("real", "sub"), "a.txt")
+}
+
+// TestCopyFile_SameFileThroughSubFileSystem is a regression test: copying
+// a local file onto itself through a SubFileSystem truncated it, because
+// the copy opened the destination for writing before reading the source.
+func TestCopyFile_SameFileThroughSubFileSystem(t *testing.T) {
+	dir := t.TempDir()
+	file := fs.File(dir).Join("file.txt")
+	require.NoError(t, file.WriteAllString(t.Context(), "precious"))
+	sub, err := fs.NewSubFileSystem(fs.Local, dir, "")
+	require.NoError(t, err)
+	register(t, sub)
+
+	require.NoError(t, fs.CopyFile(t.Context(), sub.RootDir().Join("file.txt"), file), "a no-op")
+	requireContent(t, file, "precious")
+	require.NoError(t, fs.CopyFile(t.Context(), file, sub.RootDir().Join("file.txt")), "a no-op")
+	requireContent(t, file, "precious")
 }
 
 // statCountingFS is a MockFileSystem with the files of a map that counts

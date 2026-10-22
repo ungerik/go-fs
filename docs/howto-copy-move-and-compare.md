@@ -70,8 +70,8 @@ An empty or nil `buf` makes `CopyFileBuf` allocate one, like `CopyFile`.
 err := fs.CopyRecursive(ctx, srcDir, destDir)
 ```
 
-Filter by file name — the patterns apply to the **name**, not the whole path,
-and sub-directories are always copied:
+Filter by file name — the patterns apply to the **name** of files and
+symbolic links, not the whole path, and sub-directories are always copied:
 
 ```go
 err := fs.CopyRecursive(ctx, fs.File("/srv/data"), fs.File("s3://bucket/backup"), "*.json", "*.yaml")
@@ -81,13 +81,27 @@ It creates the destination directory if it doesn't exist and merges into it if
 it does: a file of the source replaces a file at the same path, a file over a
 directory is an `fs.ErrIsDirectory` and a directory over a file an
 `fs.ErrIsNotDirectory`. Copying a directory into one of its own
-sub-directories is an error wrapping `os.ErrInvalid`. One buffer is used for
-all files, which get permissions like with `CopyFile`; directories get the
-destination's defaults.
+sub-directories is an error wrapping `os.ErrInvalid`, for a local directory
+also through a symbolic link to a parent directory or a `SubFileSystem`. One
+buffer is used for all files, which get permissions like with `CopyFile`;
+directories get the destination's defaults.
 
-Symbolic links are followed, the copy contains what they point to. A link
-back to the copied directory, or to a directory between it and the link, is
-skipped, so a link cycle doesn't copy the tree into itself.
+A symbolic link to a file is followed: the copy is a file with the content
+and permissions of the target. A symbolic link to a directory is never
+followed, like by `filepath.WalkDir`, so a link cycle can't copy the tree into
+itself and a link to `/` can't copy the whole disk:
+
+- If the destination file system implements `fs.SymbolicLinkFileSystem`
+  (`LocalFileSystem`, `MemFileSystem`, `sftpfs`, `smbfs`, a `SubFileSystem` of
+  one of them), the link is copied as a link with the same target, read from
+  the source and stored verbatim. A relative target stays relative, an
+  absolute one may point to a path that doesn't exist on the destination.
+- Otherwise, or if the source can't read the targets of its links, like
+  `ftpfs`, `CopyRecursive` fails before it writes anything, with an error
+  wrapping `errors.ErrUnsupported` that names the link. To find such links it
+  lists the source tree once more before the copy.
+
+A link that you pass as the source itself is followed, its directory is copied.
 
 This is how you extract an archive, seed a `MemFileSystem` from disk, or sync a
 directory to an object store:
@@ -140,19 +154,26 @@ More behaviours to rely on:
 
 - **Moving a file onto itself is a no-op** returning nil. This matters: it is
   what stops the copy-then-delete fallback from destroying a file when source
-  and destination resolve to the same place. Moving a local file onto another
-  hard link of it removes the source link, like a rename onto any other file.
-  A destination that the file system matches to the source's own directory
-  entry, like another case or Unicode normalization of the name on macOS,
-  renames the file. Neither removes the only link of a file.
+  and destination resolve to the same place. The fallback also compares local
+  paths as files, so two paths of the same file through bind mounts (like
+  `docker run -v /data:/a -v /data:/b`), a symbolic link to a parent
+  directory or a `SubFileSystem` are a no-op too. Moving a local file onto
+  another hard link of it removes the source link, like a rename onto any
+  other file. A destination that the file system matches to the source's own
+  directory entry, like another case or Unicode normalization of the name on
+  macOS, renames the file. Neither removes the only link of a file.
 - **Moving a directory into itself** or one of its sub-directories is an error
-  wrapping `os.ErrInvalid`, like `os.Rename`.
+  wrapping `os.ErrInvalid`, like `os.Rename`, for a local directory also
+  through such another path to it.
 - **Symbolic links are moved, not what they point to.** Within one file system
   a link stays a link and replaces an existing file or link at the
   destination. A link at the destination is replaced, not its target, and is
-  put back if the copy fails. Between file systems the target of a link would
-  be a path of the wrong file system, so what the link points to is copied
-  and only the link is deleted.
+  put back if the copy fails. Between file systems a link to a file is
+  followed: the file is copied and only the link is deleted. A link to a
+  directory, the moved source itself or one below a moved directory, is
+  copied as a link like by `CopyRecursive`, and the move fails before it
+  copies anything with an error wrapping `errors.ErrUnsupported` if the
+  destination can't create links.
 
 To rename in place, without moving between directories:
 

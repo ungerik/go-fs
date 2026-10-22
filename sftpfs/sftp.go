@@ -201,7 +201,9 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 // and calls callback for every file (not directory) matching the patterns.
 // A symbolic link at dirPath is followed, the files of the directory
 // it points to are listed below dirPath. Symbolic links in the tree are
-// not followed. A lost connection is only retried before the first callback.
+// listed like files and not followed, the FileInfo of a link to a directory
+// has IsDir false, see fs.ListDirRecursiveFileSystem.
+// A lost connection is only retried before the first callback.
 func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	err := f.run(ctx, func(c *conn, noRetry func()) error {
 		info, err := c.sftp.Stat(dirPath)

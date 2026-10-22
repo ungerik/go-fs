@@ -18,6 +18,8 @@ import (
 // for a link IsDir and IsRegular describe the target as far as the
 // file system knows it cheaply (both false if unknown),
 // and the other fields may describe the link itself.
+// ListDirRecursive describes its entries like ListDir, but it never
+// follows a link and IsDir is false also for a link to a directory.
 type FileInfo struct {
 	File        File
 	Name        string

@@ -575,13 +575,15 @@ func (m *MockFullyFeaturedFileSystem) ListDirRecursive(ctx context.Context, dirP
 		return m.MockListDirRecursive(ctx, dirPath, patterns, callback)
 	}
 	return m.ListDir(ctx, dirPath, nil, func(info *fs.FileInfo) error {
-		if info.IsDir {
+		if info.IsDir && !info.IsSymlink {
 			return m.ListDirRecursive(ctx, m.CleanPath(dirPath, info.Name), patterns, callback)
 		}
 		match, err := fsimpl.MatchAnyPattern(info.Name, patterns)
 		if !match || err != nil {
 			return err
 		}
+		// A symbolic link to a directory is listed, not followed
+		info.IsDir = false
 		return callback(info)
 	})
 }

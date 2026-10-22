@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -69,6 +71,9 @@ type minimalFileSystem struct {
 	// linkErr is returned by CreateSymbolicLink of a symlinkFileSystem,
 	// like by a file system that is not allowed to create links.
 	linkErr error
+
+	// listDirs counts the calls of ListDir.
+	listDirs atomic.Int32
 }
 
 var (
@@ -154,6 +159,7 @@ func (m *minimalFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 }
 
 func (m *minimalFileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	m.listDirs.Add(1)
 	err := m.backing.ListDir(ctx, dirPath, patterns, func(backingInfo *fs.FileInfo) error {
 		return callback(m.info(m.CleanPath(dirPath, backingInfo.Name), backingInfo))
 	})
@@ -672,21 +678,26 @@ func TestMoveEmulation_Symlinks(t *testing.T) {
 		require.False(t, tree.Exists(), "the source must be removed")
 		requireContent(t, moved.Join("file.txt"), "file")
 		require.True(t, moved.Join("link").IsSymbolicLink(), "the link must be moved as a link")
+		requireNames(t, moved, "file.txt", "link")
 		target, err := moved.Join("link").ReadSymbolicLink()
 		require.NoError(t, err)
 		require.Equal(t, outside.Path(), target, "the link target must be kept verbatim")
 		requireContent(t, outside.Join("precious.txt"), "precious")
 	})
 	t.Run("without SymbolicLinkFileSystem", func(t *testing.T) {
+		// The link to a directory can't be recreated, the move used to copy
+		// the directory it points to. It must fail before anything is copied.
 		m := newMinimalLocalFS(t)
 		dir := fs.File(m.URL(t.TempDir()))
 		tree, outside := symlinkTree(t, dir, os.Symlink)
 		moved := dir.Join("moved")
 
-		require.NoError(t, tree.MoveTo(t.Context(), moved))
-		require.False(t, tree.Exists(), "the source must be removed")
-		requireContent(t, moved.Join("file.txt"), "file")
-		requireContent(t, moved.Join("link", "precious.txt"), "precious")
+		err := tree.MoveTo(t.Context(), moved)
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+		require.ErrorContains(t, err, tree.Join("link").String(), "the error must name the link")
+		requireMissing(t, moved)
+		requireContent(t, tree.Join("file.txt"), "file")
+		require.True(t, tree.Join("link").IsSymbolicLink(), "the link must be kept")
 		requireContent(t, outside.Join("precious.txt"), "precious")
 	})
 	t.Run("link is moved, not its target", func(t *testing.T) {
@@ -958,10 +969,36 @@ func TestListDirRecursiveEmulation_IgnoresVanishedDirectory(t *testing.T) {
 	require.ElementsMatch(t, []string{"a.txt", "b.txt"}, files)
 }
 
+// listInfosRecursive returns the FileInfos that ListDirInfoRecursive
+// of dir passes to its callback by path.
+func listInfosRecursive(ctx context.Context, t *testing.T, dir fs.File) map[string]*fs.FileInfo {
+	t.Helper()
+	infos := make(map[string]*fs.FileInfo)
+	err := dir.ListDirInfoRecursive(ctx, func(info *fs.FileInfo) error {
+		infos[info.File.Path()] = info
+		return nil
+	})
+	require.NoError(t, err, "ListDirInfoRecursive of %s", dir)
+	return infos
+}
+
+// requireListedLinks requires the infos of the paths to describe
+// symbolic links with IsDir false, also for a link to a directory.
+func requireListedLinks(t *testing.T, infos map[string]*fs.FileInfo, paths ...string) {
+	t.Helper()
+	for _, p := range paths {
+		info := infos[p]
+		require.NotNil(t, info, "%s must be listed", p)
+		require.True(t, info.IsSymlink, "%s must be listed as symbolic link", p)
+		require.False(t, info.IsDir, "%s must be listed with IsDir false", p)
+	}
+}
+
 // TestListDirRecursiveEmulation_SymlinkLoop is a regression test: the
-// emulation followed a symbolic link to a directory of the listed path
-// again and again until the path had too many links. Links to other
-// directories are followed, links to files are listed like files.
+// emulation followed symbolic links to directories, and a link to a directory
+// of the listed path again and again until the path had too many links.
+// Links are listed as entries and never followed, like by filepath.WalkDir,
+// except a link at the start of the listing.
 func TestListDirRecursiveEmulation_SymlinkLoop(t *testing.T) {
 	t.Run("SymbolicLinkFileSystem", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -973,14 +1010,17 @@ func TestListDirRecursiveEmulation_SymlinkLoop(t *testing.T) {
 		require.NoError(t, s.CreateSymbolicLink("..", "/dir/sub/up"))
 		require.NoError(t, s.CreateSymbolicLink("/outside", "/dir/ext"))
 		require.NoError(t, s.CreateSymbolicLink("/outside/c.txt", "/dir/file-link"))
+		links := []string{"/dir/ext", "/dir/file-link", "/dir/loop", "/dir/sub/up"}
 
-		var files []string
-		err := root.Join("dir").ListDirRecursive(ctx, func(file fs.File) error {
-			files = append(files, file.Path())
-			return nil
-		})
-		require.NoError(t, err)
-		require.ElementsMatch(t, []string{"/dir/a.txt", "/dir/ext/c.txt", "/dir/file-link", "/dir/sub/b.txt"}, files)
+		// The ListDir of the backing MemFileSystem
+		// describes a link to a directory with IsDir set
+		infos := listInfosRecursive(ctx, t, root.Join("dir"))
+		require.ElementsMatch(t, append([]string{"/dir/a.txt", "/dir/sub/b.txt"}, links...), slices.Collect(maps.Keys(infos)))
+		requireListedLinks(t, infos, links...)
+
+		// A link at the start is followed, the links below it are not
+		infos = listInfosRecursive(ctx, t, root.Join("dir", "loop"))
+		require.ElementsMatch(t, []string{"/dir/loop/a.txt", "/dir/loop/ext", "/dir/loop/file-link", "/dir/loop/loop", "/dir/loop/sub/b.txt", "/dir/loop/sub/up"}, slices.Collect(maps.Keys(infos)))
 	})
 	t.Run("LocalFileSystem", func(t *testing.T) {
 		// The FileInfo of a link from LocalFileSystem.ListDir
@@ -994,8 +1034,59 @@ func TestListDirRecursiveEmulation_SymlinkLoop(t *testing.T) {
 		require.NoError(t, os.Symlink(dir.Join("outside").LocalPath(), dir.Join("dir", "ext").LocalPath()))
 		require.NoError(t, os.Symlink(dir.Join("outside", "c.txt").LocalPath(), dir.Join("dir", "file-link").LocalPath()))
 
-		requireFiles(t, dir.Join("dir"), "a.txt", "ext/c.txt", "file-link", "sub/b.txt")
+		requireFiles(t, dir.Join("dir"), "a.txt", "ext", "file-link", "loop", "sub/b.txt", "sub/up")
+		requireFiles(t, dir.Join("dir", "loop"), "a.txt", "ext", "file-link", "loop", "sub/b.txt", "sub/up")
+		requireListedLinks(t, listInfosRecursive(t.Context(), t, dir.Join("dir")), dir.Join("dir", "loop").Path())
 	})
+}
+
+// TestListDirRecursiveEmulation_ListsEachDirectoryOnce is a regression test:
+// every symbolic link to a directory above the start of the listing was
+// followed and listed the tree again, with the links in it, so k links
+// to k directories above the start listed the tree 2^k times.
+func TestListDirRecursiveEmulation_ListsEachDirectoryOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	const numLinks = 10
+	s := newSymlinkMemFS(t)
+	root := s.RootDir()
+	// /a1/a2/.../a10/start with the links /a1/.../a10/start/up<i> to /a1/.../a<i>
+	ancestors := make([]string, numLinks)
+	for i := range ancestors {
+		ancestors[i] = fmt.Sprintf("a%d", i+1)
+	}
+	start := root.Join(append(ancestors, "start")...)
+	writeFiles(t, start, map[string]string{"file.txt": "file", "sub/b.txt": "b"})
+	var links []string
+	for i := range ancestors {
+		link := start.Join(fmt.Sprintf("up%d", i+1))
+		require.NoError(t, s.CreateSymbolicLink(root.Join(ancestors[:i+1]...).Path(), link.Path()))
+		links = append(links, link.Path())
+	}
+	s.listDirs.Store(0)
+
+	infos := listInfosRecursive(ctx, t, start)
+	require.Len(t, infos, 2+numLinks, "the files and links below the start")
+	requireListedLinks(t, infos, links...)
+	require.Equal(t, int32(2), s.listDirs.Load(), "the start and its sub-directory must each be listed once")
+}
+
+// TestListDirRecursiveEmulation_LinkToRoot is a regression test:
+// a symbolic link to the root directory was followed through the whole
+// local file system.
+func TestListDirRecursiveEmulation_LinkToRoot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	dir := fs.File(t.TempDir())
+	writeFiles(t, dir, map[string]string{"file.txt": "file"})
+	link := dir.Join("root")
+	if err := os.Symlink(string(filepath.Separator), link.LocalPath()); err != nil {
+		t.Skipf("can't create symbolic link: %v", err)
+	}
+
+	infos := listInfosRecursive(ctx, t, dir)
+	require.ElementsMatch(t, []string{dir.Join("file.txt").Path(), link.Path()}, slices.Collect(maps.Keys(infos)))
+	requireListedLinks(t, infos, link.Path())
 }
 
 func TestListDirRecursiveEmulation_ReturnsListingError(t *testing.T) {
