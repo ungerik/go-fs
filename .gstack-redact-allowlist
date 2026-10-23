@@ -6,3 +6,26 @@ http://alice:topsecret@127.0.0.1:1
 http://alice:topsecret@[::1
 http://bob%40example.com:topsecret@"+host+"
 http://alice:secret@"+srv.Listener.Addr().String(),
+# Fake credentials of the redaction tests of fsimpl, httpfs and webdavfs
+# (passwords with ?, #, @ and / and their redacted forms)
+http://user:top?secret@host
+http://user:xxxxx@host
+http://localhost:xxxxx@example.com",
+http://host:xxxxx@b",
+http://user:topsecret@host
+http://user:xxxxx@b",
+https://user:top?secret@example.com
+https://user:xxxxx@example.com
+https://user:top@secret
+https://alice:s3cr@et
+http://alice:s3cretpart?r3st@127.0.0.1:1
+http://alice:s3cretpart#r3st@127.0.0.1:1
+http://alice:1234?r3st@127.0.0.1:1
+http://alice:1234#r3st@127.0.0.1:1
+http://alice:s3c%zzr3t@127.0.0.1:1
+http://alice:s3cr@et
+http://alice:s3cr@et?Pw@127.0.0.1:1
+http://alice:s3cr@et#Pw@127.0.0.1:1
+http://alice:s3cr3t@cloud.example.com:8080
+http://alice:s3cr3t@cloud.example.com
+http://alice:secret@cloud.example.com:8080
