@@ -1295,9 +1295,9 @@ func (file File) WriteJSON(ctx context.Context, input any, perm ...Permissions) 
 	if file == "" {
 		return ErrEmptyPath
 	}
-	data, err := marshalJSON(input, "")
+	data, err := json.Marshal(input)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	return file.WriteAll(ctx, data, perm...)
 }
@@ -1305,31 +1305,18 @@ func (file File) WriteJSON(ctx context.Context, input any, perm ...Permissions) 
 // WriteJSONIndent marshals input to JSON with every line indented
 // by indent and writes it as the file
 // with the optional permissions like WriteAll.
+// An empty indent still puts every element on its own line.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func (file File) WriteJSONIndent(ctx context.Context, input any, indent string, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	data, err := marshalJSON(input, indent)
+	data, err := json.MarshalIndent(input, "", indent)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	return file.WriteAll(ctx, data, perm...)
-}
-
-// marshalJSON marshals input to JSON, indented if indent is not empty,
-// and wraps marshalling errors with ErrMarshalJSON.
-func marshalJSON(input any, indent string) (data []byte, err error) {
-	if indent == "" {
-		data, err = json.Marshal(input)
-	} else {
-		data, err = json.MarshalIndent(input, "", indent)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
-	}
-	return data, nil
 }
 
 // ReadXML reads and unmarshals the XML content of the file to output.
@@ -1356,42 +1343,49 @@ func (file File) WriteXML(ctx context.Context, input any, perm ...Permissions) e
 	if file == "" {
 		return ErrEmptyPath
 	}
-	data, err := marshalXML(input, "")
+	data, err := xml.Marshal(input)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
-	return file.WriteAll(ctx, data, perm...)
+	return file.WriteAll(ctx, append([]byte(xml.Header), data...), perm...)
 }
 
 // WriteXMLIndent marshals input to XML with every line indented
 // by indent and writes it with a leading xml.Header as the file
 // with the optional permissions like WriteAll.
+// An empty indent still puts every element on its own line.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	data, err := marshalXML(input, indent)
+	data, err := xmlMarshalIndent(input, indent)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
-	return file.WriteAll(ctx, data, perm...)
+	return file.WriteAll(ctx, append([]byte(xml.Header), data...), perm...)
 }
 
-// marshalXML marshals input to XML with a leading xml.Header,
-// indented if indent is not empty,
-// and wraps marshalling errors with ErrMarshalXML.
-func marshalXML(input any, indent string) (data []byte, err error) {
-	if indent == "" {
-		data, err = xml.Marshal(input)
-	} else {
-		data, err = xml.MarshalIndent(input, "", indent)
+// xmlMarshalIndent works like xml.MarshalIndent with an empty prefix,
+// but like json.MarshalIndent an empty indent still puts
+// every element on its own line.
+//
+// xml.MarshalIndent writes no newlines if prefix and indent are both empty,
+// so a NUL byte is used as prefix and removed afterwards.
+// The XML encoder replaces NUL in character data and attribute values
+// with U+FFFD and NUL is invalid anywhere else in an XML document,
+// so every NUL at the start of a line is a prefix.
+func xmlMarshalIndent(input any, indent string) ([]byte, error) {
+	if indent != "" {
+		return xml.MarshalIndent(input, "", indent)
 	}
+	data, err := xml.MarshalIndent(input, "\x00", "")
 	if err != nil {
-		return nil, fmt.Errorf("%w because: %w", ErrMarshalXML, err)
+		return nil, err
 	}
-	return append([]byte(xml.Header), data...), nil
+	data = bytes.TrimPrefix(data, []byte{0})
+	return bytes.ReplaceAll(data, []byte("\n\x00"), []byte("\n")), nil
 }
 
 // StdFS wraps the file as a StdFS struct that

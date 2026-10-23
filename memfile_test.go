@@ -360,11 +360,17 @@ func TestMemFile_WriteJSON(t *testing.T) {
 	require.NoError(t, f.WriteJSONIndent(t.Context(), input, "  "))
 	require.Equal(t, "{\n  \"a\": 1\n}", string(f.FileData))
 
+	// An empty indent still starts a new line for every element
+	require.NoError(t, f.WriteJSONIndent(t.Context(), input, ""))
+	require.Equal(t, "{\n\"a\": 1\n}", string(f.FileData))
+
 	err := f.WriteJSON(t.Context(), make(chan int))
 	require.ErrorIs(t, err, ErrMarshalJSON)
+	require.ErrorIs(t, f.WriteJSONIndent(t.Context(), make(chan int), "  "), ErrMarshalJSON)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
+	require.ErrorIs(t, f.WriteJSON(ctx, input), context.Canceled)
 	require.ErrorIs(t, f.WriteJSONIndent(ctx, input, "  "), context.Canceled)
 
 	f, err = NewMemFileWriteJSON("a.json", input)
@@ -375,6 +381,12 @@ func TestMemFile_WriteJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "{\n\t\"a\": 1\n}", string(f.FileData))
 
+	f, err = NewMemFileWriteJSONIndent("a.json", input, "")
+	require.NoError(t, err)
+	require.Equal(t, "{\n\"a\": 1\n}", string(f.FileData))
+
+	_, err = NewMemFileWriteJSON("a.json", make(chan int))
+	require.ErrorIs(t, err, ErrMarshalJSON)
 	_, err = NewMemFileWriteJSONIndent("a.json", make(chan int), "\t")
 	require.ErrorIs(t, err, ErrMarshalJSON)
 }
@@ -393,11 +405,17 @@ func TestMemFile_WriteXML(t *testing.T) {
 	require.NoError(t, f.WriteXMLIndent(t.Context(), input, "  "))
 	require.Equal(t, xml.Header+"<doc>\n  <a>1</a>\n</doc>", string(f.FileData))
 
+	// An empty indent still starts a new line for every element
+	require.NoError(t, f.WriteXMLIndent(t.Context(), input, ""))
+	require.Equal(t, xml.Header+"<doc>\n<a>1</a>\n</doc>", string(f.FileData))
+
 	err := f.WriteXML(t.Context(), make(chan int))
 	require.ErrorIs(t, err, ErrMarshalXML)
+	require.ErrorIs(t, f.WriteXMLIndent(t.Context(), make(chan int), "  "), ErrMarshalXML)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
+	require.ErrorIs(t, f.WriteXML(ctx, input), context.Canceled)
 	require.ErrorIs(t, f.WriteXMLIndent(ctx, input, "  "), context.Canceled)
 
 	f, err = NewMemFileWriteXML("a.xml", input)
@@ -408,7 +426,13 @@ func TestMemFile_WriteXML(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, xml.Header+"<doc>\n\t<a>1</a>\n</doc>", string(f.FileData))
 
+	f, err = NewMemFileWriteXMLIndent("a.xml", input, "")
+	require.NoError(t, err)
+	require.Equal(t, xml.Header+"<doc>\n<a>1</a>\n</doc>", string(f.FileData))
+
 	_, err = NewMemFileWriteXML("a.xml", make(chan int))
+	require.ErrorIs(t, err, ErrMarshalXML)
+	_, err = NewMemFileWriteXMLIndent("a.xml", make(chan int), "\t")
 	require.ErrorIs(t, err, ErrMarshalXML)
 }
 

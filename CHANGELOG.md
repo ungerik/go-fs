@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+### Changed
+
+- `WriteJSONIndent` and `WriteXMLIndent` of `File` and `MemFile`, and
+  `NewMemFileWriteJSONIndent`/`NewMemFileWriteXMLIndent`, put every element on
+  its own line without indentation when `indent` is empty, instead of writing
+  the compact output of `WriteJSON`/`WriteXML`.
+
 ## [1.0.0-beta.2] - 2026-10-23
 
 Second beta. It fixes the bugs of a full review of beta.1 (data loss,

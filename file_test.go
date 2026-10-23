@@ -1179,6 +1179,11 @@ func TestFile_WriteJSON(t *testing.T) {
 	require.NoError(t, file.WriteJSONIndent(t.Context(), input, "  "))
 	assertFileContent(t, file, "{\n  \"a\": 1\n}")
 
+	// An empty indent still starts a new line for every element
+	file = dir.Join("newlines.json")
+	require.NoError(t, file.WriteJSONIndent(t.Context(), input, ""))
+	assertFileContent(t, file, "{\n\"a\": 1\n}")
+
 	require.ErrorIs(t, dir.Join("x.json").WriteJSON(t.Context(), make(chan int)), ErrMarshalJSON)
 	require.ErrorIs(t, dir.Join("x.json").WriteJSONIndent(t.Context(), make(chan int), "  "), ErrMarshalJSON)
 	require.ErrorIs(t, InvalidFile.WriteJSON(t.Context(), input), ErrEmptyPath)
@@ -1208,6 +1213,11 @@ func TestFile_WriteXML(t *testing.T) {
 	require.NoError(t, file.WriteXMLIndent(t.Context(), input, "\t"))
 	assertFileContent(t, file, xml.Header+"<doc>\n\t<a>1</a>\n</doc>")
 
+	// An empty indent still starts a new line for every element
+	file = dir.Join("newlines.xml")
+	require.NoError(t, file.WriteXMLIndent(t.Context(), input, ""))
+	assertFileContent(t, file, xml.Header+"<doc>\n<a>1</a>\n</doc>")
+
 	require.ErrorIs(t, dir.Join("x.xml").WriteXML(t.Context(), make(chan int)), ErrMarshalXML)
 	require.ErrorIs(t, dir.Join("x.xml").WriteXMLIndent(t.Context(), make(chan int), "\t"), ErrMarshalXML)
 	require.ErrorIs(t, InvalidFile.WriteXML(t.Context(), input), ErrEmptyPath)
@@ -1216,4 +1226,34 @@ func TestFile_WriteXML(t *testing.T) {
 	var output doc
 	require.NoError(t, file.ReadXML(t.Context(), &output))
 	require.Equal(t, input.A, output.A)
+}
+
+func Test_xmlMarshalIndent(t *testing.T) {
+	type item struct {
+		Name string `xml:"name,attr"`
+		Text string `xml:",chardata"`
+	}
+	type doc struct {
+		XMLName xml.Name `xml:"doc"`
+		Items   []item   `xml:"item"`
+	}
+	// NUL bytes in attributes and character data are replaced with U+FFFD
+	// by the encoder, so they can't be mistaken for the line prefix
+	input := doc{Items: []item{{Name: "a\x00", Text: "\x00x"}, {Name: "b", Text: "y"}}}
+
+	data, err := xmlMarshalIndent(input, "")
+	require.NoError(t, err)
+	require.Equal(t, "<doc>\n<item name=\"a\uFFFD\">\uFFFDx</item>\n<item name=\"b\">y</item>\n</doc>", string(data))
+
+	data, err = xmlMarshalIndent(input, "  ")
+	require.NoError(t, err)
+	require.Equal(t, "<doc>\n  <item name=\"a\uFFFD\">\uFFFDx</item>\n  <item name=\"b\">y</item>\n</doc>", string(data))
+
+	// Multiple top level elements start a new line each
+	data, err = xmlMarshalIndent(input.Items, "")
+	require.NoError(t, err)
+	require.Equal(t, "<item name=\"a\uFFFD\">\uFFFDx</item>\n<item name=\"b\">y</item>", string(data))
+
+	_, err = xmlMarshalIndent(make(chan int), "")
+	require.Error(t, err)
 }
