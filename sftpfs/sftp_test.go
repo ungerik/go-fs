@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -319,11 +320,20 @@ func Test_fileSystemInProcess(t *testing.T) {
 	root := t.TempDir()
 	s := startTestServer(t, testServerConfig{root: root})
 	f := s.dial(t, nil)
-	fstest.RunConformance(t, f, fstest.Config{
+	cfg := fstest.Config{
 		Name:    "SFTP",
 		Prefix:  "sftp://" + testServerUser + "@" + s.addr,
 		TestDir: root + "/testdata",
-	})
+	}
+	if runtime.GOOS == "windows" {
+		// The in-process server stores the files on the Windows host,
+		// where os.Chmod only toggles the read-only attribute and
+		// os.Symlink rewrites the target with backslashes. Real SFTP
+		// servers are checked by Test_fileSystem against OpenSSH.
+		cfg.PermissionMask = fs.UserWrite
+		cfg.Skip = func(name string) bool { return name == "OptionalWrite/SymbolicLink" }
+	}
+	fstest.RunConformance(t, f, cfg)
 }
 
 // TestMoveWithoutPosixRename replaces an existing file without the

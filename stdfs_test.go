@@ -77,6 +77,9 @@ func TestStdFS_TestFS(t *testing.T) {
 		if os.Symlink("a", filepath.Join(dir, "dirlink")) == nil && os.Symlink("x.txt", filepath.Join(dir, "filelink")) == nil {
 			expected = append(expected, "dirlink", "filelink")
 		}
+		if runtime.GOOS == "windows" {
+			syncWindowsModTimes(t, dir)
+		}
 		require.NoError(t, fstest.TestFS(File(dir).StdFS(), expected...))
 	})
 }
@@ -303,4 +306,28 @@ func TestStdFSDirFileClose(t *testing.T) {
 
 	_, err = dir.Stat()
 	require.ErrorIs(t, err, os.ErrClosed, "Stat after Close must fail")
+}
+
+// syncWindowsModTimes sets the modification time of every entry below dir
+// to the one of its Stat, like the os.DirFS test of the standard library.
+// NTFS updates the copy of a directory's metadata in the listing of its
+// parent lazily, so a directory listing can report an older time than
+// Stat, which testing/fstest.TestFS reports as a mismatch.
+func syncWindowsModTimes(t *testing.T, dir string) {
+	t.Helper()
+	err := filepath.WalkDir(dir, func(path string, d iofs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		stat, err := os.Stat(path)
+		if err != nil || stat.ModTime().Equal(info.ModTime()) {
+			return nil // a dangling link, or nothing to sync
+		}
+		return os.Chtimes(path, stat.ModTime(), stat.ModTime())
+	})
+	require.NoError(t, err)
 }
