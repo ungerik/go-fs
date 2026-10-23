@@ -379,11 +379,11 @@ func TestMemFile_WriteJSON(t *testing.T) {
 
 	f, err = NewMemFileWriteJSONIndent("a.json", input, "\t")
 	require.NoError(t, err)
-	require.Equal(t, "{\n\t\"a\": 1\n}", string(f.FileData))
+	require.Equal(t, MemFile{FileName: "a.json", FileData: []byte("{\n\t\"a\": 1\n}")}, f)
 
 	f, err = NewMemFileWriteJSONIndent("a.json", input, "")
 	require.NoError(t, err)
-	require.Equal(t, "{\n\"a\": 1\n}", string(f.FileData))
+	require.Equal(t, MemFile{FileName: "a.json", FileData: []byte("{\n\"a\": 1\n}")}, f)
 
 	_, err = NewMemFileWriteJSON("a.json", make(chan int))
 	require.ErrorIs(t, err, ErrMarshalJSON)
@@ -409,6 +409,13 @@ func TestMemFile_WriteXML(t *testing.T) {
 	require.NoError(t, f.WriteXMLIndent(t.Context(), input, ""))
 	require.Equal(t, xml.Header+"<doc>\n<a>1</a>\n</doc>", string(f.FileData))
 
+	// XML written by a Marshaler with tokens before its root element
+	// has to stay readable with an empty indent
+	require.NoError(t, f.WriteXMLIndent(t.Context(), xmlLeadingTokensDoc{A: 1}, ""))
+	var leading doc
+	require.NoError(t, f.ReadXML(t.Context(), &leading))
+	require.Equal(t, 1, leading.A)
+
 	err := f.WriteXML(t.Context(), make(chan int))
 	require.ErrorIs(t, err, ErrMarshalXML)
 	require.ErrorIs(t, f.WriteXMLIndent(t.Context(), make(chan int), "  "), ErrMarshalXML)
@@ -424,11 +431,11 @@ func TestMemFile_WriteXML(t *testing.T) {
 
 	f, err = NewMemFileWriteXMLIndent("a.xml", input, "\t")
 	require.NoError(t, err)
-	require.Equal(t, xml.Header+"<doc>\n\t<a>1</a>\n</doc>", string(f.FileData))
+	require.Equal(t, MemFile{FileName: "a.xml", FileData: []byte(xml.Header + "<doc>\n\t<a>1</a>\n</doc>")}, f)
 
 	f, err = NewMemFileWriteXMLIndent("a.xml", input, "")
 	require.NoError(t, err)
-	require.Equal(t, xml.Header+"<doc>\n<a>1</a>\n</doc>", string(f.FileData))
+	require.Equal(t, MemFile{FileName: "a.xml", FileData: []byte(xml.Header + "<doc>\n<a>1</a>\n</doc>")}, f)
 
 	_, err = NewMemFileWriteXML("a.xml", make(chan int))
 	require.ErrorIs(t, err, ErrMarshalXML)

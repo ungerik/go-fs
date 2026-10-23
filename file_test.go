@@ -1228,6 +1228,26 @@ func TestFile_WriteXML(t *testing.T) {
 	require.Equal(t, input.A, output.A)
 }
 
+// xmlLeadingTokensDoc writes a processing instruction and a comment
+// before its root element, so the line prefix of the root element
+// does not start the output of xml.MarshalIndent
+type xmlLeadingTokensDoc struct{ A int }
+
+func (d xmlLeadingTokensDoc) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	err := e.EncodeToken(xml.ProcInst{Target: "xml-stylesheet", Inst: []byte(`href="a.xsl"`)})
+	if err != nil {
+		return err
+	}
+	err = e.EncodeToken(xml.Comment(" c "))
+	if err != nil {
+		return err
+	}
+	start.Name.Local = "doc"
+	return e.EncodeElement(struct {
+		A int `xml:"a"`
+	}{d.A}, start)
+}
+
 func Test_xmlMarshalIndent(t *testing.T) {
 	type item struct {
 		Name string `xml:"name,attr"`
@@ -1253,6 +1273,22 @@ func Test_xmlMarshalIndent(t *testing.T) {
 	data, err = xmlMarshalIndent(input.Items, "")
 	require.NoError(t, err)
 	require.Equal(t, "<item name=\"a\uFFFD\">\uFFFDx</item>\n<item name=\"b\">y</item>", string(data))
+
+	// Tokens before the root element don't start a new line,
+	// the line prefix of the root element must not stay in the output
+	data, err = xmlMarshalIndent(xmlLeadingTokensDoc{A: 1}, "")
+	require.NoError(t, err)
+	require.Equal(t, `<?xml-stylesheet href="a.xsl"?><!-- c --><doc>`+"\n<a>1</a>\n</doc>", string(data))
+
+	// NUL is invalid in XML, an empty indent also removes it
+	// from raw content that the encoder writes without escaping
+	type rawDoc struct {
+		XMLName xml.Name `xml:"doc"`
+		Inner   string   `xml:",innerxml"`
+	}
+	data, err = xmlMarshalIndent(rawDoc{Inner: "<x>a\x00b</x>\n\x00<y/>"}, "")
+	require.NoError(t, err)
+	require.Equal(t, "<doc><x>ab</x>\n<y/></doc>", string(data))
 
 	_, err = xmlMarshalIndent(make(chan int), "")
 	require.Error(t, err)

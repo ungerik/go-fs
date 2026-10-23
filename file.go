@@ -1354,6 +1354,9 @@ func (file File) WriteXML(ctx context.Context, input any, perm ...Permissions) e
 // by indent and writes it with a leading xml.Header as the file
 // with the optional permissions like WriteAll.
 // An empty indent still puts every element on its own line.
+// The added whitespace is read back as part of mixed content
+// (character data next to child elements),
+// use WriteXML for XML that round-trips exactly.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, perm ...Permissions) error {
@@ -1372,10 +1375,14 @@ func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, p
 // every element on its own line.
 //
 // xml.MarshalIndent writes no newlines if prefix and indent are both empty,
-// so a NUL byte is used as prefix and removed afterwards.
-// The XML encoder replaces NUL in character data and attribute values
-// with U+FFFD and NUL is invalid anywhere else in an XML document,
-// so every NUL at the start of a line is a prefix.
+// so a NUL byte is used as prefix and every NUL byte is removed afterwards.
+// The first prefix does not have to start the output because an xml.Marshaler
+// can write tokens before its root element.
+// NUL is not allowed anywhere in an XML document and the encoder replaces it
+// in character data and attribute values with U+FFFD, so the removal
+// only changes output that is invalid XML anyway: a NUL in raw
+// ",innerxml", ",cdata" or ",comment" content, in a name
+// or in a token written by an xml.Marshaler is removed too.
 func xmlMarshalIndent(input any, indent string) ([]byte, error) {
 	if indent != "" {
 		return xml.MarshalIndent(input, "", indent)
@@ -1384,8 +1391,7 @@ func xmlMarshalIndent(input any, indent string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data = bytes.TrimPrefix(data, []byte{0})
-	return bytes.ReplaceAll(data, []byte("\n\x00"), []byte("\n")), nil
+	return slices.DeleteFunc(data, func(b byte) bool { return b == 0 }), nil
 }
 
 // StdFS wraps the file as a StdFS struct that
