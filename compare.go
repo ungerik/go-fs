@@ -25,12 +25,12 @@ func IdenticalFileContents(ctx context.Context, files ...FileReader) (identical 
 		return false, fmt.Errorf("need at least 2 files to compare, got %d", len(files))
 	}
 	if !files[0].Exists() {
-		return false, NewErrDoesNotExistFileReader(files[0])
+		return false, NewErrDoesNotExist(files[0])
 	}
 	size := files[0].Size()
 	for _, file := range files[1:] {
 		if !file.Exists() {
-			return false, NewErrDoesNotExistFileReader(file)
+			return false, NewErrDoesNotExist(file)
 		}
 		if file.Size() != size {
 			return false, nil
@@ -80,6 +80,7 @@ func IdenticalFileContents(ctx context.Context, files ...FileReader) (identical 
 
 // IdenticalDirContents returns true if the files in dirA and dirB are identical in size and content.
 // If recursive is true, then directories will be considered too.
+// The sizes of directories are not compared, they differ between file systems.
 func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) (identical bool, err error) {
 	if SameFile(dirA, dirB) {
 		return true, nil
@@ -101,18 +102,21 @@ func IdenticalDirContents(ctx context.Context, dirA, dirB File, recursive bool) 
 	err = dirB.ListDirInfo(ctx, func(info *FileInfo) error {
 		if !info.IsDir || recursive {
 			infoA, found := fileInfosA[info.Name]
-			if !found || info.Size != infoA.Size || info.IsDir != infoA.IsDir {
+			if !found || info.IsDir != infoA.IsDir || (!info.IsDir && info.Size != infoA.Size) {
 				return hasDiff
 			}
 			fileInfosB[info.Name] = info
 		}
 		return nil
 	})
-	if errors.Is(err, hasDiff) || len(fileInfosB) != len(fileInfosA) {
+	if errors.Is(err, hasDiff) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("IdenticalDirContents: error listing dirB %q: %w", dirB, err)
+	}
+	if len(fileInfosB) != len(fileInfosA) {
+		return false, nil
 	}
 
 	for filename, infoA := range fileInfosA {

@@ -15,8 +15,11 @@ func Example() {
 		0xad, 0x82, 0x8e, 0xc2, 0xcc, 0x20, 0x26, 0x28,
 	}
 
-	memFS, err := fs.NewMemFileSystem("/")
+	memFS, err := fs.NewMemFileSystem(nil)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
 		panic(err)
 	}
 	defer memFS.Close()

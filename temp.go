@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path"
 	"strings"
@@ -15,23 +16,29 @@ func TempDir() File {
 	return File(os.TempDir())
 }
 
-// TempFile returns a randomly named File with an optional extension
-// in the temp directory of the operating system.
+// TempFile returns a randomly named File with the extension ext,
+// which can be empty, in the temp directory of the operating system.
+// InvalidFile is returned if ext contains a slash or the path separator
+// of the operating system, because the File would not be in the temp
+// directory, like os.CreateTemp rejects such a pattern.
 //
 // The returned File does not exist yet, it's just a path, so two
 // callers can in theory get the same path. Use CreateTempFile to
 // atomically create a temporary file.
-func TempFile(ext ...string) File {
-	return TempDir().Join(fsimpl.RandomString() + strings.Join(ext, ""))
+func TempFile(ext string) File {
+	if strings.ContainsAny(ext, "/"+Separator) {
+		return InvalidFile
+	}
+	return TempDir().Join(fsimpl.RandomString() + ext)
 }
 
 // CreateTempFile atomically creates a new empty file with a random name
-// and an optional extension in the temp directory of the operating system,
-// like os.CreateTemp, and returns it.
-func CreateTempFile(ext ...string) (File, error) {
-	f, err := os.CreateTemp("", "*"+strings.Join(ext, ""))
+// and the extension ext, which can be empty, in the temp directory
+// of the operating system, like os.CreateTemp, and returns it.
+func CreateTempFile(ext string) (File, error) {
+	f, err := os.CreateTemp("", "*"+ext)
 	if err != nil {
-		return "", err
+		return InvalidFile, err
 	}
 	return File(f.Name()), f.Close()
 }
@@ -70,13 +77,19 @@ func MustMakeTempDir() File {
 }
 
 // TempFileCopy copies the provided source file
-// to the temp directory of the operating system
+// to a new file in the temp directory of the operating system
+// that is created atomically with CreateTempFile,
 // using a random filename with the extension of the source file.
+// If copying fails, then the temp file is removed
+// and InvalidFile is returned with the error.
 func TempFileCopy(ctx context.Context, source FileReader) (File, error) {
-	data, err := source.ReadAll(ctx)
+	f, err := CreateTempFile(path.Ext(source.Name()))
 	if err != nil {
 		return InvalidFile, err
 	}
-	f := TempFile(path.Ext(source.Name()))
-	return f, f.WriteAll(ctx, data)
+	err = CopyFile(ctx, source, f)
+	if err != nil {
+		return InvalidFile, errors.Join(err, f.Remove())
+	}
+	return f, nil
 }

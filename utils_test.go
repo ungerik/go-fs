@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	iofs "io/fs"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -69,6 +72,51 @@ func Test_writeAllContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+// oneByteFileReader is a FileReader whose reader
+// returns only one byte per Read call.
+type oneByteFileReader struct {
+	MemFile
+}
+
+func (f oneByteFileReader) OpenReader() (ReadCloser, error) {
+	return oneByteReadCloser{iotest.OneByteReader(bytes.NewReader(f.FileData))}, nil
+}
+
+type oneByteReadCloser struct{ io.Reader }
+
+func (oneByteReadCloser) Close() error                 { return nil }
+func (oneByteReadCloser) Stat() (iofs.FileInfo, error) { return nil, errors.New("not implemented") }
+
+// TestReadHeader is a regression test: ReadHeader did a single Read,
+// which may return fewer bytes than requested although more are available.
+func TestReadHeader(t *testing.T) {
+	file := oneByteFileReader{NewMemFile("x.pdf", []byte("%PDF-1.7 hello"))}
+
+	header, err := ReadHeader(file, 5)
+	require.NoError(t, err)
+	require.Equal(t, "%PDF-", string(header), "all requested bytes")
+
+	header, err = ReadHeader(file, 100)
+	require.NoError(t, err, "a file shorter than the header is no error")
+	require.Equal(t, "%PDF-1.7 hello", string(header))
+
+	str, err := ReadHeaderString(file, 4)
+	require.NoError(t, err)
+	require.Equal(t, "%PDF", str)
+
+	header, err = ReadHeader(file, 0)
+	require.NoError(t, err)
+	require.Nil(t, header)
+
+	// MemFile fast path
+	header, err = ReadHeader(file.MemFile, 4)
+	require.NoError(t, err)
+	require.Equal(t, "%PDF", string(header))
+	header, err = ReadHeader(file.MemFile, 100)
+	require.NoError(t, err)
+	require.Equal(t, "%PDF-1.7 hello", string(header))
 }
 
 func TestExecutableFile(t *testing.T) {

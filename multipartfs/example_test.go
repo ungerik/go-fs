@@ -8,20 +8,25 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/multipartfs"
 )
 
-// ExampleFromRequestForm treats the files of an uploaded multipart form
+// ExampleNewFromRequest treats the files of an uploaded multipart form
 // as a read-only file system, so a handler can pass them to any code
 // that takes an fs.File or fs.FileReader.
-func ExampleFromRequestForm() {
+func ExampleNewFromRequest() {
 	request := uploadRequest()
 
-	formFS, err := multipartfs.FromRequestForm(request, 4*1024*1024)
+	formFS, err := multipartfs.NewFromRequest(request, 4*1024*1024, "")
 	if err != nil {
 		panic(err)
 	}
-	// Close removes the temporary files of the form
+	// Register the file system so that the Files of the form work
+	if err := fs.Register(formFS); err != nil {
+		panic(err)
+	}
+	// Close unregisters the file system and removes the temporary files of the form
 	defer formFS.Close()
 
 	fmt.Println(formFS.FormValue("comment"))

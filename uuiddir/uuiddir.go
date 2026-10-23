@@ -44,7 +44,7 @@ func Split(uuid [16]byte) []string {
 	}
 }
 
-// Join returns a directory with the splitted UUID and pathParts joined to baseDir.
+// Join returns a directory with the split UUID and pathParts joined to baseDir.
 func Join(baseDir fs.File, uuid [16]byte, pathParts ...string) fs.File {
 	return baseDir.Join(append(Split(uuid), pathParts...)...)
 }
@@ -58,7 +58,7 @@ func Parse(uuidDir fs.File) (uuid [16]byte, err error) {
 	return ParseString(uuidPath[len(uuidPath)-36:])
 }
 
-// FormatString returns the splitted UUID joined with slashes.
+// FormatString returns the split UUID joined with slashes.
 // It's the inverse to ParseString.
 func FormatString(uuid [16]byte) string {
 	return path.Join(Split(uuid)...)
@@ -81,63 +81,51 @@ func ParseString(uuidPath string) (uuid [16]byte, err error) {
 	return uuid, validateUUID(uuid)
 }
 
+// levels is the number of directory levels of a UUID path, see Split.
+const levels = 5
+
 // Enum calls callback for every directory that represents an UUID under baseDir.
+//
+// It walks the five levels of the layout with File.ListDirInfo, so the
+// FileInfo of the listing decides whether an entry is a directory,
+// without another Stat per entry. Only symbolic links are followed
+// with a Stat, so a link to a directory is walked like a directory.
+// Hidden entries, files and leaf directories whose path doesn't parse
+// as UUID are skipped.
 func Enum(ctx context.Context, baseDir fs.File, callback func(uuidDir fs.File, uuid [16]byte) error) error {
-	return baseDir.ListDir(ctx, func(level0Dir fs.File) error {
-		if !level0Dir.Exists() || level0Dir.IsHidden() {
+	return enumLevel(ctx, baseDir, 1, callback)
+}
+
+// enumLevel lists the directories of dir, which is at the passed level
+// of the layout, and descends into them until the UUID directories.
+func enumLevel(ctx context.Context, dir fs.File, level int, callback func(uuidDir fs.File, uuid [16]byte) error) error {
+	return dir.ListDirInfo(ctx, func(info *fs.FileInfo) error {
+		if info.IsHidden {
 			return nil
 		}
-		if !level0Dir.IsDir() {
-			// fmt.Println("Directory expected but found file:", level0Dir)
+		isDir := info.IsDir
+		if info.IsSymlink && !isDir {
+			// The FileInfo of a listing describes a link itself,
+			// IsDir is only set if the target is known to be a directory
+			isDir = info.File.IsDir()
+		}
+		if !isDir {
 			return nil
 		}
-		return level0Dir.ListDir(ctx, func(level1Dir fs.File) error {
-			if !level1Dir.Exists() || level1Dir.IsHidden() {
-				return nil
-			}
-			if !level1Dir.IsDir() {
-				// fmt.Println("Directory expected but found file:", level1Dir)
-				return nil
-			}
-			return level1Dir.ListDir(ctx, func(level2Dir fs.File) error {
-				if !level2Dir.Exists() || level2Dir.IsHidden() {
-					return nil
-				}
-				if !level2Dir.IsDir() {
-					// fmt.Println("Directory expected but found file:", level2Dir)
-					return nil
-				}
-				return level2Dir.ListDir(ctx, func(level3Dir fs.File) error {
-					if !level3Dir.Exists() || level3Dir.IsHidden() {
-						return nil
-					}
-					if !level3Dir.IsDir() {
-						// fmt.Println("Directory expected but found file:", level3Dir)
-						return nil
-					}
-					return level3Dir.ListDir(ctx, func(uuidDir fs.File) error {
-						if !uuidDir.Exists() || uuidDir.IsHidden() {
-							return nil
-						}
-						if !uuidDir.IsDir() {
-							// fmt.Println("Directory expected but found file:", uuidDir)
-							return nil
-						}
-						uuid, err := Parse(uuidDir)
-						if err != nil {
-							// Skip directories that are not a valid UUID path
-							// like files at the other levels are skipped
-							return nil
-						}
-						return callback(uuidDir, uuid)
-					})
-				})
-			})
-		})
+		if level < levels {
+			return enumLevel(ctx, info.File, level+1, callback)
+		}
+		uuid, err := Parse(info.File)
+		if err != nil {
+			// Skip directories that are not a valid UUID path
+			// like files at the other levels are skipped
+			return nil
+		}
+		return callback(info.File, uuid)
 	})
 }
 
-// RemoveDir deletes uuidSubDir recursevely and all empty parent
+// RemoveDir deletes uuidSubDir recursively and all empty parent
 // directories of uuidSubDir until but not including baseDir.
 func RemoveDir(ctx context.Context, baseDir, uuidSubDir fs.File) error {
 	basePath := baseDir.Path()
@@ -151,7 +139,6 @@ func RemoveDir(ctx context.Context, baseDir, uuidSubDir fs.File) error {
 		return fmt.Errorf("uuidDir(%q) is not a sub directory of baseDir(%q)", uuidPath, basePath)
 	}
 
-	// fmt.Println("deleting", uuidDir.Path())
 	err := uuidSubDir.RemoveRecursive(ctx)
 	if err != nil {
 		return err
@@ -161,7 +148,6 @@ func RemoveDir(ctx context.Context, baseDir, uuidSubDir fs.File) error {
 		if uuidSubDir.Path() == basePath || !uuidSubDir.IsEmptyDir() {
 			return nil
 		}
-		// fmt.Println("deleting", uuidDir.Path())
 		err = uuidSubDir.Remove()
 		if err != nil {
 			return err

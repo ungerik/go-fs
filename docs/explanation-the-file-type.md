@@ -84,7 +84,8 @@ f.String()  // "file:///etc/hosts"
 Three real costs, stated plainly.
 
 **Every method call re-parses the string and hits the registry.** `ParseRawURI`
-takes a read lock and scans registered prefixes longest-first. For a tight loop
+takes a read lock and checks the prefix of every registered file system for the
+longest match. For a tight loop
 over millions of files this is measurable. The mitigation is to hoist: call
 `file.FileSystem()` once, or work with the `FileSystem` directly, when you are
 in that regime.
@@ -100,13 +101,11 @@ literal you already know is valid.
 `SubFileSystem` is closed. This is the same lifetime problem the struct has,
 just moved: instead of holding a dangling reference, the value goes stale.
 That is the safer failure — a stale `File` errors out, it does not read or
-write through a closed connection. Note which error you get, though: the
-`Invalid` file system reports itself as neither readable nor writable, so the
-direction gate fires before the method does. A read returns
-`ErrWriteOnlyFileSystem` and a write returns `ErrReadOnlyFileSystem`, both with
-the message prefix `invalid file system`. Match on `errors.Is(err, os.ErrNotExist)`
-or simply on `err != nil`; do not expect `ErrInvalidFileSystem` from the high
-level `File` API.
+write through a closed connection. Every operation returns an error wrapping
+`ErrInvalidFileSystem` that names the URI, like
+`invalid file system: no file system registered for "sub://data/report.txt"`.
+It does not wrap `os.ErrNotExist`, so a stale `File` is not mistaken for a
+missing file; match it with `errors.Is(err, fs.ErrInvalidFileSystem)`.
 
 ## The safety rule that falls out
 

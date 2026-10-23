@@ -18,6 +18,7 @@ func FileInfoToFileCallback(fileCallback func(File) error) func(*FileInfo) error
 }
 
 // ReadHeader reads up to maxNumBytes from the beginning of the passed FileReader.
+// Fewer bytes are only returned for a file that is shorter than maxNumBytes.
 // If fr is a MemFile then a slice of its FileData is returned
 // without copying it.
 func ReadHeader(fr FileReader, maxNumBytes int) ([]byte, error) {
@@ -40,9 +41,11 @@ func ReadHeader(fr FileReader, maxNumBytes int) ([]byte, error) {
 	}
 	defer r.Close()
 
+	// A single Read may return fewer bytes than available,
+	// ReadFull reads until maxNumBytes or the end of the file
 	data := make([]byte, maxNumBytes)
-	n, err := r.Read(data)
-	if err != nil && !errors.Is(err, io.EOF) {
+	n, err := io.ReadFull(r, data)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return data[:n], err
 	}
 	return data[:n], nil
@@ -55,11 +58,11 @@ func ReadHeaderString(fr FileReader, maxNumBytes int) (string, error) {
 	return string(data), err
 }
 
-// ReadAllContext reads all data from r until EOF is reached,
+// ReadAll reads all data from r until EOF is reached,
 // another error is returned, or the context got canceled.
 // It is identical to io.ReadAll except that
 // it can be canceled via a context.
-func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
+func ReadAll(ctx context.Context, r io.Reader) ([]byte, error) {
 	b := make([]byte, 0, 512)
 	for ctx.Err() == nil {
 		if len(b) == cap(b) {
@@ -78,9 +81,9 @@ func ReadAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
 	return b, ctx.Err()
 }
 
-// WriteAllContext writes all of data to w
+// WriteAll writes all of data to w
 // with a cancelable context.
-func WriteAllContext(ctx context.Context, w io.Writer, data []byte) error {
+func WriteAll(ctx context.Context, w io.Writer, data []byte) error {
 	const chunkSize = 4 * 1024 * 1024 // 4MB
 	return writeAllContext(ctx, w, data, chunkSize)
 }

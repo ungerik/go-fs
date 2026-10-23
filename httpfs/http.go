@@ -1,20 +1,29 @@
 // Package httpfs implements a read only file system
 // for HTTP URLs.
-// Import it to register FileSystem and FileSystemTLS:
+// Import it to register Default and DefaultTLS
+// for all "http://" and "https://" URLs:
 //
 //	import _ "github.com/ungerik/go-fs/httpfs"
 //
-// Requests are made with Client, which can be replaced
-// to configure timeouts, proxies or transports.
+// Use NewAndRegister to register a file system with its own
+// http.Client for a more specific prefix like "https://api.example.com/",
+// URLs starting with that prefix then use it instead of DefaultTLS.
+//
+// URLs are used verbatim, see FileSystem.
 package httpfs
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ungerik/go-fs"
@@ -22,54 +31,275 @@ import (
 )
 
 func init() {
-	fs.Register(FileSystem)
-	fs.Register(FileSystemTLS)
+	_ = fs.Register(Default)
+	_ = fs.Register(DefaultTLS)
 }
 
 const (
-	// Prefix is the URI prefix of FileSystem.
+	// Prefix is the URI prefix of Default.
 	Prefix = "http://"
-	// PrefixTLS is the URI prefix of FileSystemTLS.
+	// PrefixTLS is the URI prefix of DefaultTLS.
 	PrefixTLS = "https://"
 	// Separator is the path separator of the file systems.
 	Separator = "/"
 )
 
 var (
-	// FileSystem is the read-only file system for "http://" URLs.
-	FileSystem = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: Prefix}}
+	// Default is the read-only file system for "http://" URLs
+	// using http.DefaultClient. It is registered by the package.
+	Default = mustNew(Prefix, nil)
 
-	// FileSystemTLS is the read-only file system for "https://" URLs.
-	FileSystemTLS = &fileSystem{PathHelper: fsimpl.PathHelper{URIPrefix: PrefixTLS}}
+	// DefaultTLS is the read-only file system for "https://" URLs
+	// using http.DefaultClient. It is registered by the package.
+	DefaultTLS = mustNew(PrefixTLS, nil)
 
-	// Client is used for all HTTP requests of the file systems.
-	Client = http.DefaultClient
+	_ fs.URIFileSystem     = new(FileSystem)
+	_ fs.ExistsFileSystem  = new(FileSystem)
+	_ fs.ReadAllFileSystem = new(FileSystem)
 )
 
-// fileSystem paths are not rooted, they start with the host name:
-// Prefix()+path is the URL.
-type fileSystem struct {
-	fsimpl.PathHelper
+// Options for New and NewAndRegister.
+type Options struct {
+	// Client is used for all HTTP requests of the file system.
+	// http.DefaultClient is used if nil.
+	Client *http.Client
 }
 
-func (*fileSystem) ReadableWritable() (readable, writable bool) {
+// FileSystem is a read-only file system for HTTP URLs.
+//
+// It implements fs.URIFileSystem: its paths are URLs in their escaped
+// form without the prefix, so an URL is requested exactly as it was
+// passed. The query string and the fragment are never decoded or
+// cleaned, so "?q=a%26b", "?to=https://example.com//x" and the
+// signature of a presigned URL arrive unchanged, escapes like "%2F" or
+// "%3F" in the path stay escaped, and a trailing slash is kept. Only
+// "." and ".." elements and duplicate slashes of the path are cleaned.
+//
+// The paths of Default and DefaultTLS start with the host, which is
+// treated like a volume: no ".." element leads to another host, so
+// File("http://example.com/files").Join("..", "..", "evil.example")
+// is "http://example.com/evil.example". The paths of a file system
+// with a prefix that contains a host, like "https://api.example.com/v1/",
+// are relative to that prefix and can't leave it.
+//
+// File.Name is the last path element in its escaped form, without the
+// query and the fragment, and empty for the URL of a host without path.
+// File.Dir and File.Join drop the query and the fragment, and the
+// joined parts are path elements: a "?" or "#" in them is escaped.
+type FileSystem struct {
+	prefix string
+	// hostInPath is true for a prefix that is only a scheme,
+	// then the host is the first element of the paths.
+	hostInPath bool
+	client     *http.Client
+	closed     atomic.Bool
+}
+
+// New returns a read-only file system for URLs starting with prefix,
+// which must start with "http://" or "https://", like "https://api.example.com/".
+// The file system is not registered, see NewAndRegister.
+func New(prefix string, opts *Options) (*FileSystem, error) {
+	if !strings.HasPrefix(prefix, Prefix) && !strings.HasPrefix(prefix, PrefixTLS) {
+		return nil, fmt.Errorf("httpfs prefix must start with %s or %s: %q", Prefix, PrefixTLS, prefix)
+	}
+	if strings.ContainsAny(prefix, "?#") {
+		return nil, fmt.Errorf("httpfs prefix must not contain a query or fragment: %q", prefix)
+	}
+	client := http.DefaultClient
+	if opts != nil && opts.Client != nil {
+		client = opts.Client
+	}
+	return &FileSystem{
+		prefix:     prefix,
+		hostInPath: prefix == Prefix || prefix == PrefixTLS,
+		client:     client,
+	}, nil
+}
+
+// NewAndRegister registers a read-only file system for URLs starting with prefix,
+// see New. URLs with that prefix then use this file system instead of
+// Default or DefaultTLS, for example with a client that authenticates requests.
+func NewAndRegister(prefix string, opts *Options) error {
+	f, err := New(prefix, opts)
+	if err != nil {
+		return err
+	}
+	return fs.Register(f)
+}
+
+func mustNew(prefix string, opts *Options) *FileSystem {
+	f, err := New(prefix, opts)
+	if err != nil {
+		panic(err)
+	}
+	return f
+}
+
+// Prefix returns the URI prefix of the file system.
+func (f *FileSystem) Prefix() string {
+	return f.prefix
+}
+
+// Separator returns "/".
+func (f *FileSystem) Separator() string {
+	return Separator
+}
+
+// splitQuery splits an URL or path at the first "?" or "#"
+// into the path and the verbatim query and fragment.
+func splitQuery(uri string) (path, queryAndFragment string) {
+	if i := strings.IndexAny(uri, "?#"); i >= 0 {
+		return uri[:i], uri[i:]
+	}
+	return uri, ""
+}
+
+// pathElementEscaper escapes the characters of a joined path element
+// that would start a query or fragment of the URL.
+var pathElementEscaper = strings.NewReplacer("?", "%3F", "#", "%23")
+
+// CleanPath joins the uriParts with the separator and returns the
+// cleaned path of the file system, see FileSystem for the rules.
+// The prefix is stripped from the first part. Further parts are path
+// elements in escaped form; joining them drops the query and the
+// fragment of the first part.
+func (f *FileSystem) CleanPath(uriParts ...string) string {
+	if len(uriParts) == 0 {
+		return ""
+	}
+	filePath, query := splitQuery(strings.TrimPrefix(uriParts[0], f.prefix))
+	if len(uriParts) > 1 {
+		query = ""
+		var b strings.Builder
+		b.WriteString(filePath)
+		for _, part := range uriParts[1:] {
+			b.WriteString(Separator)
+			b.WriteString(pathElementEscaper.Replace(part))
+		}
+		filePath = b.String()
+	}
+	return f.cleanPath(filePath) + query
+}
+
+// hostLen returns the length of the host at the start of filePath,
+// or zero if the paths of the file system don't start with a host.
+func (f *FileSystem) hostLen(filePath string) int {
+	if !f.hostInPath {
+		return 0
+	}
+	if i := strings.Index(filePath, Separator); i >= 0 {
+		return i
+	}
+	return len(filePath)
+}
+
+// cleanPath cleans a path without query below its host,
+// keeping a trailing slash. Elements that clean up to
+// the root are removed, so "h/a/.." is "h".
+func (f *FileSystem) cleanPath(filePath string) string {
+	host := filePath[:f.hostLen(filePath)]
+	rest := filePath[len(host):]
+	leadingSlash := strings.HasPrefix(rest, Separator)
+	trailingSlash := strings.HasSuffix(rest, Separator)
+	cleaned := path.Clean(Separator + rest)
+	if cleaned == Separator {
+		if leadingSlash && trailingSlash {
+			return host + Separator
+		}
+		return host
+	}
+	if !leadingSlash {
+		cleaned = cleaned[len(Separator):]
+	}
+	if trailingSlash {
+		cleaned += Separator
+	}
+	return host + cleaned
+}
+
+// PathFromURI returns the clean path of an URL starting with the prefix,
+// implementing fs.URIFileSystem. URL escapes are not decoded.
+func (f *FileSystem) PathFromURI(uri string) string {
+	return f.CleanPath(uri)
+}
+
+// URIFromPath returns the URL of a clean path, which is the prefix
+// followed by the path, implementing fs.URIFileSystem.
+func (f *FileSystem) URIFromPath(cleanPath string) string {
+	return f.prefix + cleanPath
+}
+
+// SplitDirAndName returns the parent directory of filePath and the name
+// of its last element, without the query and the fragment, implementing
+// fs.URIFileSystem. The name is empty for the URL of a host without path,
+// which is the parent of the elements directly below the host.
+func (f *FileSystem) SplitDirAndName(filePath string) (dir, name string) {
+	filePath, _ = splitQuery(filePath)
+	hostLen := f.hostLen(filePath)
+	dir, name = fsimpl.SplitDirAndName(filePath, hostLen, Separator)
+	switch {
+	case dir == ".":
+		dir = "" // the root of a prefix that contains the host
+	case hostLen > 0 && name != "" && dir == filePath[:hostLen]+Separator:
+		dir = filePath[:hostLen]
+	}
+	return dir, name
+}
+
+// ReadableWritable returns true for readable and false for writable.
+func (*FileSystem) ReadableWritable() (readable, writable bool) {
 	return true, false
 }
 
-func (*fileSystem) RootDir() fs.File {
+// RootDir returns fs.InvalidFile, HTTP has no root directory to list.
+func (*FileSystem) RootDir() fs.File {
 	return fs.InvalidFile
 }
 
-func (f *fileSystem) ID() string {
-	return strings.TrimSuffix(f.URIPrefix, "://")
+// ID returns the prefix without a trailing "://",
+// so "http" or "https" for Default and DefaultTLS
+// and the whole prefix for a prefix with a host.
+func (f *FileSystem) ID() string {
+	return strings.TrimSuffix(f.prefix, "://")
 }
 
-func (f *fileSystem) Name() string {
-	return strings.ToUpper(strings.TrimSuffix(f.URIPrefix, "://"))
+// Name returns "HTTP" or "HTTPS".
+func (f *FileSystem) Name() string {
+	if strings.HasPrefix(f.prefix, PrefixTLS) {
+		return "HTTPS"
+	}
+	return "HTTP"
 }
 
-func (f *fileSystem) String() string {
-	return f.Name() + " read-only file system"
+// String returns the name and the prefix of the file system
+// with the password of the prefix redacted.
+func (f *FileSystem) String() string {
+	return f.Name() + " " + redactURL(f.prefix)
+}
+
+// redactURL returns rawURL for error messages and logs: without the
+// query and fragment, which can carry secrets like the signature of a
+// presigned URL, and with a password replaced by "xxxxx", see
+// fsimpl.RedactURI for URLs that url.Parse rejects or misreads.
+// The password is redacted before the query is cut off, because a
+// password with an unencoded '?' or '#' reaches into the query.
+func redactURL(rawURL string) string {
+	withoutQuery, query := splitQuery(fsimpl.RedactURI(rawURL))
+	if query != "" {
+		withoutQuery += "?…"
+	}
+	return withoutQuery
+}
+
+// redactErr redacts the URL of a *url.Error in err, see redactURL.
+// net/http returns the errors of requests as *url.Error
+// with the complete URL including the query.
+func redactErr(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		urlErr.URL = redactURL(urlErr.URL)
+	}
+	return err
 }
 
 // info determines whether filePath exists and, if so, returns its FileInfo.
@@ -83,18 +313,24 @@ func (f *fileSystem) String() string {
 //     yields a non-nil error, because existence is unknown. Such errors must
 //     not be reported as "does not exist", otherwise a flaky network or an
 //     auth failure would make existing files appear to vanish.
-func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
-	url := f.URL(filePath)
-
-	// First try a fast HEAD request.
-	request, err := http.NewRequest(http.MethodHead, url, nil)
-	if err != nil {
+//
+// A HEAD request is tried first. If it reports no Content-Length or the
+// server doesn't support HEAD, a GET for the first byte is sent and the
+// size is taken from the Content-Range of the answer, so the content is
+// never downloaded to determine the size. The Size is -1 if the server
+// reports no size at all.
+func (f *FileSystem) info(filePath string) (fs.FileInfo, error) {
+	if err := f.checkClosed(); err != nil {
 		return fs.FileInfo{}, err
 	}
-	name := path.Base(request.URL.Path)
-	response, err := Client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	uri := f.URIFromPath(filePath)
+	request, err := http.NewRequest(http.MethodHead, uri, nil)
 	if err != nil {
-		return fs.FileInfo{}, err
+		return fs.FileInfo{}, fmt.Errorf("httpfs: %w", redactErr(err))
+	}
+	response, err := f.client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	if err != nil {
+		return fs.FileInfo{}, redactErr(err)
 	}
 	_ = response.Body.Close() // HEAD response body is empty; close error is irrelevant
 
@@ -104,55 +340,83 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 		return fs.FileInfo{}, nil
 
 	case isSuccessStatus(response.StatusCode) && response.ContentLength >= 0:
-		return fs.FileInfo{
-			File:        fs.File(url),
-			Name:        name,
-			Exists:      true,
-			IsRegular:   true,
-			IsHidden:    strings.HasPrefix(name, "."),
-			Size:        response.ContentLength,
-			Modified:    modifiedTime(response),
-			Permissions: fs.AllRead,
-		}, nil
+		return f.fileInfo(filePath, response.ContentLength, response), nil
 
-	case isSuccessStatus(response.StatusCode):
-		// 2xx but no Content-Length from HEAD: fall through to a GET request.
-
-	case response.StatusCode == http.StatusMethodNotAllowed,
+	case isSuccessStatus(response.StatusCode),
+		response.StatusCode == http.StatusMethodNotAllowed,
 		response.StatusCode == http.StatusNotImplemented:
-		// The server does not support HEAD: fall through to a GET request.
+		// No Content-Length or no HEAD support: ask for the first byte
+		return f.rangeInfo(filePath)
 
 	default:
 		// 401, 403, 429, 5xx, ...: existence is unknown.
-		return fs.FileInfo{}, fmt.Errorf("HTTPFileSystem.info: unexpected status %s for %s", response.Status, url)
+		return fs.FileInfo{}, statusError(response, uri)
 	}
+}
 
-	// Fall back to a full GET request.
-	response, err = Client.Get(url) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+// rangeInfo returns the FileInfo of filePath from a GET request
+// for the first byte, see info.
+func (f *FileSystem) rangeInfo(filePath string) (fs.FileInfo, error) {
+	uri := f.URIFromPath(filePath)
+	request, err := http.NewRequest(http.MethodGet, uri, nil)
 	if err != nil {
-		return fs.FileInfo{}, err
+		return fs.FileInfo{}, fmt.Errorf("httpfs: %w", redactErr(err))
 	}
-	defer response.Body.Close()
+	request.Header.Set("Range", "bytes=0-0")
+	response, err := f.client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	if err != nil {
+		return fs.FileInfo{}, redactErr(err)
+	}
+	// Never read more than a few bytes, a server that ignores the
+	// range sends the whole content. Draining a short body lets the
+	// client reuse the connection.
+	_, _ = io.CopyN(io.Discard, response.Body, 512)
+	_ = response.Body.Close()
 
 	switch {
 	case isNotExistStatus(response.StatusCode):
 		return fs.FileInfo{}, nil
-	case !isSuccessStatus(response.StatusCode):
-		return fs.FileInfo{}, fmt.Errorf("HTTPFileSystem.info: unexpected status %s for %s", response.Status, url)
-	}
-
-	size := response.ContentLength
-	if size < 0 {
-		// Read full body if still no ContentLength available
-		body, err := io.ReadAll(response.Body)
-		if err != nil {
-			return fs.FileInfo{}, err
+	case response.StatusCode == http.StatusPartialContent:
+		return f.fileInfo(filePath, contentRangeSize(response), response), nil
+	case response.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+		// The first byte doesn't exist, so the resource is empty
+		size := contentRangeSize(response)
+		if size < 0 {
+			size = 0
 		}
-		size = int64(len(body))
+		return f.fileInfo(filePath, size, response), nil
+	case isSuccessStatus(response.StatusCode):
+		// The server ignored the range, ContentLength is -1 if unknown
+		return f.fileInfo(filePath, response.ContentLength, response), nil
+	default:
+		return fs.FileInfo{}, statusError(response, uri)
 	}
+}
 
+// contentRangeSize returns the complete length of a Content-Range header
+// like "bytes 0-0/1234" or "bytes */1234", or -1 if it is unknown.
+func contentRangeSize(response *http.Response) int64 {
+	contentRange := response.Header.Get("Content-Range")
+	i := strings.LastIndexByte(contentRange, '/')
+	if !strings.HasPrefix(contentRange, "bytes ") || i < 0 {
+		return -1
+	}
+	size, err := strconv.ParseInt(contentRange[i+1:], 10, 64)
+	if err != nil || size < 0 {
+		return -1 // "*" for an unknown length
+	}
+	return size
+}
+
+// fileInfo returns the FileInfo of an existing file.
+func (f *FileSystem) fileInfo(filePath string, size int64, response *http.Response) fs.FileInfo {
+	_, name := f.SplitDirAndName(filePath)
+	if name == "" {
+		// The URL of a host without path, its name is the host
+		name = response.Request.URL.Host
+	}
 	return fs.FileInfo{
-		File:        fs.File(url),
+		File:        fs.File(f.URIFromPath(filePath)),
 		Name:        name,
 		Exists:      true,
 		IsRegular:   true,
@@ -160,7 +424,12 @@ func (f *fileSystem) info(filePath string) (fs.FileInfo, error) {
 		Size:        size,
 		Modified:    modifiedTime(response),
 		Permissions: fs.AllRead,
-	}, nil
+	}
+}
+
+// statusError returns the error for an unexpected status of a response.
+func statusError(response *http.Response, uri string) error {
+	return fmt.Errorf("httpfs: unexpected status %s for %s", response.Status, redactURL(uri))
 }
 
 // isSuccessStatus reports whether statusCode is a 2xx HTTP status.
@@ -187,18 +456,24 @@ func modifiedTime(response *http.Response) time.Time {
 	return modified
 }
 
-func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
+// Stat returns the FileInfo of the URL, see FileSystem.
+// The size comes from the Content-Length of a HEAD request,
+// or from the Content-Range of a GET request for the first byte
+// if the server reports no Content-Length for HEAD.
+// It is -1 if the server reports no size at all.
+func (f *FileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	info, err := f.info(filePath)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Exists {
-		return nil, fs.NewErrDoesNotExist(fs.File(f.URL(filePath)))
+		return nil, fs.NewErrDoesNotExist(fs.File(f.URIFromPath(filePath)))
 	}
 	return &info, nil
 }
 
-func (f *fileSystem) Exists(filePath string) (bool, error) {
+// Exists reports if the URL exists, see Stat.
+func (f *FileSystem) Exists(filePath string) (bool, error) {
 	info, err := f.info(filePath)
 	if err != nil {
 		return false, err
@@ -208,39 +483,68 @@ func (f *fileSystem) Exists(filePath string) (bool, error) {
 
 // get returns the response of a GET request with ctx.
 // A 404 or 410 status is reported as an error wrapping os.ErrNotExist.
-func (f *fileSystem) get(ctx context.Context, filePath string) (*http.Response, error) {
-	url := f.URL(filePath)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
+func (f *FileSystem) get(ctx context.Context, filePath string) (*http.Response, error) {
+	if err := f.checkClosed(); err != nil {
 		return nil, err
 	}
-	response, err := Client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	uri := f.URIFromPath(filePath)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("httpfs: %w", redactErr(err))
+	}
+	response, err := f.client.Do(request) //#nosec G704 -- HTTP filesystem intentionally fetches user-provided URLs
+	if err != nil {
+		return nil, redactErr(err)
 	}
 	switch {
 	case isNotExistStatus(response.StatusCode):
 		_ = response.Body.Close()
-		return nil, fs.NewErrDoesNotExist(fs.File(url))
+		return nil, fs.NewErrDoesNotExist(fs.File(uri))
 	case !isSuccessStatus(response.StatusCode):
 		_ = response.Body.Close()
-		return nil, fmt.Errorf("HTTPFileSystem: unexpected status %s for %s", response.Status, url)
+		return nil, statusError(response, uri)
 	}
 	return response, nil
 }
 
 // ReadAll downloads the URL with a GET request using ctx.
-func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
+// The buffer for the body is allocated once for the Content-Length
+// of the response, up to 16 MiB, a longer body grows it.
+func (f *FileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
 	response, err := f.get(ctx, filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
-	return fs.ReadAllContext(ctx, response.Body)
+	data, err := readAll(ctx, response.Body, response.ContentLength)
+	return data, redactErr(err)
+}
+
+// maxSizeHint caps the buffer that ReadAll allocates up front
+// for the Content-Length, so a wrong or hostile header can't
+// allocate a huge buffer before any data arrived.
+// A longer body grows the buffer while it is read.
+const maxSizeHint = 16 << 20 // 16 MiB
+
+// readAll reads r until EOF like fs.ReadAll. Like os.ReadFile,
+// a size that is not negative is used as hint for the buffer,
+// capped at maxSizeHint. A shorter or longer r is read completely.
+// ctx is checked before reading, the transport cancels the body
+// of a request with ctx while it is read.
+func readAll(ctx context.Context, r io.Reader, size int64) ([]byte, error) {
+	if size < 0 {
+		return fs.ReadAll(ctx, r)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, min(size, maxSizeHint)+bytes.MinRead))
+	_, err := buf.ReadFrom(r)
+	return buf.Bytes(), err
 }
 
 // OpenReader streams the body of a GET request.
-func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+func (f *FileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	response, err := f.get(context.Background(), filePath)
 	if err != nil {
 		return nil, err
@@ -248,10 +552,33 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	return response.Body, nil
 }
 
-func (f *fileSystem) Close() error {
+// Close unregisters the file system, after that every method returns an
+// error wrapping fs.ErrFileSystemClosed. Close of Default and DefaultTLS
+// does nothing, they are process-wide like fs.Local and stay usable.
+func (f *FileSystem) Close() error {
+	if f == Default || f == DefaultTLS {
+		return nil
+	}
+	if !f.closed.Swap(true) {
+		fs.Unregister(f)
+	}
 	return nil
 }
 
-func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+// checkClosed returns an error wrapping fs.ErrFileSystemClosed
+// if the file system was closed.
+func (f *FileSystem) checkClosed() error {
+	if f.closed.Load() {
+		return fmt.Errorf("%s: %w", f, fs.ErrFileSystemClosed)
+	}
+	return nil
+}
+
+// ListDir returns an error wrapping errors.ErrUnsupported,
+// because HTTP has no directory listing.
+func (f *FileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	if err := f.checkClosed(); err != nil {
+		return err
+	}
 	return fs.NewErrUnsupported(f, "ListDir")
 }

@@ -18,7 +18,7 @@ working.
 | Document                                           | You will build                                     |
 | -------------------------------------------------- | -------------------------------------------------- |
 | [Getting started](tutorial-getting-started.md)     | A program that reads and writes files, running unchanged against local disk, memory and HTTP |
-| [Implement a file system](tutorial-implement-a-filesystem.md) | A complete backend in ~120 lines that passes the conformance suite |
+| [Implement a file system](tutorial-implement-a-filesystem.md) | A complete backend in about 170 lines that passes the conformance suite |
 
 ## How-to guides — solving a specific problem
 
@@ -43,10 +43,10 @@ cover what spans several types.
 
 | Document                                           | Contents                                           |
 | -------------------------------------------------- | -------------------------------------------------- |
-| [FileSystem interfaces](reference-filesystem-interfaces.md) | All 28 interfaces, every fallback, the backend support matrix |
+| [FileSystem interfaces](reference-filesystem-interfaces.md) | All 27 interfaces, every fallback, the backend support matrix |
 | [Errors](reference-errors.md)                      | Every sentinel and typed error, and how to check it |
 | [fsimpl](reference-fsimpl.md)                      | Helpers for implementing a backend                 |
-| [fstest](reference-fstest.md)                      | The conformance suite, mocks and the Docker gate   |
+| [fstest](reference-fstest.md)                      | The conformance suite and the mock file systems    |
 | [uuiddir](reference-uuiddir.md)                    | UUID-named directories without unbounded fan-out   |
 
 ### Backend and package READMEs
@@ -64,11 +64,11 @@ tests.
 | [smbfs](../smbfs/README.md)                        | NTLM authentication, share paths, Samba tests      |
 | [webdavfs](../webdavfs/README.md)                  | Basic auth and bearer tokens, WebDAV method mapping |
 | [dropboxfs](../dropboxfs/README.md)                | Dropbox app setup, access token, manual test run   |
-| [httpfs](../httpfs/README.md)                      | Reading HTTP URLs as files, the shared http.Client |
+| [httpfs](../httpfs/README.md)                      | Reading HTTP URLs as files, clients per URL prefix |
 | [zipfs](../zipfs/README.md)                        | Reading and writing ZIP archives                   |
 | [tarfs](../tarfs/README.md)                        | Reading and writing tar, .tar.gz and .tgz archives |
 | [multipartfs](../multipartfs/README.md)            | Uploaded form files as a file system               |
-| [tools](../tools/README.md)                        | The pinned staticcheck and gosec versions          |
+| [tools](../tools/README.md)                        | The pinned staticcheck, gosec and govulncheck versions          |
 
 ## Explanation — why it works this way
 
@@ -80,7 +80,7 @@ useful when something surprises you.
 | [Why File is a string](explanation-the-file-type.md) | Why not an interface or a struct?                  |
 | [Paths, URIs and the registry](explanation-path-and-uri-model.md) | How does a string become a file system?            |
 | [The context rule](explanation-context-rule.md)    | Why do only some methods take a `ctx`?             |
-| [Optional interfaces and emulation](explanation-optional-interfaces.md) | Why 28 interfaces, and why does everything work everywhere? |
+| [Optional interfaces and emulation](explanation-optional-interfaces.md) | Why 26 file system interfaces, and why does everything work everywhere? |
 
 ## Project documents
 
@@ -88,6 +88,7 @@ useful when something surprises you.
 | ---------------------------- | --------------------------------------- |
 | [README](../README.md)       | Overview and API tour                   |
 | [CHANGELOG](../CHANGELOG.md) | Release history                         |
+| [SECURITY](../SECURITY.md)   | Supported versions, reporting a vulnerability|
 | [V1 roadmap](V1_ROADMAP.md)  | Plan of record for the v1.0 work        |
 | [AGENTS.md](../AGENTS.md)    | Repository conventions for contributors |
 

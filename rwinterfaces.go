@@ -2,26 +2,17 @@ package fs
 
 import "io"
 
-// ReadSeekCloser combines the interfaces
+// ReadAtSeekCloser combines the interfaces
 // io.Reader
 // io.ReaderAt
 // io.Seeker
 // io.Closer
-type ReadSeekCloser interface {
+//
+// It is returned by FileReader.OpenReadSeeker.
+// Unlike io.ReadSeekCloser it also supports io.ReaderAt.
+type ReadAtSeekCloser interface {
 	io.Reader
 	io.ReaderAt
-	io.Seeker
-	io.Closer
-}
-
-// WriteSeekCloser combines the interfaces
-// io.Writer
-// io.WriterAt
-// io.Seeker
-// io.Closer
-type WriteSeekCloser interface {
-	io.Writer
-	io.WriterAt
 	io.Seeker
 	io.Closer
 }

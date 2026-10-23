@@ -13,16 +13,22 @@ import (
 func ExampleNewWriter() {
 	ctx := context.Background()
 
-	memFS, err := fs.NewMemFileSystem("/")
+	memFS, err := fs.NewMemFileSystem(nil)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
 		panic(err)
 	}
 	defer memFS.Close()
 	// The .tar.gz extension turns on gzip compression
 	archive := memFS.RootDir().Join("docs.tar.gz")
 
-	writer, err := tarfs.NewWriter(archive)
+	writer, err := tarfs.NewWriter(archive, "")
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(writer); err != nil {
 		panic(err)
 	}
 	err = writer.RootDir().Join("readme.txt").WriteAllString(ctx, "Hello tar")
@@ -35,8 +41,11 @@ func ExampleNewWriter() {
 		panic(err)
 	}
 
-	reader, err := tarfs.NewReader(archive)
+	reader, err := tarfs.NewReader(archive, "")
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(reader); err != nil {
 		panic(err)
 	}
 	defer reader.Close()

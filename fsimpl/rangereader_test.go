@@ -1,13 +1,21 @@
-package fsimpl
+package fsimpl_test
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ungerik/go-fs/fsimpl"
 )
 
 // rangeSource records the ranges opened by a RangeReader,
@@ -18,8 +26,8 @@ type rangeSource struct {
 	opens [][2]int64
 }
 
-func (s *rangeSource) reader() *RangeReader {
-	return &RangeReader{
+func (s *rangeSource) reader() *fsimpl.RangeReader {
+	return &fsimpl.RangeReader{
 		Size: int64(len(s.data)),
 		Open: func(offset, count int64) (io.ReadCloser, error) {
 			s.opens = append(s.opens, [2]int64{offset, count})
@@ -85,6 +93,109 @@ func TestRangeReader(t *testing.T) {
 		_, err = r.ReadAt(make([]byte, 1), 0)
 		assert.ErrorIs(t, err, os.ErrClosed)
 	})
+}
+
+// TestRangeReader_TruncatedBody verifies that a body which ends before
+// Size, like after a dropped connection, is reported as
+// io.ErrUnexpectedEOF and not as a complete file.
+func TestRangeReader_TruncatedBody(t *testing.T) {
+	data := []byte("0123456789")
+	var opens [][2]int64
+	r := &fsimpl.RangeReader{Size: int64(len(data)), Open: func(offset, count int64) (io.ReadCloser, error) {
+		opens = append(opens, [2]int64{offset, count})
+		// Every body is cut off after 4 bytes
+		end := min(offset+4, int64(len(data)))
+		return io.NopCloser(bytes.NewReader(data[offset:end])), nil
+	}}
+
+	got, err := io.ReadAll(r)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF, "ReadAll of a truncated body")
+	assert.Equal(t, "0123", string(got))
+
+	// The truncated body was closed, the next Read resumes at the position
+	got, err = io.ReadAll(r)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assert.Equal(t, "4567", string(got))
+	assert.Equal(t, [][2]int64{{0, -1}, {4, -1}}, opens, "the next Read opens a body at the position")
+
+	p := make([]byte, 8)
+	n, err := r.ReadAt(p, 0)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF, "ReadAt of a truncated body")
+	assert.Equal(t, 4, n)
+
+	// A body that delivers nothing of a range within Size
+	empty := &fsimpl.RangeReader{Size: 10, Open: func(int64, int64) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}}
+	_, err = empty.ReadAt(p, 0)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF, "ReadAt of an empty body")
+	_, err = empty.Read(p)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF, "Read of an empty body")
+}
+
+// TestRangeReader_NotBeyondSize verifies that sequential reads stop at
+// Size even if the body delivers more, for example because the file
+// grew after its size was determined.
+func TestRangeReader_NotBeyondSize(t *testing.T) {
+	r := &fsimpl.RangeReader{Size: 4, Open: func(offset, count int64) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("0123456789")[offset:])), nil
+	}}
+	got, err := io.ReadAll(r)
+	require.NoError(t, err)
+	assert.Equal(t, "0123", string(got))
+}
+
+// ExampleRangeReader reads a file with HTTP range requests. A server that
+// ignores the Range header answers 200 with the whole file, so the body
+// is moved to the offset before it is returned, and other status codes
+// are errors instead of content.
+func ExampleRangeReader() {
+	content := "Hello, range requests!"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "hello.txt", time.Time{}, strings.NewReader(content))
+	}))
+	defer server.Close()
+
+	r := &fsimpl.RangeReader{
+		Size: int64(len(content)),
+		Open: func(offset, count int64) (io.ReadCloser, error) {
+			req, err := http.NewRequest(http.MethodGet, server.URL+"/hello.txt", nil)
+			if err != nil {
+				return nil, err
+			}
+			if count < 0 {
+				req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+			} else {
+				req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, offset+count-1))
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			switch resp.StatusCode {
+			case http.StatusPartialContent:
+				return resp.Body, nil
+			case http.StatusOK:
+				// The server ignored the range and sends the whole file
+				if _, err = io.CopyN(io.Discard, resp.Body, offset); err != nil {
+					return nil, errors.Join(err, resp.Body.Close())
+				}
+				return resp.Body, nil
+			default:
+				return nil, errors.Join(fmt.Errorf("unexpected status %s", resp.Status), resp.Body.Close())
+			}
+		},
+	}
+	defer r.Close()
+
+	word := make([]byte, 5)
+	if _, err := r.ReadAt(word, 7); err != nil {
+		panic(err)
+	}
+	fmt.Println(string(word))
+
+	// Output:
+	// range
 }
 
 // TestRangeReader_ReadAtZeroLength verifies the io.ReaderAt contract for

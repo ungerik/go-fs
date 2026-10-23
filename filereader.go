@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	iofs "io/fs"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -39,6 +40,14 @@ type FileReader interface {
 	// IsDir returns true if the file is a directory.
 	IsDir() bool
 
+	// IsSymbolicLink returns if the file is a symbolic link.
+	// It is always false for implementations without symbolic links.
+	IsSymbolicLink() bool
+
+	// Stat returns a standard library io/fs.FileInfo describing the file,
+	// following symbolic links.
+	Stat() (iofs.FileInfo, error)
+
 	// CheckIsDir return an ErrDoesNotExist error
 	// if the file does not exist, ErrEmptyPath
 	// if the file path is empty, or ErrIsNotDirectory
@@ -65,15 +74,15 @@ type FileReader interface {
 	// OpenReader opens the file and returns a ReadCloser that has to be closed after reading
 	OpenReader() (ReadCloser, error)
 
-	// OpenReadSeeker opens the file and returns a ReadSeekCloser.
+	// OpenReadSeeker opens the file and returns a ReadAtSeekCloser.
 	// Use OpenReader if seeking is not necessary because implementations
 	// may need additional buffering to support seeking or not support it at all.
-	OpenReadSeeker() (ReadSeekCloser, error)
+	OpenReadSeeker() (ReadAtSeekCloser, error)
 
-	// ReadJSON reads and unmarshalles the JSON content of the file to output.
+	// ReadJSON reads and unmarshals the JSON content of the file to output.
 	ReadJSON(ctx context.Context, output any) error
 
-	// ReadXML reads and unmarshalles the XML content of the file to output.
+	// ReadXML reads and unmarshals the XML content of the file to output.
 	ReadXML(ctx context.Context, output any) error
 }
 
@@ -130,3 +139,21 @@ func (f *fileReaderWithName) Name() string {
 func (f *fileReaderWithName) Ext() string {
 	return fsimpl.Ext(f.name, "")
 }
+
+// Stat returns the io/fs.FileInfo of the wrapped FileReader
+// with the name of the fileReaderWithName.
+func (f *fileReaderWithName) Stat() (iofs.FileInfo, error) {
+	info, err := f.FileReader.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return renamedFileInfo{FileInfo: info, name: f.name}, nil
+}
+
+// renamedFileInfo is an io/fs.FileInfo with a different name.
+type renamedFileInfo struct {
+	iofs.FileInfo
+	name string
+}
+
+func (i renamedFileInfo) Name() string { return i.name }

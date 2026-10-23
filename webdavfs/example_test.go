@@ -4,16 +4,18 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/webdavfs"
 )
 
-// ExampleNewAndRegister registers a WebDAV share as file system.
+// ExampleNew connects to a WebDAV share and registers it,
+// so that its files can also be used by URI.
 //
 // The example is compiled but not run, because it needs a WebDAV server.
-func ExampleNewAndRegister() {
+func ExampleNew() {
 	ctx := context.Background()
 
-	webdavFS, err := webdavfs.NewAndRegister(
+	webdavFS, err := webdavfs.New(
 		ctx,
 		"https://example.com/remote.php/dav/files/erik",
 		&webdavfs.Options{Username: "erik", Password: "secret"},
@@ -21,9 +23,14 @@ func ExampleNewAndRegister() {
 	if err != nil {
 		panic(err)
 	}
-	defer webdavFS.Close()
+	if err := fs.Register(webdavFS); err != nil {
+		panic(err)
+	}
+	defer webdavFS.Close() // also unregisters it
 
-	content, err := webdavFS.RootDir().Join("Documents", "notes.txt").ReadAllString(ctx)
+	// webdav://erik@example.com/remote.php/dav/files/erik/Documents/notes.txt
+	file := webdavFS.RootDir().Join("Documents", "notes.txt")
+	content, err := file.ReadAllString(ctx)
 	if err != nil {
 		panic(err)
 	}

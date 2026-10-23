@@ -2,7 +2,10 @@ package fs_test
 
 import (
 	"embed"
+	"errors"
+	"maps"
 	"os"
+	"slices"
 	"testing"
 	stdfstest "testing/fstest"
 
@@ -44,7 +47,8 @@ func TestStdFileSystem_Conformance(t *testing.T) {
 
 // TestStdFileSystem_Embed makes an embed.FS usable through the File API.
 func TestStdFileSystem_Embed(t *testing.T) {
-	stdFS := fs.NewStdFileSystemAndRegister(embeddedDocs, "embedded-docs")
+	stdFS := fs.NewStdFileSystem(embeddedDocs, "embedded-docs")
+	require.NoError(t, fs.Register(stdFS))
 	t.Cleanup(func() { assert.NoError(t, stdFS.Close()) })
 
 	dir := fs.File("stdfs://embedded-docs/docs")
@@ -75,7 +79,8 @@ func TestStdFileSystem_DirFS(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(tempDir.LocalPath()) })
 	require.NoError(t, tempDir.Join("a.txt").WriteAllString(t.Context(), "a"))
 
-	stdFS := fs.NewStdFileSystemAndRegister(os.DirFS(tempDir.LocalPath()), "")
+	stdFS := fs.NewStdFileSystem(os.DirFS(tempDir.LocalPath()), "")
+	require.NoError(t, fs.Register(stdFS))
 	t.Cleanup(func() { assert.NoError(t, stdFS.Close()) })
 
 	root := stdFS.RootDir()
@@ -87,4 +92,33 @@ func TestStdFileSystem_DirFS(t *testing.T) {
 	_, err = root.Join("..", "..", "etc", "passwd").Stat()
 	require.Error(t, err)
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// TestStdFileSystem_SymbolicLinks checks the symbolic links of an os.DirFS:
+// ListDirRecursive lists a link to a directory as entry without following it,
+// except a link at the start, and CopyRecursive fails before it writes
+// anything, where it used to copy the directory the link points to, because
+// a link to a directory is never copied to another file system.
+func TestStdFileSystem_SymbolicLinks(t *testing.T) {
+	dir := fs.File(t.TempDir())
+	writeFiles(t, dir, map[string]string{"tree/a.txt": "a", "outside/b.txt": "b"})
+	if err := os.Symlink("../outside", dir.Join("tree", "link").LocalPath()); err != nil {
+		t.Skipf("can't create symbolic link: %v", err)
+	}
+	stdFS := fs.NewStdFileSystem(os.DirFS(dir.LocalPath()), "")
+	register(t, stdFS)
+	tree := stdFS.RootDir().Join("tree")
+
+	infos := listInfosRecursive(t.Context(), t, tree)
+	require.ElementsMatch(t, []string{"/tree/a.txt", "/tree/link"}, slices.Collect(maps.Keys(infos)))
+	requireListedLinks(t, infos, "/tree/link")
+	requireFiles(t, tree.Join("link"), "b.txt")
+
+	dest := newLinkMemFS(t).RootDir().Join("copy")
+	for _, src := range []fs.File{tree, stdFS.RootDir()} {
+		err := fs.CopyRecursive(t.Context(), src, dest)
+		require.ErrorIs(t, err, errors.ErrUnsupported, "CopyRecursive of %s", src)
+		require.ErrorContains(t, err, tree.Join("link").String(), "the error must name the link")
+		requireMissing(t, dest)
+	}
 }

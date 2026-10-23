@@ -1,16 +1,24 @@
 package fs
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
-	"fmt"
+	"io"
 	iofs "io/fs"
+	"iter"
+	"os"
+	"path"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	stdfstest "testing/fstest"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -242,75 +250,84 @@ func TestFile_RelPathOf(t *testing.T) {
 }
 
 func TestFile_Watch(t *testing.T) {
-	Local.WatchEventLogger = LoggerFunc(func(format string, args ...any) {
-		fmt.Printf(format+"\n", args...)
-	})
-	Local.WatchErrorLogger = LoggerFunc(func(format string, args ...any) {
-		t.Errorf(format, args...)
-	})
-	const sleepDurationForCallback = time.Millisecond * 10
-	var (
-		dir       = File(t.TempDir())
-		mtx       sync.Mutex // the callback runs on the watcher goroutine
-		gotFiles  []File
-		gotEvents []Event
-	)
-	cancel, err := dir.Watch(func(file File, event Event) {
-		mtx.Lock()
-		defer mtx.Unlock()
-		gotFiles = append(gotFiles, file)
-		gotEvents = append(gotEvents, event)
-	})
-	require.NoError(t, err, "dir.Watch")
-
-	newFile := dir.Join("newFile")
-	err = newFile.Touch()
-	require.NoError(t, err, "newFile.Touch")
-
-	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
-
-	renamedFile, err := newFile.Rename("renamedFile")
-	require.NoError(t, err, "newFile.Rename")
-
-	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
-
-	err = renamedFile.Remove()
-	require.NoError(t, err, "renamedFile.Remove")
-
-	time.Sleep(sleepDurationForCallback) // Give goroutines time for callback
-
-	// The order in which fsnotify delivers the events differs between
-	// platforms (inotify reports the RENAME of newFile before the CREATE
-	// of renamedFile, kqueue the other way round), so compare as a set.
 	type fileEvent struct {
 		file  File
 		event Event
 	}
-	mtx.Lock()
-	defer mtx.Unlock()
-	var got []fileEvent
-	for i := range gotFiles {
-		got = append(got, fileEvent{gotFiles[i], gotEvents[i]})
-	}
-	assert.ElementsMatch(t,
-		[]fileEvent{
-			{newFile, eventCreate},
-			{newFile, eventRename},
-			{renamedFile, eventCreate},
-			{renamedFile, eventRemove},
-		},
-		got,
+	var (
+		dir = File(t.TempDir())
+		mtx sync.Mutex // the callback runs on a goroutine of the watch
+		got []fileEvent
 	)
+	cancel, err := dir.Watch(func(file File, event Event) {
+		mtx.Lock()
+		defer mtx.Unlock()
+		got = append(got, fileEvent{file, event})
+	})
+	require.NoError(t, err, "dir.Watch")
+
+	// received reports if an event of file has the operation op,
+	// fsnotify can report several operations in one event
+	received := func(file File, op Event) bool {
+		mtx.Lock()
+		defer mtx.Unlock()
+		return slices.ContainsFunc(got, func(e fileEvent) bool {
+			return e.file == file && e.event&op == op
+		})
+	}
+	// The watcher reports the events asynchronously, so wait for
+	// the event of every step before taking the next one.
+	waitFor := func(file File, op Event) {
+		t.Helper()
+		require.Eventually(t, func() bool { return received(file, op) },
+			5*time.Second, time.Millisecond, "event %s of %s", op, file)
+	}
+
+	// kqueue reports the RENAME and REMOVE of a file in a directory
+	// only through a watch of the file, which fsnotify adds after it
+	// reported the CREATE. A WRITE comes through that watch, so the
+	// file is written until a WRITE shows that the watch exists.
+	writeUntilWatched := func(file File) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			require.NoError(t, file.WriteAllString(t.Context(), "content"), "WriteAllString")
+			return received(file, EventWrite)
+		}, 5*time.Second, 5*time.Millisecond, "event %s of %s", EventWrite, file)
+	}
+
+	newFile := dir.Join("newFile")
+	require.NoError(t, newFile.Touch(), "newFile.Touch")
+	waitFor(newFile, EventCreate)
+	writeUntilWatched(newFile)
+
+	renamedFile, err := newFile.Rename(t.Context(), "renamedFile")
+	require.NoError(t, err, "newFile.Rename")
+	// The order of the two events differs between platforms
+	// (inotify reports the RENAME of newFile before the CREATE
+	// of renamedFile, kqueue the other way round)
+	waitFor(newFile, EventRename)
+	waitFor(renamedFile, EventCreate)
+	writeUntilWatched(renamedFile)
+
+	require.NoError(t, renamedFile.Remove(), "renamedFile.Remove")
+	waitFor(renamedFile, EventRemove)
 
 	err = cancel()
 	assert.NoError(t, err, "cancel watch")
+
+	mtx.Lock()
+	defer mtx.Unlock()
+	for _, e := range got {
+		assert.Contains(t, []File{newFile, renamedFile}, e.file, "event %s of an unexpected file", e.event)
+	}
 }
 
 // mapFSDir registers a read-only StdFileSystem over the MapFS
 // fixture for the test and returns its root directory.
 func mapFSDir(t *testing.T, fixture stdfstest.MapFS) File {
 	t.Helper()
-	stdFS := NewStdFileSystemAndRegister(fixture, "")
+	stdFS := NewStdFileSystem(fixture, "")
+	require.NoError(t, Register(stdFS))
 	t.Cleanup(func() { _ = stdFS.Close() })
 	return stdFS.RootDir()
 }
@@ -495,11 +512,6 @@ func TestFile_Glob(t *testing.T) {
 	xFile2 := xDir.Join("file2.txt")
 	xFile3 := xDir.Join("file3.txt")
 
-	type result struct {
-		file   File
-		values []string
-	}
-
 	// Absolute patterns below are relative to the root directory
 	dirPathFromRoot := dir.Path()
 
@@ -507,120 +519,140 @@ func TestFile_Glob(t *testing.T) {
 		name    string
 		file    File
 		pattern string
-		want    []result
-		wantErr bool
+		want    []File
+		wantErr error
 	}{
-		{
-			name:    "invalid file",
-			file:    "",
-			pattern: "",
-			want:    nil,
-		},
 		{
 			name:    "empty pattern",
 			file:    dir,
 			pattern: "",
-			want:    []result{{dir, nil}},
+			want:    []File{dir},
 		},
 		{
 			name:    "no wildcard pattern",
 			file:    dir,
 			pattern: "a/b/c/Hello/World/x/file1.txt",
-			want: []result{
-				{xFile1, nil},
-			},
+			want:    []File{xFile1},
 		},
 		{
 			name:    "no wildcard non-canonical pattern",
 			file:    dir,
 			pattern: "/./a/b//c/Hello/./././/World/x/file1.txt",
-			want: []result{
-				{xFile1, nil},
-			},
+			want:    []File{xFile1},
+		},
+		{
+			name:    "no wildcard directory pattern on a file",
+			file:    dir,
+			pattern: "a/b/c/Hello/World/x/file1.txt/",
+			want:    nil,
 		},
 		{
 			name:    "root files",
 			file:    dir,
 			pattern: "*",
-			want: []result{
-				{dir.Join("a"), []string{"a"}},
-			},
+			want:    []File{dir.Join("a")},
 		},
 		{
 			name:    "root dirs",
 			file:    dir,
 			pattern: "*/",
-			want: []result{
-				{dir.Join("a"), []string{"a"}},
-			},
+			want:    []File{dir.Join("a")},
 		},
 		{
 			name:    "file and dir",
 			file:    dir,
 			pattern: "./a/b/c/*",
-			want: []result{
-				{dir.Join("a", "b", "c", "Hello"), []string{"Hello"}},
-				{cFile, []string{"cFile"}},
-			},
+			want:    []File{dir.Join("a", "b", "c", "Hello"), cFile},
 		},
 		{
 			name:    "directories only",
 			file:    dir,
 			pattern: "./a/b/c/*/",
-			want: []result{
-				{dir.Join("a", "b", "c", "Hello"), []string{"Hello"}},
-			},
+			want:    []File{dir.Join("a", "b", "c", "Hello")},
 		},
 		{
 			name:    "complexer pattern",
 			file:    dir,
 			pattern: "*/b/c/*/W???d/x/file[1-2].txt",
-			want: []result{
-				{xFile1, []string{"a", "Hello", "World", "file1.txt"}},
-				{xFile2, []string{"a", "Hello", "World", "file2.txt"}},
-			},
-		},
-		{
-			name:    "invalid empty path base file",
-			file:    "",
-			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/*",
-			want:    nil,
+			want:    []File{xFile1, xFile2},
 		},
 		{
 			name:    "root dir base",
 			file:    rootDir,
 			pattern: dirPathFromRoot + "/a/b/c/Hello/World/x/*.txt",
-			want: []result{
-				{xFile1, []string{"file1.txt"}},
-				{xFile2, []string{"file2.txt"}},
-				{xFile3, []string{"file3.txt"}},
-			},
+			want:    []File{xFile1, xFile2, xFile3},
+		},
+		{
+			name:    "missing directory is no match",
+			file:    dir,
+			pattern: "*/missing/*",
+			want:    nil,
+		},
+		{
+			name:    "pattern continuing below a file is no match",
+			file:    dir,
+			pattern: "a/b/c/cFile/*",
+			want:    nil,
+		},
+		{
+			name:    "no wildcard pattern continuing below a file is no match",
+			file:    dir,
+			pattern: "*/b/c/cFile/x.txt",
+			want:    nil,
 		},
 		// Errors
+		{
+			name:    "invalid file",
+			file:    "",
+			pattern: "",
+			wantErr: ErrEmptyPath,
+		},
+		{
+			name:    "invalid empty path base file",
+			file:    "",
+			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/*",
+			wantErr: ErrEmptyPath,
+		},
 		{
 			name:    "malformed pattern",
 			file:    dir,
 			pattern: "a/b/c/Hello/World/x/[file1.txt",
-			wantErr: true,
+			wantErr: path.ErrBadPattern,
+		},
+		{
+			name:    "parent directory in pattern",
+			file:    dir,
+			pattern: "a/../*",
+			wantErr: path.ErrBadPattern,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotIter, err := tt.file.Glob(t.Context(), tt.pattern)
-			if tt.wantErr {
-				require.Error(t, err, "File.Glob")
+			got, errs := collectGlob(tt.file.Glob(t.Context(), tt.pattern))
+			if tt.wantErr != nil {
+				require.Len(t, errs, 1, "File.Glob must yield exactly one error")
+				require.ErrorIs(t, errs[0], tt.wantErr)
+				require.Empty(t, got, "no files after a pattern error")
 				return
 			}
-			require.NoError(t, err, "File.Glob")
-			var got []result
-			for file, values := range gotIter {
-				require.Truef(t, file.Exists(), "file %s does not exist", file)
-				got = append(got, result{file, values})
-			}
-			sort.Slice(got, func(i, j int) bool { return got[i].file.Path() < got[j].file.Path() })
+			require.Empty(t, errs, "File.Glob errors")
 			require.Equal(t, tt.want, got, "file path sorted results")
 		})
 	}
+}
+
+// collectGlob returns the files yielded by a Glob iterator
+// sorted by path and the yielded errors.
+func collectGlob(seq iter.Seq2[File, error]) (files []File, errs []error) {
+	for file, err := range seq {
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		files = append(files, file)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path() < files[j].Path() })
+	return files, errs
 }
 
 func TestGlob(t *testing.T) {
@@ -639,149 +671,278 @@ func TestGlob(t *testing.T) {
 	xFile3 := xDir.Join("file3.txt")
 	require.NoError(t, xFile3.Touch())
 
-	type result struct {
-		file   File
-		values []string
-	}
-
 	tests := []struct {
 		name    string
 		pattern string
-		want    []result
-		wantErr bool
+		want    []File
+		wantErr error
 	}{
 		{
 			name:    "empty pattern for current dir",
 			pattern: "",
-			want:    []result{{".", nil}},
+			want:    []File{"."},
 		},
 		{
 			name:    "no wildcard pattern",
 			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/file1.txt",
-			want: []result{
-				{xFile1, nil},
-			},
+			want:    []File{xFile1},
 		},
 		{
 			name:    "no wildcard non-canonical pattern",
 			pattern: dir.PathWithSlashes() + "/./a/b//c/Hello/./././/World/x/file1.txt",
-			want: []result{
-				{xFile1, nil},
-			},
+			want:    []File{xFile1},
+		},
+		{
+			// A trailing slash matches only directories, also without wildcards
+			name:    "no wildcard directory pattern on a file",
+			pattern: dir.PathWithSlashes() + "/a/b/c/cFile/",
+			want:    nil,
+		},
+		{
+			name:    "no wildcard directory pattern",
+			pattern: dir.PathWithSlashes() + "/a/b/c/",
+			want:    []File{dir.Join("a", "b", "c")},
 		},
 		{
 			name:    "root files",
 			pattern: dir.PathWithSlashes() + "/*",
-			want: []result{
-				{dir.Join("a"), []string{"a"}},
-			},
+			want:    []File{dir.Join("a")},
 		},
 		{
 			name:    "root dirs",
 			pattern: dir.PathWithSlashes() + "/*/",
-			want: []result{
-				{dir.Join("a"), []string{"a"}},
-			},
+			want:    []File{dir.Join("a")},
 		},
 		{
 			name:    "file and dir",
 			pattern: dir.PathWithSlashes() + "/a/b/c/*",
-			want: []result{
-				{dir.Join("a", "b", "c", "Hello"), []string{"Hello"}},
-				{cFile, []string{"cFile"}},
-			},
+			want:    []File{dir.Join("a", "b", "c", "Hello"), cFile},
 		},
 		{
 			name:    "directories only",
 			pattern: dir.PathWithSlashes() + "/a/b/c/*/",
-			want: []result{
-				{dir.Join("a", "b", "c", "Hello"), []string{"Hello"}},
-			},
+			want:    []File{dir.Join("a", "b", "c", "Hello")},
 		},
 		{
 			name:    "complexer pattern",
 			pattern: dir.PathWithSlashes() + "/*/b/c/*/W???d/x/file[1-2].txt",
-			want: []result{
-				{xFile1, []string{"a", "Hello", "World", "file1.txt"}},
-				{xFile2, []string{"a", "Hello", "World", "file2.txt"}},
-			},
+			want:    []File{xFile1, xFile2},
 		},
 		{
 			name:    "*.txt",
 			pattern: dir.PathWithSlashes() + "/a/b/c/Hello/World/x/*.txt",
-			want: []result{
-				{xFile1, []string{"file1.txt"}},
-				{xFile2, []string{"file2.txt"}},
-				{xFile3, []string{"file3.txt"}},
-			},
+			want:    []File{xFile1, xFile2, xFile3},
+		},
+		{
+			// The local file system reports "not a directory" for these paths
+			name:    "pattern continuing below a file is no match",
+			pattern: dir.PathWithSlashes() + "/a/b/c/cFile/x/*",
+			want:    nil,
+		},
+		{
+			name:    "no wildcard pattern continuing below a file is no match",
+			pattern: dir.PathWithSlashes() + "/*/b/c/cFile/x/y.txt",
+			want:    nil,
 		},
 		// Errors
 		{
 			name:    "malformed pattern",
 			pattern: "/a/b/c/Hello/World/x/[file1.txt",
-			wantErr: true,
+			wantErr: path.ErrBadPattern,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotIter, err := Glob(t.Context(), tt.pattern)
-			if tt.wantErr {
-				require.Error(t, err, "Glob")
+			got, errs := collectGlob(Glob(t.Context(), tt.pattern))
+			if tt.wantErr != nil {
+				require.Len(t, errs, 1, "Glob must yield exactly one error")
+				require.ErrorIs(t, errs[0], tt.wantErr)
 				return
 			}
-			require.NoError(t, err, "Glob")
-			var got []result
-			for file, values := range gotIter {
-				require.Truef(t, file.Exists(), "file %s does not exist", file)
-				got = append(got, result{file, values})
-			}
-			sort.Slice(got, func(i, j int) bool { return got[i].file.LocalPath() < got[j].file.LocalPath() })
+			require.Empty(t, errs, "Glob errors")
 			require.Equal(t, tt.want, got, "file path sorted results")
 		})
 	}
 }
 
-// noRenameMoveFS wraps a FileSystem but only exposes the base FileSystem
-// interface, deliberately hiding any Rename or Move methods of the wrapped
-// implementation. This forces File.Rename into its default copy-and-remove
-// fallback branch for file systems that implement neither RenameFileSystem
-// nor MoveFileSystem (for example s3fs).
+// TestGlob_Break is a regression test: breaking out of a Glob loop
+// over a pattern with several wildcard segments panicked with
+// "range function continued iteration", because the iterator kept
+// listing directories and calling yield after it returned false.
+func TestGlob_Break(t *testing.T) {
+	memFS, err := RegisteredTestMemFileSystem(nil,
+		NewMemFile("/d1/x.txt", []byte("1")),
+		NewMemFile("/d2/x.txt", []byte("2")),
+		NewMemFile("/d3/x.txt", []byte("3")),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memFS.Close() })
+
+	for _, pattern := range []string{"*/x.txt", "*/*.txt", "*/*"} {
+		t.Run(pattern, func(t *testing.T) {
+			n := 0
+			require.NotPanics(t, func() {
+				for file, err := range memFS.RootDir().Glob(t.Context(), pattern) {
+					require.NoError(t, err)
+					require.True(t, file.Exists())
+					n++
+					break
+				}
+			})
+			require.Equal(t, 1, n, "one file before the break")
+		})
+	}
+}
+
+// TestGlob_URIWithoutWildcard is a regression test: a pattern without
+// a wildcard was cleaned with path.Clean, which turned "mem://id/x"
+// into "mem:/id/x", so the existing file was not yielded.
+func TestGlob_URIWithoutWildcard(t *testing.T) {
+	memFS, err := RegisteredTestMemFileSystem(nil,
+		NewMemFile("/d1/x.txt", []byte("1")),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memFS.Close() })
+	file := memFS.RootDir().Join("d1", "x.txt")
+	dir := memFS.RootDir().Join("d1")
+
+	got, errs := collectGlob(Glob(t.Context(), string(file)))
+	require.Empty(t, errs)
+	require.Equal(t, []File{file}, got, "URI without wildcard")
+
+	got, errs = collectGlob(Glob(t.Context(), string(dir)+"/"))
+	require.Empty(t, errs)
+	require.Equal(t, []File{dir}, got, "directory URI with trailing slash")
+
+	got, errs = collectGlob(Glob(t.Context(), string(file)+"/"))
+	require.Empty(t, errs)
+	require.Empty(t, got, "file URI with trailing slash matches only directories")
+
+	got, errs = collectGlob(Glob(t.Context(), string(dir)+"/*.txt"))
+	require.Empty(t, errs)
+	require.Equal(t, []File{file}, got, "URI with wildcard")
+}
+
+// globFailListFS wraps a file system and fails ListDir
+// for one directory, to test that Glob yields listing errors.
+type globFailListFS struct {
+	WriteFileSystem
+	failDir string
+}
+
+var errGlobTestListing = errors.New("listing failed")
+
+func (f *globFailListFS) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
+	if dirPath == f.failDir {
+		return errGlobTestListing
+	}
+	return f.WriteFileSystem.ListDir(ctx, dirPath, patterns, callback)
+}
+
+// TestGlob_Errors is a regression test: Glob used to swallow listing
+// errors including context cancellation and returned pattern errors
+// separately. Now they are yielded by the iterator.
+func TestGlob_Errors(t *testing.T) {
+	memFS, err := RegisteredTestMemFileSystem(nil,
+		NewMemFile("/d1/x.txt", []byte("1")),
+		NewMemFile("/d2/x.txt", []byte("2")),
+		NewMemFile("/d3/x.txt", []byte("3")),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memFS.Close() })
+	root := memFS.RootDir()
+
+	t.Run("listing error", func(t *testing.T) {
+		Unregister(memFS)
+		wrapped := &globFailListFS{WriteFileSystem: memFS, failDir: "/d2"}
+		require.NoError(t, Register(wrapped))
+		t.Cleanup(func() {
+			Unregister(wrapped)
+			require.NoError(t, Register(memFS))
+		})
+
+		got, errs := collectGlob(root.Glob(t.Context(), "*/*.txt"))
+		require.Len(t, errs, 1, "the listing error is yielded")
+		require.ErrorIs(t, errs[0], errGlobTestListing)
+		require.Equal(t, []File{root.Join("d1", "x.txt"), root.Join("d3", "x.txt")}, got,
+			"the iteration continues after a listing error")
+
+		// Any error from listing a file is no match
+		wrapped.failDir = "/d1/x.txt"
+		got, errs = collectGlob(root.Glob(t.Context(), "d1/x.txt/*"))
+		require.Empty(t, errs, "listing a file is no match")
+		require.Empty(t, got)
+	})
+
+	t.Run("canceled before", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		got, errs := collectGlob(root.Glob(ctx, "*/*.txt"))
+		require.Empty(t, got)
+		require.Len(t, errs, 1, "the context error is yielded once")
+		require.ErrorIs(t, errs[0], context.Canceled)
+	})
+
+	t.Run("canceled while iterating", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var (
+			files int
+			errs  []error
+		)
+		for file, err := range root.Glob(ctx, "*/*.txt") {
+			if err != nil {
+				require.Equal(t, InvalidFile, file, "errors are yielded with InvalidFile")
+				errs = append(errs, err)
+				continue
+			}
+			files++
+			cancel()
+		}
+		require.Equal(t, 1, files, "no file after the cancellation")
+		require.Len(t, errs, 1, "the context error is yielded once")
+		require.ErrorIs(t, errs[0], context.Canceled)
+	})
+}
+
+// noRenameMoveFS wraps a FileSystem but only exposes the WriteFileSystem
+// interface, deliberately hiding the Move method of the wrapped
+// implementation. This forces File.Rename into the copy-and-remove
+// emulation moveByCopy in dispatch.go, used by file systems
+// that don't implement MoveFileSystem (for example s3fs).
 type noRenameMoveFS struct {
 	WriteFileSystem
 }
 
 // registerNoRenameMoveFS creates an in-memory file system with the given
 // initial files, re-registers it wrapped so that it routes through the
-// default Rename branch, and returns the wrapped file system's root dir.
+// move emulation, and returns the wrapped file system's root dir.
 func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
 	t.Helper()
-	memFS, err := NewMemFileSystem("/", initialFiles...)
+	memFS, err := RegisteredTestMemFileSystem(nil, initialFiles...)
 	require.NoError(t, err)
-	// Replace the registered *MemFileSystem (which implements Rename and
-	// Move) with a wrapper that only exposes the base FileSystem interface.
+	// Replace the registered *MemFileSystem (which implements Move)
+	// with a wrapper that only exposes the WriteFileSystem interface.
 	Unregister(memFS)
 	wrapped := &noRenameMoveFS{WriteFileSystem: memFS}
-	Register(wrapped)
+	require.NoError(t, Register(wrapped))
 	t.Cleanup(func() {
 		Unregister(wrapped)
 		_ = memFS.Close()
 	})
 	// Guard the test's premise: the wrapper must not satisfy the optional
-	// rename/move interfaces, otherwise the default branch is never reached.
-	if _, ok := any(wrapped).(RenameFileSystem); ok {
-		t.Fatal("noRenameMoveFS must not implement RenameFileSystem")
-	}
+	// move interface, otherwise the emulation is never reached.
 	if _, ok := any(wrapped).(MoveFileSystem); ok {
 		t.Fatal("noRenameMoveFS must not implement MoveFileSystem")
 	}
 	return wrapped.RootDir()
 }
 
-// TestFile_Rename_DefaultBranch covers the fallback used by file systems that
-// implement neither RenameFileSystem nor MoveFileSystem. The previous
-// implementation created an empty directory and then tried file.Remove(),
-// which silently discarded a non-empty directory's contents and failed to
-// remove the source. See file.go Rename default case.
+// TestFile_Rename_DefaultBranch covers the move emulation used by file systems
+// that don't implement MoveFileSystem. A previous implementation created
+// an empty directory and then tried file.Remove(), which silently discarded
+// a non-empty directory's contents and failed to remove the source.
+// See moveByCopy in dispatch.go.
 func TestFile_Rename_DefaultBranch(t *testing.T) {
 	t.Run("non-empty directory keeps all contents", func(t *testing.T) {
 		root := registerNoRenameMoveFS(t,
@@ -792,7 +953,7 @@ func TestFile_Rename_DefaultBranch(t *testing.T) {
 		dir := root.Join("dir")
 		require.True(t, dir.IsDir(), "source must be a directory")
 
-		renamed, err := dir.Rename("renamed")
+		renamed, err := dir.Rename(t.Context(), "renamed")
 		require.NoError(t, err, "Rename of non-empty directory")
 
 		// Source directory must be gone, including its contents.
@@ -812,7 +973,7 @@ func TestFile_Rename_DefaultBranch(t *testing.T) {
 		src := root.Join("a.txt")
 		require.True(t, src.Exists())
 
-		renamed, err := src.Rename("b.txt")
+		renamed, err := src.Rename(t.Context(), "b.txt")
 		require.NoError(t, err, "Rename of single file")
 
 		require.False(t, src.Exists(), "source file must be removed")
@@ -827,4 +988,232 @@ func assertFileContent(t *testing.T, file File, want string) {
 	got, err := file.ReadAllString(t.Context())
 	require.NoError(t, err, "ReadAllString %s", file)
 	require.Equal(t, want, got, "content of %s", file)
+}
+
+// TestFile_Size is a regression test: the documentation says that
+// Size returns 0 for a directory, but the local file system
+// returned the size of the directory entries.
+func TestFile_Size(t *testing.T) {
+	dir := File(t.TempDir())
+	require.NoError(t, dir.Join("a.txt").WriteAllString(t.Context(), "abc"))
+	require.Equal(t, int64(0), dir.Size(), "local directory")
+	require.Equal(t, int64(3), dir.Join("a.txt").Size(), "local file")
+	require.Equal(t, int64(0), dir.Join("missing").Size(), "missing file")
+
+	memFS, err := RegisteredTestMemFileSystem(nil, NewMemFile("/sub/a.txt", []byte("abc")))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memFS.Close() })
+	require.Equal(t, int64(0), memFS.RootDir().Join("sub").Size(), "mem directory")
+	require.Equal(t, int64(3), memFS.RootDir().Join("sub", "a.txt").Size(), "mem file")
+}
+
+// readFromTestFS wraps a file system so that OpenWriter returns
+// writers that commit the data only in Close, like uploads.
+type readFromTestFS struct {
+	WriteFileSystem
+	closeErr  error // returned by Close of the writers
+	abortable bool  // the writers implement WriteAborter
+
+	closed, aborted bool
+}
+
+func (f *readFromTestFS) OpenWriter(filePath string, perm Permissions) (io.WriteCloser, error) {
+	w := &readFromTestWriter{fs: f, filePath: filePath, perm: perm}
+	if f.abortable {
+		return &readFromTestAbortWriter{w}, nil
+	}
+	return w, nil
+}
+
+type readFromTestWriter struct {
+	fs       *readFromTestFS
+	filePath string
+	perm     Permissions
+	buf      bytes.Buffer
+}
+
+func (w *readFromTestWriter) Write(p []byte) (int, error) { return w.buf.Write(p) }
+
+func (w *readFromTestWriter) Close() error {
+	w.fs.closed = true
+	if w.fs.closeErr != nil {
+		return w.fs.closeErr
+	}
+	inner, err := w.fs.WriteFileSystem.OpenWriter(w.filePath, w.perm)
+	if err != nil {
+		return err
+	}
+	_, err = inner.Write(w.buf.Bytes())
+	return errors.Join(err, inner.Close())
+}
+
+type readFromTestAbortWriter struct{ *readFromTestWriter }
+
+func (w *readFromTestAbortWriter) Abort() error {
+	w.fs.aborted = true
+	return nil
+}
+
+// registerReadFromTestFS registers a readFromTestFS
+// over a MemFileSystem with initialFiles.
+func registerReadFromTestFS(t *testing.T, initialFiles ...MemFile) (*readFromTestFS, File) {
+	t.Helper()
+	memFS, err := NewMemFileSystem(nil, initialFiles...)
+	require.NoError(t, err)
+	wrapped := &readFromTestFS{WriteFileSystem: memFS}
+	require.NoError(t, Register(wrapped))
+	t.Cleanup(func() {
+		Unregister(wrapped)
+		_ = memFS.Close()
+	})
+	return wrapped, wrapped.RootDir()
+}
+
+// TestFile_ReadFrom is a regression test: ReadFrom deferred the Close
+// of the writer, so a failed upload in Close was not reported,
+// and a failed copy committed the partial data in Close.
+func TestFile_ReadFrom(t *testing.T) {
+	errRead := errors.New("read failed")
+
+	t.Run("success", func(t *testing.T) {
+		_, root := registerReadFromTestFS(t)
+		n, err := root.Join("a.txt").ReadFrom(strings.NewReader("data"))
+		require.NoError(t, err)
+		require.Equal(t, int64(4), n)
+		assertFileContent(t, root.Join("a.txt"), "data")
+	})
+
+	t.Run("close error", func(t *testing.T) {
+		fileSystem, root := registerReadFromTestFS(t)
+		errClose := errors.New("upload failed")
+		fileSystem.closeErr = errClose
+		_, err := root.Join("a.txt").ReadFrom(strings.NewReader("data"))
+		require.ErrorIs(t, err, errClose)
+	})
+
+	t.Run("copy error aborts", func(t *testing.T) {
+		fileSystem, root := registerReadFromTestFS(t, NewMemFile("/a.txt", []byte("precious")))
+		fileSystem.abortable = true
+		_, err := root.Join("a.txt").ReadFrom(iotest.ErrReader(errRead))
+		require.ErrorIs(t, err, errRead)
+		require.True(t, fileSystem.aborted, "writer must be aborted")
+		require.False(t, fileSystem.closed, "writer must not be closed after Abort")
+		assertFileContent(t, root.Join("a.txt"), "precious")
+	})
+
+	t.Run("copy error closes writer without Abort", func(t *testing.T) {
+		fileSystem, root := registerReadFromTestFS(t)
+		_, err := root.Join("a.txt").ReadFrom(iotest.ErrReader(errRead))
+		require.ErrorIs(t, err, errRead)
+		require.True(t, fileSystem.closed, "writer must be closed")
+	})
+
+	t.Run("empty path", func(t *testing.T) {
+		_, err := InvalidFile.ReadFrom(strings.NewReader("data"))
+		require.ErrorIs(t, err, ErrEmptyPath)
+	})
+}
+
+// TestFile_RemoveDirContents is a regression test: RemoveDirContents
+// is documented to delete the files of a directory, but it also tried
+// to remove sub-directories and failed for non-empty ones.
+func TestFile_RemoveDirContents(t *testing.T) {
+	newDir := func(t *testing.T) File {
+		dir := File(t.TempDir())
+		require.NoError(t, dir.Join("a.txt").WriteAllString(t.Context(), "a"))
+		require.NoError(t, dir.Join("b.log").WriteAllString(t.Context(), "b"))
+		require.NoError(t, dir.Join("sub", "c.txt").MakeAllDirs())
+		require.NoError(t, dir.Join("sub", "c.txt").Remove())
+		require.NoError(t, dir.Join("sub", "c.txt").WriteAllString(t.Context(), "c"))
+		require.NoError(t, dir.Join("empty").MakeDir())
+		return dir
+	}
+
+	t.Run("all files", func(t *testing.T) {
+		dir := newDir(t)
+		require.NoError(t, dir.RemoveDirContents(t.Context()))
+		require.False(t, dir.Join("a.txt").Exists())
+		require.False(t, dir.Join("b.log").Exists())
+		require.True(t, dir.Join("sub", "c.txt").Exists(), "sub-directories are kept")
+		require.True(t, dir.Join("empty").IsDir(), "empty sub-directories are kept")
+	})
+
+	t.Run("patterns", func(t *testing.T) {
+		dir := newDir(t)
+		require.NoError(t, dir.RemoveDirContents(t.Context(), "*.txt"))
+		require.False(t, dir.Join("a.txt").Exists())
+		require.True(t, dir.Join("b.log").Exists())
+		require.True(t, dir.Join("sub", "c.txt").Exists())
+	})
+
+	t.Run("symbolic link to a directory", func(t *testing.T) {
+		dir := newDir(t)
+		link := dir.Join("link")
+		if err := os.Symlink(dir.Join("sub").LocalPath(), link.LocalPath()); err != nil {
+			t.Skipf("can't create symbolic link: %s", err)
+		}
+		require.NoError(t, dir.RemoveDirContents(t.Context()))
+		require.False(t, link.IsSymbolicLink(), "the link is removed")
+		require.True(t, dir.Join("sub", "c.txt").Exists(), "the link target is kept")
+	})
+
+	t.Run("RemoveDirContentsRecursive", func(t *testing.T) {
+		dir := newDir(t)
+		require.NoError(t, dir.RemoveDirContentsRecursive(t.Context()))
+		require.True(t, dir.IsEmptyDir())
+	})
+}
+
+func TestFile_WriteJSON(t *testing.T) {
+	dir := File(t.TempDir())
+	input := map[string]int{"a": 1}
+
+	file := dir.Join("a.json")
+	require.NoError(t, file.WriteJSON(t.Context(), input, UserReadWrite))
+	assertFileContent(t, file, `{"a":1}`)
+	if runtime.GOOS != "windows" {
+		require.Equal(t, UserReadWrite, file.Permissions(), "permissions like WriteAll")
+	}
+
+	file = dir.Join("indent.json")
+	require.NoError(t, file.WriteJSONIndent(t.Context(), input, "  "))
+	assertFileContent(t, file, "{\n  \"a\": 1\n}")
+
+	require.ErrorIs(t, dir.Join("x.json").WriteJSON(t.Context(), make(chan int)), ErrMarshalJSON)
+	require.ErrorIs(t, dir.Join("x.json").WriteJSONIndent(t.Context(), make(chan int), "  "), ErrMarshalJSON)
+	require.ErrorIs(t, InvalidFile.WriteJSON(t.Context(), input), ErrEmptyPath)
+	require.ErrorIs(t, InvalidFile.WriteJSONIndent(t.Context(), input, "  "), ErrEmptyPath)
+
+	var output map[string]int
+	require.NoError(t, dir.Join("indent.json").ReadJSON(t.Context(), &output))
+	require.Equal(t, input, output)
+}
+
+func TestFile_WriteXML(t *testing.T) {
+	type doc struct {
+		XMLName xml.Name `xml:"doc"`
+		A       int      `xml:"a"`
+	}
+	dir := File(t.TempDir())
+	input := doc{A: 1}
+
+	file := dir.Join("a.xml")
+	require.NoError(t, file.WriteXML(t.Context(), input, UserReadWrite))
+	assertFileContent(t, file, xml.Header+"<doc><a>1</a></doc>")
+	if runtime.GOOS != "windows" {
+		require.Equal(t, UserReadWrite, file.Permissions(), "permissions like WriteAll")
+	}
+
+	file = dir.Join("indent.xml")
+	require.NoError(t, file.WriteXMLIndent(t.Context(), input, "\t"))
+	assertFileContent(t, file, xml.Header+"<doc>\n\t<a>1</a>\n</doc>")
+
+	require.ErrorIs(t, dir.Join("x.xml").WriteXML(t.Context(), make(chan int)), ErrMarshalXML)
+	require.ErrorIs(t, dir.Join("x.xml").WriteXMLIndent(t.Context(), make(chan int), "\t"), ErrMarshalXML)
+	require.ErrorIs(t, InvalidFile.WriteXML(t.Context(), input), ErrEmptyPath)
+	require.ErrorIs(t, InvalidFile.WriteXMLIndent(t.Context(), input, "\t"), ErrEmptyPath)
+
+	var output doc
+	require.NoError(t, file.ReadXML(t.Context(), &output))
+	require.Equal(t, input.A, output.A)
 }

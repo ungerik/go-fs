@@ -2,8 +2,13 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"encoding/json"
+	"encoding/xml"
+	"io"
+	iofs "io/fs"
+	"mime/multipart"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -146,7 +151,10 @@ func TestMemFile_DirAndName(t *testing.T) {
 		{FileName: "some\\path\\file.txt", wantDir: MemFile{}, wantName: "some\\path\\file.txt"}, // backslash is a literal character
 		{FileName: "/file.txt", wantDir: MemFile{FileName: "/"}, wantName: "file.txt"},
 		{FileName: "/", wantDir: MemFile{FileName: "/"}, wantName: ""}, // root is its own parent
-		{FileName: "some/path/dir/", wantDir: MemFile{FileName: "some/path/dir/"}, wantName: "dir"},
+		// Regression: a directory returned itself as its parent
+		{FileName: "some/path/dir/", wantDir: MemFile{FileName: "some/path/"}, wantName: "dir"},
+		{FileName: "/dir/", wantDir: MemFile{FileName: "/"}, wantName: "dir"},
+		{FileName: "dir/", wantDir: MemFile{}, wantName: "dir"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.FileName, func(t *testing.T) {
@@ -170,7 +178,9 @@ func TestMemFile_Dir(t *testing.T) {
 		{FileName: "/file.txt", want: MemFile{FileName: "/"}},                   // root
 		{FileName: "/", want: MemFile{FileName: "/"}},                           // root is its own parent
 		{FileName: "/some/file.txt", want: MemFile{FileName: "/some/"}},         // absolute parent dir
-		{FileName: "some/path/dir/", want: MemFile{FileName: "some/path/dir/"}}, // already a dir, returns itself
+		{FileName: "some/path/dir/", want: MemFile{FileName: "some/path/"}},     // regression: a dir returned itself
+		{FileName: "/dir/", want: MemFile{FileName: "/"}},                       // dir in root
+		{FileName: "dir/", want: MemFile{}},                                     // dir without parent
 	}
 	for _, tt := range tests {
 		t.Run(tt.FileName, func(t *testing.T) {
@@ -288,4 +298,152 @@ func TestMemFile_GobEncodeDecode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMemFile_ReadAt is a regression test: ReadAt panicked for a negative
+// offset and returned a custom error instead of io.EOF when fewer than
+// len(p) bytes were available, which broke io.SectionReader.
+func TestMemFile_ReadAt(t *testing.T) {
+	f := NewMemFile("x", []byte("hello"))
+
+	buf := make([]byte, 2)
+	require.NotPanics(t, func() {
+		_, err := f.ReadAt(buf, -1)
+		require.ErrorIs(t, err, iofs.ErrInvalid, "negative offset")
+	})
+
+	n, err := f.ReadAt(buf, 1)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, "el", string(buf))
+
+	n, err = f.ReadAt(buf, 3)
+	require.NoError(t, err, "all requested bytes up to the end")
+	require.Equal(t, 2, n)
+	require.Equal(t, "lo", string(buf))
+
+	n, err = f.ReadAt(buf, 4)
+	require.ErrorIs(t, err, io.EOF, "fewer bytes than requested")
+	require.Equal(t, 1, n)
+	require.Equal(t, "o", string(buf[:n]))
+
+	n, err = f.ReadAt(buf, 5)
+	require.ErrorIs(t, err, io.EOF, "offset at the end")
+	require.Equal(t, 0, n)
+
+	data, err := io.ReadAll(io.NewSectionReader(f, 0, 1<<20))
+	require.NoError(t, err, "io.SectionReader needs io.EOF at the end")
+	require.Equal(t, "hello", string(data))
+}
+
+// TestMemFile_Stat is a regression test: the ModTime of Stat was time.Now()
+// instead of the zero time, so a MemFile looked modified on every call.
+func TestMemFile_Stat(t *testing.T) {
+	info, err := NewMemFile("a.txt", []byte("abc")).Stat()
+	require.NoError(t, err)
+	require.True(t, info.ModTime().IsZero(), "ModTime must be the zero time")
+	require.Equal(t, "a.txt", info.Name())
+	require.Equal(t, int64(3), info.Size())
+	require.True(t, info.Mode().IsRegular())
+
+	require.False(t, NewMemFile("a.txt", nil).IsSymbolicLink())
+	require.False(t, NewMemFile("dir/", nil).IsSymbolicLink())
+}
+
+func TestMemFile_WriteJSON(t *testing.T) {
+	input := map[string]int{"a": 1}
+
+	var f MemFile
+	require.NoError(t, f.WriteJSON(t.Context(), input))
+	require.Equal(t, `{"a":1}`, string(f.FileData))
+
+	require.NoError(t, f.WriteJSONIndent(t.Context(), input, "  "))
+	require.Equal(t, "{\n  \"a\": 1\n}", string(f.FileData))
+
+	err := f.WriteJSON(t.Context(), make(chan int))
+	require.ErrorIs(t, err, ErrMarshalJSON)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, f.WriteJSONIndent(ctx, input, "  "), context.Canceled)
+
+	f, err = NewMemFileWriteJSON("a.json", input)
+	require.NoError(t, err)
+	require.Equal(t, MemFile{FileName: "a.json", FileData: []byte(`{"a":1}`)}, f)
+
+	f, err = NewMemFileWriteJSONIndent("a.json", input, "\t")
+	require.NoError(t, err)
+	require.Equal(t, "{\n\t\"a\": 1\n}", string(f.FileData))
+
+	_, err = NewMemFileWriteJSONIndent("a.json", make(chan int), "\t")
+	require.ErrorIs(t, err, ErrMarshalJSON)
+}
+
+func TestMemFile_WriteXML(t *testing.T) {
+	type doc struct {
+		XMLName xml.Name `xml:"doc"`
+		A       int      `xml:"a"`
+	}
+	input := doc{A: 1}
+
+	var f MemFile
+	require.NoError(t, f.WriteXML(t.Context(), input))
+	require.Equal(t, xml.Header+"<doc><a>1</a></doc>", string(f.FileData))
+
+	require.NoError(t, f.WriteXMLIndent(t.Context(), input, "  "))
+	require.Equal(t, xml.Header+"<doc>\n  <a>1</a>\n</doc>", string(f.FileData))
+
+	err := f.WriteXML(t.Context(), make(chan int))
+	require.ErrorIs(t, err, ErrMarshalXML)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, f.WriteXMLIndent(ctx, input, "  "), context.Canceled)
+
+	f, err = NewMemFileWriteXML("a.xml", input)
+	require.NoError(t, err)
+	require.Equal(t, MemFile{FileName: "a.xml", FileData: []byte(xml.Header + "<doc><a>1</a></doc>")}, f)
+
+	f, err = NewMemFileWriteXMLIndent("a.xml", input, "\t")
+	require.NoError(t, err)
+	require.Equal(t, xml.Header+"<doc>\n\t<a>1</a>\n</doc>", string(f.FileData))
+
+	_, err = NewMemFileWriteXML("a.xml", make(chan int))
+	require.ErrorIs(t, err, ErrMarshalXML)
+}
+
+func TestReadMultipartFormMemFiles(t *testing.T) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for _, file := range []struct{ field, name, data string }{
+		{"docs", "a.txt", "aaa"},
+		{"docs", "b.txt", "bbb"},
+		{"image", "c.png", "ccc"},
+	} {
+		part, err := w.CreateFormFile(file.field, file.name)
+		require.NoError(t, err)
+		_, err = part.Write([]byte(file.data))
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+	// A maxMemory of 1 byte stores the files in temp files on disk,
+	// which ReadMultipartFormMemFiles opens and closes one at a time
+	form, err := multipart.NewReader(&body, w.Boundary()).ReadForm(1)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = form.RemoveAll() })
+
+	memFiles, err := ReadMultipartFormMemFiles(t.Context(), form)
+	require.NoError(t, err)
+	require.Equal(t, map[string][]MemFile{
+		"docs": {
+			NewMemFile("a.txt", []byte("aaa")),
+			NewMemFile("b.txt", []byte("bbb")),
+		},
+		"image": {NewMemFile("c.png", []byte("ccc"))},
+	}, memFiles)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = ReadMultipartFormMemFiles(ctx, form)
+	require.ErrorIs(t, err, context.Canceled)
 }

@@ -83,22 +83,22 @@ func TestInfoStatusHandling(t *testing.T) {
 
 	t.Run("Exists200", func(t *testing.T) {
 		path := addr + "/exists.txt"
-		exists, err := FileSystem.Exists(path)
+		exists, err := Default.Exists(path)
 		require.NoError(t, err)
 		assert.True(t, exists, "200 response should exist")
 
-		info, err := FileSystem.Stat(path)
+		info, err := Default.Stat(path)
 		require.NoError(t, err)
 		assert.Equal(t, int64(5), info.Size)
 	})
 
 	t.Run("Missing404", func(t *testing.T) {
 		path := addr + "/missing.txt"
-		exists, err := FileSystem.Exists(path)
+		exists, err := Default.Exists(path)
 		require.NoError(t, err, "404 is a definite answer, not an error")
 		assert.False(t, exists, "404 response should not exist")
 
-		_, err = FileSystem.Stat(path)
+		_, err = Default.Stat(path)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, os.ErrNotExist, "404 must map to ErrDoesNotExist")
 	})
@@ -107,14 +107,14 @@ func TestInfoStatusHandling(t *testing.T) {
 		path := addr + "/missing-with-body.txt"
 		// The key regression: a 404 with a body must report not-exist so that
 		// Exists() and OpenReader() agree.
-		exists, err := FileSystem.Exists(path)
+		exists, err := Default.Exists(path)
 		require.NoError(t, err)
 		assert.False(t, exists, "404 with body should not exist")
 
-		_, err = FileSystem.Stat(path)
+		_, err = Default.Stat(path)
 		assert.ErrorIs(t, err, os.ErrNotExist)
 
-		_, err = FileSystem.OpenReader(path)
+		_, err = Default.OpenReader(path)
 		require.Error(t, err, "OpenReader must also fail for a 404")
 	})
 
@@ -122,25 +122,25 @@ func TestInfoStatusHandling(t *testing.T) {
 		path := addr + "/servererror.txt"
 		// A 500 means existence is unknown: it must NOT be reported as
 		// "does not exist", otherwise a flaky server makes files vanish.
-		_, err := FileSystem.Stat(path)
+		_, err := Default.Stat(path)
 		require.Error(t, err)
 		assert.NotErrorIs(t, err, os.ErrNotExist, "5xx must not map to ErrDoesNotExist")
 	})
 
 	t.Run("Forbidden403", func(t *testing.T) {
 		path := addr + "/forbidden.txt"
-		_, err := FileSystem.Stat(path)
+		_, err := Default.Stat(path)
 		require.Error(t, err)
 		assert.NotErrorIs(t, err, os.ErrNotExist, "403 must not map to ErrDoesNotExist")
 	})
 
 	t.Run("HeadNotAllowedFallsBackToGet", func(t *testing.T) {
 		path := addr + "/no-head.txt"
-		exists, err := FileSystem.Exists(path)
+		exists, err := Default.Exists(path)
 		require.NoError(t, err)
 		assert.True(t, exists, "should fall back to GET when HEAD is rejected")
 
-		info, err := FileSystem.Stat(path)
+		info, err := Default.Stat(path)
 		require.NoError(t, err)
 		assert.Equal(t, int64(5), info.Size)
 	})
@@ -155,11 +155,11 @@ func TestInfoTransportErrorNotMissing(t *testing.T) {
 	server.Close() // nothing is listening anymore
 
 	// Existence is unknown, so Exists must report an error, not false.
-	exists, err := FileSystem.Exists(addr + "/whatever.txt")
+	exists, err := Default.Exists(addr + "/whatever.txt")
 	require.Error(t, err, "a transport error must not look like a missing file")
 	assert.False(t, exists)
 
-	_, err = FileSystem.Stat(addr + "/whatever.txt")
+	_, err = Default.Stat(addr + "/whatever.txt")
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, os.ErrNotExist, "a transport error must not look like a missing file")
 	// Sanity: it is a real transport error, not our sentinel.

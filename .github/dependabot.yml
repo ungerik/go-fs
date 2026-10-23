@@ -1,0 +1,37 @@
+version: 2
+
+updates:
+  # Every module of go.work. The minor and patch updates of a directory
+  # come as one pull request, major updates one pull request each.
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /azureblobfs
+      - /dropboxfs
+      - /ftpfs
+      - /s3fs
+      - /sftpfs
+      - /smbfs
+      - /webdavfs
+      - /tools
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    ignore:
+      # The backend modules require the root module with a placeholder
+      # pseudo-version and replace it with the parent directory.
+      # The placeholder is deliberate and must not be bumped to a release.
+      - dependency-name: github.com/ungerik/go-fs
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+
+  # The workflows pin the major version tags of the actions,
+  # so all action updates come as one pull request.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ['*']

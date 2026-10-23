@@ -5,7 +5,310 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## v1.0.0-beta.1 - 2026-10-20
+## [1.0.0-beta.2] - 2026-10-23
+
+Second beta. It fixes the bugs of a full review of beta.1 (data loss,
+security, crashes) and settles the API decisions that freeze with v1.0.0.
+Most breaking changes fail to compile, so the compiler finds the call sites;
+`docs/MIGRATION_v1.md` lists them in "Upgrading from v1.0.0-beta.1". All
+modules are tagged in lockstep, the `tools` module is not tagged.
+
+### Changed
+
+- **Constructors never register implicitly.** `New…`/`Dial…` return the file
+  system, and an error where construction can fail, and don't register it; `…AndRegister` variants register
+  and return only an `error`. Every constructor that used to register under a
+  plain name changed its signature, so old call sites don't compile instead of
+  silently losing the registration: `fs.NewMemFileSystem(opts
+  *MemFileSystemOptions, initialFiles...)` (ID, separator, volume and
+  read-only are options; `WithID`, `WithVolume` and `NewSingleMemFileSystem`
+  are gone), `zipfs`/`tarfs` `NewReader`/`NewWriter(file, id)`,
+  `multipartfs.New(form, id)` and `multipartfs.NewFromRequest` (was
+  `FromRequestForm`), `s3fs.NewLoadDefaultConfig` and
+  `azureblobfs.NewFromConnectionString`. Temporary file systems are used with
+  `New`, `fs.Register` and `defer f.Close()`.
+- **Registry.** A URI matches a prefix only at a boundary (the URI ends, the
+  prefix ends with `/`, or `/` or the separator follows), and the longest
+  match over prefixes and aliases wins, so `s3://logs` no longer serves
+  `s3://logs-archive/…` and `ftp://user@files` no longer serves
+  `ftp://user@files.example.com/…`. `Register` returns an error
+  (`ErrAlreadyRegistered`) when another file system holds the prefix and is
+  not reference counted any more; `Unregister` and `IsRegistered` compare
+  instances. `fs.EnsureRegistered` is an atomic get-or-create with one shared
+  connect for concurrent callers and reference counted `free` functions.
+  `Close` always unregisters.
+- **Per-instance options in every backend, no mutable package config.**
+  `s3fs.New(client, bucket, *Options)`, `azureblobfs.New(ctx, client,
+  *Options)`, `dropboxfs.New(ctx, token, *Options)`, `sftpfs.Dial(ctx,
+  address, *Options)` (password, public keys, agent and keyboard-interactive
+  via `Auth`, host key callback that fails closed, timeouts, keep-alive,
+  retries, `DialContext`), `ftpfs.Dial(ctx, address, *Options)` (credentials
+  moved into the options), `smbfs` `Options.DialContext`. The package
+  variables `s3fs.MultipartUploadThreshold`/`MultipartDownloadThreshold`,
+  `sftpfs.MaxConnectRetries`/`InitialRetryBackoff`/`URLHostKeyCallback` and
+  `httpfs.Client` are gone; all `DefaultPermissions`/`DefaultDirPermissions`
+  are constants. `httpfs` has an exported `FileSystem` type with
+  `New(prefix, *Options)` and `NewAndRegister`, for example to use an
+  authenticating client for `https://api.example.com/`; its `Close` unregisters it,
+  `Default` and `DefaultTLS` stay registered.
+- **Error contract.** The typed errors (`ErrDoesNotExist`, `ErrPermission`,
+  `ErrAlreadyExists`, `ErrIsDirectory`, `ErrIsNotDirectory` and the new
+  `ErrDirectoryNotEmpty`) are created for a `FileReader`; `File()` returns
+  `(File, bool)`, the new `FileReader()` the passed reader, and every typed
+  error matches `errors.Is(err, fs.ErrIsDirectory{})` and so on. They stay
+  comparable for non-comparable readers like `MemFile`, so `errors.Is` never
+  panics. `ErrEmptyPath` is a constant that no longer wraps `os.ErrNotExist`,
+  so `Remove("")` is an error. Files of unregistered prefixes report
+  `ErrInvalidFileSystem` with the URI (password redacted) instead of
+  "write-only". New sentinels `ErrFileSystemsDoNotMatch` and
+  `ErrAlreadyRegistered`. Error messages never contain passwords, SAS
+  signatures or URL queries.
+- **Move, Rename and CopyFile onto an existing destination** behave the same
+  on every file system: an existing file is replaced, an existing directory
+  is an error wrapping `os.ErrExist` (`ErrIsDirectory` for `CopyFile`) and is
+  never merged or deleted, a directory onto a file is `ErrIsNotDirectory`,
+  moving a directory into itself is an error wrapping `os.ErrInvalid`.
+- **Implementer interfaces.** `MoveFileSystem.Move` and
+  `TruncateFileSystem.Truncate` take a ctx; `SymbolicLinkFileSystem` has
+  `Lstat` instead of `IsSymbolicLink`; `XAttrFileSystem.SetXAttr` takes the
+  portable `XAttrFlags` (`XAttrCreate`, `XAttrReplace`); `PermissionsFileSystem`
+  embeds `FileSystem`; `RenameFileSystem` and `ListDirMaxFileSystem` are
+  removed (Rename is a Move within the directory). New `WriteAborter`, which
+  the package uses to discard uploads that commit on Close when a copy fails,
+  and `URIFileSystem` for file systems whose paths are escaped URIs.
+  `fsimpl.PathHelper` is no longer embedded as an exported field and lost
+  `IsAbsPath`, `AbsPath` and `IsHidden`. `Event` has go-fs owned constants
+  (`EventCreate`, …) instead of fsnotify values, and the callbacks of one
+  watch are called serially in event order.
+- **File API.** `File.Rename`/`Renamef` take a ctx (without native move they
+  copy); `File.Lstat` is new and `ReadSymbolicLink` returns the raw target
+  string; `FileReader` gains `Stat` and `IsSymbolicLink`; `Glob` yields
+  `iter.Seq2[File, error]` with pattern, listing and ctx errors, `MustGlob` is
+  removed; `WriteJSON`/`WriteXML(ctx, input, perm...)` and
+  `WriteJSONIndent`/`WriteXMLIndent(ctx, input, indent, perm...)` (same for
+  `MemFile` and `NewMemFileWrite*`); `ServeFileHTTP(w, r, file, contentType
+  string)`; `TempFile(ext)`/`CreateTempFile(ext)`;
+  `ContentHashFuncFrom(newHash func() hash.Hash)`; `CopyFileBuf(ctx, src,
+  dest, buf []byte, perm...)`; `fs.ReadAll(ctx, r)`/`fs.WriteAll(ctx, w,
+  data)` (were `ReadAllContext`/`WriteAllContext`); `ReadSeekCloser` is
+  `ReadAtSeekCloser`.
+- **fstest** no longer depends on testify, derives every name from the seed,
+  has `Config.Skip` and many new contract checks (errors, closed file systems,
+  cancellation, overwrite semantics, moves into itself, content above 1 MiB,
+  `WriteAborter`, URI boundary and round trip). The Docker helpers moved to
+  `internal/dockertest`.
+- `s3fs` uses `feature/s3/transfermanager` instead of the deprecated
+  `feature/s3/manager`; `smbfs` uses the maintained `github.com/cloudsoda/go-smb2`
+  fork (GO-2026-5051); dependencies are bumped (x/net, x/text, x/crypto,
+  x/sys, AWS SDK, jlaffaye/ftp v0.2.4, Dropbox SDK v6.6.2).
+- **Copies never take over setuid, setgid and sticky bits.** `CopyFile`,
+  `CopyRecursive`, emulated moves, the overlay copy-up and
+  `MemFileSystem.CopyFile` give the destination only the 9 permission bits of
+  the source; pass `perm` to set special bits. A copy from a read-only file
+  system (uploads, archive entries, `StdFileSystem`) gets the owner write bit,
+  so an upload copies as 0644 instead of 0444. `NewFileInfo` (Local,
+  `StdFileSystem`, sftpfs, smbfs) reports the special bits.
+- **Directory links in recursive walks.** `ListDirRecursive` (native and
+  emulated) never descends into a symbolic link to a directory, like
+  `filepath.WalkDir`: the link itself is passed to the callback with
+  `IsSymlink` true and `IsDir` false; a link at the start of the listing is
+  followed. `CopyRecursive` and moves recreate a link to a directory as a
+  link with its verbatim target within one file system instance that
+  supports links. Between different instances, or if the destination can't
+  create links, they fail before writing anything with an error wrapping
+  `errors.ErrUnsupported`; links to files are copied as files. Copies never
+  write through a symbolic link below the destination root, a link where a
+  file or directory is to be written is an error wrapping `os.ErrExist`;
+  this assumes nobody else changes the destination during the copy.
+- **XAttr errors.** `XAttrCreate` on an existing attribute wraps
+  `os.ErrExist`; `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing
+  attribute wrap `os.ErrNotExist` (Local and MemFileSystem); fstest checks it.
+- **Archive names.** `fs.Zip` and `ZipMemFiles` reject names that escape
+  with `..`, names with a backslash and absolute names (the leading slash of
+  a `MemFile` name is dropped) with an error wrapping `os.ErrInvalid`, so every archive
+  they write unzips with `UnzipToMemFiles`; `zipfs.Reader` skips symbolic
+  links, devices and FIFOs like `tarfs`.
+- **Root directories.** `Remove` and `RemoveAll` of the root return an error
+  wrapping `os.ErrInvalid` in every file system, also for relative paths of
+  the root like `"."` in sftpfs and ftpfs, instead of deleting the whole
+  bucket, container or server tree in s3fs, azureblobfs, sftpfs and ftpfs and
+  calling `os.RemoveAll("/")` for the root of a local volume.
+- **Paths.** Only a `~` at the start of the first part of a Local path means
+  the home directory, a directory named `~` is written `./~`; a SubFileSystem
+  stores relative link targets with `..` as paths of the parent; smbfs paths
+  and link targets containing `\`, and link targets with a drive letter, are
+  errors wrapping `os.ErrInvalid`; `TempFile` returns `InvalidFile` for an extension with a
+  path separator; `StdFS` and SubFileSystems of Local apply the `os.DirFS`
+  name rules (Windows device names, `\`, `:`, NUL) to the local file system
+  only.
+- **Same file under two names.** `LocalFileSystem.Move` renames a file onto
+  its own directory entry under another spelling (case, Unicode
+  normalization) and moves a file with more than one hard link through a
+  temporary `.gofs-move-*` name, so it never removes the only link of a file;
+  moves through bind mounts, symbolic links to a parent or a SubFileSystem
+  onto the same file never copy and remove it, also through the local layers
+  of an `OverlayFileSystem`. Moving a symbolic link onto the file it points
+  to is an error wrapping `os.ErrInvalid`, like `mv` reports "are the same
+  file", in Local, Mem, sftpfs, smbfs and the move emulation; `CopyFile` of a
+  file onto itself through another path is a no-op. `fs.Move` of a directory
+  to a name that only differs in case renames it.
+- `ServeFileHTTP` passes seekable readers to `http.ServeContent` (local files
+  use sendfile again), serves multi-range requests only from local files and
+  in-memory readers (other readers answer with the whole content, so a
+  request can't make a backend read the file once per range) and streams a
+  file of unknown size.
+- ftpfs and smbfs reject addresses with an unencoded `@` after the host like
+  sftpfs; webdavfs rejects a base URL whose host has a port and whose path
+  has a raw `@` without user info, or that has a password and an `@` after
+  the host (write `%40`, or pass the credentials with `Options`). Error
+  messages redact everything up to the last `@` of a URI with a password, so
+  they can lose the host but never show a password.
+- webdavfs follows no redirects to another host or port or from https to
+  http, unless the `CheckRedirect` of `Options.Client` allows them, and then
+  without credentials.
+- sftpfs rejects addresses with an unencoded `@` after the host (`/`, `?` and
+  `#` of the user info must be percent-encoded), drops a connection only after
+  `KeepAliveCountMax` unanswered keep-alives and never for an SFTP status
+  reply.
+- `uuiddir.Enum` follows links to directories, multipartfs ignores form
+  fields with an empty name, `OverlayFileSystem` documents that its layers
+  must be case-sensitive.
+
+### Added
+
+- `fs.EnsureRegistered`, `fs.WriteAborter`, `fs.URIFileSystem`, `fs.XAttrFlags`,
+  `File.Lstat`, `fs.NewStdDirEntry`, `fs.PermissionsFromFileMode`,
+  `fs.UnzipToMemFiles` size cap (`UnzipToMemFilesMaxSize`), `fs.Event…`
+  constants, `httpfs.New`/`NewAndRegister`, `smbfs.EnsureRegistered`,
+  `dropboxfs.New`, `s3fs.New`, `NewMemFileSystemAndRegister`,
+  `sftpfs.Options.HostKeyAlgorithms`, `sftpfs.KeepAliveCountMax`,
+  `fsimpl.RedactURI`, `fsimpl.RedactAddress` and
+  `fsimpl.RedactAddressWithoutScheme`.
+- Streaming uploads in s3fs (multipart), azureblobfs (blocks) and dropboxfs
+  (upload sessions, also above 150 MiB); multipart copies above 5 GiB in s3fs;
+  native `MakeAllDirs` for the zip and tar writers.
+- The root module builds on freebsd, netbsd, openbsd, solaris, illumos,
+  dragonfly, aix, wasip1 and js/wasm.
+- dropboxfs runs the conformance suite offline against an in-memory fake of
+  the Dropbox API; sftpfs and ftpfs run it against in-process servers.
+- CI: Go `stable` next to the go.work version, cross-compile jobs,
+  `govulncheck`, `go mod tidy -diff` and `GOWORK=off` builds per module, lint
+  on all three OSes, Dependabot; `tag-release.sh` tags all modules in lockstep
+  and creates the GitHub release; `SECURITY.md`.
+
+### Fixed
+
+- Links created through a SubFileSystem escaped its root when one was created
+  below another; names like `~/x` reached `$HOME` through `File(".").StdFS()`
+  and SubFileSystems of Local; smbfs passed `..\` to the server, so
+  SubFileSystems and CopyRecursive destinations on SMB were escaped.
+- Passwords stayed in error messages for URIs that `url.Parse` rejects (a
+  file named `100%.txt`) or misreads as `host:port`, and for passwords with
+  `/`, `?` or `#` in sftpfs, ftpfs, smbfs and webdavfs addresses;
+  httpfs transport errors kept presigned URL signatures; webdavfs redirects
+  sent the basic auth and `Options.Header` to other hosts and over plain HTTP.
+- `ServeFileHTTP` read a file that can't seek again for every range of a
+  multi-range request, lost sendfile for local files and answered 500 for a
+  file of unknown size.
+- A failed copy onto an existing symbolic link deleted the link, and a link
+  couldn't replace an existing file in the move emulation; Local `Move` onto a
+  hard link of the source kept the source; ftpfs `Move` deleted the
+  destination when the server refused the source; sftpfs (without
+  posix-rename) and webdavfs moves deleted the source on a case-only rename
+  or through an aliased path; dropboxfs `CopyFile` deleted the destination
+  when the source had become a folder.
+- Copying archive entries with setuid or setgid bits as root created setuid
+  files; recursive copies followed directory link cycles until `ELOOP` and
+  wrote about 40 nested partial copies; moving a file onto itself through
+  bind mounts or a symbolic link to its directory deleted it.
+- `EnsureRegistered` waiters got the creator's context cancellation; smbfs
+  reconnect waiters dialed one after another after a dial timeout, a session
+  dialed right before the context ended leaked, a connection broken during
+  the checks of a Move wasn't retried; ftpfs leaked a connection when `Close`
+  raced a running operation; sftpfs dropped the shared connection for status
+  replies mentioning "connection reset" and killed slow downloads after one
+  late keep-alive answer.
+- `Close` contract: smbfs `io.Copy` on open files and `Remove` of the root,
+  and sftpfs `Move`, answered without `ErrFileSystemClosed` after `Close`.
+- azureblobfs `Touch` overwrote a blob created concurrently or hidden by an
+  empty listing page, and `Remove` deleted the marker of a non-empty
+  directory after an empty listing page; smbfs `CreateSymbolicLink` panicked
+  for the targets `.` and `./`; dropboxfs returned a raw error for a source without
+  write permission; sftpfs `ListDirRecursive` of a link to a directory
+  returned only the link.
+- zipfs listed symbolic links as regular files whose content was the target;
+  `ZipMemFiles` wrote names that `UnzipToMemFiles` rejects; multipartfs
+  overflowed the stack for a field with an empty name; `uuiddir.Enum` skipped
+  linked level directories; the overlay returned Files with the volume of a
+  layer; the XAttr errors of Local and MemFileSystem didn't match
+  `os.ErrExist`/`os.ErrNotExist`; smbfs built invalid prefixes for `host:` and
+  IPv6 zones.
+- `ParseRawURI` allocated for every registered file system, `CopyFile` stat'ed
+  the destination twice, `ReadAll` of httpfs, s3fs, azureblobfs and webdavfs
+  grew the buffer instead of using the content length, the dropboxfs cache
+  scanned all entries for every insert when full.
+- Copy and Move reported success for a failed upload (the writer's Close
+  error was dropped) and Move then deleted the source; a canceled or failed
+  copy now aborts the upload and never removes the source.
+- `Rename("")`, `Rename(".")` and `Rename("..")` deleted the file on file
+  systems without native move; moving a directory into itself recursed until
+  the path was too long; the RemoveAll emulation followed symlinks out of the
+  tree; the ListDirRecursive emulation swallowed callback errors.
+- webdavfs `Move`/`CopyFile` sent `Overwrite: T` and deleted an existing
+  destination directory tree; `RemoveAll` did nothing on nginx; Apache
+  redirects turned PROPFIND/DELETE/MOVE into GET.
+- FTP command injection through CR/LF in paths; httpfs `Join("..")` could
+  escape the host (SSRF); sftpfs and ftpfs registered credential URLs in
+  `init`, so importing them made any URL dial out; `SubFileSystem` paths
+  escaped the root through `..\`; `StdFS.Stat`/`Sub` accepted `..`; tar
+  entries like `..\..\evil.txt` extracted outside the destination.
+- The local watcher crashed the process when `Close` ran during a callback;
+  sftpfs never closed the SSH connection and leaked one on every ctx timeout;
+  a closed file system could stay registered forever after a race in
+  `EnsureRegistered`; MemFileSystem panicked and deadlocked after `Close`.
+- MemFileSystem shared byte slices with callers and open readers; writes to
+  directories and through symlinks were stored on the wrong node; the
+  overlay resurrected removed base contents and lost concurrent appends.
+- sftpfs listings re-delivered entries and lost the callback error; ftpfs
+  retried appends twice; non-idempotent operations are no longer retried after
+  their request was sent; Dial honours ctx through the handshake.
+- httpfs decoded and path-cleaned query strings (presigned URLs broke) and
+  the extension of `report.pdf?x=1` was `.pdf?x=1`; RangeReader reported a
+  truncated body as a complete file; tar and zip archives with duplicate
+  entries returned corrupt content; `ContentHashFuncFrom` returned wrong
+  hashes from the second call; Glob panicked when the loop was left early.
+- s3fs copy sources with `+` failed; Touch wiped object metadata on s3fs and
+  azureblobfs; keys like `d//x.txt` made a directory list itself; Dropbox
+  uploads above 150 MB failed; the Dropbox metadata cache grew without bound.
+- `Local` returned raw `EISDIR`/`ENOTDIR`/`ENOTEMPTY` errors, moved despite a
+  canceled ctx and merged into existing directories on cross-device moves; a
+  zero-value `LocalFileSystem` created mode 0000 files; `~foo` expanded to
+  `$HOME/foo`.
+- ftpfs: Append ran twice after a lost reply, ListDirRecursive returned
+  partial results without an error, Dial ignored ctx during login, Close
+  waited behind hung operations, data connections went to the IP of the PASV
+  reply, FTPS servers that require TLS session reuse rejected transfers,
+  `DebugOut` logged the password, IPv6 addresses without a port failed.
+- smbfs: `Options.Password` was ignored for a username from the address,
+  sessions dropped by the server were never reconnected, ReadAt at the end
+  didn't return `io.EOF`, Move replaced empty directories, symlink targets
+  lost their leading `/`; anonymous guest shares work.
+- The root module did not compile on freebsd, netbsd, openbsd, solaris and
+  wasm; `./test-workspace.sh` failed on Go 1.27 because of the pinned
+  staticcheck version; the azureblobfs and smbfs dependencies had known
+  vulnerabilities.
+
+### Removed
+
+- `fs.Remove(uris ...string)` and `fs.RemoveFile` (use `RemoveFiles` or the
+  method expression `File.Remove`), `fs.MustGlob`, `File.MustGlob`,
+  `fs.NewSingleMemFileSystem`, `MemFileSystem.WithID`/`WithVolume`,
+  `fs.WriteSeekCloser`, the `Permissions.CanXxx` methods (use `Can`),
+  `fs.RenameFileSystem`, `fs.ListDirMaxFileSystem`,
+  `fsimpl.NewFileBufferWithClose`, `fsimpl.DirTreeNode` (now
+  `internal/dirtree`), `fstest.DockerAvailable`/`DockerSetupFailed`.
+
+## [1.0.0-beta.1] - 2026-10-20
 
 First beta of the v1 API; further beta releases iterate on it before
 v1.0.0 freezes the API. Upgrading from v0.x is mechanical, see
@@ -274,12 +577,10 @@ module only pins development tools and is not tagged.
   (merged into `fs.AbsPathFileSystem`), `s3fs` `Watch` and `VolumeName` stubs,
   `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
   `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
-- `fsimpl.DirEntryFromFileInfo`, `fsimpl.NewReadonlyFileBufferWithClose`,
-  `fsimpl.ReadWriteAllSeekCloser.InvalidateBuffer` (unused).
 - `fs.MemFileSystem.ReadAll` on a directory returns `ErrIsDirectory` instead
   of empty data.
 
-## v0.1.0 - 2026-06-30
+## [0.1.0] - 2026-06-30
 
 First release, and a v1.0 preparation pass: a broad audit of the library that
 fixes data-loss and crash bugs across the backends, tightens the public API, and

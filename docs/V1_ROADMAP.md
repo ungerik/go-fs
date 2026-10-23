@@ -2,13 +2,18 @@
 
 Plan of record for reaching v1.0.0: clean, durable abstractions and a complete
 feature surface for the areas the library touches, so the API can be frozen.
-It replaces the earlier `TODOS.md`; every still-open item from it is folded into
-the phases below. Breaking changes are explicitly allowed before v1.0.0.
+It replaced the earlier `TODOS.md`; every still-open item from it is folded into
+the phases below. The new `TODOS.md` only lists the dependents to update after v1.0.0. Breaking changes are explicitly allowed before v1.0.0.
 
 Two audits of the whole tree (core package, all backends, test infrastructure)
 plus a design pass produced the findings and decisions recorded here.
 
 ## Decisions
+
+> Design of 2026-09. Where it differs, the Beta 2 decisions below and the
+> CHANGELOG win: ctx on Move, Truncate and Rename, `Lstat`, no
+> `RenameFileSystem`/`ListDirMaxFileSystem`/`MustGlob`, `fs.EnsureRegistered`,
+> `MemFileSystemOptions`.
 
 Taken 2026-09-05/06:
 
@@ -82,6 +87,11 @@ and the `fstest` mocks must be migrated when the interface changes. Hot
 
 ## Target architecture
 
+> Design of 2026-09. Where it differs, the Beta 2 decisions below and the
+> CHANGELOG win: ctx on Move, Truncate and Rename, `Lstat`, no
+> `RenameFileSystem`/`ListDirMaxFileSystem`/`MustGlob`, `fs.EnsureRegistered`,
+> `MemFileSystemOptions`.
+
 ### Core `FileSystem` interface (implementer-facing)
 
 ```go
@@ -98,7 +108,7 @@ type FileSystem interface {
 	Stat(path string) (*FileInfo, error)
 	ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error
 	OpenReader(path string) (io.ReadCloser, error)
-	Close() error // idempotent; unregisters if registered; no-op for Local/Invalid
+	Close() error // idempotent; unregisters if registered; Local only stops its watcher and stays usable; no-op for Invalid
 }
 
 type WriteFileSystem interface {
@@ -510,7 +520,8 @@ One PR per phase unless noted.
       once fixed, segfaulted on connection close on Docker Desktop, in the
       Alpine and the Debian builds alike. TestMain of the remaining Docker
       backed tests (s3fs, sftpfs) fails instead of skipping when Docker is
-      installed but the server can't be started (`fstest.DockerSetupFailed`).
+      installed but the server can't be started (`fstest.DockerSetupFailed`,
+      since beta.2 `internal/dockertest.SetupFailed`).
 - [x] dropboxfs: `NewAndRegister(ctx, token, cacheTimeout, mute)` fetches the
       account and uses the account id as `ID()` and prefix suffix, so the
       same account always gets the same prefix; typed `not_found` and
@@ -536,14 +547,17 @@ One PR per phase unless noted.
       cancelable. Commented-out `MemFile` JSON marshalling removed.
 - [x] CHANGELOG `v1.0.0-beta.1` with the migration link, `VERSION` =
       `v1.0.0-beta.1`.
-- [ ] Tag all modules in lockstep after the PR is merged
+- [x] Tag all modules in lockstep after the PR is merged
       (`v1.0.0-beta.1`, `s3fs/v1.0.0-beta.1`, `sftpfs/v1.0.0-beta.1`,
       `ftpfs/v1.0.0-beta.1`, `dropboxfs/v1.0.0-beta.1`,
       `webdavfs/v1.0.0-beta.1`, `smbfs/v1.0.0-beta.1`,
       `azureblobfs/v1.0.0-beta.1`; not the `tools` module, which only pins
       development tools). The intermediate tags `v0.2.0`/`v0.3.0` were not
       created because everything lands in one PR.
-- [ ] v1.0.0: after the beta iterations in follow-up PRs.
+- [ ] v1.0.0: after the beta iterations in follow-up PRs, tagged with
+      `tag-release.sh` (the `tools` module is never tagged).
+- [ ] After v1.0.0: update the ungerik and domonda repositories that use
+      go-fs, listed in `TODOS.md`.
 
 ### Beta iterations (after Phase 6)
 
@@ -597,15 +611,81 @@ helpers, no change to the `File` API.
       field or file name can address an upload of another field (the
       `..%2Fother%2Fx.txt` upload read the `other` field's file).
 
+### Beta 2 (v1.0.0-beta.2)
+
+A full review of beta.1 (core, File API, implementations, sub-packages,
+backends, release readiness; `docs/MIGRATION_v1.md` lists the resulting
+changes) found data loss, security and crash bugs and API shapes that would
+be hard to change after the freeze. Decisions taken 2026-10-21:
+
+- **Constructors never register implicitly.** `New…`/`Dial…` return the
+  file system, and an error where construction can fail, `…AndRegister`
+  registers and returns only an error. Every constructor whose registration behaviour changed also changed
+  its signature, so old call sites fail to compile instead of losing the
+  registration silently. Temporary file systems use `New` + `fs.Register` +
+  `defer Close`.
+- **Atomic registry.** Prefix matching at a boundary, longest match over
+  prefixes and aliases, `Register` returns `ErrAlreadyRegistered` for another
+  instance and is not reference counted, `fs.EnsureRegistered` is the atomic
+  reference counted get-or-create, `Close` always unregisters.
+- **Per-instance `*Options` in every backend**, no mutable package
+  configuration; permission defaults are constants.
+- **ctx on the native Move and Truncate**, `WriteAborter` for writers that
+  commit on Close, `Rename` takes a ctx because without native move it copies.
+- **Error contract.** Typed errors store the `FileReader` they were created
+  for (behind a pointer, so `errors.Is` never panics for non-comparable
+  readers), `File() (File, bool)`, `FileReader()`, `Is` matching any value of
+  the type; `ErrDirectoryNotEmpty`, `ErrFileSystemsDoNotMatch`,
+  `ErrAlreadyRegistered`; `ErrEmptyPath` does not wrap `os.ErrNotExist`;
+  unregistered prefixes report `ErrInvalidFileSystem`.
+- **Overwrite semantics** for Move/Rename/CopyFile: a file destination is
+  replaced, a directory destination is an error, never merged or deleted;
+  moving into itself is `os.ErrInvalid`.
+- `CopyFileBuf` stays with a plain `buf []byte`; `IsSymbolicLink` stays on
+  `File` and `FileReader`, implementers provide `Lstat`.
+
+- [x] Core API (registry, errors, interfaces, root constructors, PathHelper
+      hiding, `internal/dockertest`).
+- [x] fstest: stdlib only, `Config.Skip`, seed-derived names, new contract
+      checks (errors, Close, cancellation, overwrite, into-itself, 1 MiB
+      content, `WriteAborter`, URI boundary and round trip).
+- [x] Generic emulations commit only complete data; File/FileReader/MemFile
+      signatures; fsimpl (`WriteAborter`, `RangeReader`), `internal/dirtree`,
+      httpfs as `URIFileSystem`, zipfs/tarfs/multipartfs/uuiddir fixes.
+- [x] Mem, Local (all Unix platforms; wasm builds), Sub, Overlay and Std pass
+      the conformance suite, Invalid its error-contract tests; s3fs
+      (transfermanager, streaming), azureblobfs, webdavfs, dropboxfs (offline
+      fake client), sftpfs (Options, keep-alive, safe retries), ftpfs and
+      smbfs (cloudsoda/go-smb2 fork) rework.
+- [x] CI: Go stable, cross-compiles, govulncheck, tidy and `GOWORK=off`
+      checks, lint on all OSes, Dependabot, `tag-release.sh`, `SECURITY.md`.
+- [x] Pre-release review of the beta.2 branch (2026-10-22): confinement
+      escapes (SubFileSystem link chains, `~` on Local, `\` on smbfs),
+      password and signature leaks in errors and webdavfs redirects,
+      `ServeFileHTTP` range amplification, move and copy data loss
+      (symlinks, hard links, case-only renames, refused RNFR), setuid
+      propagation from archives, link cycles, reconnect and keep-alive
+      bugs, `RemoveAll` of the root in s3fs, azureblobfs and sftpfs.
+      Decided: copies keep only the 9 permission bits of the source unless
+      `perm` is passed; overlay layers must be case-sensitive; XAttr flag
+      errors wrap `os.ErrExist`/`os.ErrNotExist`. Deferred items are
+      tracked outside the repository.
+
 ## Verification (overall)
 
 - `./test-workspace.sh` (with `-race`) green locally; GitHub Actions green on
   ubuntu/macos/windows for every module.
-- `fstest.RunConformance` passes on Local, Mem (both separators), httpfs
-  (httptest), zipfs reader + writer, multipartfs, s3fs (S3Mock, MinIO until
-  its Docker images were removed in 2026), sftpfs
-  (Docker), ftpfs (in-process + Docker), dropboxfs (token).
-- `go vet`, staticcheck and gosec clean.
+- `fstest.RunConformance` passes on Local, Mem (both separators and with a
+  volume), Sub, Overlay, Std, httpfs (httptest), zipfs and tarfs reader +
+  writer, multipartfs, s3fs (S3Mock, MinIO until its Docker images were
+  removed in 2026), azureblobfs (Azurite), sftpfs (in-process and Docker
+  sshd), ftpfs (in-process FTP and FTPS server), smbfs (Docker Samba),
+  webdavfs (x/net/webdav with nginx and Apache behaviour), dropboxfs
+  (offline fake and token).
+- The root module builds for linux, darwin, windows, the BSDs, solaris,
+  illumos, aix, wasip1 and js/wasm.
+- `go vet`, staticcheck, gosec and govulncheck clean, `go mod tidy -diff`
+  clean for every module.
 - domonda-service and go-docdb compile against the v1 branch after applying
   `docs/MIGRATION_v1.md`.
 - `grep -rn 'TODO\|FIXME' --include='*.go'` returns nothing unaddressed; no

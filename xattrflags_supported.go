@@ -1,16 +1,19 @@
-//go:build linux || freebsd || netbsd || darwin || solaris
+//go:build linux || darwin || solaris
 
 package fs
 
 import "github.com/pkg/xattr"
 
-// xattrCreate and xattrReplace mirror the platform-specific
-// [xattr.XATTR_CREATE] and [xattr.XATTR_REPLACE] flag values so that
-// [MemFileSystem] interprets SetXAttr flags the same way the local file
-// system does. The pkg/xattr package only defines these constants on
-// platforms with native xattr support; see xattrflags_unsupported.go for
-// the fallback used on platforms without it (e.g. Windows).
-const (
-	xattrCreate  = xattr.XATTR_CREATE
-	xattrReplace = xattr.XATTR_REPLACE
-)
+// xattrNativeFlags returns the platform values of [xattr.XATTR_CREATE]
+// and [xattr.XATTR_REPLACE] for flags. The pkg/xattr package only defines
+// these constants on some platforms, see xattrflags_other.go
+// for the platforms without them.
+func xattrNativeFlags(flags XAttrFlags) (native int, ok bool) {
+	if flags&XAttrCreate != 0 {
+		native |= xattr.XATTR_CREATE
+	}
+	if flags&XAttrReplace != 0 {
+		native |= xattr.XATTR_REPLACE
+	}
+	return native, true
+}

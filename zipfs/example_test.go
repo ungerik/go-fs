@@ -13,15 +13,21 @@ import (
 func ExampleNewWriter() {
 	ctx := context.Background()
 
-	memFS, err := fs.NewMemFileSystem("/")
+	memFS, err := fs.NewMemFileSystem(nil)
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(memFS); err != nil {
 		panic(err)
 	}
 	defer memFS.Close()
 	archive := memFS.RootDir().Join("docs.zip")
 
-	writer, err := zipfs.NewWriter(archive)
+	writer, err := zipfs.NewWriter(archive, "")
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(writer); err != nil {
 		panic(err)
 	}
 	err = writer.RootDir().Join("readme.txt").WriteAllString(ctx, "Hello ZIP")
@@ -34,8 +40,11 @@ func ExampleNewWriter() {
 		panic(err)
 	}
 
-	reader, err := zipfs.NewReader(archive)
+	reader, err := zipfs.NewReader(archive, "")
 	if err != nil {
+		panic(err)
+	}
+	if err := fs.Register(reader); err != nil {
 		panic(err)
 	}
 	defer reader.Close()

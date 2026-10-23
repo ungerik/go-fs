@@ -34,6 +34,36 @@ func TestSplitDirAndName(t *testing.T) {
 	}
 }
 
+// TestSplitDirAndName_Volume verifies that the root of a volume has an
+// empty name and is the parent of the names directly below it. The root
+// `C:\` used to be split into (".", "C:") and `C:\a` into ("C:", "a"),
+// which is the drive relative current directory on Windows.
+func TestSplitDirAndName_Volume(t *testing.T) {
+	tests := []struct {
+		path      string
+		volumeLen int
+		dir, name string
+	}{
+		{`C:\`, 2, `C:\`, ""},
+		{`C:`, 2, `C:`, ""},
+		{`C:\a`, 2, `C:\`, "a"},
+		{`C:\a\`, 2, `C:\`, "a"},
+		{`C:\a\b`, 2, `C:\a`, "b"},
+		{`C:a`, 2, `C:`, "a"},
+		{`\\server\share`, 14, `\\server\share`, ""},
+		{`\\server\share\`, 14, `\\server\share\`, ""},
+		{`\\server\share\a`, 14, `\\server\share\`, "a"},
+		{`\\server\share\a\b`, 14, `\\server\share\a`, "b"},
+		{`\a`, 0, `\`, "a"},
+		{`\`, 0, `\`, ""},
+	}
+	for _, tt := range tests {
+		dir, name := SplitDirAndName(tt.path, tt.volumeLen, `\`)
+		assert.Equalf(t, tt.dir, dir, "dir of SplitDirAndName(%#v, %d)", tt.path, tt.volumeLen)
+		assert.Equalf(t, tt.name, name, "name of SplitDirAndName(%#v, %d)", tt.path, tt.volumeLen)
+	}
+}
+
 func TestRandomString(t *testing.T) {
 	for range 100 {
 		s := RandomString()

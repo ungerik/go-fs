@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// RandomString returns a 120 bit randum number
+// RandomString returns a 120 bit random number
 // encoded as URL compatible base64 string with a length of 20 characters.
 // The first character will never be a dash '-' to avoid issues with
 // file names being interpreted as a command line options.
@@ -91,30 +91,40 @@ func TrimExt(filePath, separator string) string {
 // SplitDirAndName is a generic helper for FileSystem.SplitDirAndName implementations.
 // path.Split or filepath.Split don't have the wanted behavior when given a path ending in a separator.
 // SplitDirAndName returns the parent directory of filePath and the name with that directory of the last filePath element.
-// If filePath is the root of the file system, then an empty string will be returned as name.
-// If filePath does not contain a separator before the name part, then "." will be returned as dir.
+// If filePath is the root of the file system or of a volume, then an empty string will be returned as name.
+// If filePath does not contain a separator before the name part, then "." will be returned as dir,
+// or the volume name if filePath starts with one.
+//
+// The first volumeLen bytes of filePath are its volume name, like "C:" on Windows.
+// A volume root like `C:\` is returned as dir with an empty name, and the
+// parent of an element directly below it is the volume root, like `C:\` for `C:\a`.
 func SplitDirAndName(filePath string, volumeLen int, separator string) (dir, name string) {
 	if filePath == "" {
 		return "", ""
 	}
 
-	filePath = strings.TrimSuffix(filePath, separator)
-
-	if filePath == "" {
+	trimmed := strings.TrimSuffix(filePath, separator)
+	if trimmed == "" {
 		return separator, ""
 	}
 
-	pos := strings.LastIndex(filePath, separator)
+	pos := strings.LastIndex(trimmed, separator)
 	switch {
-	case pos == -1:
-		return ".", filePath
 	case pos == 0:
-		return separator, filePath[1:]
-	case pos < volumeLen:
+		return separator, trimmed[len(separator):]
+	case volumeLen > 0 && pos < volumeLen && len(trimmed) <= volumeLen:
+		// The root of a volume like `C:\` or "C:"
 		return filePath, ""
+	case volumeLen > 0 && pos < volumeLen:
+		// A name directly after a volume without separator like "C:a"
+		return trimmed[:volumeLen], trimmed[volumeLen:]
+	case volumeLen > 0 && pos == volumeLen:
+		// A name directly below the root of a volume like `C:\a`
+		return trimmed[:pos+len(separator)], trimmed[pos+len(separator):]
+	case pos == -1:
+		return ".", trimmed
 	}
-
-	return filePath[:pos], filePath[pos+1:]
+	return trimmed[:pos], trimmed[pos+len(separator):]
 }
 
 // MatchAnyPattern returns true if name matches any of patterns,

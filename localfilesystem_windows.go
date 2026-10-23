@@ -3,6 +3,7 @@ package fs
 import (
 	"errors"
 	"fmt"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -15,6 +16,12 @@ const localRoot = `C:\`
 // when source and destination are on different volumes.
 func isCrossDeviceError(err error) bool {
 	return errors.Is(err, syscall.Errno(0x11))
+}
+
+// localLinkCount returns false, because the Sys value
+// of a FileInfo on Windows has no link count.
+func localLinkCount(os.FileInfo) (links uint64, ok bool) {
+	return 0, false
 }
 
 var extraDirPermissions Permissions = 0
@@ -34,14 +41,22 @@ func localFileSystemID() string {
 	return fmt.Sprintf("%08x", serial)
 }
 
-func hasLocalFileAttributeHidden(filePath string) (bool, error) {
-	p, e := syscall.UTF16PtrFromString(filePath)
-	if e != nil {
-		return false, e
+// localHiddenAttribute reports if the file has the FILE_ATTRIBUTE_HIDDEN
+// attribute. It is read from info if not nil, else from the file at filePath.
+// A file whose attributes can't be read is not hidden.
+func localHiddenAttribute(filePath string, info os.FileInfo) bool {
+	if info != nil {
+		if data, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
+			return data.FileAttributes&syscall.FILE_ATTRIBUTE_HIDDEN != 0
+		}
 	}
-	attrs, e := syscall.GetFileAttributes(p)
-	if e != nil {
-		return false, e
+	p, err := syscall.UTF16PtrFromString(filePath)
+	if err != nil {
+		return false
 	}
-	return attrs&syscall.FILE_ATTRIBUTE_HIDDEN != 0, nil
+	attrs, err := syscall.GetFileAttributes(p)
+	if err != nil {
+		return false
+	}
+	return attrs&syscall.FILE_ATTRIBUTE_HIDDEN != 0
 }

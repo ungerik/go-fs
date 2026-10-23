@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -71,13 +72,14 @@ func newFormRequest(t *testing.T, uploads []upload, values map[string]string) *h
 // that is closed at the end of the test.
 func newTestFS(t *testing.T, uploads []upload, values map[string]string) *MultipartFileSystem {
 	t.Helper()
-	multipartFS, err := FromRequestForm(newFormRequest(t, uploads, values), 1<<20)
-	require.NoError(t, err, "FromRequestForm")
+	multipartFS, err := NewFromRequest(newFormRequest(t, uploads, values), 1<<20, "")
+	require.NoError(t, err, "NewFromRequest")
+	require.NoError(t, fs.Register(multipartFS))
 	t.Cleanup(func() { _ = multipartFS.Close() })
 	return multipartFS
 }
 
-func TestFromRequestForm(t *testing.T) {
+func TestNewFromRequest(t *testing.T) {
 	uploads := []upload{
 		{field: "files", name: "hello.txt", content: "Hello, World!"},
 		{field: "files", name: "empty.txt", content: ""},
@@ -131,9 +133,9 @@ func TestFromRequestForm(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist, "a directory has no file header")
 }
 
-func TestFromRequestForm_noMultipart(t *testing.T) {
+func TestNewFromRequest_noMultipart(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/upload", bytes.NewReader([]byte("not a form")))
-	_, err := FromRequestForm(request, 1<<20)
+	_, err := NewFromRequest(request, 1<<20, "")
 	assert.Error(t, err, "parsing must fail instead of returning an empty file system")
 }
 
@@ -146,7 +148,9 @@ func TestNew(t *testing.T) {
 	form, err := multipart.NewReader(body, params["boundary"]).ReadForm(1 << 20)
 	require.NoError(t, err)
 
-	multipartFS := New(form)
+	multipartFS, err := New(form, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(multipartFS))
 	defer func() { _ = multipartFS.Close() }()
 
 	assert.Same(t, form, multipartFS.Form)
@@ -154,7 +158,59 @@ func TestNew(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "A", string(data))
 
-	assert.Panics(t, func() { New(nil) }, "a nil form would panic on every later call")
+	_, err = New(nil, "")
+	assert.Error(t, err, "a nil form would panic on every later call")
+}
+
+// TestNew_EmptyFieldName is a regression test: the directory of a form field
+// with an empty name was the root directory, so the root listed itself and
+// a recursive listing of the root overflowed the stack. mime/multipart skips
+// such fields, but a form passed to New can have them.
+func TestNew_EmptyFieldName(t *testing.T) {
+	body, contentType := newFormBody(t, []upload{
+		{field: "files", name: "a.txt", content: "A"},
+		{field: "unnamed-field", name: "b.txt", content: "B"},
+	}, nil)
+	_, params, err := mime.ParseMediaType(contentType)
+	require.NoError(t, err)
+	form, err := multipart.NewReader(body, params["boundary"]).ReadForm(1 << 20)
+	require.NoError(t, err)
+	form.File[""] = form.File["unnamed-field"]
+	delete(form.File, "unnamed-field")
+	multipartFS, err := New(form, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(multipartFS))
+	t.Cleanup(func() { _ = multipartFS.Close() })
+
+	dirs, err := multipartFS.RootDir().ListDirMax(t.Context(), -1)
+	require.NoError(t, err)
+	assert.Equal(t, []fs.File{multipartFS.JoinCleanFile("files")}, dirs, "the root must not list itself")
+
+	var files []string
+	err = multipartFS.RootDir().ListDirRecursive(t.Context(), func(file fs.File) error {
+		files = append(files, file.Path())
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/files/a.txt"}, files)
+
+	_, err = multipartFS.FormFile("")
+	assert.ErrorIs(t, err, os.ErrNotExist, "an upload without field name has no path")
+	assert.Nil(t, multipartFS.FormFiles(""))
+}
+
+// TestCopyFile_UploadIsWritable is a regression test: a copy of an upload
+// took over the permissions fs.AllRead of the read-only file system,
+// so the copy was read-only and writing it failed.
+func TestCopyFile_UploadIsWritable(t *testing.T) {
+	multipartFS := newTestFS(t, []upload{{field: "files", name: "a.txt", content: "A"}}, nil)
+	upload, err := multipartFS.FormFile("files")
+	require.NoError(t, err)
+	dest := fs.File(filepath.Join(t.TempDir(), "a.txt"))
+
+	require.NoError(t, fs.CopyFile(t.Context(), upload, dest))
+	assert.True(t, dest.Permissions().Can(fs.UserRead|fs.UserWrite), "permissions of the copy: %s", dest.Permissions().FileMode(false))
+	require.NoError(t, dest.WriteAllString(t.Context(), "changed"), "writing the copy")
 }
 
 func TestUniqueFileNames(t *testing.T) {
@@ -268,10 +324,11 @@ func TestListDirErrors(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	multipartFS, err := FromRequestForm(newFormRequest(t, []upload{
+	multipartFS, err := NewFromRequest(newFormRequest(t, []upload{
 		{field: "files", name: "a.txt", content: "A"},
-	}, nil), 1<<20)
-	require.NoError(t, err)
+	}, nil), 1<<20, "")
+	require.NoError(t, err, "NewFromRequest")
+	require.NoError(t, fs.Register(multipartFS))
 	filePath := multipartFS.CleanPath("files", "a.txt")
 
 	require.NoError(t, multipartFS.Close())
@@ -315,9 +372,114 @@ func TestOpenReaderStat(t *testing.T) {
 	assert.Equal(t, "a (2).txt", info.Name(), "the unique file system name, not the uploaded one")
 	assert.Equal(t, int64(2), info.Size())
 	assert.False(t, info.IsDir())
-	assert.Equal(t, iofs.FileMode(0666), info.Mode())
+	assert.Equal(t, iofs.FileMode(0444), info.Mode(), "read-only like the Permissions of Stat")
 	assert.True(t, info.ModTime().IsZero(), "multipart parts carry no modification time")
 	assert.Nil(t, info.Sys())
+
+	// The reader and the file system must agree on the permissions,
+	// the reader used to report 0666 for a read-only file system
+	fsInfo, err := multipartFS.Stat(multipartFS.CleanPath("files", "a (2).txt"))
+	require.NoError(t, err)
+	assert.Equal(t, fsInfo.Permissions, fs.PermissionsFromStdFileInfo(info))
+	assert.Equal(t, fs.AllRead, fsInfo.Permissions)
+}
+
+// TestOpenReader_Directory verifies that opening the root or a form field
+// directory reports fs.ErrIsDirectory. Both used to be reported as missing,
+// although Stat describes them as existing directories.
+func TestOpenReader_Directory(t *testing.T) {
+	multipartFS := newTestFS(t, []upload{{field: "files", name: "a.txt", content: "A"}}, nil)
+
+	for _, dirPath := range []string{multipartFS.CleanPath(""), multipartFS.CleanPath("files")} {
+		_, err := multipartFS.OpenReader(dirPath)
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenReader(%q)", dirPath)
+		assert.NotErrorIs(t, err, os.ErrNotExist, "OpenReader(%q)", dirPath)
+		_, err = multipartFS.ReadAll(t.Context(), dirPath)
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "ReadAll(%q)", dirPath)
+	}
+
+	// Missing paths are still reported as missing
+	_, err := multipartFS.OpenReader(multipartFS.CleanPath("missing"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	_, err = multipartFS.OpenReader(multipartFS.CleanPath("files", "missing.txt"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+
+	// After Close a directory is reported as closed, not as directory
+	require.NoError(t, multipartFS.Close())
+	_, err = multipartFS.OpenReader(multipartFS.CleanPath("files"))
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+}
+
+// newDiskFS returns a MultipartFileSystem whose uploads larger than one
+// byte are stored in temporary files in a new directory, which is returned.
+func newDiskFS(t *testing.T, uploads []upload, values map[string]string) (*MultipartFileSystem, string) {
+	t.Helper()
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir) // os.TempDir on Unix
+	t.Setenv("TMP", tempDir)    // os.TempDir on Windows
+	multipartFS, err := NewFromRequest(newFormRequest(t, uploads, values), 1, "")
+	require.NoError(t, err, "NewFromRequest")
+	require.NotEmpty(t, dirEntries(t, tempDir), "the uploads are stored in temporary files")
+	t.Cleanup(func() { _ = multipartFS.Close() })
+	return multipartFS, tempDir
+}
+
+func dirEntries(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	return entries
+}
+
+// TestClose_ClosesReaders verifies that Close closes the readers that are
+// still open before it removes the temporary files. On Windows open files
+// can't be removed, so the temporary files leaked.
+func TestClose_ClosesReaders(t *testing.T) {
+	multipartFS, tempDir := newDiskFS(t, []upload{
+		{field: "files", name: "a.txt", content: "stored on disk"},
+	}, map[string]string{"comment": "kept in memory"})
+
+	reader, err := multipartFS.OpenReader(multipartFS.CleanPath("files", "a.txt"))
+	require.NoError(t, err)
+	buf := make([]byte, 6)
+	_, err = io.ReadFull(reader, buf)
+	require.NoError(t, err)
+
+	require.NoError(t, multipartFS.Close())
+	assert.Empty(t, dirEntries(t, tempDir), "the temporary files are removed")
+	_, err = reader.Read(buf)
+	assert.ErrorIs(t, err, os.ErrClosed, "Close of the file system closed the reader")
+	assert.NoError(t, reader.Close(), "closing a closed reader is no error")
+
+	// The form values are kept in memory and stay usable, as documented
+	assert.Equal(t, "kept in memory", multipartFS.FormValue("comment"))
+	assert.Equal(t, []string{"kept in memory"}, multipartFS.FormValues("comment"))
+}
+
+// TestClose_Retry verifies that a Close that failed to remove the
+// temporary files returns the error and can be retried. Close used to
+// mark the file system as closed first, so a second Close returned nil
+// and the files leaked.
+func TestClose_Retry(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory that denies removing files")
+	}
+	multipartFS, tempDir := newDiskFS(t, []upload{
+		{field: "files", name: "a.txt", content: "stored on disk"},
+	}, nil)
+	filePath := multipartFS.CleanPath("files", "a.txt")
+
+	require.NoError(t, os.Chmod(tempDir, 0o500)) //#nosec G302 -- the test directory must deny removing files
+	t.Cleanup(func() { _ = os.Chmod(tempDir, 0o700) })
+	assert.Error(t, multipartFS.Close(), "the temporary files can't be removed")
+	_, err := multipartFS.Stat(filePath)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "the file system is closed even if removing failed")
+	assert.NotEmpty(t, dirEntries(t, tempDir))
+
+	require.NoError(t, os.Chmod(tempDir, 0o700)) //#nosec G302 -- restore the permissions of the test directory
+	require.NoError(t, multipartFS.Close(), "the retry removes the temporary files")
+	assert.Empty(t, dirEntries(t, tempDir))
+	require.NoError(t, multipartFS.Close(), "Close is idempotent after success")
 }
 
 // fileSystemName returns the file system name of a file uploaded as name:

@@ -34,7 +34,7 @@ var (
 // and io/fs.ReadDirFS methods are used when the wrapped file system
 // implements them.
 type StdFileSystem struct {
-	fsimpl.PathHelper
+	paths fsimpl.PathHelper
 
 	fsys   iofs.FS
 	id     string
@@ -60,19 +60,37 @@ func NewStdFileSystem(fsys iofs.FS, id string) *StdFileSystem {
 func NewStdFileSystemWithPrefix(fsys iofs.FS, prefix, name string) *StdFileSystem {
 	_, id, _ := strings.Cut(prefix, "://")
 	return &StdFileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: prefix, Rooted: true},
-		fsys:       fsys,
-		id:         id,
-		name:       name,
+		paths: fsimpl.PathHelper{URIPrefix: prefix, Rooted: true},
+		fsys:  fsys,
+		id:    id,
+		name:  name,
 	}
 }
 
-// NewStdFileSystemAndRegister returns a registered read-only
-// FileSystem for fsys, see NewStdFileSystem.
-func NewStdFileSystemAndRegister(fsys iofs.FS, id string) *StdFileSystem {
-	stdFS := NewStdFileSystem(fsys, id)
-	Register(stdFS)
-	return stdFS
+// NewStdFileSystemAndRegister registers a read-only
+// FileSystem for fsys with the URI prefix "stdfs://" + id,
+// see NewStdFileSystem. The id must not be empty.
+func NewStdFileSystemAndRegister(fsys iofs.FS, id string) error {
+	if id == "" {
+		return errors.New("NewStdFileSystemAndRegister needs an id")
+	}
+	return Register(NewStdFileSystem(fsys, id))
+}
+
+// Prefix returns the URI prefix of the file system.
+func (s *StdFileSystem) Prefix() string {
+	return s.paths.URIPrefix
+}
+
+// Separator returns "/".
+func (s *StdFileSystem) Separator() string {
+	return s.paths.Separator()
+}
+
+// CleanPath joins the uriParts with the separator and returns
+// the cleaned absolute path of the file system without the prefix.
+func (s *StdFileSystem) CleanPath(uriParts ...string) string {
+	return s.paths.CleanPath(uriParts...)
 }
 
 // name returns the io/fs name of a file system path.
@@ -111,7 +129,7 @@ func (s *StdFileSystem) wrapErr(filePath string, err error) error {
 }
 
 func (s *StdFileSystem) file(filePath string) File {
-	return File(s.JoinCleanURI(filePath))
+	return File(s.paths.JoinCleanURI(filePath))
 }
 
 // ReadableWritable returns true for readable and false for writable,
@@ -122,7 +140,7 @@ func (s *StdFileSystem) ReadableWritable() (readable, writable bool) {
 
 // RootDir returns the root directory of the file system.
 func (s *StdFileSystem) RootDir() File {
-	return File(s.URIPrefix + "/")
+	return File(s.paths.URIPrefix + "/")
 }
 
 // ID returns the id of the file system, which is part of its URI prefix.
@@ -139,7 +157,7 @@ func (s *StdFileSystem) Name() string {
 // String returns a descriptive string of the file system
 // including its name and prefix.
 func (s *StdFileSystem) String() string {
-	return s.Name() + " with prefix " + s.URIPrefix
+	return s.Name() + " with prefix " + s.paths.URIPrefix
 }
 
 // Stat returns the FileInfo of the file. Names beginning with a dot
@@ -155,7 +173,7 @@ func (s *StdFileSystem) Stat(filePath string) (*FileInfo, error) {
 	if err != nil {
 		return nil, s.wrapErr(filePath, err)
 	}
-	fileInfo := s.fileInfo(s.file(filePath), info, s.IsHidden(filePath))
+	fileInfo := s.fileInfo(s.file(filePath), info, strings.HasPrefix(path.Base(filePath), "."))
 	if stdName(filePath) == "." {
 		fileInfo.Name = "/"
 	}
@@ -198,7 +216,7 @@ func (s *StdFileSystem) ListDir(ctx context.Context, dirPath string, patterns []
 		if err != nil {
 			return err
 		}
-		err = callback(s.fileInfo(s.file(s.CleanPath(dirPath, entry.Name())), info, s.IsHidden(entry.Name())))
+		err = callback(s.fileInfo(s.file(s.CleanPath(dirPath, entry.Name())), info, strings.HasPrefix(entry.Name(), ".")))
 		if err != nil {
 			return err
 		}
@@ -208,6 +226,9 @@ func (s *StdFileSystem) ListDir(ctx context.Context, dirPath string, patterns []
 
 // ListDirRecursive walks the tree with io/fs.WalkDir and calls
 // callback for every file (not directory) matching the patterns.
+// Like io/fs.WalkDir it follows a symbolic link at dirPath and lists
+// the links below it like files without following them, so the FileInfo
+// of a link to a directory has IsDir false, see ListDirRecursiveFileSystem.
 func (s *StdFileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if err := s.checkClosed(); err != nil {
 		return err
@@ -240,7 +261,7 @@ func (s *StdFileSystem) ListDirRecursive(ctx context.Context, dirPath string, pa
 		if err != nil {
 			return err
 		}
-		return callback(s.fileInfo(s.file("/"+name), info, s.IsHidden(entry.Name())))
+		return callback(s.fileInfo(s.file("/"+name), info, strings.HasPrefix(entry.Name(), ".")))
 	})
 }
 
@@ -266,7 +287,7 @@ func (s *StdFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	}
 	// Stat of the opened file must report the same info as Stat
 	// of the file system, including the readable permissions
-	return &stdFile{File: file, info: s.fileInfo(s.file(filePath), info, s.IsHidden(filePath)).StdFileInfo()}, nil
+	return &stdFile{File: file, info: s.fileInfo(s.file(filePath), info, strings.HasPrefix(path.Base(filePath), ".")).StdFileInfo()}, nil
 }
 
 // stdFile is an opened io/fs.File whose Stat reports

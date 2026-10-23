@@ -2,9 +2,12 @@ package uuiddir
 
 import (
 	"context"
+	"errors"
 	iofs "io/fs"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 
@@ -183,7 +186,8 @@ func Test_Enum(t *testing.T) {
 	fixture := make(fstest.MapFS)
 	dirs := make(map[fs.File]bool)
 	ids := make(map[[16]byte]struct{})
-	stdFS := fs.NewStdFileSystemAndRegister(fixture, "")
+	stdFS := fs.NewStdFileSystem(fixture, "")
+	require.NoError(t, fs.Register(stdFS))
 	t.Cleanup(func() { _ = stdFS.Close() })
 	baseDir := stdFS.RootDir()
 	for _, id := range []string{
@@ -208,6 +212,105 @@ func Test_Enum(t *testing.T) {
 
 		return nil
 	})
+}
+
+// statCountingFS counts the Stat calls to the wrapped file system.
+type statCountingFS struct {
+	*fs.MemFileSystem
+	stats atomic.Int64
+}
+
+func (s *statCountingFS) Stat(filePath string) (*fs.FileInfo, error) {
+	s.stats.Add(1)
+	return s.MemFileSystem.Stat(filePath)
+}
+
+// Test_Enum_NoStatPerEntry verifies that Enum decides with the FileInfo
+// of the listing whether an entry is a hidden entry, a file or a
+// directory. It used to call Exists, IsHidden and IsDir for every
+// entry of every level, so two Stats per entry.
+func Test_Enum_NoStatPerEntry(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	counting := &statCountingFS{MemFileSystem: memFS}
+	require.NoError(t, fs.Register(counting))
+	t.Cleanup(func() { fs.Unregister(counting); _ = memFS.Close() })
+	baseDir := counting.RootDir()
+
+	want := map[[16]byte]struct{}{}
+	for _, id := range []string{
+		"ced14f11-83f6-4908-b502-8971ff464608",
+		"ced8e7c4-49fa-41e1-8962-263070ecb87f", // shares the first level
+		"4717a9b7-17d8-4c12-89e1-c998fb34e9ac",
+	} {
+		uuid := mustParseUUID(id)
+		_, err := Make(baseDir, uuid)
+		require.NoError(t, err)
+		want[uuid] = struct{}{}
+	}
+	// Entries that don't fit the layout are skipped
+	require.NoError(t, baseDir.Join("readme.txt").Touch())
+	require.NoError(t, baseDir.Join(".hidden", "498", "fad", "437c4954", "ad828ec2cc202628").MakeAllDirs())
+	require.NoError(t, baseDir.Join("ce", "d14", "f11", "notauuid", "x").MakeAllDirs())
+	require.NoError(t, baseDir.Join("ce", "d14", "f11", "83f64908", "file.txt").Touch())
+
+	counting.stats.Store(0)
+	got := findUUIDs(ctx, baseDir)
+	assert.Equal(t, want, got)
+	assert.Zero(t, counting.stats.Load(), "Enum must not Stat the listed entries")
+
+	// A callback error stops the walk
+	stop := errors.New("stop")
+	calls := 0
+	err = Enum(ctx, baseDir, func(fs.File, [16]byte) error { calls++; return stop })
+	assert.ErrorIs(t, err, stop)
+	assert.Equal(t, 1, calls)
+}
+
+// Test_Enum_SymlinkedDirs is a regression test: Enum skipped symbolic links
+// to directories, because the FileInfo of a listing describes a link itself.
+// It used to decide with File.IsDir, which follows links.
+func Test_Enum_SymlinkedDirs(t *testing.T) {
+	ctx := t.Context()
+	tempDir := t.TempDir()
+	baseDir := fs.File(filepath.Join(tempDir, "base"))
+	elsewhere := fs.File(filepath.Join(tempDir, "elsewhere"))
+	symlink := func(target, link fs.File) {
+		t.Helper()
+		require.NoError(t, link.Dir().MakeAllDirs())
+		if err := os.Symlink(target.LocalPath(), link.LocalPath()); err != nil {
+			t.Skipf("symbolic links not available: %s", err)
+		}
+	}
+
+	// The first level directory of a UUID is a link
+	levelLinked := mustParseUUID("ced14f11-83f6-4908-b502-8971ff464608")
+	parts := Split(levelLinked)
+	require.NoError(t, elsewhere.Join("level", parts[1], parts[2], parts[3], parts[4]).MakeAllDirs())
+	symlink(elsewhere.Join("level"), baseDir.Join(parts[0]))
+
+	// The UUID directory itself is a link
+	leafLinked := mustParseUUID("4717a9b7-17d8-4c12-89e1-c998fb34e9ac")
+	parts = Split(leafLinked)
+	require.NoError(t, elsewhere.Join("leaf").MakeAllDirs())
+	symlink(elsewhere.Join("leaf"), baseDir.Join(parts...))
+
+	// Links to a file and to a missing path are skipped like files
+	require.NoError(t, elsewhere.Join("file.txt").Touch())
+	symlink(elsewhere.Join("file.txt"), baseDir.Join("ab"))
+	symlink(elsewhere.Join("missing"), baseDir.Join("cd"))
+
+	got := map[fs.File][16]byte{}
+	err := Enum(ctx, baseDir, func(uuidDir fs.File, uuid [16]byte) error {
+		got[uuidDir] = uuid
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[fs.File][16]byte{
+		Join(baseDir, levelLinked): levelLinked,
+		Join(baseDir, leafLinked):  leafLinked,
+	}, got, "the UUID directories are found through the links")
 }
 
 func findUUIDs(ctx context.Context, baseDir fs.File) map[[16]byte]struct{} {

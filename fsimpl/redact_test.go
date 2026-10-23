@@ -1,0 +1,176 @@
+package fsimpl
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+// TestRedactURI checks the password redaction of URIs, also of URIs that
+// url.Parse rejects or misreads because a password contains an unencoded
+// '/', '?' or '#'. Most cases come from the tests of the redaction functions
+// that RedactURI replaced in the fs, httpfs, s3fs and sftpfs packages.
+func TestRedactURI(t *testing.T) {
+	for uri, want := range map[string]string{
+		// Parsed by url.Parse
+		"ftp://user:hunter2@host/dir/file.txt": "ftp://user:xxxxx@host/dir/file.txt",
+		"ftp://user@host/dir/file.txt":         "ftp://user@host/dir/file.txt",
+		"ftp://host/dir/a@b.txt":               "ftp://host/dir/a@b.txt",
+		"sftp://:secret@host":                  "sftp://:xxxxx@host",
+		"sftp://user:@host":                    "sftp://user:xxxxx@host",
+		"http://host/key?mail=a@b":             "http://host/key?mail=a@b",
+		"http://[::1]:8080/a:b@c":              "http://[::1]:8080/a:b@c",
+		"file:///home/a:b@c.txt":               "file:///home/a:b@c.txt",
+		// Without scheme there is no user info
+		"/local/a:b@c.txt":  "/local/a:b@c.txt",
+		"/local/a:b@c%.txt": "/local/a:b@c%.txt",
+		"user:secret@host":  "user:secret@host",
+
+		// Rejected by url.Parse
+		"ftp://user:hunter2@host/dir/100%.txt": "ftp://user:xxxxx@host/dir/100%.txt",
+		"ftp://user:hunter2@host:port/dir":     "ftp://user:xxxxx@host:port/dir",
+		"ftp://user:hunter2@host/dir/\x7f.txt": "ftp://user:xxxxx@host/dir/\x7f.txt",
+		"ftp://user:hunter2@[::1/dir":          "ftp://user:xxxxx@[::1/dir",
+		"sftp://user:secret@ho st/path":        "sftp://user:xxxxx@ho st/path",
+		"ftp://user:hunter2@x@host/100%.txt":   "ftp://user:xxxxx@host/100%.txt",
+		"ftp://user@host/dir/100%.txt":         "ftp://user@host/dir/100%.txt",
+		"ftp://host/dir/100%.txt":              "ftp://host/dir/100%.txt",
+		"ftp://host/a@b/100%.txt":              "ftp://host/a@b/100%.txt",
+		"http://host/key%zz?mail=a@b":          "http://host/key%zz?mail=a@b",
+		// "host:22/a%zz" is no valid user info even with the '/' encoded,
+		// so the '@' is part of the path. The port and path were replaced
+		// by "xxxxx" as if they were a password: "sftp://host:xxxxx@b"
+		"sftp://host:22/a%zz@b": "sftp://host:22/a%zz@b",
+
+		// A password with an unencoded '/', '?' or '#' that url.Parse
+		// rejects as port, it ends with the last '@'
+		"ftp://user:hunter2/x@host/dir/100%.txt": "ftp://user:xxxxx@host/dir/100%.txt",
+		"ftp://user:hunter2?x@host/dir/100%.txt": "ftp://user:xxxxx@host/dir/100%.txt",
+		"ftp://user:hunter2#x@host/dir/100%.txt": "ftp://user:xxxxx@host/dir/100%.txt",
+		"http://user:top?secret@host/key":        "http://user:xxxxx@host/key",
+		"http://user:top/secret@host/key%zz":     "http://user:xxxxx@host/key%zz",
+		"sftp://bob:ab/cd@host":                  "sftp://bob:xxxxx@host",
+		"sftp://bob:ab#cd@host":                  "sftp://bob:xxxxx@host",
+		"sftp://bob:ab/cd@host:22/path":          "sftp://bob:xxxxx@host:22/path",
+		"ftp://alice@example.com:se/cret@host/x": "ftp://alice@example.com:xxxxx@host/x",
+
+		// A password of digits or an empty one with an unencoded '/', '?'
+		// or '#', which url.Parse takes for a port, was not redacted.
+		// A host with a port and an '@' in the path looks the same.
+		"sftp://user:/secret@host/x":             "sftp://user:xxxxx@host/x",
+		"ftp://u:123?x@host/":                    "ftp://u:xxxxx@host/",
+		"sftp://bob:12/34@127.0.0.1":             "sftp://bob:xxxxx@127.0.0.1",
+		"sftp://bob:12#34@host":                  "sftp://bob:xxxxx@host",
+		"ftp://u:123/x@host/dir/100%.txt":        "ftp://u:xxxxx@host/dir/100%.txt",
+		"http://localhost:8080/me@example.com":   "http://localhost:xxxxx@example.com",
+		"http://localhost:8080/me%40example.com": "http://localhost:8080/me%40example.com",
+		// A password that starts with a '/', '?' or '#' and has an invalid
+		// escape was kept, because the user info would be invalid. An empty
+		// port, which url.Parse takes "user:" for, is never written for a host.
+		"sftp://user:/%zz@host/x": "sftp://user:xxxxx@host/x",
+		"sftp://user:?%@host/x":   "sftp://user:xxxxx@host/x",
+		"sftp://user:#a%@host/x":  "sftp://user:xxxxx@host/x",
+		"http://host:/a%zz@b":     "http://host:xxxxx@b",
+
+		// A password with an unencoded '@' and '/' of a URI that url.Parse rejects
+		"s3://user:se@cr/et@minio.example.com/b%zz": "s3://user:xxxxx@minio.example.com/b%zz",
+
+		// A password with an unencoded '@' followed by a '/', '?' or '#'.
+		// url.Parse accepts the URI, takes the host from the password and
+		// the rest of the password for the path, query or fragment, which
+		// was kept, like "sftp://user:xxxxx@et/Pw@host/x".
+		"sftp://user:S3cr@et/Pw@host/x":       "sftp://user:xxxxx@host/x",
+		"sftp://user:S3cr@et?Pw@host/x":       "sftp://user:xxxxx@host/x",
+		"sftp://user:S3cr@et#Pw@host/x":       "sftp://user:xxxxx@host/x",
+		"sftp://user:S3cr@et/Pw@host:22/x":    "sftp://user:xxxxx@host:22/x",
+		"sftp://user:S3cr@et/Pw@[::1]:22/x":   "sftp://user:xxxxx@[::1]:22/x",
+		"sftp://user:@/@host/x":               "sftp://user:xxxxx@host/x",
+		"sftp://bob:a@b/c@host":               "sftp://bob:xxxxx@host",
+		"ftp://user:S3cr@et/Pw@host/100%.txt": "ftp://user:xxxxx@host/100%.txt",
+		// An '@' in the path, query or fragment of a URI with a password
+		// can't be told apart from one in the password, so everything up to
+		// the last '@' is replaced, also the host and the start of the path
+		"sftp://user:secret@host/me@example.com":  "sftp://user:xxxxx@example.com",
+		"http://user:topsecret@host/key%zz?m=a@b": "http://user:xxxxx@b",
+		"http://user:topsecret@host/key#a@b":      "http://user:xxxxx@b",
+		// but not of a URI with a username only or without user info
+		"sftp://user@host/me@example.com":    "sftp://user@host/me@example.com",
+		"sftp://host/me@example.com":         "sftp://host/me@example.com",
+		"ftp://alice@host:21/me@example.com": "ftp://alice@host:21/me@example.com",
+	} {
+		assert.Equal(t, want, RedactURI(uri), "RedactURI(%q)", uri)
+	}
+}
+
+// TestRedactAddress checks the redaction of addresses that are rejected
+// because of an '@' after the host or that url.Parse rejects. The cases
+// come from the tests of the redaction functions that RedactAddress
+// replaced in the sftpfs, ftpfs and smbfs packages. Those of ftpfs and
+// smbfs kept an '@' after the host, like in "u:S3cret@host/a@b" and
+// "ftp://host/a:b@c", which these packages now reject.
+func TestRedactAddress(t *testing.T) {
+	for address, want := range map[string]string{
+		"sftp://user:secret@host":       "sftp://user:xxxxx@host",
+		"sftp://user@host":              "sftp://user@host",
+		"sftp://user@host/path":         "sftp://user@host/path",
+		"sftp://user:secret@ho st/path": "sftp://user:xxxxx@ho st/path",
+		"sftp://user:secret@[::1":       "sftp://user:xxxxx@[::1",
+		"sftp://ho st":                  "sftp://ho st",
+		"sftp://:secret@host":           "sftp://:xxxxx@host",
+		"host":                          "host",
+		// Without scheme
+		"user:secret@host":    "user:xxxxx@host",
+		"u:S3cret@host/share": "u:xxxxx@host/share",
+		// A password with an unencoded '/', '?', '#' or '@'
+		"sftp://bob:ab/cd@host":         "sftp://bob:xxxxx@host",
+		"sftp://bob:12/34@127.0.0.1":    "sftp://bob:xxxxx@127.0.0.1",
+		"sftp://bob:12?34@host":         "sftp://bob:xxxxx@host",
+		"sftp://bob:ab#cd@host":         "sftp://bob:xxxxx@host",
+		"sftp://bob:a@b/c@host":         "sftp://bob:xxxxx@host",
+		"sftp://bob:ab/cd@host:22/path": "sftp://bob:xxxxx@host:22/path",
+		"u:S3cret@host/a@b":             "u:xxxxx@b",
+		// A password with "://" of an address without scheme was kept,
+		// the "://" is the end of a scheme only after a valid scheme
+		"user:pa://ss@host":        "user:xxxxx@host",
+		"u:S3c://ret@host/share":   "u:xxxxx@host/share",
+		"user:p/a://ss@host":       "user:xxxxx@host",
+		"sftp://user:pa://ss@host": "sftp://user:xxxxx@host",
+		"1sftp://user:pa@host":     "1sftp:xxxxx@host",
+		// A username with a '/', '?' or '#' can't be told apart from the host and path
+		"sftp://ali/ce:secret@host":        "sftp://xxxxx@host",
+		"sftp://host/dir/name@example.com": "sftp://xxxxx@example.com",
+		"ftp://host/a:b@c":                 "ftp://xxxxx@c",
+	} {
+		assert.Equal(t, want, RedactAddress(address), "RedactAddress(%q)", address)
+	}
+}
+
+// TestRedactAddressWithoutScheme checks the redaction of addresses that are
+// rejected because they don't have the scheme of the file system. Their text
+// before "://" can be a username with a password that starts with "//", like
+// alice with the password "//S3cret" of "alice://S3cret@host", which
+// RedactAddress takes for the scheme alice and the username S3cret.
+func TestRedactAddressWithoutScheme(t *testing.T) {
+	for address, want := range map[string]string{
+		"alice://S3cret@host":        "alice:xxxxx@host",
+		"alice://S3c:ret@host":       "alice:xxxxx@host",
+		"alice://@S3cret@host/share": "alice:xxxxx@host/share",
+		"alice://S3c/ret@host":       "alice:xxxxx@host",
+		"a1.b+c-d://S3cret@host":     "a1.b+c-d:xxxxx@host",
+		// A real scheme loses the username
+		"ftp://u:S3cret@host/share": "ftp:xxxxx@host/share",
+		// Like RedactAddress for an address without "://" before the last '@'
+		"user:secret@host":     "user:xxxxx@host",
+		"user:pa://ss@host":    "user:xxxxx@host",
+		"u:S3cret@host/a@b":    "u:xxxxx@b",
+		"host":                 "host",
+		"user@host":            "user@host",
+		"alice://host":         "alice://host",
+		"alice://host/a://b":   "alice://host/a://b",
+		"ali/ce://S3cret@host": "xxxxx@host",
+		"host/dir@example.com": "xxxxx@example.com",
+	} {
+		assert.Equal(t, want, RedactAddressWithoutScheme(address), "RedactAddressWithoutScheme(%q)", address)
+	}
+	assert.Equal(t, "alice://S3cret@host", RedactAddress("alice://S3cret@host"), "RedactAddress keeps the username of a real scheme")
+}

@@ -1,0 +1,112 @@
+package smbfs
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ungerik/go-fs"
+)
+
+// TestFile verifies the io semantics of file handles: ReadAt returned
+// nil instead of io.EOF at the end of the file, and Seek accepted a
+// negative offset.
+func TestFile(t *testing.T) {
+	f, _ := dialTestFS(t)
+	ctx := t.Context()
+	name := fmt.Sprintf("/file-%d.txt", time.Now().UnixNano())
+	require.NoError(t, f.WriteAll(ctx, name, []byte("0123456789"), 0))
+	t.Cleanup(func() { _ = f.Remove(name) })
+
+	r, err := f.OpenReader(name)
+	require.NoError(t, err)
+	handle := r.(fs.ReadAtSeekCloser)
+
+	buf := make([]byte, 4)
+	n, err := handle.ReadAt(buf, 8)
+	assert.Equal(t, 2, n)
+	assert.ErrorIs(t, err, io.EOF, "ReadAt across the end")
+	n, err = handle.ReadAt(buf, 20)
+	assert.Zero(t, n)
+	assert.ErrorIs(t, err, io.EOF, "ReadAt past the end")
+	n, err = handle.ReadAt(buf, 2)
+	require.NoError(t, err)
+	assert.Equal(t, "2345", string(buf[:n]))
+
+	_, err = handle.Seek(-1, io.SeekStart)
+	assert.Error(t, err, "Seek before the start")
+	_, err = handle.Seek(-11, io.SeekEnd)
+	assert.Error(t, err, "Seek before the start from the end")
+	_, err = handle.Seek(0, 42)
+	assert.Error(t, err, "invalid whence")
+	pos, err := handle.Seek(-3, io.SeekEnd)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), pos)
+	pos, err = handle.Seek(1, io.SeekCurrent)
+	require.NoError(t, err)
+	assert.Equal(t, int64(8), pos)
+	_, err = handle.Seek(-9, io.SeekCurrent)
+	assert.Error(t, err, "Seek before the start from the current offset")
+	rest, err := io.ReadAll(handle)
+	require.NoError(t, err)
+	assert.Equal(t, "89", string(rest), "a failed Seek must not move the offset")
+	require.NoError(t, handle.Close())
+
+	w, err := f.OpenReadWriter(name, 0)
+	require.NoError(t, err)
+	_, err = w.(io.WriterAt).WriteAt([]byte("ab"), 1)
+	require.NoError(t, err)
+	_, err = w.Write([]byte("X"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	data, err := f.ReadAll(ctx, name)
+	require.NoError(t, err)
+	assert.Equal(t, "Xab3456789", string(data))
+}
+
+// TestFile_AfterClose verifies that open handles report
+// fs.ErrFileSystemClosed after Close of the file system, also from
+// WriteTo, ReadFrom and WriteString, which io.Copy and io.WriteString
+// prefer. Those were promoted from the go-smb2 file without the mapping.
+func TestFile_AfterClose(t *testing.T) {
+	f, _ := dialTestFS(t)
+	name := fmt.Sprintf("/after-close-%d.txt", time.Now().UnixNano())
+	written := fmt.Sprintf("/after-close-written-%d.txt", time.Now().UnixNano())
+	require.NoError(t, f.WriteAll(t.Context(), name, []byte("content"), 0))
+	t.Cleanup(func() {
+		cleanup, err := Dial(context.Background(), testSMBAddress, &Options{Username: testUsername, Password: testPassword})
+		if err == nil {
+			_ = cleanup.(*fileSystem).Remove(name)
+			_ = cleanup.(*fileSystem).Remove(written)
+			_ = cleanup.Close()
+		}
+	})
+
+	r, err := f.OpenReader(name)
+	require.NoError(t, err)
+	w, err := f.OpenWriter(written, 0)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = r.Read(make([]byte, 4))
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "Read")
+	_, err = io.Copy(io.Discard, r)
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "io.Copy from the file calls its WriteTo")
+	// The struct hides the WriteTo method of strings.Reader,
+	// which io.Copy would prefer over the ReadFrom of the file
+	_, err = io.Copy(w, struct{ io.Reader }{strings.NewReader("data")})
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "io.Copy to the file calls its ReadFrom")
+	_, err = io.WriteString(w, "data")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "io.WriteString calls WriteString")
+	_, err = w.Write([]byte("data"))
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed, "Write")
+
+	assert.NoError(t, r.Close(), "closing a handle of a closed file system")
+	assert.NoError(t, w.Close(), "closing a handle of a closed file system")
+}

@@ -21,12 +21,18 @@ import (
 func handleUpload(response http.ResponseWriter, request *http.Request) {
     ctx := request.Context()
 
-    formFS, err := multipartfs.FromRequestForm(request, 4*1024*1024) // maxMemory
+    // maxMemory 4 MB, "" for a random id
+    formFS, err := multipartfs.NewFromRequest(request, 4*1024*1024, "")
     if err != nil {
         http.Error(response, "invalid form", http.StatusBadRequest)
         return
     }
-    // Close removes the temporary files of the form
+    // Register the file system so that the fs.File values of the uploads work
+    if err := fs.Register(formFS); err != nil {
+        http.Error(response, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    // Close unregisters the file system and removes the temporary files of the form
     defer formFS.Close()
 
     // Regular form values
@@ -42,8 +48,10 @@ func handleUpload(response http.ResponseWriter, request *http.Request) {
 }
 ```
 
-`multipartfs.New` does the same for a `*multipart.Form` that was parsed by
-the caller. `formFS.Form` is the underlying `*multipart.Form`, and
+`multipartfs.New(form, id)` does the same for a `*multipart.Form` that was
+parsed by the caller. Neither registers the file system, so register it
+before using the returned `fs.File` values. `formFS.Form` is the underlying
+`*multipart.Form`, and
 `GetMultipartFileHeader` returns the `*multipart.FileHeader` of a path, for
 the `Content-Type` a client sent for example.
 
@@ -68,15 +76,21 @@ The root package also has `fs.ParseRequestMultipartFormMemFiles` and
   name is unescaped, so no field or file name can address an upload of
   another field.
 - **Read-only.** `Exists` and `ReadAll` are native, every write operation
-  returns `fs.ErrReadOnlyFileSystem`.
+  returns `fs.ErrReadOnlyFileSystem`. Uploaded files have the permissions
+  `fs.AllRead`, also in the `Stat` of an open reader.
 - **No modification time.** A multipart form carries no timestamps, so
   uploaded files have a zero modification time.
-- **Lifetime.** `Close` removes the temporary files that
-  `http.Request.ParseMultipartForm` wrote to disk and unregisters the file
-  system; every method returns `fs.ErrFileSystemClosed` afterwards. Always
-  `defer formFS.Close()` in the handler.
-- **URI prefix.** `multipart://` followed by a random id, so concurrent
-  requests each get their own file system. `ID()` is that prefix.
+- **Lifetime.** `Close` unregisters the file system, closes the readers of
+  uploaded files that are still open and removes the temporary files that
+  `http.Request.ParseMultipartForm` wrote to disk. Afterwards every method
+  that returns an error returns `fs.ErrFileSystemClosed`; `FormValue`,
+  `FormValues` and the values of `formFS.Form` stay usable, because they are
+  kept in memory. If the temporary files can't be removed, `Close` returns
+  the error and the next `Close` tries again. Always `defer formFS.Close()`
+  in the handler.
+- **URI prefix.** `multipart://` followed by the id passed to `New` or
+  `NewFromRequest`, a random one if it is empty, so concurrent requests each
+  get their own file system. `ID()` is that prefix.
 
 ## Testing
 

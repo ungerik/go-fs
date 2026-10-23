@@ -5,23 +5,27 @@ import (
 	"io"
 	iofs "io/fs"
 	"math"
+	"os"
 	"slices"
 )
 
 var _ iofs.File = new(ReadonlyFileBuffer)
 
-// ReadonlyFileBuffer is a memory buffer that implements ReadSeekCloser which combines the interfaces
+// ReadonlyFileBuffer is a memory buffer that implements ReadAtSeekCloser which combines the interfaces
 //
 //	io/fs.File
 //	io.Reader
 //	io.ReaderAt
 //	io.Seeker
 //	io.Closer
+//
+// After Close every method except Stat, Bytes and Size returns os.ErrClosed.
 type ReadonlyFileBuffer struct {
-	info  iofs.FileInfo
-	data  []byte
-	pos   int64 // current reading index
-	close func() error
+	info   iofs.FileInfo
+	data   []byte
+	pos    int64        // current reading index
+	commit func() error // called by Close, see NewWriteOnCloseFileBuffer
+	closed bool
 }
 
 // NewReadonlyFileBuffer returns a new ReadonlyFileBuffer
@@ -66,6 +70,9 @@ func (buf *ReadonlyFileBuffer) Size() int64 {
 // If some data is available but not len(p) bytes, Read conventionally
 // returns what is available instead of waiting for more.
 func (buf *ReadonlyFileBuffer) Read(p []byte) (n int, err error) {
+	if buf.closed {
+		return 0, os.ErrClosed
+	}
 	if buf.pos >= int64(len(buf.data)) {
 		return 0, io.EOF
 	}
@@ -79,6 +86,9 @@ func (buf *ReadonlyFileBuffer) Read(p []byte) (n int, err error) {
 // read (0 <= n <= len(p)) and any error encountered.
 func (buf *ReadonlyFileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
 	// cannot modify state - see io.ReaderAt
+	if buf.closed {
+		return 0, os.ErrClosed
+	}
 	if off < 0 {
 		return 0, errors.New("ReadonlyFileBuffer.ReadAt: negative offset")
 	}
@@ -104,6 +114,9 @@ func (buf *ReadonlyFileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
 // Seeking to any positive offset is legal, but the behavior of subsequent
 // I/O operations on the underlying object is implementation-dependent.
 func (buf *ReadonlyFileBuffer) Seek(offset int64, whence int) (newPos int64, err error) {
+	if buf.closed {
+		return 0, os.ErrClosed
+	}
 	var abs int64
 	switch whence {
 	case io.SeekStart:
@@ -122,15 +135,26 @@ func (buf *ReadonlyFileBuffer) Seek(offset int64, whence int) (newPos int64, err
 	return abs, nil
 }
 
-// Close will free the internal buffer
+// Close frees the internal buffer. Close is idempotent,
+// all methods except Stat, Bytes and Size return os.ErrClosed afterwards.
 func (buf *ReadonlyFileBuffer) Close() (err error) {
-	if buf.close != nil {
-		err = buf.close()
+	if buf.closed {
+		return nil
 	}
+	if buf.commit != nil {
+		err = buf.commit()
+	}
+	buf.release()
+	return err
+}
+
+// release frees the internal buffer and marks it as closed
+// without calling the commit function.
+func (buf *ReadonlyFileBuffer) release() {
 	buf.data = nil
 	buf.pos = 0
-	buf.close = nil
-	return err
+	buf.commit = nil
+	buf.closed = true
 }
 
 // FileBuffer is a memory buffer that implements ReadWriteSeekCloser which combines the interfaces
@@ -140,6 +164,10 @@ func (buf *ReadonlyFileBuffer) Close() (err error) {
 // io.WriterAt
 // io.Seeker
 // io.Closer
+//
+// It also has the Abort method of fs.WriteAborter, see NewWriteOnCloseFileBuffer.
+// After Close or Abort every method except Stat, Bytes and Size returns os.ErrClosed,
+// so data written to a closed buffer is never silently dropped.
 type FileBuffer struct {
 	ReadonlyFileBuffer
 }
@@ -149,20 +177,25 @@ func NewFileBuffer(data []byte) *FileBuffer {
 	return &FileBuffer{ReadonlyFileBuffer: ReadonlyFileBuffer{data: data}}
 }
 
-// NewFileBufferWithClose returns a new FileBuffer
-// that calls the passed close function when its Close method is called.
-func NewFileBufferWithClose(data []byte, close func() error) *FileBuffer {
-	return &FileBuffer{ReadonlyFileBuffer: ReadonlyFileBuffer{data: data, close: close}}
-}
-
 // NewWriteOnCloseFileBuffer returns a new FileBuffer initialized with data
 // that passes its complete content to the write function when it is closed.
 // This is the building block for file systems without random access writes
 // (object stores, FTP, ZIP archives) that have to upload whole files.
+//
+// Abort discards the buffered data without calling write,
+// so an upload that failed midway doesn't replace the file.
 func NewWriteOnCloseFileBuffer(data []byte, write func(data []byte) error) *FileBuffer {
 	buf := NewFileBuffer(data)
-	buf.close = func() error { return write(buf.data) }
+	buf.commit = func() error { return write(buf.data) }
 	return buf
+}
+
+// Abort frees the internal buffer without passing it to the write function
+// of NewWriteOnCloseFileBuffer, implementing fs.WriteAborter.
+// Close and Abort after Close or Abort are no-ops that return nil.
+func (buf *FileBuffer) Abort() error {
+	buf.release()
+	return nil
 }
 
 // Write writes len(p) bytes from p to the underlying data stream.
@@ -179,6 +212,9 @@ func (buf *FileBuffer) Write(p []byte) (n int, err error) {
 // and any error encountered that caused the write to stop early.
 // WriteAt must return a non-nil error if it returns n < len(p).
 func (buf *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
+	if buf.closed {
+		return 0, os.ErrClosed
+	}
 	if off < 0 {
 		return 0, errors.New("FileBuffer.WriteAt: negative offset")
 	}
@@ -209,6 +245,9 @@ func (buf *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 // If the buffer is larger than size, the extra data is lost.
 // If the buffer is smaller, it is extended with zeros.
 func (buf *FileBuffer) Truncate(size int64) error {
+	if buf.closed {
+		return os.ErrClosed
+	}
 	if size < 0 {
 		return errors.New("FileBuffer.Truncate: negative size")
 	}

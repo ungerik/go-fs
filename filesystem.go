@@ -34,11 +34,18 @@ type (
 //
 // Implementations must return errors that satisfy [errors.Is] for
 // [os.ErrNotExist] when a file does not exist, [os.ErrExist] when
-// [WriteFileSystem.MakeDir] finds an existing path, [ErrIsDirectory] and
-// [ErrIsNotDirectory] where applicable, [ErrFileSystemClosed] after [FileSystem.Close],
-// and the error of a canceled context. Read-only and write-only file systems
+// [WriteFileSystem.MakeDir] finds an existing path, [ErrIsDirectory],
+// [ErrIsNotDirectory] and [ErrDirectoryNotEmpty] where applicable
+// (match them with errors.Is(err, fs.ErrIsDirectory{}) and so on),
+// [ErrFileSystemClosed] after [FileSystem.Close], and the error
+// of a canceled context. Read-only and write-only file systems
 // don't need to implement any checks, the package returns [ErrReadOnlyFileSystem]
 // and [ErrWriteOnlyFileSystem] based on [FileSystem.ReadableWritable].
+//
+// A URI matches the prefix of a file system only at a boundary:
+// the URI ends after the prefix, the prefix ends with a slash,
+// or the prefix is followed by a slash or the separator.
+// The URIs of an implementation must follow that rule.
 type FileSystem interface {
 	// ID returns a string that identifies this file system
 	// uniquely among the registered file systems and stays
@@ -98,14 +105,18 @@ type FileSystem interface {
 	// Canceling the context or returning an error from the callback
 	// will stop the listing and return the context or callback error.
 	// Does not recurse into subdirectories.
+	// The FileInfo of a symbolic link describes the link itself
+	// with IsSymlink set, like Lstat.
 	ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error
 
 	// OpenReader opens the file at filePath for reading.
 	OpenReader(filePath string) (io.ReadCloser, error)
 
-	// Close closes the file system and unregisters it if it was registered.
-	// Calling Close more than once is valid and returns nil.
-	// File systems that can't be closed do nothing.
+	// Close closes the file system and unregisters it if it was registered
+	// by calling [Unregister]. Calling Close more than once is valid and returns nil.
+	// After Close every method returns an error wrapping [ErrFileSystemClosed].
+	// The exception is the process wide singleton [Local]: its Close only stops
+	// its watcher, it stays registered and usable.
 	Close() error
 }
 
@@ -119,6 +130,9 @@ type WriteFileSystem interface {
 	// OpenWriter opens the file at filePath for writing, creating it if it does not exist
 	// or truncating it if it does exist.
 	// A perm of zero means the default permissions of the file system.
+	// Returns an [ErrIsDirectory] if filePath is a directory.
+	// Writers that commit the written data only in Close,
+	// like uploads, should implement [WriteAborter].
 	OpenWriter(filePath string, perm Permissions) (io.WriteCloser, error)
 
 	// MakeDir creates a single directory at dirPath.
@@ -130,8 +144,46 @@ type WriteFileSystem interface {
 
 	// Remove deletes the file or empty directory at filePath.
 	// Returns an error wrapping os.ErrNotExist if the path does not exist,
-	// and an error for a non-empty directory.
+	// and an [ErrDirectoryNotEmpty] for a non-empty directory.
 	Remove(filePath string) error
+}
+
+// WriteAborter is implemented by writers returned from
+// [WriteFileSystem.OpenWriter], [AppendWriterFileSystem.OpenAppendWriter]
+// and the package's emulations that commit the written data only in Close,
+// like uploads to object stores.
+//
+// Abort discards the written data without committing it and
+// releases the resources of the writer. Close after Abort is a no-op
+// that returns nil. The package aborts writers when copying fails
+// or the context is canceled, so no partial data replaces a file.
+type WriteAborter interface {
+	io.WriteCloser
+
+	// Abort discards the written data without committing it.
+	Abort() error
+}
+
+// URIFileSystem can be implemented by file systems whose paths
+// are URIs in their escaped form, like HTTP URLs with query strings.
+//
+// The package then doesn't decode URL escapes of URIs, but uses
+// PathFromURI and URIFromPath to convert between URIs and paths,
+// and SplitDirAndName to get the name of a file.
+type URIFileSystem interface {
+	FileSystem
+
+	// PathFromURI returns the clean path of uri,
+	// which starts with Prefix() or one of the prefix aliases.
+	PathFromURI(uri string) string
+
+	// URIFromPath returns the URI of a clean path,
+	// the inverse of PathFromURI.
+	URIFromPath(cleanPath string) string
+
+	// SplitDirAndName returns the parent directory
+	// and the name of the last path element of filePath.
+	SplitDirAndName(filePath string) (dir, name string)
 }
 
 // PrefixAliasFileSystem can be implemented by file systems
@@ -160,6 +212,8 @@ type ReadAllFileSystem interface {
 	FileSystem
 
 	// ReadAll reads the entire content of the file at filePath.
+	// The returned slice belongs to the caller, who may modify it,
+	// so implementations must not return a slice they keep using.
 	ReadAll(ctx context.Context, filePath string) ([]byte, error)
 }
 
@@ -215,7 +269,7 @@ type TruncateFileSystem interface {
 	// truncating to a smaller size but also
 	// appending zeros to a bigger size
 	// than the current one.
-	Truncate(filePath string, size int64) error
+	Truncate(ctx context.Context, filePath string, size int64) error
 }
 
 // TouchFileSystem can be implemented by file systems
@@ -260,7 +314,9 @@ type CopyFileSystem interface {
 	WriteFileSystem
 
 	// CopyFile copies a single file within the file system.
-	// Copying a file onto itself is a no-op.
+	// destFile is always the final path, never a directory to copy into.
+	// An existing file at destFile is replaced, an existing directory
+	// at destFile is an [ErrIsDirectory]. Copying a file onto itself is a no-op.
 	CopyFile(ctx context.Context, srcFile string, destFile string) error
 }
 
@@ -272,31 +328,16 @@ type MoveFileSystem interface {
 	// Move moves and/or renames the file or directory at filePath to destPath.
 	// destPath is always the final path, never a directory to move into.
 	//
+	// An existing file at destPath is replaced like by [os.Rename]
+	// (an [ErrIsNotDirectory] if filePath is a directory),
+	// an existing directory at destPath is an error wrapping [os.ErrExist].
+	// Moving a directory into itself or one of its sub-directories
+	// is an error wrapping [os.ErrInvalid]. A symbolic link is moved
+	// as link like by [os.Rename], not what it points to.
+	//
 	// When filePath and destPath are the same, Move must be a no-op
 	// and return nil, matching the behavior of [os.Rename].
-	Move(filePath string, destPath string) error
-}
-
-// RenameFileSystem can be implemented by file systems
-// that have native file renaming functionality.
-type RenameFileSystem interface {
-	WriteFileSystem
-
-	// Rename only renames the file in its base directory
-	// but does not move it into another directory.
-	Rename(filePath string, newName string) (newPath string, err error)
-}
-
-// ListDirMaxFileSystem can be implemented by file systems
-// that can efficiently list a limited number of directory entries.
-type ListDirMaxFileSystem interface {
-	FileSystem
-
-	// ListDirMax returns at most max files and directories in dirPath.
-	// A max value of -1 returns all files.
-	// If any patterns are passed, then only files or directories with a name that matches
-	// at least one of the patterns are returned.
-	ListDirMax(ctx context.Context, dirPath string, max int, patterns []string) ([]File, error)
+	Move(ctx context.Context, filePath string, destPath string) error
 }
 
 // ListDirRecursiveFileSystem can be implemented by file systems
@@ -308,6 +349,16 @@ type ListDirRecursiveFileSystem interface {
 	// recursing into all sub-directories.
 	// If any patterns are passed, then only files (not directories) with a name that matches
 	// at least one of the patterns are returned.
+	//
+	// Symbolic links are never followed, like by filepath.WalkDir: a link,
+	// also to a directory or a dangling one, is passed to the callback like
+	// a file, and the files of the directory that a link points to are not
+	// listed below the link. The FileInfo of a link describes the directory
+	// entry like for ListDir with IsSymlink set, but IsDir is always false,
+	// the callback never gets a FileInfo with IsDir set. Stat a link to tell
+	// if it points to a directory. Only a link at dirPath is followed, its
+	// directory is listed with the files below the path of the link.
+	// The emulation for file systems without ListDirRecursive works the same.
 	ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error
 }
 
@@ -325,6 +376,10 @@ type WatchFileSystem interface {
 	// It is valid to watch a file with multiple
 	// callbacks, calling the returned cancel function
 	// will cancel a particular watch.
+	//
+	// The callback of one watch is called serially in the order
+	// of the events on a goroutine of the file system, so a slow
+	// callback only delays the later events of the same watch.
 	Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error)
 }
 
@@ -341,7 +396,7 @@ type HiddenFileSystem interface {
 // PermissionsFileSystem can be implemented by file systems
 // that support setting file permissions.
 type PermissionsFileSystem interface {
-	WriteFileSystem
+	FileSystem
 
 	// SetPermissions sets the permissions of the file at filePath.
 	SetPermissions(filePath string, perm Permissions) error
@@ -376,8 +431,11 @@ type GroupFileSystem interface {
 type SymbolicLinkFileSystem interface {
 	FileSystem
 
-	// IsSymbolicLink returns if the file at filePath is a symbolic link.
-	IsSymbolicLink(filePath string) bool
+	// Lstat returns the FileInfo of the file or directory at filePath
+	// without following a symbolic link: for a symbolic link
+	// the FileInfo describes the link itself with IsSymlink set.
+	// Returns an error wrapping os.ErrNotExist if the file does not exist.
+	Lstat(filePath string) (*FileInfo, error)
 
 	// CreateSymbolicLink creates a symbolic link at linkPath
 	// pointing to targetPath. targetPath is stored verbatim,
@@ -391,6 +449,20 @@ type SymbolicLinkFileSystem interface {
 	ReadSymbolicLink(linkPath string) (targetPath string, err error)
 }
 
+// XAttrFlags control how SetXAttr treats an existing attribute.
+// Zero flags create the attribute or replace an existing one.
+type XAttrFlags uint8
+
+const (
+	// XAttrCreate makes SetXAttr fail with an error wrapping
+	// os.ErrExist if the attribute already exists.
+	XAttrCreate XAttrFlags = 1 << iota
+
+	// XAttrReplace makes SetXAttr fail with an error wrapping
+	// os.ErrNotExist if the attribute does not exist.
+	XAttrReplace
+)
+
 // XAttrFileSystem extends FileSystem with support for extended file attributes (xattrs).
 // Extended attributes are name-value pairs associated with files that provide
 // additional metadata beyond standard file attributes.
@@ -403,15 +475,20 @@ type XAttrFileSystem interface {
 	ListXAttr(filePath string, followSymlinks bool) ([]string, error)
 
 	// GetXAttr returns the value of the named extended attribute.
+	// The error for a missing attribute wraps os.ErrNotExist.
 	// If followSymlinks is true, symlinks are resolved to their target.
 	GetXAttr(filePath string, name string, followSymlinks bool) ([]byte, error)
 
 	// SetXAttr sets the value of the named extended attribute.
-	// The flags parameter controls the behavior (e.g., unix.XATTR_CREATE, unix.XATTR_REPLACE).
+	// The flags control what happens if the attribute exists or not,
+	// zero flags create or replace the attribute.
+	// XAttrCreate fails with an error wrapping os.ErrExist,
+	// XAttrReplace with an error wrapping os.ErrNotExist.
 	// If followSymlinks is true, symlinks are resolved to their target.
-	SetXAttr(filePath string, name string, data []byte, flags int, followSymlinks bool) error
+	SetXAttr(filePath string, name string, data []byte, flags XAttrFlags, followSymlinks bool) error
 
 	// RemoveXAttr removes the named extended attribute from the file.
+	// The error for a missing attribute wraps os.ErrNotExist.
 	// If followSymlinks is true, symlinks are resolved to their target.
 	RemoveXAttr(filePath string, name string, followSymlinks bool) error
 }

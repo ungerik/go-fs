@@ -1,7 +1,8 @@
 # Optional interfaces and emulation
 
-go-fs defines 28 file system interfaces. A backend implements two of them and
-gets the other 26 for free. This document explains the mechanism and why it is
+go-fs defines 26 file system interfaces. A backend implements one or two of
+them, `FileSystem` and, if it can write, `WriteFileSystem`, and gets what the
+other 24 offer for free. This document explains the mechanism and why it is
 built this way.
 
 ## The problem
@@ -46,7 +47,7 @@ func fsTruncate(ctx context.Context, fileSystem FileSystem, filePath string, siz
         return err
     }
     if t, ok := w.(TruncateFileSystem); ok {
-        return t.Truncate(filePath, size) // native
+        return t.Truncate(ctx, filePath, size) // native
     }
     // emulation: stat, read, cut or zero-pad, write back
     ...
@@ -71,13 +72,15 @@ File.Truncate(ctx, 1024)
 ## Why every emulation is built on the primitives
 
 The emulations call back through the dispatch layer, not directly into the
-backend. `fsAppend` falls back to `fsReadAll` + `fsWriteAll`, and each of those
-checks for its *own* optional interface first.
+backend. `fsAppend` falls back to the backend's `OpenAppendWriter` if it has
+one, else to `fsReadAll` + `fsWriteAll`, and each of those checks for its *own*
+optional interface first.
 
 That composition matters. A backend that implements `ReadAllFileSystem` and
-`WriteAllFileSystem` but not `AppendFileSystem` gets an append built from its
-own fast read and fast write, not from a generic `OpenReader`/`OpenWriter`
-loop. Capabilities compose instead of being all-or-nothing.
+`WriteAllFileSystem` but neither `AppendFileSystem` nor
+`AppendWriterFileSystem` gets an append built from its own fast read and fast
+write, not from a generic `OpenReader`/`OpenWriter` loop. Capabilities compose
+instead of being all-or-nothing.
 
 It also means adding one optional interface to a backend speeds up every
 emulation layered on top of it.
@@ -88,13 +91,17 @@ Every optional interface resolves to one of three outcomes, and knowing which
 tells you what to expect from a backend that skips it.
 
 **1. Transparent.** Same result, possibly slower. `Exists` becomes a `Stat`.
-`ListDirMax` becomes a `ListDir` that stops early. `CopyFile` becomes a
-streamed read-write. Most interfaces are here.
+`CopyFile` becomes a streamed read-write. `Move` becomes a copy followed by
+the removal of the source, which only happens after the copy succeeded. Most
+interfaces are here.
 
 **2. Buffered.** Same result, but the whole file passes through memory.
 `OpenReadWriter` becomes `fsimpl.ReadWriteAllSeekCloser`, which reads the file
 on first use and writes it back on `Close`. `OpenAppendWriter` becomes an
-`fsimpl.FileBuffer` seeked to the end. `Truncate` becomes read-modify-write.
+`fsimpl.FileBuffer` with the current content, seeked to the end and written
+back on `Close`. `Truncate` becomes read-modify-write. These buffers implement
+`fs.WriteAborter`, so a failed copy discards them instead of writing back
+partial data.
 
 This is where the cost is real and worth knowing: random access on an S3 object
 buffers the whole object. Correct, and fine for a config file; not fine for a
@@ -102,7 +109,9 @@ buffers the whole object. Correct, and fine for a config file; not fine for a
 
 **3. Refused.** Some things cannot be emulated at all, so they return
 `ErrUnsupported` wrapping `errors.ErrUnsupported`: `SetPermissions`, `User`,
-`Group`, symbolic links, extended attributes, `Watch`.
+`Group`, creating and reading symbolic links, extended attributes, `Watch`.
+`Lstat` is the exception among the link methods: without symbolic links it is
+the same as `Stat`.
 
 `Touch` is the interesting hybrid. The emulation creates a *missing* file, but
 returns `ErrUnsupported` for an existing one, because "update the modification
@@ -131,21 +140,22 @@ Two mocks in `fstest` cover both sides of every branch:
 
 - `MockFileSystem` implements the required interfaces and nothing else, so
   every operation against it exercises the emulation.
-- `MockFullyFeaturedFileSystem` implements every optional interface, so every
-  operation against it exercises the native path.
+- `MockFullyFeaturedFileSystem` implements every optional interface except
+  `URIFileSystem`, so every operation against it exercises the native path.
 
 `fstest.RunConformance` then runs the same contract against real backends, and
 because it tests through both the `FileSystem` methods and the high level
 `File` API, it catches a native implementation that disagrees with the
 emulation it replaced. The backend support matrix in
-[FileSystem interfaces](reference-filesystem-interfaces.md) is the output of
-that suite, not a hand-maintained list.
+[FileSystem interfaces](reference-filesystem-interfaces.md) lists what every
+backend implements natively, and the suite runs each of those native
+implementations against the same checks as the emulation.
 
 ## Trade-offs
 
 | Chosen                                    | Given up                                      |
 | ----------------------------------------- | --------------------------------------------- |
-| 26 small interfaces                       | A single interface you can read in one screen |
+| 24 small optional interfaces              | A single interface you can read in one screen |
 | Backends implement only what they improve | Knowing a backend's cost from its type        |
 | Emulation means every op works everywhere | Failing loudly when an op will be slow        |
 | Type assertion per operation              | Zero-cost dispatch                            |

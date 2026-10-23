@@ -20,18 +20,30 @@ import "github.com/ungerik/go-fs/multipartfs"
 const maxUploadSize = 32 << 20 // 32 MB kept in memory, the rest spills to temp files
 
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
-    formFS, err := multipartfs.FromRequestForm(r, maxUploadSize)
+    formFS, err := multipartfs.NewFromRequest(r, maxUploadSize, "") // "" = random id
     if err != nil {
         http.Error(w, "could not parse upload", http.StatusBadRequest)
         return
     }
-    defer formFS.Close()
+    defer formFS.Close() // removes the temporary files and unregisters it
+    // The fs.File values of the uploads resolve through the registry
+    if err := fs.Register(formFS); err != nil {
+        http.Error(w, "could not handle upload", http.StatusInternalServerError)
+        return
+    }
     ...
 }
 ```
 
-`Close` removes the temporary files the form spilled to disk, so the `defer` is
-not optional. After it, every method returns `fs.ErrFileSystemClosed`.
+`NewFromRequest` doesn't register the file system, and the `fs.File` values
+that `FormFile` and `FormFiles` return only work while it is registered.
+
+`Close` unregisters the file system, closes the readers of uploaded files that
+are still open and removes the temporary files the form spilled to disk, so the
+`defer` is not optional. After it, every method that returns an error returns
+`fs.ErrFileSystemClosed`. `FormValue`, `FormValues` and the values of
+`formFS.Form` keep working, they are held in memory. If the temporary files
+can't be removed, `Close` returns the error and a second `Close` tries again.
 
 The `maxMemory` argument is what `http.Request.ParseMultipartForm` means by it:
 how much is buffered in memory before spilling to temp files, not a hard limit
@@ -121,8 +133,14 @@ err := r.ParseMultipartForm(maxUploadSize)
 if err != nil {
     return err
 }
-formFS := multipartfs.New(r.MultipartForm)
+formFS, err := multipartfs.New(r.MultipartForm, "")
+if err != nil {
+    return err
+}
 defer formFS.Close()
+if err := fs.Register(formFS); err != nil {
+    return err
+}
 ```
 
 ## Without a file system: ParseRequestMultipartFormMemFiles
@@ -146,6 +164,16 @@ for field, memFiles := range filesByField {
 parsed. Use these for small uploads; use `multipartfs` when the upload may be
 large or when you want to stream it somewhere without buffering.
 
+`maxMemory` doesn't bound the memory here: every file is read into a `MemFile`,
+including the ones that `ParseMultipartForm` spilled to temp files, so the
+whole upload ends up in memory. Limit the request body with
+`http.MaxBytesReader` before calling it:
+
+```go
+r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+filesByField, err := fs.ParseRequestMultipartFormMemFiles(r, maxUploadSize)
+```
+
 ## How the file system is laid out
 
 It has exactly two levels: **the form field names are the directories**, and
@@ -164,7 +192,14 @@ Three normalisations happen because a path has to identify exactly one file:
   such as `.` or `..`, becomes `unnamed`.
 - **There are no modification times.** Uploaded files carry none.
 
-The file system is read-only. It also provides `Exists` and `ReadAll` natively.
+A form field with an empty name has no directory name, so its uploads are not
+in the file system. `mime/multipart` already skips such fields when it parses a
+request, only a form passed to `multipartfs.New` can have them.
+
+The file system is read-only and the uploaded files have the permissions
+`fs.AllRead`. A copy made with `fs.CopyFile` also gets the owner's write
+permission, so it can be changed. The file system provides `Exists` and
+`ReadAll` natively.
 
 ## Verification
 
@@ -187,8 +222,13 @@ formFS.Close()` ran. An upload passed to a background goroutine must be copied
 first, with `fs.ReadMemFile` or `fs.CopyFile`, because the temp files are gone
 once the handler returns.
 
-**Temp files left behind** — `Close` was not called. Every path out of the
-handler needs it; a `defer` right after the successful parse covers them all.
+**Temp files left behind** — `Close` was not called, or it returned an error
+that was ignored. Every path out of the handler needs it; a `defer` right after
+the successful parse covers them all. If `Close` reports that the temporary
+files could not be removed, call it again later.
+
+**The upload `fs.File` is "invalid"** — the file system was not registered.
+Call `fs.Register(formFS)` after `NewFromRequest` or `New`.
 
 **`FormFile` returns "does not exist"** — the field name does not match the
 form's `name` attribute, or the field carries a value rather than a file. Check

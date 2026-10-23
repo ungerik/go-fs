@@ -1,7 +1,12 @@
 package fs_test
 
 import (
+	"errors"
+	"io"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	stdfstest "testing/fstest"
 
@@ -16,13 +21,14 @@ import (
 // of a mem upper layer on a read-only MapFS base that has content
 // outside the suite's directory.
 func TestOverlayFileSystem_Conformance(t *testing.T) {
-	base := fs.NewStdFileSystemAndRegister(stdfstest.MapFS{
+	base := fs.NewStdFileSystem(stdfstest.MapFS{
 		"base.txt":            {Data: []byte("base")},
 		"conformance/.keep":   {Data: nil},
 		"other/base-only.txt": {Data: []byte("x")},
 	}, "")
+	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { _ = base.Close() })
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
 
@@ -42,27 +48,29 @@ func TestOverlayFileSystem_Conformance(t *testing.T) {
 // through, shadowing, whiteouts, copy up and the union listing.
 func TestOverlayFileSystem_Layers(t *testing.T) {
 	ctx := t.Context()
-	base := fs.NewStdFileSystemAndRegister(stdfstest.MapFS{
+	base := fs.NewStdFileSystem(stdfstest.MapFS{
 		"docs/readme.md":  {Data: []byte("base readme")},
 		"docs/notes.txt":  {Data: []byte("notes")},
 		"docs/old/a.txt":  {Data: []byte("a")},
 		"config.json":     {Data: []byte(`{}`)},
 		"data/report.csv": {Data: []byte("1,2")},
 	}, "")
+	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { _ = base.Close() })
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
 
-	readOnly, err := fs.NewMemFileSystem("/")
+	readOnly, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = readOnly.Close() })
 	readOnly.SetReadOnly(true)
 	_, err = fs.NewOverlayFileSystem(base, readOnly, "")
 	require.Error(t, err, "upper layer must be writable")
 
-	overlay, err := fs.NewOverlayFileSystemAndRegister(base, upper, "layers")
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "layers")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
 	t.Cleanup(func() { assert.NoError(t, overlay.Close()) })
 	root := fs.File("overlay://layers/")
 
@@ -102,7 +110,8 @@ func TestOverlayFileSystem_Layers(t *testing.T) {
 	assert.False(t, root.Join("config.json").Exists())
 	_, err = root.Join("config.json").Stat()
 	assert.ErrorIs(t, err, os.ErrNotExist)
-	assert.Error(t, root.Join("docs", "old").Remove(), "non-empty directory")
+	assert.ErrorIs(t, root.Join("docs", "old").Remove(), fs.ErrDirectoryNotEmpty{}, "non-empty directory")
+	assert.ErrorIs(t, overlay.Remove("/docs/old"), fs.ErrDirectoryNotEmpty{}, "non-empty directory")
 	require.NoError(t, root.Join("docs", "old").RemoveRecursive(ctx))
 	assert.False(t, root.Join("docs", "old", "a.txt").Exists(), "hidden below a removed directory")
 	names, err = root.Join("docs").ListDirMax(ctx, -1)
@@ -123,7 +132,7 @@ func TestOverlayFileSystem_Layers(t *testing.T) {
 	assert.True(t, upper.RootDir().Join("data", "sub").IsDir())
 
 	// The root can't be removed
-	assert.Error(t, overlay.Remove("/"))
+	assert.ErrorIs(t, overlay.Remove("/"), os.ErrInvalid, "the root can't be removed")
 }
 
 func mustRead(t *testing.T, f fs.File) []byte {
@@ -134,20 +143,29 @@ func mustRead(t *testing.T, f fs.File) []byte {
 }
 
 // newOverlayTestFS returns a registered overlay of a mem upper layer
-// on a read-only MapFS base containing "/base.txt".
+// on a read-only MapFS base containing "/base.txt" and "/basedir/x.txt".
 func newOverlayTestFS(t *testing.T) *fs.OverlayFileSystem {
 	t.Helper()
-	base := fs.NewStdFileSystemAndRegister(stdfstest.MapFS{
+	return newOverlayOfMapFS(t, stdfstest.MapFS{
 		"base.txt":      {Data: []byte("base")},
 		"basedir/x.txt": {Data: []byte("x")},
-	}, "")
+	})
+}
+
+// newOverlayOfMapFS returns a registered overlay of
+// a mem upper layer on a read-only base with the files of mapFS.
+func newOverlayOfMapFS(t *testing.T, mapFS stdfstest.MapFS) *fs.OverlayFileSystem {
+	t.Helper()
+	base := fs.NewStdFileSystem(mapFS, "")
+	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { _ = base.Close() })
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
 
-	overlay, err := fs.NewOverlayFileSystemAndRegister(base, upper, "")
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
 	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
 	t.Cleanup(func() { _ = overlay.Close() })
 	assert.Equal(t, fs.FileSystem(base), overlay.Base())
 	assert.Equal(t, fs.WriteFileSystem(upper), overlay.Upper())
@@ -157,7 +175,7 @@ func newOverlayTestFS(t *testing.T) *fs.OverlayFileSystem {
 // TestOverlayFileSystem_NilLayers verifies that a missing layer is
 // rejected at construction instead of panicking on the first operation.
 func TestOverlayFileSystem_NilLayers(t *testing.T) {
-	upper, err := fs.NewMemFileSystem("/")
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = upper.Close() })
 
@@ -165,7 +183,7 @@ func TestOverlayFileSystem_NilLayers(t *testing.T) {
 	assert.Error(t, err, "nil base layer")
 	_, err = fs.NewOverlayFileSystem(upper, nil, "")
 	assert.Error(t, err, "nil upper layer")
-	_, err = fs.NewOverlayFileSystemAndRegister(nil, upper, "")
+	err = fs.NewOverlayFileSystemAndRegister(nil, upper, "nil-base")
 	assert.Error(t, err, "nil base layer must not be registered")
 }
 
@@ -194,7 +212,7 @@ func TestOverlayFileSystem_Closed(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.WriteAll(ctx, "/a.txt", []byte("x"), 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.Append(ctx, "/a.txt", []byte("x"), 0), fs.ErrFileSystemClosed)
-	assert.ErrorIs(t, overlay.Truncate("/a.txt", 0), fs.ErrFileSystemClosed)
+	assert.ErrorIs(t, overlay.Truncate(t.Context(), "/a.txt", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.Touch("/a.txt", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.MakeDir("/dir", 0), fs.ErrFileSystemClosed)
 	assert.ErrorIs(t, overlay.MakeAllDirs("/dir/sub", 0), fs.ErrFileSystemClosed)
@@ -227,7 +245,7 @@ func TestOverlayFileSystem_EmptyPath(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.WriteAll(ctx, "", []byte("x"), 0), fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.Append(ctx, "", []byte("x"), 0), fs.ErrEmptyPath)
-	assert.ErrorIs(t, overlay.Truncate("", 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, overlay.Truncate(t.Context(), "", 0), fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.Touch("", 0), fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.MakeDir("", 0), fs.ErrEmptyPath)
 	assert.ErrorIs(t, overlay.MakeAllDirs("", 0), fs.ErrEmptyPath)
@@ -249,12 +267,491 @@ func TestOverlayFileSystem_IsDirectoryErrors(t *testing.T) {
 	assert.ErrorAs(t, err, new(fs.ErrIsDirectory))
 	// Copy up of a base-only directory must fail instead of
 	// materializing the directory as a file in the upper layer
-	assert.ErrorAs(t, overlay.Truncate("/basedir", 1), new(fs.ErrIsDirectory))
+	assert.ErrorAs(t, overlay.Truncate(t.Context(), "/basedir", 1), new(fs.ErrIsDirectory))
 	assert.ErrorAs(t, overlay.Touch("/basedir", 0), new(fs.ErrIsDirectory))
 	err = overlay.ListDir(ctx, "/base.txt", nil, func(*fs.FileInfo) error { return nil })
 	assert.ErrorAs(t, err, new(fs.ErrIsNotDirectory), "listing a file")
 	assert.ErrorAs(t, overlay.MakeAllDirs("/base.txt", 0), new(fs.ErrIsNotDirectory))
 
 	// The root can't be removed recursively either
-	assert.Error(t, overlay.RemoveAll(ctx, "/"))
+	assert.ErrorIs(t, overlay.RemoveAll(ctx, "/"), os.ErrInvalid, "the root can't be removed")
+}
+
+// TestOverlayFileSystem_RecreateRemovedDir verifies that a directory
+// created at the path of a removed base directory is opaque. Creating it
+// used to drop the whiteouts of the path and its ancestors, which brought
+// back the removed base entries.
+func TestOverlayFileSystem_RecreateRemovedDir(t *testing.T) {
+	ctx := t.Context()
+	overlay := newOverlayOfMapFS(t, stdfstest.MapFS{
+		"made/old.txt":     {Data: []byte("old")},
+		"all/old.txt":      {Data: []byte("old")},
+		"all/sub/old.txt":  {Data: []byte("old")},
+		"emptied/x.txt":    {Data: []byte("x")},
+		"emptied/keep.txt": {Data: []byte("keep")},
+	})
+	listNames := func(dirPath string) (names []string) {
+		t.Helper()
+		err := overlay.ListDir(ctx, dirPath, nil, func(info *fs.FileInfo) error {
+			names = append(names, info.Name)
+			return nil
+		})
+		require.NoError(t, err, "ListDir(%q)", dirPath)
+		return names
+	}
+	exists := func(filePath string) bool {
+		_, err := overlay.Stat(filePath)
+		return err == nil
+	}
+
+	// MakeDir after RemoveAll
+	require.NoError(t, overlay.RemoveAll(ctx, "/made"))
+	require.NoError(t, overlay.MakeDir("/made", 0))
+	assert.False(t, exists("/made/old.txt"), "the removed base file must stay hidden")
+	assert.Empty(t, listNames("/made"), "the recreated directory must be empty")
+
+	// MakeAllDirs below a removed directory
+	require.NoError(t, overlay.RemoveAll(ctx, "/all"))
+	require.NoError(t, overlay.MakeAllDirs("/all/sub/deeper", 0))
+	assert.False(t, exists("/all/old.txt"), "the removed base file must stay hidden")
+	assert.False(t, exists("/all/sub/old.txt"), "the removed base file must stay hidden")
+	assert.Equal(t, []string{"sub"}, listNames("/all"))
+	assert.Equal(t, []string{"deeper"}, listNames("/all/sub"))
+
+	// A directory that was emptied and removed entry by entry
+	require.NoError(t, overlay.Remove("/emptied/x.txt"))
+	require.NoError(t, overlay.Remove("/emptied/keep.txt"))
+	require.NoError(t, overlay.Remove("/emptied"))
+	require.NoError(t, overlay.MakeDir("/emptied", 0))
+	assert.Empty(t, listNames("/emptied"))
+
+	// Writing into the recreated directory works
+	require.NoError(t, overlay.WriteAll(ctx, "/made/new.txt", []byte("new"), 0))
+	assert.Equal(t, []string{"new.txt"}, listNames("/made"))
+}
+
+// TestOverlayFileSystem_DirOverRemovedFile verifies that a directory created
+// at the path of a removed base file can be listed. The base file was not
+// hidden anymore, so ListDir failed listing it as a directory of the base.
+func TestOverlayFileSystem_DirOverRemovedFile(t *testing.T) {
+	ctx := t.Context()
+	overlay := newOverlayTestFS(t)
+
+	require.NoError(t, overlay.Remove("/base.txt"))
+	require.NoError(t, overlay.MakeDir("/base.txt", 0))
+	info, err := overlay.Stat("/base.txt")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir)
+	var names []string
+	listNames := func(info *fs.FileInfo) error { names = append(names, info.Name); return nil }
+	require.NoError(t, overlay.ListDir(ctx, "/base.txt", nil, listNames))
+	assert.Empty(t, names)
+
+	require.NoError(t, overlay.WriteAll(ctx, "/base.txt/inner.txt", []byte("inner"), 0))
+	require.NoError(t, overlay.ListDir(ctx, "/base.txt", nil, listNames))
+	assert.Equal(t, []string{"inner.txt"}, names)
+}
+
+// TestOverlayFileSystem_WriteOnDirectory verifies that writing a file over
+// a directory of either layer is an fs.ErrIsDirectory. Writes to a directory
+// that only exists in the base created a file in the upper layer that hid
+// the directory and its content.
+func TestOverlayFileSystem_WriteOnDirectory(t *testing.T) {
+	ctx := t.Context()
+	overlay := newOverlayTestFS(t)
+	require.NoError(t, overlay.MakeDir("/upperdir", 0))
+
+	for _, dir := range []string{"/basedir", "/upperdir"} {
+		assert.ErrorIs(t, overlay.WriteAll(ctx, dir, []byte("data"), 0), fs.ErrIsDirectory{}, "WriteAll(%q)", dir)
+		w, err := overlay.OpenWriter(dir, 0)
+		if err == nil {
+			_ = w.Close()
+		}
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenWriter(%q)", dir)
+		assert.ErrorIs(t, overlay.Append(ctx, dir, []byte("data"), 0), fs.ErrIsDirectory{}, "Append(%q)", dir)
+		aw, err := overlay.OpenAppendWriter(dir, 0)
+		if err == nil {
+			_ = aw.Close()
+		}
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenAppendWriter(%q)", dir)
+		rw, err := overlay.OpenReadWriter(dir, 0)
+		if err == nil {
+			_ = rw.Close()
+		}
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenReadWriter(%q)", dir)
+		assert.ErrorIs(t, overlay.Truncate(ctx, dir, 0), fs.ErrIsDirectory{}, "Truncate(%q)", dir)
+		err = fs.File(overlay.Prefix()+dir).WriteAllString(ctx, "data")
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "File.WriteAll(%q)", dir)
+
+		info, err := overlay.Stat(dir)
+		require.NoError(t, err)
+		assert.True(t, info.IsDir, "%s must stay a directory", dir)
+	}
+	data, err := overlay.ReadAll(ctx, "/basedir/x.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(data), "the content of the base directory must stay visible")
+	assert.False(t, overlay.Upper().RootDir().Join("basedir").Exists(), "nothing written to the upper layer")
+
+	// Touch of a directory in the upper layer is forwarded to it
+	assert.NoError(t, overlay.Touch("/upperdir", 0))
+}
+
+// TestOverlayFileSystem_MakeAllDirsBelowFile verifies that MakeAllDirs
+// below a file of either layer is an fs.ErrIsNotDirectory. Below a base
+// file it created a directory in the upper layer that hid the file.
+func TestOverlayFileSystem_MakeAllDirsBelowFile(t *testing.T) {
+	ctx := t.Context()
+	overlay := newOverlayTestFS(t)
+	require.NoError(t, overlay.WriteAll(ctx, "/upper.txt", []byte("upper"), 0))
+
+	for _, file := range []string{"/base.txt", "/upper.txt"} {
+		assert.ErrorIs(t, overlay.MakeAllDirs(file+"/sub", 0), fs.ErrIsNotDirectory{}, "MakeAllDirs below %s", file)
+		assert.ErrorIs(t, overlay.MakeAllDirs(file+"/sub/deeper", 0), fs.ErrIsNotDirectory{}, "MakeAllDirs below %s", file)
+		assert.ErrorIs(t, overlay.MakeDir(file+"/sub", 0), fs.ErrIsNotDirectory{}, "MakeDir below %s", file)
+		info, err := overlay.Stat(file)
+		require.NoError(t, err)
+		assert.False(t, info.IsDir, "%s must stay a file", file)
+	}
+	data, err := overlay.ReadAll(ctx, "/base.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "base", string(data))
+	assert.False(t, overlay.Upper().RootDir().Join("base.txt").Exists(), "nothing created in the upper layer")
+}
+
+// TestOverlayFileSystem_ConcurrentAppend verifies that concurrent appends
+// to a base-only file are serialized with its copy up. Every append copied
+// the base file up and the later copies overwrote the earlier appends.
+func TestOverlayFileSystem_ConcurrentAppend(t *testing.T) {
+	ctx := t.Context()
+	const writers = 8
+	for range 20 {
+		overlay := newOverlayOfMapFS(t, stdfstest.MapFS{"log.txt": {Data: []byte("base\n")}})
+		var wg sync.WaitGroup
+		for range writers {
+			wg.Go(func() {
+				assert.NoError(t, overlay.Append(ctx, "/log.txt", []byte("line\n"), 0))
+			})
+		}
+		wg.Wait()
+		data, err := overlay.ReadAll(ctx, "/log.txt")
+		require.NoError(t, err)
+		require.Equal(t, "base\n"+strings.Repeat("line\n", writers), string(data), "no append may be lost")
+	}
+
+	// The same for the append writers
+	overlay := newOverlayOfMapFS(t, stdfstest.MapFS{"log.txt": {Data: []byte("base\n")}})
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Go(func() {
+			w, err := overlay.OpenAppendWriter("/log.txt", 0)
+			if !assert.NoError(t, err) {
+				return
+			}
+			_, err = io.WriteString(w, "line\n")
+			assert.NoError(t, err)
+			assert.NoError(t, w.Close())
+		})
+	}
+	wg.Wait()
+	data, err := overlay.ReadAll(ctx, "/log.txt")
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(string(data), "base\nline\n"), "the base content must be copied up once: %q", data)
+}
+
+// TestOverlayFileSystem_LayerSeparator verifies that a name containing the
+// separator of a layer is rejected. A base with the separator `\` resolved
+// "/d/..\x" to "/x", which made a removed base file readable again.
+func TestOverlayFileSystem_LayerSeparator(t *testing.T) {
+	ctx := t.Context()
+	base, err := fs.RegisteredTestMemFileSystem(&fs.MemFileSystemOptions{Separator: `\`})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = base.Close() })
+	require.NoError(t, base.WriteAll(ctx, `\removed.txt`, []byte("removed"), 0))
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = upper.Close() })
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+	require.NoError(t, err)
+	require.NoError(t, overlay.Remove("/removed.txt"))
+
+	_, err = overlay.ReadAll(ctx, `/d/..\removed.txt`)
+	assert.ErrorIs(t, err, os.ErrInvalid, "ReadAll of a name with the separator of the base")
+	_, err = overlay.Stat(`/d/..\removed.txt`)
+	assert.ErrorIs(t, err, os.ErrInvalid, "Stat of a name with the separator of the base")
+	err = overlay.ListDir(ctx, `/d/..\`, nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, os.ErrInvalid, "ListDir of a name with the separator of the base")
+	assert.ErrorIs(t, overlay.WriteAll(ctx, `/a\b.txt`, []byte("x"), 0), os.ErrInvalid, "WriteAll of a name with the separator of the base")
+	_, err = overlay.Stat("/removed.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "the removed file stays hidden")
+}
+
+// TestOverlayFileSystem_ListDirRecursiveSymlinkLoop is a regression test:
+// the recursive listing followed a link of the base layer to a directory
+// of the listed path again and again until the path had too many links,
+// because the overlay couldn't tell where the link points to.
+// The links of the layers are listed as entries and not followed,
+// and a copy fails before it writes anything, because the overlay
+// can't create links and another file system never gets them.
+func TestOverlayFileSystem_ListDirRecursiveSymlinkLoop(t *testing.T) {
+	base, err := fs.RegisteredTestMemFileSystem(nil, fs.NewMemFile("/dir/a.txt", []byte("a")))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = base.Close() })
+	require.NoError(t, base.CreateSymbolicLink(".", "/dir/loop"))
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = upper.Close() })
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
+	t.Cleanup(func() { _ = overlay.Close() })
+	listFiles := func() []string {
+		var files []string
+		err := overlay.RootDir().Join("dir").ListDirRecursive(t.Context(), func(file fs.File) error {
+			files = append(files, file.Path())
+			return nil
+		})
+		require.NoError(t, err)
+		return files
+	}
+
+	assert.Equal(t, []string{"/dir/a.txt", "/dir/loop"}, listFiles(), "a link of the base")
+
+	require.NoError(t, upper.MakeAllDirs("/dir/sub", 0))
+	require.NoError(t, upper.CreateSymbolicLink("..", "/dir/sub/up"))
+	assert.Equal(t, []string{"/dir/a.txt", "/dir/loop", "/dir/sub/up"}, listFiles(), "a relative link of the upper layer")
+
+	// A link to a directory is never copied to another file system
+	dest, err := fs.RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = dest.Close() })
+	err = fs.CopyRecursive(t.Context(), overlay.RootDir().Join("dir"), dest.RootDir().Join("copy"))
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+	assert.False(t, dest.RootDir().Join("copy").Exists(), "nothing must be copied")
+
+	// The overlay can't create links, the copy fails before it writes anything
+	err = fs.CopyRecursive(t.Context(), overlay.RootDir().Join("dir"), overlay.RootDir().Join("copy"))
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+	assert.False(t, overlay.RootDir().Join("copy").Exists(), "nothing must be copied")
+}
+
+// TestOverlayFileSystem_CopyUpPermissions is a regression test: a base file
+// was copied up with its exact permissions, so the copy up of a file of a
+// read-only base like an embedded file was read-only, and appending to it
+// failed in a local upper layer, while the setuid bit of a base file was
+// copied up.
+func TestOverlayFileSystem_CopyUpPermissions(t *testing.T) {
+	newOverlay := func(t *testing.T, upper fs.WriteFileSystem) *fs.OverlayFileSystem {
+		base := fs.NewStdFileSystem(stdfstest.MapFS{
+			"read-only.txt": {Data: []byte("r"), Mode: 0o444},
+			"suid":          {Data: []byte("s"), Mode: os.ModeSetuid | 0o755},
+		}, "")
+		require.NoError(t, fs.Register(base))
+		t.Cleanup(func() { _ = base.Close() })
+		overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+		require.NoError(t, err)
+		return overlay
+	}
+
+	t.Run("MemFileSystem upper layer", func(t *testing.T) {
+		upper, err := fs.RegisteredTestMemFileSystem(nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = upper.Close() })
+		overlay := newOverlay(t, upper)
+
+		for name, want := range map[string]fs.Permissions{"read-only.txt": 0o644, "suid": 0o755} {
+			require.NoError(t, overlay.Append(t.Context(), "/"+name, []byte("+"), 0))
+			info, err := upper.Stat("/" + name)
+			require.NoError(t, err)
+			assert.Equal(t, want, info.Permissions, "permissions of the copy up of %s", name)
+		}
+	})
+	t.Run("local upper layer", func(t *testing.T) {
+		upper, err := fs.NewSubFileSystem(fs.Local, t.TempDir(), "")
+		require.NoError(t, err)
+		require.NoError(t, fs.Register(upper))
+		t.Cleanup(func() { _ = upper.Close() })
+		overlay := newOverlay(t, upper)
+
+		require.NoError(t, overlay.Append(t.Context(), "/read-only.txt", []byte("+"), 0))
+		data, err := overlay.ReadAll(t.Context(), "/read-only.txt")
+		require.NoError(t, err)
+		assert.Equal(t, "r+", string(data))
+	})
+}
+
+// TestOverlayFileSystem_LayerVolume is a regression test: the overlay kept
+// the volume of a layer path, so over a MemFileSystem with a volume ListDir
+// returned files like overlay://id/C:/dir/a.txt that didn't resolve.
+func TestOverlayFileSystem_LayerVolume(t *testing.T) {
+	base, err := fs.RegisteredTestMemFileSystem(&fs.MemFileSystemOptions{Separator: `\`, Volume: "C:"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = base.Close() })
+	require.NoError(t, base.MakeDir(`C:\dir`, 0))
+	require.NoError(t, base.WriteAll(t.Context(), `C:\dir\a.txt`, []byte("a"), 0))
+	upper, err := fs.RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = upper.Close() })
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
+	t.Cleanup(func() { _ = overlay.Close() })
+	want := overlay.RootDir().Join("dir", "a.txt")
+
+	files, err := overlay.RootDir().Join("dir").ListDirMax(t.Context(), -1)
+	require.NoError(t, err)
+	assert.Equal(t, []fs.File{want}, files)
+	data, err := want.ReadAllString(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "a", data, "the listed file must resolve")
+
+	info, err := overlay.Stat("/dir/a.txt")
+	require.NoError(t, err)
+	assert.Equal(t, want, info.File)
+	_, err = overlay.OpenReader("/dir")
+	var isDir fs.ErrIsDirectory
+	require.ErrorAs(t, err, &isDir)
+	errFile, _ := isDir.File()
+	assert.Equal(t, overlay.RootDir().Join("dir"), errFile, "errors name the file of the overlay")
+}
+
+// newLocalOverlay returns a registered OverlayFileSystem whose layers are
+// registered SubFileSystems of the local directories baseDir and upperDir.
+func newLocalOverlay(t *testing.T, baseDir, upperDir string) *fs.OverlayFileSystem {
+	t.Helper()
+	base, err := fs.NewSubFileSystem(fs.Local, baseDir, "")
+	require.NoError(t, err)
+	register(t, base)
+	upper, err := fs.NewSubFileSystem(fs.Local, upperDir, "")
+	require.NoError(t, err)
+	register(t, upper)
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+	require.NoError(t, err)
+	register(t, overlay)
+	return overlay
+}
+
+// TestOverlayFileSystem_LinkOntoItsTarget is a regression test: through an
+// overlay of local layers, Move of a symbolic link onto the file it points to
+// compared the paths that the overlay resolved, which differ from the file
+// that the local file system resolves for a target that leaves the directory
+// of the layer and comes back, an absolute target through another path to the
+// layer, or a target with another case on a case-insensitive disk. The copy
+// read the file through the link while the writer truncated it, so the file
+// was empty and Move returned nil. CopyFile of the link onto the file
+// truncated it the same way, also for a plain target. Like mv, Move refuses
+// with an error wrapping os.ErrInvalid, and CopyFile is a no-op.
+func TestOverlayFileSystem_LinkOntoItsTarget(t *testing.T) {
+	cases := []struct {
+		name string
+		// layer returns the directory of the upper layer
+		// and the target of the link to the file "f" in it
+		layer func(t *testing.T) (upperDir, target string)
+	}{
+		{"plain target", func(t *testing.T) (string, string) {
+			return t.TempDir(), "f"
+		}},
+		{"relative target through the parent of the layer", func(t *testing.T) (string, string) {
+			upperDir := filepath.Join(t.TempDir(), "up")
+			require.NoError(t, os.Mkdir(upperDir, 0o700))
+			return upperDir, filepath.Join("..", "up", "f")
+		}},
+		{"absolute target through a link to the layer", func(t *testing.T) (string, string) {
+			dir := t.TempDir()
+			upperDir, alias := filepath.Join(dir, "upper"), filepath.Join(dir, "alias")
+			require.NoError(t, os.Mkdir(upperDir, 0o700))
+			if err := os.Symlink(upperDir, alias); err != nil {
+				t.Skipf("can't create symbolic link: %v", err)
+			}
+			return upperDir, filepath.Join(alias, "f")
+		}},
+		{"target with another case", func(t *testing.T) (string, string) {
+			return caseInsensitiveTempDir(t).LocalPath(), "F"
+		}},
+	}
+	// setup returns the overlay over an empty base layer
+	// with the file "f" and the link "l" in the upper layer
+	setup := func(t *testing.T, layer func(t *testing.T) (string, string)) (overlay *fs.OverlayFileSystem, file, link fs.File, target string) {
+		upperDir, target := layer(t)
+		file, link = fs.File(upperDir).Join("f"), fs.File(upperDir).Join("l")
+		require.NoError(t, file.WriteAllString(t.Context(), "precious"))
+		if err := os.Symlink(target, link.LocalPath()); err != nil {
+			t.Skipf("can't create symbolic link: %v", err)
+		}
+		return newLocalOverlay(t, t.TempDir(), upperDir), file, link, target
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Run("Move", func(t *testing.T) {
+				overlay, file, link, target := setup(t, c.layer)
+
+				err := fs.Move(t.Context(), overlay.RootDir().Join("l"), overlay.RootDir().Join("f"))
+				require.ErrorIs(t, err, os.ErrInvalid)
+				requireContent(t, file, "precious")
+				requireLink(t, link, target)
+			})
+			t.Run("CopyFile", func(t *testing.T) {
+				overlay, file, link, target := setup(t, c.layer)
+
+				require.NoError(t, fs.CopyFile(t.Context(), overlay.RootDir().Join("l"), overlay.RootDir().Join("f")), "a no-op")
+				requireContent(t, file, "precious")
+				requireLink(t, link, target)
+			})
+		})
+	}
+}
+
+// TestOverlayFileSystem_HardLinks is a regression test: through an overlay
+// with a local upper layer, Move and CopyFile of a file onto another hard
+// link of it truncated the file with the writer of the copy while reading it,
+// and Move then removed the source link, so the file was empty. The overlay
+// can't tell another hard link from the same directory entry under another
+// spelling of its name without writing to the layer past the overlay, so Move
+// refuses with an error wrapping os.ErrInvalid. CopyFile of a file onto
+// itself is a no-op.
+func TestOverlayFileSystem_HardLinks(t *testing.T) {
+	// setup returns the overlay over an empty base layer
+	// with the hard links "f" and "g" of a file in the upper layer
+	setup := func(t *testing.T) (overlay *fs.OverlayFileSystem, file, other fs.File) {
+		upperDir := t.TempDir()
+		file, other = fs.File(upperDir).Join("f"), fs.File(upperDir).Join("g")
+		require.NoError(t, file.WriteAllString(t.Context(), "precious"))
+		if err := os.Link(file.LocalPath(), other.LocalPath()); err != nil {
+			t.Skipf("can't create hard link: %v", err)
+		}
+		return newLocalOverlay(t, t.TempDir(), upperDir), file, other
+	}
+
+	t.Run("Move", func(t *testing.T) {
+		overlay, file, other := setup(t)
+
+		err := fs.Move(t.Context(), overlay.RootDir().Join("g"), overlay.RootDir().Join("f"))
+		require.ErrorIs(t, err, os.ErrInvalid)
+		requireContent(t, file, "precious")
+		requireContent(t, other, "precious")
+	})
+	t.Run("CopyFile", func(t *testing.T) {
+		overlay, file, other := setup(t)
+
+		require.NoError(t, fs.CopyFile(t.Context(), overlay.RootDir().Join("g"), overlay.RootDir().Join("f")), "a no-op")
+		requireContent(t, file, "precious")
+		requireContent(t, other, "precious")
+	})
+}
+
+// TestOverlayFileSystem_CaseOnlyRename is a regression test: over
+// a case-insensitive local upper layer, Move to a name that only differs in
+// case copied the file onto itself, which truncated it, and then removed
+// the source, the only directory entry of the file. The overlay supports only
+// one case of a name, so the move is refused with an error wrapping
+// os.ErrInvalid instead of renaming the file in the layer past the overlay.
+func TestOverlayFileSystem_CaseOnlyRename(t *testing.T) {
+	upperDir := caseInsensitiveTempDir(t)
+	writeFiles(t, upperDir, map[string]string{"file.txt": "precious"})
+	overlay := newLocalOverlay(t, t.TempDir(), upperDir.LocalPath())
+
+	err := fs.Move(t.Context(), overlay.RootDir().Join("file.txt"), overlay.RootDir().Join("File.txt"))
+	require.ErrorIs(t, err, os.ErrInvalid)
+	requireNames(t, upperDir, "file.txt")
+	requireContent(t, upperDir.Join("file.txt"), "precious")
 }

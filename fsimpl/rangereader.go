@@ -30,13 +30,21 @@ type RangeReader struct {
 }
 
 // Read reads from the body opened for the current position,
-// opening one if necessary.
+// opening one if necessary. It never reads beyond Size.
+//
+// A body that ends before Size, for example because the connection
+// was dropped, is reported as io.ErrUnexpectedEOF, not as the end
+// of the file. The body is closed then, so the next Read opens
+// a new one from the current position.
 func (r *RangeReader) Read(p []byte) (int, error) {
 	if r.closed {
 		return 0, os.ErrClosed
 	}
 	if r.pos >= r.Size {
 		return 0, io.EOF
+	}
+	if len(p) == 0 {
+		return 0, nil
 	}
 	if r.body == nil {
 		body, err := r.Open(r.pos, -1)
@@ -45,10 +53,20 @@ func (r *RangeReader) Read(p []byte) (int, error) {
 		}
 		r.body = body
 	}
+	if remaining := r.Size - r.pos; int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
 	n, err := r.body.Read(p)
 	r.pos += int64(n)
-	if n > 0 && err == io.EOF {
-		err = nil // report EOF with the next Read like bufio does
+	if err == io.EOF {
+		if r.pos < r.Size {
+			_ = r.body.Close()
+			r.body = nil
+			return n, io.ErrUnexpectedEOF
+		}
+		if n > 0 {
+			err = nil // report EOF with the next Read like bufio does
+		}
 	}
 	return n, err
 }
@@ -80,6 +98,9 @@ func (r *RangeReader) Seek(offset int64, whence int) (int64, error) {
 
 // ReadAt reads len(p) bytes at offset off with a single range request,
 // independent of the position of the sequential reads.
+// It returns io.EOF if the range reaches beyond Size, and
+// io.ErrUnexpectedEOF if the body ends before the requested
+// range within Size was read.
 func (r *RangeReader) ReadAt(p []byte, off int64) (int, error) {
 	if r.closed {
 		return 0, os.ErrClosed
@@ -101,7 +122,12 @@ func (r *RangeReader) ReadAt(p []byte, off int64) (int, error) {
 	}
 	defer body.Close()
 	n, err := io.ReadFull(body, p[:count])
-	if err == io.ErrUnexpectedEOF || (err == nil && int64(n) < int64(len(p))) {
+	switch {
+	case err == io.EOF:
+		// No byte of a range within Size was delivered
+		err = io.ErrUnexpectedEOF
+	case err == nil && n < len(p):
+		// The requested range reaches beyond Size
 		err = io.EOF
 	}
 	return n, err

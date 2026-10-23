@@ -17,6 +17,12 @@ import (
 // by the path escaped with EscapeURIPath, see URL.
 //
 // The zero value is not usable, at least URIPrefix must be set.
+//
+// Methods added to PathHelper must never complete an optional interface
+// of package fs that changes behaviour, like fs.HiddenFileSystem or
+// fs.AbsPathFileSystem, because every file system embedding a PathHelper
+// would then implement it by accident. PrefixAliases is the exception:
+// it implements fs.PrefixAliasFileSystem and is harmless without AltPrefixes.
 type PathHelper struct {
 	// URIPrefix is the prefix of all URIs of the file system,
 	// for example "s3://bucket" or "file://".
@@ -124,11 +130,17 @@ func (h PathHelper) CleanPath(uriParts ...string) string {
 }
 
 // URL returns the URI of a file system path: URIPrefix followed by
-// cleanPath escaped with EscapeURIPath, without doubling the separator
-// if URIPrefix ends with one.
+// cleanPath escaped with EscapeURIPath.
+//
+// If URIPrefix ends with the separator after a host, like "mem://id/",
+// the separator is not doubled. A prefix that is only a scheme
+// like "file://" is followed by the whole rooted path,
+// so the URI of "/a" is "file:///a".
 func (h PathHelper) URL(cleanPath string) string {
 	sep := h.Separator()
-	if strings.HasSuffix(h.URIPrefix, sep) && strings.HasPrefix(cleanPath, sep) {
+	if strings.HasSuffix(h.URIPrefix, sep) &&
+		!strings.HasSuffix(h.URIPrefix, "://") &&
+		strings.HasPrefix(cleanPath, sep) {
 		cleanPath = cleanPath[len(sep):]
 	}
 	return h.URIPrefix + EscapeURIPath(cleanPath)
@@ -147,37 +159,10 @@ func (h PathHelper) SplitPath(filePath string) []string {
 }
 
 // SplitDirAndName returns the parent directory of filePath
-// and the name of the last path element.
+// and the name of the last path element, see the function SplitDirAndName.
+// Like SplitPath it accepts a filePath with prefix, the returned dir
+// has no prefix.
 func (h PathHelper) SplitDirAndName(filePath string) (dir, name string) {
+	filePath = h.TrimPrefix(filePath)
 	return SplitDirAndName(filePath, h.volumeLen(filePath), h.Separator())
-}
-
-// IsAbsPath returns whether filePath is absolute for the file system.
-// For rooted file systems that means starting with the separator or a
-// volume, for non rooted file systems starting with the URI prefix.
-func (h PathHelper) IsAbsPath(filePath string) bool {
-	if !h.Rooted {
-		return strings.HasPrefix(filePath, h.URIPrefix)
-	}
-	return strings.HasPrefix(filePath, h.Separator()) || h.volumeLen(filePath) > 0
-}
-
-// AbsPath returns filePath in absolute form.
-// For rooted file systems that is the cleaned path starting with
-// the separator, for non rooted file systems the URI.
-func (h PathHelper) AbsPath(filePath string) string {
-	if !h.Rooted {
-		if h.IsAbsPath(filePath) {
-			return filePath
-		}
-		return h.URL(h.CleanPath(filePath))
-	}
-	return h.CleanPath(filePath)
-}
-
-// IsHidden returns whether the last element of filePath
-// begins with a dot.
-func (h PathHelper) IsHidden(filePath string) bool {
-	_, name := h.SplitDirAndName(filePath)
-	return strings.HasPrefix(name, ".")
 }

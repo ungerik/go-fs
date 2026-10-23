@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ungerik/go-fs/fsimpl"
@@ -29,11 +31,13 @@ func fsURL(fileSystem FileSystem, cleanPath string) string {
 	if local, ok := fileSystem.(*LocalFileSystem); ok {
 		return local.URL(cleanPath)
 	}
-	prefix, sep := fileSystem.Prefix(), fileSystem.Separator()
-	if strings.HasSuffix(prefix, sep) && strings.HasPrefix(cleanPath, sep) {
-		cleanPath = cleanPath[len(sep):]
+	if u, ok := fileSystem.(URIFileSystem); ok {
+		return u.URIFromPath(cleanPath)
 	}
-	return prefix + fsimpl.EscapeURIPath(cleanPath)
+	// Same rule as PathHelper.URL: a prefix ending with the separator
+	// after a host doesn't double it, a scheme-only prefix like "x://"
+	// is followed by the whole rooted path
+	return fsimpl.PathHelper{URIPrefix: fileSystem.Prefix(), PathSep: fileSystem.Separator()}.URL(cleanPath)
 }
 
 // fsFile returns the File for a clean path within fileSystem.
@@ -63,6 +67,9 @@ func fsVolumeLen(fileSystem FileSystem, filePath string) int {
 
 // fsSplitDirAndName returns the parent directory and the name of the last element of filePath.
 func fsSplitDirAndName(fileSystem FileSystem, filePath string) (dir, name string) {
+	if u, ok := fileSystem.(URIFileSystem); ok {
+		return u.SplitDirAndName(filePath)
+	}
 	return fsimpl.SplitDirAndName(filePath, fsVolumeLen(fileSystem, filePath), fileSystem.Separator())
 }
 
@@ -179,6 +186,25 @@ func fsStat(fileSystem FileSystem, filePath string) (*FileInfo, error) {
 	return completeFileInfo(fileSystem, dir, info), nil
 }
 
+func fsLstat(fileSystem FileSystem, filePath string) (*FileInfo, error) {
+	if filePath == "" {
+		return nil, ErrEmptyPath
+	}
+	if err := fsReadable(fileSystem); err != nil {
+		return nil, err
+	}
+	l, ok := fileSystem.(SymbolicLinkFileSystem)
+	if !ok {
+		return fsStat(fileSystem, filePath)
+	}
+	info, err := l.Lstat(filePath)
+	if err != nil {
+		return nil, err
+	}
+	dir, _ := fsSplitDirAndName(fileSystem, filePath)
+	return completeFileInfo(fileSystem, dir, info), nil
+}
+
 func fsListDir(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	if dirPath == "" {
 		return ErrEmptyPath
@@ -273,7 +299,7 @@ func fsReadAll(ctx context.Context, fileSystem FileSystem, filePath string) ([]b
 		return nil, err
 	}
 	defer reader.Close()
-	return ReadAllContext(ctx, reader)
+	return ReadAll(ctx, reader)
 }
 
 func fsWriteAll(ctx context.Context, fileSystem FileSystem, filePath string, data []byte, perm Permissions) error {
@@ -296,7 +322,26 @@ func fsWriteAll(ctx context.Context, fileSystem FileSystem, filePath string, dat
 	if err != nil {
 		return err
 	}
-	err = WriteAllContext(ctx, writer, data)
+	return commitOrAbort(ctx, writer, WriteAll(ctx, writer, data))
+}
+
+// commitOrAbort finishes writing to writer after the write returned err.
+//
+// If err is not nil or ctx is canceled, the written data must not be committed:
+// writer is aborted if it implements [WriteAborter], else it is closed,
+// and err is returned joined with the error of Abort or Close.
+// Else writer is closed, committing the data, and the error of Close
+// is returned, which reports for example a failed upload.
+func commitOrAbort(ctx context.Context, writer io.WriteCloser, err error) error {
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil {
+		return writer.Close()
+	}
+	if aborter, ok := writer.(WriteAborter); ok {
+		return errors.Join(err, aborter.Abort())
+	}
 	return errors.Join(err, writer.Close())
 }
 
@@ -347,8 +392,7 @@ func fsAppend(ctx context.Context, fileSystem FileSystem, filePath string, data 
 		if err != nil {
 			return err
 		}
-		err = WriteAllContext(ctx, writer, data)
-		return errors.Join(err, writer.Close())
+		return commitOrAbort(ctx, writer, WriteAll(ctx, writer, data))
 	}
 	// Emulate append by reading the whole file
 	// and writing it back with the appended data.
@@ -402,7 +446,7 @@ func fsTruncate(ctx context.Context, fileSystem FileSystem, filePath string, siz
 		return err
 	}
 	if t, ok := w.(TruncateFileSystem); ok {
-		return t.Truncate(filePath, size)
+		return t.Truncate(ctx, filePath, size)
 	}
 	// Emulate by rewriting the file
 	info, err := fsStat(fileSystem, filePath)
@@ -506,30 +550,35 @@ func fsRemoveAll(ctx context.Context, fileSystem FileSystem, filePath string) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	info, err := w.Stat(filePath)
+	// Lstat, so that a symbolic link is removed
+	// and not the files it points to
+	info, err := fsLstat(w, filePath)
 	if err != nil {
 		return RemoveErrDoesNotExist(err)
 	}
-	if info.IsDir {
-		err = fsRemoveDirContents(ctx, w, filePath)
-		if err != nil {
+	return removeAll(ctx, w, filePath, info)
+}
+
+// removeAll removes filePath, described by info, and if it is
+// a directory everything in it. Symbolic links are removed,
+// never followed: ListDir describes a link itself with IsSymlink,
+// even if IsDir is set for a link to a directory.
+func removeAll(ctx context.Context, w WriteFileSystem, filePath string, info *FileInfo) error {
+	if info.IsDir && !info.IsSymlink {
+		err := fsListDir(ctx, w, filePath, nil, func(entry *FileInfo) error {
+			// Ignore entries that have been deleted concurrently,
+			// after all we wanted to get rid of them in the first place
+			return RemoveErrDoesNotExist(removeAll(ctx, w, entry.File.Path(), entry))
+		})
+		if RemoveErrDoesNotExist(err) != nil {
 			return err
 		}
 	}
 	return RemoveErrDoesNotExist(w.Remove(filePath))
 }
 
-// fsRemoveDirContents removes all entries of dirPath recursively.
-func fsRemoveDirContents(ctx context.Context, w WriteFileSystem, dirPath string) error {
-	return fsListDir(ctx, w, dirPath, nil, func(info *FileInfo) error {
-		// Ignore entries that have been deleted concurrently,
-		// after all we wanted to get rid of them in the first place
-		return RemoveErrDoesNotExist(fsRemoveAll(ctx, w, info.File.Path()))
-	})
-}
-
 // fsMove moves srcPath to destPath within one file system,
-// destPath being the final path.
+// destPath being the final path, see [MoveFileSystem.Move].
 func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string) error {
 	if srcPath == "" || destPath == "" {
 		return ErrEmptyPath
@@ -541,35 +590,289 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 	if srcPath == destPath {
 		return nil
 	}
+	// Checked for native implementations too, a copying
+	// implementation would recurse into the copy.
+	if isSubPath(fileSystem, srcPath, destPath) {
+		return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, fsFile(fileSystem, srcPath), fsFile(fileSystem, destPath))
+	}
 	if m, ok := w.(MoveFileSystem); ok {
-		return m.Move(srcPath, destPath)
+		return m.Move(ctx, srcPath, destPath)
 	}
 	// Emulate by copying and removing
-	src, dest := fsFile(fileSystem, srcPath), fsFile(fileSystem, destPath)
-	err = CopyRecursive(ctx, src, dest)
+	return moveByCopy(ctx, fileSystem, srcPath, fileSystem, destPath)
+}
+
+// moveByCopy moves srcPath of srcFS to destPath of destFS by copying it
+// and removing the source after the copy completely succeeded,
+// so a failed or canceled copy never deletes the source.
+// The partial copy of a failed directory copy is left at destPath.
+//
+// destPath is the final path with the overwrite semantics of
+// [MoveFileSystem.Move]: an existing file is replaced
+// ([ErrIsNotDirectory] if the source is a directory),
+// an existing directory is an [ErrAlreadyExists] and neither merged nor deleted.
+// A directory moved into itself within one file system must have been
+// rejected by the caller, see fsMove. Local paths are also compared as
+// files, because two paths can be the same file, like through bind mounts,
+// a symbolic link to a parent directory, a SubFileSystem or the local layer
+// of an OverlayFileSystem, see fsLocalPath. Moving a file or directory onto
+// itself that way is a no-op, unless the name in the same directory only
+// differs in case: then the file is renamed like by LocalFileSystem.Move.
+// Moving a directory into itself that way, a file onto another hard link
+// of it, and a case-only rename through an OverlayFileSystem, which supports
+// only one case of a name, are errors wrapping [os.ErrInvalid].
+//
+// Within a file system that implements [SymbolicLinkFileSystem],
+// symbolic links are copied as links with their target stored verbatim,
+// like [os.Rename] keeps them, and a link replaces an existing file or link.
+// Between file systems, or within one without symbolic links, a link
+// to a file is followed and the file is copied. A link to a directory,
+// the moved one or one below a moved directory, can't be copied that way,
+// another file system can resolve its target to another directory, see
+// CopyRecursive: the move fails with an error wrapping
+// [errors.ErrUnsupported] that names the link before anything is copied.
+// A symbolic link at destPath is replaced, not the file it points to,
+// and recreated if the copy fails. Moving a symbolic link onto the file
+// it points to is an error wrapping [os.ErrInvalid], see isLinkOntoTarget,
+// because the file would be replaced with a link to itself.
+// Removing the source never follows symbolic links, see fsRemoveAll.
+// The copied files get permissions like with CopyFile.
+func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The source must be removable after the copy
+	if _, err := fsWritable(srcFS); err != nil {
+		return err
+	}
+	if _, err := fsWritable(destFS); err != nil {
+		return err
+	}
+	srcInfo, err := fsLstat(srcFS, srcPath)
 	if err != nil {
 		return err
 	}
-	return fsRemoveAll(ctx, fileSystem, srcPath)
+	c := newTreeCopier(ctx, srcFS, destFS, nil)
+	if srcFS == destFS {
+		// Within one file system every link is moved as link
+		c.links = c.dirLinks
+	}
+	srcIsLink := srcInfo.IsSymlink
+	moveLink := srcIsLink && c.links != nil
+	if srcIsLink && !moveLink {
+		target, err := fsStat(srcFS, srcPath)
+		if err != nil {
+			return err
+		}
+		if target.IsDir {
+			// A link to a directory is moved as link
+			moveLink = true
+		} else {
+			// Copy the file that the link points to
+			srcInfo = target
+		}
+	}
+	srcIsDir := srcInfo.IsDir && !srcInfo.IsSymlink
+	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
+
+	if srcLocal, destLocal, viaOverlay, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
+		switch {
+		case isLocalSameFile(srcLocal, destLocal, os.Lstat):
+			// The copy would be a no-op and removing
+			// the source would remove the only copy
+			if isLocalSameDirEntry(srcLocal, destLocal) {
+				if filepath.Base(srcLocal) == filepath.Base(destLocal) {
+					return nil
+				}
+				if !viaOverlay {
+					// Another case of the name, renamed like by LocalFileSystem.Move
+					srcLocalInfo, err := os.Lstat(srcLocal)
+					if err != nil {
+						return wrapOSErr(srcLocal, err)
+					}
+					return moveLocalSameFile(srcLocal, destLocal, srcLocalInfo)
+				}
+			}
+			// Another hard link of the file, or the same directory entry
+			// under a name that only the file system matches, like another
+			// Unicode normalization on macOS. Without knowing which,
+			// nothing is removed. A layer of an overlay is never renamed
+			// past the overlay, which supports only one case of a name.
+			return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
+		case srcIsDir && isLocalInsideDir(srcLocal, destLocal):
+			return fmt.Errorf("%w: can't move directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
+		}
+	}
+	if moveLink && !c.canCopyDirLinks() {
+		return c.errDirLink(src, dest)
+	}
+
+	// destInfo stays nil if there is nothing to replace
+	destInfo, err := fsLstat(destFS, destPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, ErrWriteOnlyFileSystem):
+		// Nothing to replace, or a write-only file system that can't tell
+	case err != nil:
+		return err
+	case destInfo.IsDir && !destInfo.IsSymlink:
+		return NewErrAlreadyExists(dest)
+	case srcIsDir:
+		return NewErrIsNotDirectory(dest)
+	case srcIsLink && !destInfo.IsSymlink && isLinkOntoTarget(srcFS, srcPath, destFS, destPath):
+		return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
+	}
+
+	switch {
+	case moveLink:
+		err = c.replaceWithLink(src, dest, destInfo)
+	case srcIsDir:
+		err = c.checkDirLinks(src, dest)
+		if err == nil {
+			err = c.copyDir(src, dest, true)
+		}
+	default:
+		var restoreLink func() error
+		if destInfo != nil && destInfo.IsSymlink {
+			// Replace the link, not the file it points to
+			restoreLink, err = removeLink(destFS, destPath)
+			if err != nil {
+				return err
+			}
+		}
+		// The Lstat above told that dest is no directory
+		err = copyFileTo(ctx, src, srcInfo.Permissions, dest, &c.buf, nil, true, true)
+		if err != nil && restoreLink != nil {
+			err = errors.Join(err, restoreLink())
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return fsRemoveAll(ctx, srcFS, srcPath)
 }
 
-func fsRename(fileSystem FileSystem, filePath, newName string) (newPath string, err error) {
+// isLinkOntoTarget reports if the symbolic link srcPath of srcFS points to
+// destPath of destFS, an existing file that is no link, which a move of the
+// link would replace with the link: the link would then point to itself and
+// the file would be gone, so mv refuses to move them as the same file.
+// Local paths, also of the local layers of an OverlayFileSystem, are
+// compared like by LocalFileSystem.Move, see isLocalLinkOntoTarget, because
+// the local file system can resolve the link to another path than the
+// overlay, a file with other hard links is kept by them and replaced like
+// any other file. Within one other file system the paths are compared with
+// every symbolic link resolved, see fsEvalSymlinks, a link that can't be
+// resolved is reported as not pointing to destPath.
+func isLinkOntoTarget(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
+	if srcLocal, destLocal, _, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
+		destInfo, err := os.Lstat(destLocal)
+		return err == nil && isLocalLinkOntoTarget(srcLocal, destInfo)
+	}
+	if srcFS != destFS {
+		return false
+	}
+	srcResolved, ok := fsEvalSymlinks(srcFS, srcPath)
+	if !ok {
+		return false
+	}
+	destResolved, ok := fsEvalSymlinks(destFS, destPath)
+	return ok && srcResolved == destResolved
+}
+
+// evalSymlinksMaxLinks is the number of symbolic links
+// that fsEvalSymlinks follows, like filepath.EvalSymlinks.
+const evalSymlinksMaxLinks = 255
+
+// fsEvalSymlinks returns the clean filePath of fileSystem with every symbolic
+// link in it resolved, like filepath.EvalSymlinks, and false if a link can't
+// be read, an element doesn't exist or more than evalSymlinksMaxLinks links
+// are followed. Like MemFileSystem resolves its paths, the elements are walked
+// from the root and a link is replaced with the elements of its target,
+// which is absolute or relative to the resolved directory of the link.
+// Every element costs a Lstat, a round trip on a remote file system.
+func fsEvalSymlinks(fileSystem FileSystem, filePath string) (string, bool) {
+	if !fsCanReadLinks(fileSystem) {
+		return "", false
+	}
+	sep := fileSystem.Separator()
+	filePath = fileSystem.CleanPath(filePath)
+	resolved := fileSystem.CleanPath(filePath[:fsVolumeLen(fileSystem, filePath)])
+	pending := fsSplitPath(fileSystem, filePath)
+	for links := 0; len(pending) > 0; {
+		name := pending[0]
+		pending = pending[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			resolved = fileSystem.CleanPath(resolved, "..")
+			continue
+		}
+		next := fileSystem.CleanPath(resolved, name)
+		info, err := fsLstat(fileSystem, next)
+		if err != nil {
+			return "", false
+		}
+		if !info.IsSymlink {
+			resolved = next
+			continue
+		}
+		if links++; links > evalSymlinksMaxLinks {
+			return "", false
+		}
+		target, err := fsReadSymbolicLink(fileSystem, next)
+		if err != nil || target == "" {
+			return "", false
+		}
+		volumeLen := fsVolumeLen(fileSystem, target)
+		if volumeLen > 0 || strings.HasPrefix(target, "/") || strings.HasPrefix(target, sep) {
+			// An absolute target
+			resolved = fileSystem.CleanPath(target[:volumeLen])
+		}
+		elems := strings.Split(strings.ReplaceAll(target[volumeLen:], sep, "/"), "/")
+		pending = append(elems, pending...)
+	}
+	return resolved, true
+}
+
+// isSubPath reports if filePath is inside the directory dirPath
+// of fileSystem, not counting dirPath itself.
+// A path without a volume name is on the same volume
+// as a path with one.
+func isSubPath(fileSystem FileSystem, dirPath, filePath string) bool {
+	dirVolume := dirPath[:fsVolumeLen(fileSystem, dirPath)]
+	fileVolume := filePath[:fsVolumeLen(fileSystem, filePath)]
+	if dirVolume != "" && fileVolume != "" && dirVolume != fileVolume {
+		return false
+	}
+	dir := fsSplitPath(fileSystem, dirPath)
+	file := fsSplitPath(fileSystem, filePath)
+	return len(file) > len(dir) && slices.Equal(dir, file[:len(dir)])
+}
+
+// isValidName reports if name can be the name of a directory entry
+// of fileSystem: not empty, not "." or ".." and without a separator.
+// A slash is a separator for every file system,
+// because CleanPath treats it as one.
+func isValidName(fileSystem FileSystem, name string) bool {
+	switch {
+	case name == "", name == ".", name == "..":
+		return false
+	case strings.Contains(name, "/"), strings.Contains(name, fileSystem.Separator()):
+		return false
+	}
+	return true
+}
+
+func fsRename(ctx context.Context, fileSystem FileSystem, filePath, newName string) (newPath string, err error) {
 	if filePath == "" {
 		return "", ErrEmptyPath
 	}
-	if strings.ContainsAny(newName, fileSystem.Separator()) {
-		return "", fmt.Errorf("newName %#v for Rename contains path separator %s", newName, fileSystem.Separator())
-	}
-	w, err := fsWritable(fileSystem)
-	if err != nil {
-		return "", err
-	}
-	if r, ok := w.(RenameFileSystem); ok {
-		return r.Rename(filePath, newName)
+	if !isValidName(fileSystem, newName) {
+		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
 	}
 	dir, _ := fsSplitDirAndName(fileSystem, filePath)
 	newPath = fileSystem.CleanPath(dir, newName)
-	return newPath, fsMove(context.Background(), fileSystem, filePath, newPath)
+	return newPath, fsMove(ctx, fileSystem, filePath, newPath)
 }
 
 func fsListDirMax(ctx context.Context, fileSystem FileSystem, dirPath string, max int, patterns []string) (files []File, err error) {
@@ -581,9 +884,6 @@ func fsListDirMax(ctx context.Context, fileSystem FileSystem, dirPath string, ma
 	}
 	if err := fsReadable(fileSystem); err != nil {
 		return nil, err
-	}
-	if l, ok := fileSystem.(ListDirMaxFileSystem); ok {
-		return l.ListDirMax(ctx, dirPath, max, patterns)
 	}
 	return listDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
 		return fsListDir(ctx, fileSystem, dirPath, patterns, FileInfoToFileCallback(callback))
@@ -602,16 +902,230 @@ func fsListDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath stri
 			return callback(completeFileInfo(fileSystem, dirPath, info))
 		})
 	}
+	err := listDirRecursive(ctx, fileSystem, dirPath, patterns, func(info *FileInfo) error {
+		if err := callback(info); err != nil {
+			return callbackError{err}
+		}
+		return nil
+	})
+	var cbErr callbackError
+	if errors.As(err, &cbErr) {
+		return cbErr.err
+	}
+	return err
+}
+
+// callbackError marks an error returned by the callback of a listing,
+// so that it can be told apart from the errors of the listing itself.
+type callbackError struct{ err error }
+
+func (e callbackError) Error() string { return e.err.Error() }
+func (e callbackError) Unwrap() error { return e.err }
+
+// listDirRecursive emulates ListDirRecursive with ListDir.
+// The callback must return its errors as callbackError.
+//
+// Symbolic links are listed like files and never followed, also a link
+// to a directory, which is passed with IsDir false, like by filepath.WalkDir.
+// Only a link at dirPath is followed, because ListDir follows it.
+func listDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {
 	return fsListDir(ctx, fileSystem, dirPath, nil, func(info *FileInfo) error {
-		if info.IsDir {
+		if info.IsDir && !info.IsSymlink {
 			// Not returning directories, but recursing into them.
-			// Don't mind directories that have been deleted while iterating.
-			return RemoveErrDoesNotExist(fsListDirRecursive(ctx, fileSystem, info.File.Path(), patterns, callback))
+			err := listDirRecursive(ctx, fileSystem, info.File.Path(), patterns, callback)
+			if errors.As(err, new(callbackError)) {
+				return err
+			}
+			// Don't mind directories that have been deleted while iterating,
+			// but never ignore an error of the callback.
+			return RemoveErrDoesNotExist(err)
 		}
 		match, err := fsimpl.MatchAnyPattern(info.Name, patterns)
 		if !match || err != nil {
 			return err
 		}
+		// ListDir describes a link to a directory with IsDir set
+		// if the file system knows its target cheaply
+		info.IsDir = false
 		return callback(info)
 	})
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Symbolic links and local paths for copies and moves
+
+// linkTargetReader is implemented by file systems that can read the target
+// of a symbolic link without implementing SymbolicLinkFileSystem, like
+// OverlayFileSystem with the links of its layers, so that fsEvalSymlinks
+// can resolve their links, see fsReadSymbolicLink.
+type linkTargetReader interface {
+	readSymbolicLink(linkPath string) (string, error)
+}
+
+// fsReadSymbolicLink returns the target of the symbolic link at linkPath
+// as stored, using SymbolicLinkFileSystem or linkTargetReader.
+func fsReadSymbolicLink(fileSystem FileSystem, linkPath string) (string, error) {
+	switch f := fileSystem.(type) {
+	case SymbolicLinkFileSystem:
+		return f.ReadSymbolicLink(linkPath)
+	case linkTargetReader:
+		return f.readSymbolicLink(linkPath)
+	}
+	return "", NewErrUnsupported(fileSystem, "ReadSymbolicLink")
+}
+
+// fsCanReadLinks reports if fsReadSymbolicLink
+// can read the symbolic links of fileSystem.
+func fsCanReadLinks(fileSystem FileSystem) bool {
+	if _, ok := fileSystem.(linkTargetReader); ok {
+		return true
+	}
+	return fsLinks(fileSystem) != nil
+}
+
+// fsLinks returns fileSystem as SymbolicLinkFileSystem if it implements it,
+// else nil. A SubFileSystem implements it for every parent, so it is
+// only returned if the parent below all SubFileSystems implements it.
+func fsLinks(fileSystem FileSystem) SymbolicLinkFileSystem {
+	links, ok := fileSystem.(SymbolicLinkFileSystem)
+	if !ok {
+		return nil
+	}
+	for parent := fileSystem; ; {
+		sub, isSub := parent.(*SubFileSystem)
+		if !isSub {
+			if _, ok := parent.(SymbolicLinkFileSystem); !ok {
+				return nil
+			}
+			return links
+		}
+		parent = sub.parent
+	}
+}
+
+// fsLocalPaths returns the local paths of aPath of aFS and bPath of bFS
+// and true if both are paths of the local file system, see fsLocalPath.
+// viaOverlay is true if one of them is a path of an OverlayFileSystem.
+func fsLocalPaths(aFS FileSystem, aPath string, bFS FileSystem, bPath string) (aLocal, bLocal string, viaOverlay, ok bool) {
+	aLocal, aOverlay, aOK := fsLocalPath(aFS, aPath)
+	bLocal, bOverlay, bOK := fsLocalPath(bFS, bPath)
+	return aLocal, bLocal, aOverlay || bOverlay, aOK && bOK
+}
+
+// fsLocalPath returns the local path of filePath of fileSystem and true
+// if it is a path of the local file system, directly or through
+// SubFileSystems and OverlayFileSystems. An OverlayFileSystem is unwrapped
+// to the layer that holds the path, see OverlayFileSystem.pathLayer, and
+// viaOverlay is true then: the local path may only be used to compare
+// files, because a write past the overlay would change its read-only base
+// layer or bring back the base entries that it hides.
+func fsLocalPath(fileSystem FileSystem, filePath string) (localPath string, viaOverlay, ok bool) {
+	for {
+		switch f := fileSystem.(type) {
+		case *LocalFileSystem:
+			return filePath, viaOverlay, true
+		case *SubFileSystem:
+			parentPath, err := f.parentPath(filePath)
+			if err != nil {
+				return "", false, false
+			}
+			fileSystem, filePath = f.parent, parentPath
+		case *OverlayFileSystem:
+			layer, layerPath, err := f.pathLayer(filePath)
+			if err != nil {
+				return "", false, false
+			}
+			fileSystem, filePath, viaOverlay = layer, layerPath, true
+		default:
+			return "", false, false
+		}
+	}
+}
+
+// isLocalSameFile reports if the local paths a and b are the same file
+// or directory, like two paths through bind mounts or through a symbolic
+// link to a parent directory, or two hard links of a file.
+// stat is os.Stat to compare what symbolic links at a and b point to,
+// or os.Lstat to compare the links themselves.
+func isLocalSameFile(a, b string, stat func(string) (os.FileInfo, error)) bool {
+	aInfo, err := stat(a)
+	if err != nil {
+		return false
+	}
+	bInfo, err := stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(aInfo, bInfo)
+}
+
+// isLocalSameDirEntry reports if the local paths a and b of the same file
+// have the same name in the same directory. The names are compared with
+// strings.EqualFold, so a false result can still be the same directory entry
+// for a file system that matches names by Unicode normalization or with
+// other case rules, never treat it as proof of two different entries.
+func isLocalSameDirEntry(a, b string) bool {
+	return strings.EqualFold(filepath.Base(a), filepath.Base(b)) && isLocalInSameDir(a, b)
+}
+
+// isLocalInSameDir reports if the local paths a and b are in the same directory.
+func isLocalInSameDir(a, b string) bool {
+	aDir, err := os.Stat(filepath.Dir(a))
+	if err != nil {
+		return false
+	}
+	bDir, err := os.Stat(filepath.Dir(b))
+	if err != nil {
+		return false
+	}
+	return os.SameFile(aDir, bDir)
+}
+
+// isLocalRenameOfDirEntry reports if destPath of destFS is the directory
+// entry of srcPath of srcFS under another spelling of its name, which the
+// file system matches to the same entry, like another case on
+// a case-insensitive file system or another Unicode normalization on APFS.
+// Both must be local paths of the same file per os.Lstat with other names
+// in the same directory: that is the same entry for a directory, which has
+// no other hard links, and for a name that only differs in case.
+func isLocalRenameOfDirEntry(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
+	srcLocal, destLocal, _, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath)
+	if !ok || filepath.Base(srcLocal) == filepath.Base(destLocal) {
+		return false
+	}
+	srcInfo, err := os.Lstat(srcLocal)
+	if err != nil {
+		return false
+	}
+	destInfo, err := os.Lstat(destLocal)
+	if err != nil || !os.SameFile(srcInfo, destInfo) {
+		return false
+	}
+	if srcInfo.IsDir() {
+		return isLocalInSameDir(srcLocal, destLocal)
+	}
+	return isLocalSameDirEntry(srcLocal, destLocal)
+}
+
+// isLocalInsideDir reports if the local path filePath is inside the directory
+// dirPath, also through another path to the directory, like through a bind
+// mount or a symbolic link: one of the parent directories of filePath is
+// the same directory as dirPath.
+func isLocalInsideDir(dirPath, filePath string) bool {
+	dirInfo, err := os.Stat(dirPath)
+	if err != nil {
+		return false
+	}
+	filePath, err = filepath.Abs(filePath)
+	if err != nil {
+		return false
+	}
+	for parent := filepath.Dir(filePath); ; parent = filepath.Dir(parent) {
+		if info, err := os.Stat(parent); err == nil && os.SameFile(dirInfo, info) {
+			return true
+		}
+		if filepath.Dir(parent) == parent {
+			return false
+		}
+	}
 }

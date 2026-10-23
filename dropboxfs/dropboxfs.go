@@ -1,22 +1,32 @@
 // Package dropboxfs implements a go-fs file system for Dropbox.
 //
-// The file system is identified by the Dropbox account id, which the
-// constructor fetches, so the same account always gets the same prefix
-// "dropbox://<account id>". Metadata is cached for a configurable time
-// to save API calls; every write operation invalidates the affected
-// cache entries.
+// The file system is identified by the Dropbox account id, which New
+// fetches, so the same account always gets the same prefix
+// "dropbox://<account id>" (the id without its "dbid:" part).
+// Metadata is cached for Options.CacheTimeout to save API calls;
+// every write operation invalidates the affected cache entries.
 //
-// The mute option controls whether file modifications trigger user
+// Dropbox paths are case-insensitive: "/Docs/a.txt" and "/docs/A.TXT"
+// are the same file. FileInfos have the names in the case Dropbox reports,
+// usually the one they were created with.
+//
+// Files of up to 150 MiB are written with one upload request, larger
+// ones with an upload session in chunks. Writers from OpenWriter upload
+// files larger than one chunk (32 MiB) while they are written, so they
+// hold at most one chunk in memory.
+//
+// Options.Mute controls whether file modifications trigger user
 // notifications; set it for automated operations that should not spam
 // the account owner.
 package dropboxfs
 
 import (
-	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -37,16 +47,16 @@ const (
 
 	// Separator used in Dropbox file system paths
 	Separator = "/"
-)
 
-var (
 	// DefaultPermissions reported for Dropbox files
 	DefaultPermissions = fs.UserAndGroupReadWrite
 
 	// DefaultDirPermissions reported for Dropbox directories
-	DefaultDirPermissions = fs.UserAndGroupReadWrite + fs.AllExecute
+	DefaultDirPermissions = fs.UserAndGroupReadWrite | fs.AllExecute
+)
 
-	// Compile-time interface checks
+// Compile-time interface checks
+var (
 	_ fs.FileSystem                 = new(fileSystem)
 	_ fs.WriteFileSystem            = new(fileSystem)
 	_ fs.WriteAllFileSystem         = new(fileSystem)
@@ -57,110 +67,111 @@ var (
 	_ fs.ListDirRecursiveFileSystem = new(fileSystem)
 )
 
+// Options for a Dropbox file system. A nil *Options uses the defaults.
+type Options struct {
+	// CacheTimeout is the time file metadata is cached,
+	// zero disables the cache.
+	CacheTimeout time.Duration
+
+	// Mute keeps Dropbox from notifying the account owner
+	// of the file modifications made through the file system.
+	Mute bool
+
+	// HTTPClient sends all API requests instead of a client that
+	// authenticates them with the access token passed to New,
+	// which is ignored then.
+	//
+	// Dropbox issues short-lived access tokens, so long running programs
+	// need a client that refreshes them, like the one returned by the
+	// Client method of an golang.org/x/oauth2 Config for a token
+	// with a refresh token.
+	HTTPClient *http.Client
+}
+
 // fileSystem implements fs.FileSystem for a Dropbox account.
 type fileSystem struct {
 	fsimpl.PathHelper
 
-	accountID   string
-	filesClient files.Client
-	cache       *fileInfoCache
-	mute        bool // If true, file modifications won't trigger user notifications
-	closed      atomic.Bool
+	accountID string
+	client    files.ContextClient
+	cache     *fileInfoCache
+	mute      bool // If true, file modifications won't trigger user notifications
+	maxUpload int  // maxUploadSize, smaller in tests
+	chunkSize int  // uploadChunkSize, smaller in tests
+	closed    atomic.Bool
 }
 
-// NewAndRegister fetches the account of the accessToken,
-// creates a file system with the prefix "dropbox://<account id>"
-// and registers it.
+// New fetches the account of the accessToken and returns a file system
+// with the prefix "dropbox://<account id>" for it, without registering it.
+// ctx is used for the request of the account.
 //
-// Metadata is cached for cacheTimeout, zero disables the cache.
-// If mute is true, users are not notified of file changes
-// made through the file system.
-func NewAndRegister(ctx context.Context, accessToken string, cacheTimeout time.Duration, mute bool) (fs.FileSystem, error) {
-	if err := ctx.Err(); err != nil {
+// With Options.HTTPClient the accessToken is ignored and may be empty.
+func New(ctx context.Context, accessToken string, opts *Options) (fs.FileSystem, error) {
+	config, err := newConfig(accessToken, opts)
+	if err != nil {
 		return nil, err
 	}
+	return newFromConfig(ctx, config, opts)
+}
+
+// NewAndRegister creates a file system for the account of the accessToken
+// like New and registers it, so that fs.File values with its prefix
+// "dropbox://<account id>" work. It is meant for callers that know the
+// account id and work with URIs; fs.GetFileSystem returns the file system
+// for the prefix, closing it unregisters it again. Use New and fs.Register
+// to get the file system and its prefix.
+func NewAndRegister(ctx context.Context, accessToken string, opts *Options) error {
+	dbfs, err := New(ctx, accessToken, opts)
+	if err != nil {
+		return err
+	}
+	if err := fs.Register(dbfs); err != nil {
+		return errors.Join(err, dbfs.Close())
+	}
+	return nil
+}
+
+// newConfig returns the SDK configuration for accessToken and opts.
+func newConfig(accessToken string, opts *Options) (dropbox.Config, error) {
 	config := dropbox.Config{
 		Token:    accessToken,
 		LogLevel: dropbox.LogOff,
 	}
-	account, err := users.New(config).GetCurrentAccount()
+	if opts != nil {
+		config.Client = opts.HTTPClient
+	}
+	if config.Token == "" && config.Client == nil {
+		return config, errors.New("dropboxfs: empty access token and no Options.HTTPClient")
+	}
+	return config, nil
+}
+
+// newFromConfig fetches the current account with config
+// and returns a file system for it.
+func newFromConfig(ctx context.Context, config dropbox.Config, opts *Options) (*fileSystem, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	account, err := users.NewContext(config).GetCurrentAccountContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("dropboxfs: getting the current account: %w", err)
 	}
-	dbfs := newFileSystem(account.AccountId, files.New(config), cacheTimeout, mute)
-	fs.Register(dbfs)
-	return dbfs, nil
+	return newFileSystem(account.AccountId, files.NewContext(config), opts), nil
 }
 
-func newFileSystem(accountID string, filesClient files.Client, cacheTimeout time.Duration, mute bool) *fileSystem {
+func newFileSystem(accountID string, client files.ContextClient, opts *Options) *fileSystem {
+	if opts == nil {
+		opts = new(Options)
+	}
 	return &fileSystem{
-		PathHelper:  fsimpl.PathHelper{URIPrefix: Prefix + strings.TrimPrefix(accountID, "dbid:"), Rooted: true},
-		accountID:   accountID,
-		filesClient: filesClient,
-		cache:       newFileInfoCache(cacheTimeout),
-		mute:        mute,
+		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + strings.TrimPrefix(accountID, "dbid:"), Rooted: true},
+		accountID:  accountID,
+		client:     client,
+		cache:      newFileInfoCache(opts.CacheTimeout),
+		mute:       opts.Mute,
+		maxUpload:  maxUploadSize,
+		chunkSize:  uploadChunkSize,
 	}
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// Errors
-
-// lookupNotFound reports whether a LookupError means "path not found".
-func lookupNotFound(l *files.LookupError) bool {
-	return l != nil && l.Tag == files.LookupErrorNotFound
-}
-
-// isNotExistError reports whether err is a typed Dropbox API error that
-// means a file or folder does not exist, as opposed to a transport or
-// authorization error (network outage, rate limit, 5xx, expired token).
-//
-// The distinction matters: treating a transient error as "does not exist"
-// would make existing files appear to vanish, which is dangerous for
-// callers that check existence before overwriting or deleting.
-func isNotExistError(err error) bool {
-	if e, ok := errors.AsType[files.GetMetadataAPIError](err); ok {
-		return e.EndpointError != nil && lookupNotFound(e.EndpointError.Path)
-	}
-	if e, ok := errors.AsType[files.DownloadAPIError](err); ok {
-		return e.EndpointError != nil && lookupNotFound(e.EndpointError.Path)
-	}
-	if e, ok := errors.AsType[files.ListFolderAPIError](err); ok {
-		return e.EndpointError != nil && lookupNotFound(e.EndpointError.Path)
-	}
-	if e, ok := errors.AsType[files.DeleteAPIError](err); ok {
-		return e.EndpointError != nil && lookupNotFound(e.EndpointError.PathLookup)
-	}
-	if e, ok := errors.AsType[files.MoveAPIError](err); ok {
-		return e.EndpointError != nil && lookupNotFound(e.EndpointError.FromLookup)
-	}
-	if e, ok := errors.AsType[files.CopyAPIError](err); ok {
-		return e.EndpointError != nil && lookupNotFound(e.EndpointError.FromLookup)
-	}
-	return false
-}
-
-// isConflictError reports whether err is a typed Dropbox API error
-// that means the target path already exists.
-func isConflictError(err error) bool {
-	if e, ok := errors.AsType[files.CreateFolderAPIError](err); ok {
-		return e.EndpointError != nil && e.EndpointError.Path != nil && e.EndpointError.Path.Tag == files.WriteErrorConflict
-	}
-	return false
-}
-
-// wrapErr converts typed Dropbox "not found" and "conflict" errors
-// for filePath to the fs error types. All other errors (including
-// transport and authorization errors) are returned unchanged.
-func (dbfs *fileSystem) wrapErr(filePath string, err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case isNotExistError(err):
-		return fs.NewErrDoesNotExist(dbfs.file(filePath))
-	case isConflictError(err):
-		return fs.NewErrAlreadyExists(dbfs.file(filePath))
-	}
-	return err
 }
 
 func (dbfs *fileSystem) checkClosed() error {
@@ -195,11 +206,13 @@ func (dbfs *fileSystem) ID() string {
 }
 
 func (dbfs *fileSystem) Name() string {
-	return "Dropbox file system"
+	return "Dropbox"
 }
 
+// String returns the name and the prefix,
+// which contains no secret, only the account id.
 func (dbfs *fileSystem) String() string {
-	return dbfs.Name() + " with prefix " + dbfs.Prefix()
+	return dbfs.Name() + " " + dbfs.Prefix()
 }
 
 func (dbfs *fileSystem) file(filePath string) fs.File {
@@ -209,11 +222,17 @@ func (dbfs *fileSystem) file(filePath string) fs.File {
 // apiPath returns the path for the Dropbox API,
 // which uses the empty string for the root.
 func apiPath(filePath string) string {
-	filePath = path.Clean(filePath)
-	if filePath == Separator || filePath == "." {
+	filePath = path.Clean("/" + filePath)
+	if filePath == Separator {
 		return ""
 	}
 	return filePath
+}
+
+// isInside reports whether the API path p is below the API
+// directory path dir, compared case-insensitively like Dropbox does.
+func isInside(dir, p string) bool {
+	return dir == "" || strings.HasPrefix(strings.ToLower(p), strings.ToLower(dir)+"/")
 }
 
 func (dbfs *fileSystem) rootInfo() *fs.FileInfo {
@@ -238,7 +257,7 @@ func (dbfs *fileSystem) metadataToFileInfo(meta files.IsMetadata) *fs.FileInfo {
 			IsRegular:   true,
 			IsHidden:    strings.HasPrefix(m.Name, "."),
 			Size:        int64(m.Size), //#nosec G115 -- int64 limit will not be exceeded in real world use cases
-			Modified:    m.ServerModified,
+			Modified:    time.Time(m.ServerModified),
 			Permissions: DefaultPermissions,
 		}
 	case *files.FolderMetadata:
@@ -254,13 +273,35 @@ func (dbfs *fileSystem) metadataToFileInfo(meta files.IsMetadata) *fs.FileInfo {
 	return nil
 }
 
-// Stat returns the FileInfo of filePath from the cache or the API.
-func (dbfs *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
-	if err := dbfs.checkClosed(); err != nil {
-		return nil, err
+// metadata returns the metadata of the API path p from the server,
+// never from the cache, and puts its FileInfo into the cache.
+func (dbfs *fileSystem) metadata(ctx context.Context, p, filePath string) (files.IsMetadata, *fs.FileInfo, error) {
+	if err := dbfs.check(ctx); err != nil {
+		return nil, nil, err
 	}
-	if filePath == "" {
-		return nil, fs.ErrEmptyPath
+	if p == "" {
+		return nil, dbfs.rootInfo(), nil
+	}
+	meta, err := dbfs.client.GetMetadataContext(ctx, files.NewGetMetadataArg(p))
+	if err != nil {
+		if isNotExistError(err) {
+			dbfs.cache.Delete(p)
+		}
+		return nil, nil, dbfs.wrapErr(filePath, err)
+	}
+	info := dbfs.metadataToFileInfo(meta)
+	if info == nil {
+		dbfs.cache.Delete(p)
+		return nil, nil, fs.NewErrDoesNotExist(dbfs.file(filePath))
+	}
+	dbfs.cache.Put(p, info)
+	return meta, info, nil
+}
+
+// stat returns the FileInfo of filePath from the cache or the API.
+func (dbfs *fileSystem) stat(ctx context.Context, filePath string) (*fs.FileInfo, error) {
+	if err := dbfs.check(ctx); err != nil {
+		return nil, err
 	}
 	p := apiPath(filePath)
 	if p == "" {
@@ -269,16 +310,19 @@ func (dbfs *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	if info, ok := dbfs.cache.Get(p); ok {
 		return info, nil
 	}
-	meta, err := dbfs.filesClient.GetMetadata(files.NewGetMetadataArg(p))
-	if err != nil {
-		return nil, dbfs.wrapErr(filePath, err)
+	_, info, err := dbfs.metadata(ctx, p, filePath)
+	return info, err
+}
+
+// Stat returns the FileInfo of filePath from the cache or the API.
+func (dbfs *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
+	if err := dbfs.checkClosed(); err != nil {
+		return nil, err
 	}
-	info := dbfs.metadataToFileInfo(meta)
-	if info == nil {
-		return nil, fs.NewErrDoesNotExist(dbfs.file(filePath))
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
 	}
-	dbfs.cache.Put(p, info)
-	return info, nil
+	return dbfs.stat(context.Background(), filePath)
 }
 
 func (dbfs *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
@@ -300,11 +344,11 @@ func (dbfs *fileSystem) listDir(ctx context.Context, dirPath string, patterns []
 	}
 	arg := files.NewListFolderArg(apiPath(dirPath))
 	arg.Recursive = recursive
-	result, err := dbfs.filesClient.ListFolder(arg)
+	result, err := dbfs.client.ListFolderContext(ctx, arg)
 	if err != nil {
-		if isNotExistError(err) {
-			// A file is reported as not found by ListFolder
-			if info, statErr := dbfs.Stat(dirPath); statErr == nil && !info.IsDir {
+		if tag := lookupTag(err); tag == files.LookupErrorNotFound || tag == files.LookupErrorNotFolder {
+			// A file is reported as not_folder or not_found by ListFolder
+			if info, statErr := dbfs.stat(ctx, dirPath); statErr == nil && !info.IsDir {
 				return fs.NewErrIsNotDirectory(info.File)
 			}
 		}
@@ -335,12 +379,12 @@ func (dbfs *fileSystem) listDir(ctx context.Context, dirPath string, patterns []
 		if !result.HasMore {
 			return nil
 		}
-		if err := ctx.Err(); err != nil {
+		if err := dbfs.check(ctx); err != nil {
 			return err
 		}
-		result, err = dbfs.filesClient.ListFolderContinue(files.NewListFolderContinueArg(result.Cursor))
+		result, err = dbfs.client.ListFolderContinueContext(ctx, files.NewListFolderContinueArg(result.Cursor))
 		if err != nil {
-			return err
+			return dbfs.wrapErr(dirPath, err)
 		}
 	}
 }
@@ -349,6 +393,7 @@ func (dbfs *fileSystem) listDir(ctx context.Context, dirPath string, patterns []
 // Reading
 
 // OpenReader streams the download of the file.
+// A folder is an fs.ErrIsDirectory.
 func (dbfs *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if err := dbfs.checkClosed(); err != nil {
 		return nil, err
@@ -356,7 +401,16 @@ func (dbfs *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	_, body, err := dbfs.filesClient.Download(files.NewDownloadArg(apiPath(filePath)))
+	return dbfs.download(context.Background(), filePath)
+}
+
+// download returns the content of the file at filePath.
+func (dbfs *fileSystem) download(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	p := apiPath(filePath)
+	if p == "" {
+		return nil, fs.NewErrIsDirectory(dbfs.RootDir())
+	}
+	_, body, err := dbfs.client.DownloadContext(ctx, files.NewDownloadArg(p))
 	if err != nil {
 		return nil, dbfs.wrapErr(filePath, err)
 	}
@@ -367,6 +421,8 @@ func (dbfs *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 // Writing
 
 // WriteAll uploads data as the file, overwriting an existing one.
+// Data larger than 150 MiB is uploaded with an upload session.
+// A folder at filePath is an fs.ErrIsDirectory.
 func (dbfs *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
 	if err := dbfs.check(ctx); err != nil {
 		return err
@@ -375,20 +431,17 @@ func (dbfs *fileSystem) WriteAll(ctx context.Context, filePath string, data []by
 		return fs.ErrEmptyPath
 	}
 	p := apiPath(filePath)
-	arg := files.NewUploadArg(p)
-	arg.Mode = &files.WriteMode{Tagged: dropbox.Tagged{Tag: files.WriteModeOverwrite}}
-	arg.Mute = dbfs.mute
-	meta, err := dbfs.filesClient.Upload(arg, bytes.NewReader(data))
-	if err != nil {
-		dbfs.cache.Delete(p)
-		return dbfs.wrapErr(filePath, err)
+	if p == "" {
+		return fs.NewErrIsDirectory(dbfs.RootDir())
 	}
-	dbfs.cache.Put(p, dbfs.metadataToFileInfo(meta))
-	return nil
+	meta, err := dbfs.upload(ctx, p, data)
+	return dbfs.uploaded(p, filePath, meta, err)
 }
 
-// OpenWriter returns a writer that buffers the data in memory
-// and uploads it on Close.
+// OpenWriter returns a writer that uploads the file, see uploadWriter.
+// The file is created or replaced when the writer is closed,
+// a folder at filePath is an fs.ErrIsDirectory then.
+// The writer implements fs.WriteAborter.
 func (dbfs *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
 	if err := dbfs.checkClosed(); err != nil {
 		return nil, err
@@ -396,25 +449,49 @@ func (dbfs *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.Wri
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
-	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
-		return dbfs.WriteAll(context.Background(), filePath, data, perm)
-	}), nil
+	p := apiPath(filePath)
+	if p == "" {
+		return nil, fs.NewErrIsDirectory(dbfs.RootDir())
+	}
+	return &uploadWriter{
+		dbfs:     dbfs,
+		filePath: filePath,
+		session:  uploadSession{dbfs: dbfs, path: p},
+	}, nil
 }
 
 // OpenReadWriter downloads the file (or starts empty for a missing one)
 // into a memory buffer that is uploaded on Close.
+// The buffer implements fs.WriteAborter.
 func (dbfs *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.ReadWriteSeekCloser, error) {
-	data, err := dbfs.file(filePath).ReadAll(context.Background())
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := dbfs.checkClosed(); err != nil {
+		return nil, err
+	}
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
+	}
+	ctx := context.Background()
+	var data []byte
+	body, err := dbfs.download(ctx, filePath)
+	switch {
+	case err == nil:
+		data, err = fs.ReadAll(ctx, body)
+		err = errors.Join(err, body.Close())
+		if err != nil {
+			return nil, err
+		}
+	case !errors.Is(err, os.ErrNotExist):
 		return nil, err
 	}
 	return fsimpl.NewWriteOnCloseFileBuffer(data, func(data []byte) error {
-		return dbfs.WriteAll(context.Background(), filePath, data, perm)
+		return dbfs.WriteAll(ctx, filePath, data, perm)
 	}), nil
 }
 
 // MakeDir creates a folder. It returns an error wrapping
 // os.ErrExist if the path already exists.
+//
+// Unlike other file systems Dropbox creates missing parent folders.
 func (dbfs *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	if err := dbfs.checkClosed(); err != nil {
 		return err
@@ -426,15 +503,22 @@ func (dbfs *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	if p == "" {
 		return fs.NewErrAlreadyExists(dbfs.RootDir())
 	}
-	result, err := dbfs.filesClient.CreateFolderV2(files.NewCreateFolderArg(p))
+	result, err := dbfs.client.CreateFolderV2Context(context.Background(), files.NewCreateFolderArg(p))
 	if err != nil {
+		if conflict := conflictTag(err); conflict == files.WriteConflictErrorFile || conflict == files.WriteConflictErrorFolder {
+			return fs.NewErrAlreadyExists(dbfs.file(dirPath))
+		}
 		return dbfs.wrapErr(dirPath, err)
 	}
 	dbfs.cache.Put(p, dbfs.metadataToFileInfo(result.Metadata))
 	return nil
 }
 
-// CopyFile copies a file server-side. Copying a file onto itself is a no-op.
+// CopyFile copies a file server-side.
+//
+// An existing file at destFile is replaced, an existing folder
+// is an fs.ErrIsDirectory. Copying a file onto itself, also with
+// a destination that differs only in case, is a no-op.
 func (dbfs *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	if err := dbfs.check(ctx); err != nil {
 		return err
@@ -443,63 +527,205 @@ func (dbfs *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile s
 		return fs.ErrEmptyPath
 	}
 	src, dest := apiPath(srcFile), apiPath(destFile)
-	if src == dest {
+	if strings.EqualFold(src, dest) {
 		return nil
 	}
-	dbfs.cache.Delete(dest)
-	_, err := dbfs.filesClient.CopyV2(files.NewRelocationArg(src, dest))
-	return dbfs.wrapErr(srcFile, err)
+	info, err := dbfs.stat(ctx, srcFile)
+	if err != nil {
+		return err
+	}
+	if info.IsDir {
+		return fs.NewErrIsDirectory(info.File)
+	}
+	if dest == "" {
+		return fs.NewErrIsDirectory(dbfs.RootDir())
+	}
+	return dbfs.relocate(ctx, false, src, dest)
 }
 
 // Move moves or renames a file or folder server-side.
 //
-// When filePath and destPath resolve to the same location after path
-// cleaning, Move returns nil without calling the Dropbox API, matching
-// the no-op behavior required by the [fs.MoveFileSystem] contract.
-// (Dropbox MoveV2 would otherwise reject the request with a "to/conflict"
-// error.)
-func (dbfs *fileSystem) Move(filePath string, destPath string) error {
-	if err := dbfs.checkClosed(); err != nil {
+// An existing file at destPath is replaced (an fs.ErrIsNotDirectory
+// if filePath is a folder), an existing folder is an error wrapping
+// os.ErrExist and is neither deleted nor merged.
+// Moving a folder into itself is an error wrapping os.ErrInvalid.
+// Renames that only change the case of a name are supported.
+//
+// When filePath and destPath are the same after path cleaning, Move
+// returns nil without calling the Dropbox API, matching the no-op
+// behavior required by the [fs.MoveFileSystem] contract.
+func (dbfs *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
+	if err := dbfs.check(ctx); err != nil {
 		return err
 	}
 	if filePath == "" || destPath == "" {
 		return fs.ErrEmptyPath
 	}
 	src, dest := apiPath(filePath), apiPath(destPath)
-	if src == dest {
+	switch {
+	case src == dest:
 		return nil
+	case dest == "":
+		return fs.NewErrAlreadyExists(dbfs.RootDir())
+	case isInside(src, dest):
+		// Only a folder can contain the destination
+		_, info, err := dbfs.metadata(ctx, src, filePath)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir {
+			return fs.NewErrIsNotDirectory(info.File)
+		}
+		return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, info.File, dbfs.file(dest))
+	case strings.EqualFold(src, dest):
+		return dbfs.moveCase(ctx, src, dest)
 	}
-	dbfs.cache.Clear()
-	_, err := dbfs.filesClient.MoveV2(files.NewRelocationArg(src, dest))
-	return dbfs.wrapErr(filePath, err)
+	return dbfs.relocate(ctx, true, src, dest)
+}
+
+// relocateV2 moves or copies src to dest with one API call.
+func (dbfs *fileSystem) relocateV2(ctx context.Context, move bool, src, dest string) (*files.RelocationResult, error) {
+	if err := dbfs.check(ctx); err != nil {
+		return nil, err
+	}
+	arg := files.NewRelocationArg(src, dest)
+	if move {
+		return dbfs.client.MoveV2Context(ctx, arg)
+	}
+	return dbfs.client.CopyV2Context(ctx, arg)
+}
+
+// relocate moves or copies the API path src to dest, which differ
+// not only in case, with the overwrite semantics of Move and CopyFile.
+//
+// Dropbox refuses to relocate onto an existing path. An existing file
+// at dest is therefore deleted before a second attempt, if src is not
+// a folder on the server, and only the version of the file that was
+// checked (DeleteArg.ParentRev), so a folder or a newer file that took
+// its place in the meantime is never deleted.
+// The deleted file stays restorable in the version history of Dropbox.
+func (dbfs *fileSystem) relocate(ctx context.Context, move bool, src, dest string) error {
+	defer func() {
+		if move {
+			dbfs.cache.Delete(src)
+		}
+		dbfs.cache.Delete(dest)
+	}()
+	result, err := dbfs.relocateV2(ctx, move, src, dest)
+	if conflict := conflictTag(err); conflict == files.WriteConflictErrorFile || conflict == files.WriteConflictErrorFolder {
+		destMeta, destInfo, statErr := dbfs.metadata(ctx, dest, dest)
+		if statErr != nil {
+			return statErr
+		}
+		switch {
+		case destInfo.IsDir && move:
+			return fs.NewErrAlreadyExists(destInfo.File)
+		case destInfo.IsDir:
+			return fs.NewErrIsDirectory(destInfo.File)
+		}
+		// A folder never replaces a file. The source is checked on the
+		// server before the file is deleted, because CopyFile checked it
+		// in the cache and it may have become a folder since then.
+		_, srcInfo, statErr := dbfs.metadata(ctx, src, src)
+		if statErr != nil {
+			return statErr
+		}
+		switch {
+		case srcInfo.IsDir && move:
+			return fs.NewErrIsNotDirectory(destInfo.File)
+		case srcInfo.IsDir:
+			return fs.NewErrIsDirectory(srcInfo.File)
+		}
+		if err := dbfs.deleteFile(ctx, dest, destMeta); err != nil {
+			return err
+		}
+		result, err = dbfs.relocateV2(ctx, move, src, dest)
+	}
+	if err != nil {
+		return dbfs.wrapRelocationErr(src, dest, err)
+	}
+	if _, isFolder := result.Metadata.(*files.FolderMetadata); isFolder && !move {
+		// The source was a file when it was checked, but is a folder now:
+		// don't leave a copy of the folder behind
+		_, delErr := dbfs.client.DeleteV2Context(ctx, files.NewDeleteArg(dest))
+		return errors.Join(fs.NewErrIsDirectory(dbfs.file(src)), delErr)
+	}
+	return nil
+}
+
+// deleteFile deletes the file of the API path p with the metadata meta,
+// but only the version of meta.
+func (dbfs *fileSystem) deleteFile(ctx context.Context, p string, meta files.IsMetadata) error {
+	arg := files.NewDeleteArg(p)
+	if m, ok := meta.(*files.FileMetadata); ok {
+		arg.ParentRev = m.Rev
+	}
+	dbfs.cache.Delete(p)
+	_, err := dbfs.client.DeleteV2Context(ctx, arg)
+	return dbfs.wrapErr(p, err)
+}
+
+// moveCase renames the API path src to dest, which differs only in case.
+// Dropbox may refuse that as a move onto itself, then src is moved to
+// a temporary name in the same folder first. The conflict handling of
+// relocate must never run for such a move: it would delete src.
+func (dbfs *fileSystem) moveCase(ctx context.Context, src, dest string) error {
+	defer dbfs.cache.Delete(src)
+	_, err := dbfs.relocateV2(ctx, true, src, dest)
+	if !isConflictError(err) {
+		return dbfs.wrapRelocationErr(src, dest, err)
+	}
+	tmp := path.Join(path.Dir(src), ".gofs-rename-"+rand.Text())
+	_, err = dbfs.relocateV2(ctx, true, src, tmp)
+	if err != nil {
+		return dbfs.wrapRelocationErr(src, dest, err)
+	}
+	_, err = dbfs.relocateV2(ctx, true, tmp, dest)
+	if err != nil {
+		// Restore the original name
+		_, restoreErr := dbfs.relocateV2(context.WithoutCancel(ctx), true, tmp, src)
+		return errors.Join(dbfs.wrapRelocationErr(src, dest, err), restoreErr)
+	}
+	return nil
 }
 
 // Remove deletes a file or an empty folder.
 // It returns an error wrapping os.ErrNotExist for a missing path
-// and refuses to delete a folder with content.
+// and an fs.ErrDirectoryNotEmpty for a folder with content.
+//
+// The type of the path is always checked on the server, never in the
+// cache, because the DeleteV2 API call deletes folders recursively.
+// A file is only deleted in the version that was checked. A folder
+// could still get content between the check and the deletion,
+// which is then deleted with it.
 func (dbfs *fileSystem) Remove(filePath string) error {
-	info, err := dbfs.Stat(filePath)
+	if err := dbfs.checkClosed(); err != nil {
+		return err
+	}
+	if filePath == "" {
+		return fs.ErrEmptyPath
+	}
+	p := apiPath(filePath)
+	if p == "" {
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, dbfs)
+	}
+	ctx := context.Background()
+	meta, info, err := dbfs.metadata(ctx, p, filePath)
 	if err != nil {
 		return err
 	}
-	p := apiPath(filePath)
 	if info.IsDir {
-		if p == "" {
-			return fmt.Errorf("can't remove root directory of %s", dbfs)
-		}
 		arg := files.NewListFolderArg(p)
 		arg.Limit = 1
-		result, err := dbfs.filesClient.ListFolder(arg)
+		result, err := dbfs.client.ListFolderContext(ctx, arg)
 		if err != nil {
 			return dbfs.wrapErr(filePath, err)
 		}
 		if len(result.Entries) > 0 || result.HasMore {
-			return fmt.Errorf("directory not empty: %s", info.File)
+			return fs.NewErrDirectoryNotEmpty(info.File)
 		}
 	}
-	dbfs.cache.Delete(p)
-	_, err = dbfs.filesClient.DeleteV2(files.NewDeleteArg(p))
-	return dbfs.wrapErr(filePath, err)
+	return dbfs.deleteFile(ctx, p, meta)
 }
 
 // RemoveAll deletes a file or a folder with all its content.
@@ -511,12 +737,16 @@ func (dbfs *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	dbfs.cache.Clear()
-	_, err := dbfs.filesClient.DeleteV2(files.NewDeleteArg(apiPath(filePath)))
-	if err != nil && isNotExistError(err) {
+	p := apiPath(filePath)
+	if p == "" {
+		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, dbfs)
+	}
+	dbfs.cache.Delete(p)
+	_, err := dbfs.client.DeleteV2Context(ctx, files.NewDeleteArg(p))
+	if isNotExistError(err) {
 		return nil
 	}
-	return err
+	return dbfs.wrapErr(filePath, err)
 }
 
 // Close unregisters the file system. Every method returns
