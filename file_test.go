@@ -1248,16 +1248,17 @@ func (d xmlLeadingTokensDoc) MarshalXML(e *xml.Encoder, start xml.StartElement) 
 	}{d.A}, start)
 }
 
-func Test_xmlIndentRemover(t *testing.T) {
-	// The encoder writes in chunks, a newline at the end of one chunk
-	// still removes the indentation at the start of the next
-	var w xmlIndentRemover
-	for _, chunk := range []string{"<a>\n", "\x00\x00<b>x\x00", "</b>\n", "</a>"} {
+func Test_xmlLinePrefixRemover(t *testing.T) {
+	// The encoder writes in chunks, a NUL at the end of one chunk
+	// is still removed when the next chunk starts with '<'.
+	// Only the NUL directly before '<' goes, other NUL bytes stay
+	var w xmlLinePrefixRemover
+	for _, chunk := range []string{"\x00<a>\n\x00", "<b>x\x00\x00", "</b>\n\x00", "</a>\x00"} {
 		n, err := w.Write([]byte(chunk))
 		require.NoError(t, err)
 		require.Equal(t, len(chunk), n)
 	}
-	require.Equal(t, "<a>\n<b>x\x00</b>\n</a>", string(w.data))
+	require.Equal(t, "<a>\n<b>x\x00</b>\n</a>\x00", string(w.data))
 }
 
 func Test_xmlMarshalIndent(t *testing.T) {
@@ -1303,15 +1304,22 @@ func Test_xmlMarshalIndent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `<?xml-stylesheet href="a.xsl"?><!-- c --><doc>`+"\n<a>1</a>\n</doc>", string(data))
 
-	// Only NUL bytes after a newline are indentation, raw content
+	// Only a NUL directly before '<' can be a line marker, raw content
 	// that the encoder writes without escaping keeps every other NUL
 	type rawDoc struct {
 		XMLName xml.Name `xml:"doc"`
 		Inner   string   `xml:",innerxml"`
 	}
-	data, err = xmlMarshalIndent(rawDoc{Inner: "<x>a\x00b</x>\n\x00<y/>"}, "")
+	data, err = xmlMarshalIndent(rawDoc{Inner: "<x>a\x00b</x>\n\x00<y/>\n\x00z"}, "")
 	require.NoError(t, err)
-	require.Equal(t, "<doc><x>a\x00b</x>\n<y/></doc>", string(data))
+	require.Equal(t, "<doc><x>a\x00b</x>\n<y/>\n\x00z</doc>", string(data))
+
+	// The encoder flushes its 4096 byte buffer between the line marker
+	// of the second item (the last buffered byte) and the following '<'
+	long := strings.Repeat("x", 4074)
+	data, err = xmlMarshalIndent(doc{Items: []item{{Name: "a", Text: long}, {Name: "b", Text: "y"}}}, "")
+	require.NoError(t, err)
+	require.Equal(t, "<doc>\n<item name=\"a\">"+long+"</item>\n<item name=\"b\">y</item>\n</doc>", string(data))
 
 	// Removing the indentation must not join the bytes around a NUL
 	// to markup: "]]\x00>" in a CDATA section must not become "]]>"

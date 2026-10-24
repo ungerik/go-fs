@@ -1375,25 +1375,29 @@ func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, p
 // every element on its own line.
 //
 // xml.MarshalIndent writes no newlines if prefix and indent are both empty,
-// so the encoder indents with a NUL byte and xmlIndentRemover drops
-// the NUL bytes following a newline while they are written,
-// which keeps the memory linear in the nesting depth.
-// Elements at depth zero get no indentation, so tokens an xml.Marshaler
-// writes before its root element can't separate indentation from a newline.
+// so the encoder starts every line with a NUL byte as prefix
+// and xmlLinePrefixRemover drops it while it is written.
+// One byte per line instead of one per nesting level keeps
+// the memory and time linear in the nesting depth.
+// The encoder writes the prefix only directly before the '<'
+// of a tag or comment, also for the first line, which has no newline
+// before it when an xml.Marshaler writes tokens before its root element.
 // Every other NUL byte is kept: removing one from raw ",innerxml", ",cdata"
 // or ",comment" content could join the bytes around it to markup,
 // like "]]\x00>" to the end of a CDATA section.
-// A removed NUL always follows a newline, which no XML delimiter contains.
+// A removed NUL is always followed by '<', and no XML delimiter has
+// a '<' anywhere but at its start.
 // The encoder replaces NUL in character data and attribute values
-// with U+FFFD, so only a NUL directly after a newline in raw content,
-// which is invalid XML, is removed together with the indentation.
+// with U+FFFD, so only a NUL directly before a '<' in content written
+// without escaping (",innerxml", ",cdata", ",comment", names and tokens
+// of an xml.Marshaler), which is invalid XML, is removed with the prefixes.
 func xmlMarshalIndent(input any, indent string) ([]byte, error) {
 	if indent != "" {
 		return xml.MarshalIndent(input, "", indent)
 	}
-	var w xmlIndentRemover
+	var w xmlLinePrefixRemover
 	enc := xml.NewEncoder(&w)
-	enc.Indent("", "\x00")
+	enc.Indent("\x00", "")
 	err := enc.Encode(input)
 	if err != nil {
 		return nil, err
@@ -1405,20 +1409,19 @@ func xmlMarshalIndent(input any, indent string) ([]byte, error) {
 	return w.data, nil
 }
 
-// xmlIndentRemover is an io.Writer that keeps everything
-// written to it except the NUL bytes following a newline,
-// also when the newline ended the previous write.
-type xmlIndentRemover struct {
-	data         []byte
-	afterNewline bool
+// xmlLinePrefixRemover is an io.Writer that keeps everything
+// written to it except a NUL byte directly before a '<',
+// also when the NUL ended the previous write.
+type xmlLinePrefixRemover struct {
+	data []byte
 }
 
-func (w *xmlIndentRemover) Write(p []byte) (int, error) {
+func (w *xmlLinePrefixRemover) Write(p []byte) (int, error) {
 	for _, b := range p {
-		if b == 0 && w.afterNewline {
+		if b == '<' && len(w.data) > 0 && w.data[len(w.data)-1] == 0 {
+			w.data[len(w.data)-1] = '<'
 			continue
 		}
-		w.afterNewline = b == '\n'
 		w.data = append(w.data, b)
 	}
 	return len(p), nil

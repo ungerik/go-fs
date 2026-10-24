@@ -16,8 +16,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   beta.1's `WriteJSON(ctx, v, "")` again. For XML the newlines are new and are
   read back as part of mixed content (character data next to child elements);
   `WriteXML` still adds no whitespace. A NUL byte, which is invalid in XML,
-  directly after a newline in raw `,innerxml`, `,cdata` or `,comment` content
-  is removed together with the indentation.
+  directly before a `<` in content the encoder writes without escaping
+  (`,innerxml`, `,cdata`, `,comment`, names and `xml.Marshaler` tokens) is
+  removed together with the line markers.
 
 ## [1.0.0-beta.2] - 2026-10-23
 
