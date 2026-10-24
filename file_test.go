@@ -1179,6 +1179,11 @@ func TestFile_WriteJSON(t *testing.T) {
 	require.NoError(t, file.WriteJSONIndent(t.Context(), input, "  "))
 	assertFileContent(t, file, "{\n  \"a\": 1\n}")
 
+	// An empty indent still starts a new line for every element
+	file = dir.Join("newlines.json")
+	require.NoError(t, file.WriteJSONIndent(t.Context(), input, ""))
+	assertFileContent(t, file, "{\n\"a\": 1\n}")
+
 	require.ErrorIs(t, dir.Join("x.json").WriteJSON(t.Context(), make(chan int)), ErrMarshalJSON)
 	require.ErrorIs(t, dir.Join("x.json").WriteJSONIndent(t.Context(), make(chan int), "  "), ErrMarshalJSON)
 	require.ErrorIs(t, InvalidFile.WriteJSON(t.Context(), input), ErrEmptyPath)
@@ -1208,6 +1213,11 @@ func TestFile_WriteXML(t *testing.T) {
 	require.NoError(t, file.WriteXMLIndent(t.Context(), input, "\t"))
 	assertFileContent(t, file, xml.Header+"<doc>\n\t<a>1</a>\n</doc>")
 
+	// An empty indent still starts a new line for every element
+	file = dir.Join("newlines.xml")
+	require.NoError(t, file.WriteXMLIndent(t.Context(), input, ""))
+	assertFileContent(t, file, xml.Header+"<doc>\n<a>1</a>\n</doc>")
+
 	require.ErrorIs(t, dir.Join("x.xml").WriteXML(t.Context(), make(chan int)), ErrMarshalXML)
 	require.ErrorIs(t, dir.Join("x.xml").WriteXMLIndent(t.Context(), make(chan int), "\t"), ErrMarshalXML)
 	require.ErrorIs(t, InvalidFile.WriteXML(t.Context(), input), ErrEmptyPath)
@@ -1216,4 +1226,111 @@ func TestFile_WriteXML(t *testing.T) {
 	var output doc
 	require.NoError(t, file.ReadXML(t.Context(), &output))
 	require.Equal(t, input.A, output.A)
+}
+
+// xmlLeadingTokensDoc writes a processing instruction and a comment
+// before its root element, so the line prefix of the root element
+// does not start the output of xml.MarshalIndent
+type xmlLeadingTokensDoc struct{ A int }
+
+func (d xmlLeadingTokensDoc) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	err := e.EncodeToken(xml.ProcInst{Target: "xml-stylesheet", Inst: []byte(`href="a.xsl"`)})
+	if err != nil {
+		return err
+	}
+	err = e.EncodeToken(xml.Comment(" c "))
+	if err != nil {
+		return err
+	}
+	start.Name.Local = "doc"
+	return e.EncodeElement(struct {
+		A int `xml:"a"`
+	}{d.A}, start)
+}
+
+func Test_xmlLinePrefixRemover(t *testing.T) {
+	// The encoder writes in chunks, a NUL at the end of one chunk
+	// is still removed when the next chunk starts with '<'.
+	// Only the NUL directly before '<' goes, other NUL bytes stay
+	var w xmlLinePrefixRemover
+	for _, chunk := range []string{"\x00<a>\n\x00", "<b>x\x00\x00", "</b>\n\x00", "</a>\x00"} {
+		n, err := w.Write([]byte(chunk))
+		require.NoError(t, err)
+		require.Equal(t, len(chunk), n)
+	}
+	require.Equal(t, "<a>\n<b>x\x00</b>\n</a>\x00", string(w.data))
+}
+
+func Test_xmlMarshalIndent(t *testing.T) {
+	type item struct {
+		Name string `xml:"name,attr"`
+		Text string `xml:",chardata"`
+	}
+	type doc struct {
+		XMLName xml.Name `xml:"doc"`
+		Items   []item   `xml:"item"`
+	}
+	// NUL bytes in attributes and character data are replaced with U+FFFD
+	// by the encoder, so they can't be mistaken for the line prefix
+	input := doc{Items: []item{{Name: "a\x00", Text: "\x00x"}, {Name: "b", Text: "y"}}}
+
+	data, err := xmlMarshalIndent(input, "")
+	require.NoError(t, err)
+	require.Equal(t, "<doc>\n<item name=\"a\uFFFD\">\uFFFDx</item>\n<item name=\"b\">y</item>\n</doc>", string(data))
+
+	data, err = xmlMarshalIndent(input, "  ")
+	require.NoError(t, err)
+	require.Equal(t, "<doc>\n  <item name=\"a\uFFFD\">\uFFFDx</item>\n  <item name=\"b\">y</item>\n</doc>", string(data))
+
+	// Deeper elements are not indented either
+	type nested struct {
+		XMLName xml.Name `xml:"a"`
+		B       struct {
+			C int `xml:"c"`
+		} `xml:"b"`
+	}
+	data, err = xmlMarshalIndent(nested{}, "")
+	require.NoError(t, err)
+	require.Equal(t, "<a>\n<b>\n<c>0</c>\n</b>\n</a>", string(data))
+
+	// Multiple top level elements start a new line each
+	data, err = xmlMarshalIndent(input.Items, "")
+	require.NoError(t, err)
+	require.Equal(t, "<item name=\"a\uFFFD\">\uFFFDx</item>\n<item name=\"b\">y</item>", string(data))
+
+	// Tokens before the root element don't start a new line,
+	// the line prefix of the root element must not stay in the output
+	data, err = xmlMarshalIndent(xmlLeadingTokensDoc{A: 1}, "")
+	require.NoError(t, err)
+	require.Equal(t, `<?xml-stylesheet href="a.xsl"?><!-- c --><doc>`+"\n<a>1</a>\n</doc>", string(data))
+
+	// Only a NUL directly before '<' can be a line marker, raw content
+	// that the encoder writes without escaping keeps every other NUL
+	type rawDoc struct {
+		XMLName xml.Name `xml:"doc"`
+		Inner   string   `xml:",innerxml"`
+	}
+	data, err = xmlMarshalIndent(rawDoc{Inner: "<x>a\x00b</x>\n\x00<y/>\n\x00z"}, "")
+	require.NoError(t, err)
+	require.Equal(t, "<doc><x>a\x00b</x>\n<y/>\n\x00z</doc>", string(data))
+
+	// The encoder flushes its 4096 byte buffer between the line marker
+	// of the second item (the last buffered byte) and the following '<'
+	long := strings.Repeat("x", 4074)
+	data, err = xmlMarshalIndent(doc{Items: []item{{Name: "a", Text: long}, {Name: "b", Text: "y"}}}, "")
+	require.NoError(t, err)
+	require.Equal(t, "<doc>\n<item name=\"a\">"+long+"</item>\n<item name=\"b\">y</item>\n</doc>", string(data))
+
+	// Removing the indentation must not join the bytes around a NUL
+	// to markup: "]]\x00>" in a CDATA section must not become "]]>"
+	type cdataDoc struct {
+		XMLName xml.Name `xml:"doc"`
+		Data    string   `xml:",cdata"`
+	}
+	data, err = xmlMarshalIndent(cdataDoc{Data: "]]\x00><b/>"}, "")
+	require.NoError(t, err)
+	require.Equal(t, "<doc><![CDATA[]]\x00><b/>]]></doc>", string(data))
+
+	_, err = xmlMarshalIndent(make(chan int), "")
+	require.Error(t, err)
 }

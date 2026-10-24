@@ -14,8 +14,8 @@ require (
 require (
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
-	github.com/geoffgarside/ber v1.1.0 // indirect
-	github.com/hashicorp/go-uuid v1.0.3 // indirect
+	github.com/geoffgarside/ber v1.2.0 // indirect
+	github.com/hashicorp/go-uuid v1.0.4 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/gofork v1.7.6 // indirect

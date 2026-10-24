@@ -605,6 +605,91 @@ func newHTTPTestFileSystem(t *testing.T, handler http.HandlerFunc) *fileSystem {
 	return f.(*fileSystem)
 }
 
+// TestReadNotModified checks that ReadAll and the reader of OpenReader
+// return an error for a download answered with 304 Not Modified.
+// azblob returns that answer as a response without body and without error,
+// reading it panicked with a nil pointer dereference.
+func TestReadNotModified(t *testing.T) {
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "5")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotModified)
+	})
+
+	_, err := blobFS.ReadAll(t.Context(), "/file.txt")
+	require.ErrorContains(t, err, "304 Not Modified")
+
+	reader, err := blobFS.OpenReader("/file.txt")
+	require.NoError(t, err)
+	_, err = io.ReadAll(reader)
+	require.ErrorContains(t, err, "304 Not Modified")
+	require.NoError(t, reader.Close())
+}
+
+// TestListingWithoutBlobs checks that a listing answered without a Blobs
+// element is an error. azcore decodes such an answer without error into
+// a nil Segment, which made every method that lists panic with a nil pointer
+// dereference. Azure always sends the element, a proxy or another
+// service in its place might not. Every blob is missing, so each method lists.
+func TestListingWithoutBlobs(t *testing.T) {
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("comp") == "list" {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="utf-8"?><EnumerationResults ContainerName="container"></EnumerationResults>`)
+			return
+		}
+		w.Header().Set("x-ms-error-code", string(bloberror.BlobNotFound))
+		w.WriteHeader(http.StatusNotFound)
+	})
+	ctx := t.Context()
+	noop := func(*fs.FileInfo) error { return nil }
+
+	_, err := blobFS.Stat("/dir")
+	require.ErrorIs(t, err, errListingWithoutBlobs, "Stat")
+	err = blobFS.ListDir(ctx, "/dir", nil, noop)
+	require.ErrorIs(t, err, errListingWithoutBlobs, "ListDir")
+	err = blobFS.ListDirRecursive(ctx, "/dir", nil, noop)
+	require.ErrorIs(t, err, errListingWithoutBlobs, "ListDirRecursive")
+	err = blobFS.WriteAll(ctx, "/dir/file.txt", []byte("x"), fs.UserReadWrite)
+	require.ErrorIs(t, err, errListingWithoutBlobs, "WriteAll")
+	err = blobFS.Remove("/dir")
+	require.ErrorIs(t, err, errListingWithoutBlobs, "Remove")
+	err = blobFS.RemoveAll(ctx, "/dir")
+	require.ErrorIs(t, err, errListingWithoutBlobs, "RemoveAll")
+}
+
+// TestOpenReaderIgnoredRange checks that the reader of OpenReader returns
+// the bytes at its position when the server ignores the Range header
+// and sends the whole blob: it returned the start of the blob instead.
+func TestOpenReaderIgnoredRange(t *testing.T) {
+	const content = "0123456789"
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+		if r.Method == http.MethodHead {
+			return
+		}
+		_, _ = io.WriteString(w, content)
+	})
+	reader, err := blobFS.OpenReader("/file.txt")
+	require.NoError(t, err)
+
+	_, err = reader.(io.Seeker).Seek(6, io.SeekStart)
+	require.NoError(t, err)
+	rest, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, "6789", string(rest))
+
+	// ReadAt opens a body for its own range
+	buf := make([]byte, 3)
+	_, err = reader.(io.ReaderAt).ReadAt(buf, 2)
+	require.NoError(t, err)
+	require.Equal(t, "234", string(buf))
+	require.NoError(t, reader.Close())
+}
+
 // TestRemoveRootOffline checks that Remove and RemoveAll refuse the root
 // with an error wrapping os.ErrInvalid, like the other file systems, without
 // any request. The test server answers every request with an error.

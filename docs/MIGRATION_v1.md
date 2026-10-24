@@ -201,6 +201,10 @@ Behaviour changes:
   `maxMemory` doesn't bound that: limit the request body with
   `http.MaxBytesReader`. multipartfs ignores fields with an empty name.
 - `uuiddir.Enum` follows links to directories.
+- `WriteXMLIndent`, `MemFile.WriteXMLIndent` and `NewMemFileWriteXMLIndent`
+  with an empty indent put every element on its own line, where beta.1's
+  `WriteXML(ctx, v, "")` wrote compact XML; use `WriteXML(ctx, v)` for that.
+  The JSON functions write the same as in beta.1.
 
 ### FileSystem implementations
 
@@ -331,6 +335,11 @@ signatures. Changes compared to v0.1:
   `dir.Join("a%20b")` addresses a file named `a%20b` on every file system.
   Code that builds a URI by concatenation (`fs.File(prefix + path)`) has to
   escape the path with `fsimpl.EscapeURIPath`, or use `File.Join`.
+- `WriteJSON`, `WriteXML`, `MemFile.WriteJSON`/`WriteXML` and
+  `NewMemFileWriteJSON`/`NewMemFileWriteXML` don't take an indent any more,
+  the `…Indent` variants do. `WriteXMLIndent` with an empty indent puts every
+  element on its own line, where `WriteXML(ctx, v, "")` wrote compact XML;
+  `WriteXML(ctx, v)` still does.
 - `fs.MakeTempDir` uses `os.MkdirTemp`; the new `fs.CreateTempFile` creates a
   temporary file atomically, `fs.TempFile` still only returns a path.
 - Every file system satisfies `errors.Is(err, os.ErrNotExist)` /

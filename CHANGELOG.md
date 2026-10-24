@@ -5,6 +5,39 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [1.0.0-beta.3] - 2026-10-24
+
+Third beta: an empty indent of the `…Indent` writers puts every element on its
+own line, and `azureblobfs` handles unexpected answers without panicking. All
+modules are tagged in lockstep, the `tools` module is not tagged.
+
+### Changed
+
+- `WriteJSONIndent` and `WriteXMLIndent` of `File` and `MemFile`, and
+  `NewMemFileWriteJSONIndent`/`NewMemFileWriteXMLIndent`, put every element on
+  its own line without indentation when `indent` is empty, instead of writing
+  the compact output of `WriteJSON`/`WriteXML`. For JSON that is the output of
+  beta.1's `WriteJSON(ctx, v, "")` again. For XML the newlines are new and are
+  read back as part of mixed content (character data next to child elements);
+  `WriteXML` still adds no whitespace. A NUL byte, which is invalid in XML,
+  directly before a `<` in content the encoder writes without escaping
+  (`,innerxml`, `,cdata`, `,comment`, names and `xml.Marshaler` tokens) is
+  removed together with the line markers.
+- Backend dependencies are bumped: `azureblobfs` (azcore v1.23.3, azblob
+  v1.8.2), `s3fs` (AWS SDK v1.47.4, service/s3 v1.114.5, transfermanager
+  v0.4.19), `sftpfs` (pkg/sftp v1.13.12) and `smbfs` (geoffgarside/ber v1.2.0,
+  hashicorp/go-uuid v1.0.4).
+
+### Fixed
+
+- `azureblobfs` returns an error instead of panicking with a nil pointer for a
+  download answered with 304 Not Modified (azblob v1.8.2 returns it without
+  body and without error) and for a listing answer without a `Blobs` element.
+- The reader of `azureblobfs` `OpenReader` returns the bytes at its position
+  when a server ignores the Range header, instead of the start of the blob.
+- `azureblobfs` `WriteAll` uploads at most 4 blocks in parallel like
+  `OpenWriter`, azblob v1.8.1 raised its default to 8 to 96.
+
 ## [1.0.0-beta.2] - 2026-10-23
 
 Second beta. It fixes the bugs of a full review of beta.1 (data loss,

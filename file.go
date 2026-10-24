@@ -1295,9 +1295,9 @@ func (file File) WriteJSON(ctx context.Context, input any, perm ...Permissions) 
 	if file == "" {
 		return ErrEmptyPath
 	}
-	data, err := marshalJSON(input, "")
+	data, err := json.Marshal(input)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	return file.WriteAll(ctx, data, perm...)
 }
@@ -1305,31 +1305,18 @@ func (file File) WriteJSON(ctx context.Context, input any, perm ...Permissions) 
 // WriteJSONIndent marshals input to JSON with every line indented
 // by indent and writes it as the file
 // with the optional permissions like WriteAll.
+// An empty indent still puts every element on its own line.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func (file File) WriteJSONIndent(ctx context.Context, input any, indent string, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	data, err := marshalJSON(input, indent)
+	data, err := json.MarshalIndent(input, "", indent)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	return file.WriteAll(ctx, data, perm...)
-}
-
-// marshalJSON marshals input to JSON, indented if indent is not empty,
-// and wraps marshalling errors with ErrMarshalJSON.
-func marshalJSON(input any, indent string) (data []byte, err error) {
-	if indent == "" {
-		data, err = json.Marshal(input)
-	} else {
-		data, err = json.MarshalIndent(input, "", indent)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
-	}
-	return data, nil
 }
 
 // ReadXML reads and unmarshals the XML content of the file to output.
@@ -1356,42 +1343,88 @@ func (file File) WriteXML(ctx context.Context, input any, perm ...Permissions) e
 	if file == "" {
 		return ErrEmptyPath
 	}
-	data, err := marshalXML(input, "")
+	data, err := xml.Marshal(input)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
-	return file.WriteAll(ctx, data, perm...)
+	return file.WriteAll(ctx, append([]byte(xml.Header), data...), perm...)
 }
 
 // WriteXMLIndent marshals input to XML with every line indented
 // by indent and writes it with a leading xml.Header as the file
 // with the optional permissions like WriteAll.
+// An empty indent still puts every element on its own line.
+// The added whitespace is read back as part of mixed content
+// (character data next to child elements),
+// use WriteXML for XML without added whitespace.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, perm ...Permissions) error {
 	if file == "" {
 		return ErrEmptyPath
 	}
-	data, err := marshalXML(input, indent)
+	data, err := xmlMarshalIndent(input, indent)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
-	return file.WriteAll(ctx, data, perm...)
+	return file.WriteAll(ctx, append([]byte(xml.Header), data...), perm...)
 }
 
-// marshalXML marshals input to XML with a leading xml.Header,
-// indented if indent is not empty,
-// and wraps marshalling errors with ErrMarshalXML.
-func marshalXML(input any, indent string) (data []byte, err error) {
-	if indent == "" {
-		data, err = xml.Marshal(input)
-	} else {
-		data, err = xml.MarshalIndent(input, "", indent)
+// xmlMarshalIndent works like xml.MarshalIndent with an empty prefix,
+// but like json.MarshalIndent an empty indent still puts
+// every element on its own line.
+//
+// xml.MarshalIndent writes no newlines if prefix and indent are both empty,
+// so the encoder starts every line with a NUL byte as prefix
+// and xmlLinePrefixRemover drops it while it is written.
+// One byte per line instead of one per nesting level keeps
+// the memory and time linear in the nesting depth.
+// The encoder writes the prefix only directly before the '<'
+// of a tag or comment, also for the first line, which has no newline
+// before it when an xml.Marshaler writes tokens before its root element.
+// Every other NUL byte is kept: removing one from raw ",innerxml", ",cdata"
+// or ",comment" content could join the bytes around it to markup,
+// like "]]\x00>" to the end of a CDATA section.
+// A removed NUL is always followed by '<', and no XML delimiter has
+// a '<' anywhere but at its start.
+// The encoder replaces NUL in character data and attribute values
+// with U+FFFD, so only a NUL directly before a '<' in content written
+// without escaping (",innerxml", ",cdata", ",comment", names and tokens
+// of an xml.Marshaler), which is invalid XML, is removed with the prefixes.
+func xmlMarshalIndent(input any, indent string) ([]byte, error) {
+	if indent != "" {
+		return xml.MarshalIndent(input, "", indent)
 	}
+	var w xmlLinePrefixRemover
+	enc := xml.NewEncoder(&w)
+	enc.Indent("\x00", "")
+	err := enc.Encode(input)
 	if err != nil {
-		return nil, fmt.Errorf("%w because: %w", ErrMarshalXML, err)
+		return nil, err
 	}
-	return append([]byte(xml.Header), data...), nil
+	err = enc.Close()
+	if err != nil {
+		return nil, err
+	}
+	return w.data, nil
+}
+
+// xmlLinePrefixRemover is an io.Writer that keeps everything
+// written to it except a NUL byte directly before a '<',
+// also when the NUL ended the previous write.
+type xmlLinePrefixRemover struct {
+	data []byte
+}
+
+func (w *xmlLinePrefixRemover) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b == '<' && len(w.data) > 0 && w.data[len(w.data)-1] == 0 {
+			w.data[len(w.data)-1] = '<'
+			continue
+		}
+		w.data = append(w.data, b)
+	}
+	return len(p), nil
 }
 
 // StdFS wraps the file as a StdFS struct that

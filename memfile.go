@@ -84,17 +84,22 @@ func NewMemFile(name string, data []byte) MemFile {
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func NewMemFileWriteJSON(name string, input any) (MemFile, error) {
-	return NewMemFileWriteJSONIndent(name, input, "")
+	data, err := json.Marshal(input)
+	if err != nil {
+		return MemFile{}, fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
+	}
+	return MemFile{FileName: name, FileData: data}, nil
 }
 
 // NewMemFileWriteJSONIndent returns a new MemFile by value with the input marshalled
 // to JSON with every line indented by indent as FileData.
+// An empty indent still puts every element on its own line.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func NewMemFileWriteJSONIndent(name string, input any, indent string) (MemFile, error) {
-	data, err := marshalJSON(input, indent)
+	data, err := json.MarshalIndent(input, "", indent)
 	if err != nil {
-		return MemFile{}, err
+		return MemFile{}, fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	return MemFile{FileName: name, FileData: data}, nil
 }
@@ -104,19 +109,27 @@ func NewMemFileWriteJSONIndent(name string, input any, indent string) (MemFile, 
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func NewMemFileWriteXML(name string, input any) (MemFile, error) {
-	return NewMemFileWriteXMLIndent(name, input, "")
+	data, err := xml.Marshal(input)
+	if err != nil {
+		return MemFile{}, fmt.Errorf("%w because: %w", ErrMarshalXML, err)
+	}
+	return MemFile{FileName: name, FileData: append([]byte(xml.Header), data...)}, nil
 }
 
 // NewMemFileWriteXMLIndent returns a new MemFile by value with the input marshalled
 // to XML with every line indented by indent and a leading xml.Header as FileData.
+// An empty indent still puts every element on its own line.
+// The added whitespace is read back as part of mixed content
+// (character data next to child elements),
+// use NewMemFileWriteXML for XML without added whitespace.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func NewMemFileWriteXMLIndent(name string, input any, indent string) (MemFile, error) {
-	data, err := marshalXML(input, indent)
+	data, err := xmlMarshalIndent(input, indent)
 	if err != nil {
-		return MemFile{}, err
+		return MemFile{}, fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
-	return MemFile{FileName: name, FileData: data}, nil
+	return MemFile{FileName: name, FileData: append([]byte(xml.Header), data...)}, nil
 }
 
 // ReadMemFile returns a new MemFile by value with name and data from fileReader.
@@ -456,11 +469,21 @@ func (f MemFile) ReadJSON(ctx context.Context, output any) error {
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func (f *MemFile) WriteJSON(ctx context.Context, input any) error {
-	return f.WriteJSONIndent(ctx, input, "")
+	// Context is passed for identical call signature as other types
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
+	}
+	f.FileData = data
+	return nil
 }
 
 // WriteJSONIndent marshals input to JSON with every line
 // indented by indent and sets it as FileData.
+// An empty indent still puts every element on its own line.
 //
 // Returns a wrapped ErrMarshalJSON when the marshalling failed.
 func (f *MemFile) WriteJSONIndent(ctx context.Context, input any, indent string) error {
@@ -468,9 +491,9 @@ func (f *MemFile) WriteJSONIndent(ctx context.Context, input any, indent string)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	data, err := marshalJSON(input, indent)
+	data, err := json.MarshalIndent(input, "", indent)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalJSON, err)
 	}
 	f.FileData = data
 	return nil
@@ -500,11 +523,24 @@ func (f MemFile) ReadXML(ctx context.Context, output any) error {
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (f *MemFile) WriteXML(ctx context.Context, input any) error {
-	return f.WriteXMLIndent(ctx, input, "")
+	// Context is passed for identical call signature as other types
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	data, err := xml.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
+	}
+	f.FileData = append([]byte(xml.Header), data...)
+	return nil
 }
 
 // WriteXMLIndent marshals input to XML with every line indented
 // by indent and sets it with a leading xml.Header as FileData.
+// An empty indent still puts every element on its own line.
+// The added whitespace is read back as part of mixed content
+// (character data next to child elements),
+// use WriteXML for XML without added whitespace.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (f *MemFile) WriteXMLIndent(ctx context.Context, input any, indent string) error {
@@ -512,11 +548,11 @@ func (f *MemFile) WriteXMLIndent(ctx context.Context, input any, indent string) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	data, err := marshalXML(input, indent)
+	data, err := xmlMarshalIndent(input, indent)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w because: %w", ErrMarshalXML, err)
 	}
-	f.FileData = data
+	f.FileData = append([]byte(xml.Header), data...)
 	return nil
 }
 

@@ -56,6 +56,7 @@ const (
 	// uploads of OpenWriter: blocks of 4 MiB allow blobs of up to
 	// 195 GiB with the 50000 blocks of a block blob, at most
 	// uploadConcurrency blocks are buffered and staged in parallel.
+	// WriteAll stages at most uploadConcurrency blocks in parallel too.
 	uploadBlockSize   = 4 << 20
 	uploadConcurrency = 4
 )
@@ -356,6 +357,12 @@ func (f *fileSystem) dirExists(ctx context.Context, name string) (exists bool, m
 	return true, modified, nil
 }
 
+// errListingWithoutBlobs is returned for a listing answer without a Blobs
+// element, which azcore decodes without error into a nil Segment.
+// Azure always sends the element, so the answer came from something else,
+// like a misconfigured proxy.
+var errListingWithoutBlobs = errors.New("azureblobfs: listing answer without Blobs element")
+
 // firstBlob returns the first blob that pager lists, or nil.
 // Azure can return an empty page with a continuation marker,
 // so it reads pages until one has a blob or there are no more.
@@ -364,6 +371,9 @@ func firstBlob(ctx context.Context, pager *runtime.Pager[container.ListBlobsFlat
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, redactErr(err)
+		}
+		if page.Segment == nil {
+			return nil, errListingWithoutBlobs
 		}
 		if len(page.Segment.BlobItems) > 0 {
 			return page.Segment.BlobItems[0], nil
@@ -443,6 +453,9 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return redactErr(err)
+		}
+		if page.Segment == nil {
+			return errListingWithoutBlobs
 		}
 		found = found || len(page.Segment.BlobPrefixes) > 0 || len(page.Segment.BlobItems) > 0
 		for _, blobPrefix := range page.Segment.BlobPrefixes {
@@ -540,6 +553,9 @@ func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patte
 		if err != nil {
 			return redactErr(err)
 		}
+		if page.Segment == nil {
+			return errListingWithoutBlobs
+		}
 		found = found || len(page.Segment.BlobItems) > 0
 		err = f.callbackBlobItems(ctx, prefix, page.Segment.BlobItems, patterns, callback)
 		if err != nil {
@@ -571,6 +587,16 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 			})
 			if err != nil {
 				return nil, redactErr(err)
+			}
+			if response.Body == nil {
+				return nil, f.notModifiedError(blobName(filePath))
+			}
+			if offset > 0 && response.ContentRange == nil {
+				// The server ignored the range and sends the blob from its start
+				_, err = io.CopyN(io.Discard, response.Body, offset)
+				if err != nil {
+					return nil, errors.Join(redactErr(err), response.Body.Close())
+				}
 			}
 			return response.Body, nil
 		},
@@ -605,6 +631,9 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 		}
 		return nil, redactErr(err)
 	}
+	if response.Body == nil {
+		return nil, f.notModifiedError(name)
+	}
 	defer response.Body.Close()
 	size := max(deref(response.ContentLength), 0)
 	if size > math.MaxInt {
@@ -638,8 +667,17 @@ func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	if err := f.checkNotDir(ctx, name); err != nil {
 		return err
 	}
-	_, err := f.client.NewBlockBlobClient(name).UploadBuffer(ctx, data, nil)
+	_, err := f.client.NewBlockBlobClient(name).UploadBuffer(ctx, data, &blockblob.UploadBufferOptions{
+		Concurrency: uploadConcurrency,
+	})
 	return redactErr(err)
+}
+
+// notModifiedError is returned for a download without body:
+// azblob reports a 304 Not Modified answer as a response
+// without body and without error.
+func (f *fileSystem) notModifiedError(name string) error {
+	return fmt.Errorf("azureblobfs: download of %s returned no body (304 Not Modified)", f.file(name))
 }
 
 // OpenWriter returns a writer that streams the written data to an upload
@@ -816,6 +854,9 @@ func (f *fileSystem) Remove(filePath string) error {
 		if err != nil {
 			return redactErr(err)
 		}
+		if page.Segment == nil {
+			return errListingWithoutBlobs
+		}
 		for _, item := range page.Segment.BlobItems {
 			if deref(item.Name) != marker {
 				return fs.NewErrDirectoryNotEmpty(info.File)
@@ -853,6 +894,9 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return redactErr(err)
+		}
+		if page.Segment == nil {
+			return errListingWithoutBlobs
 		}
 		for _, item := range page.Segment.BlobItems {
 			_, err := f.client.NewBlobClient(deref(item.Name)).Delete(ctx, nil)
