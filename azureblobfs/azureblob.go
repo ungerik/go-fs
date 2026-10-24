@@ -357,6 +357,12 @@ func (f *fileSystem) dirExists(ctx context.Context, name string) (exists bool, m
 	return true, modified, nil
 }
 
+// errListingWithoutBlobs is returned for a listing answer without a Blobs
+// element, which azcore decodes without error into a nil Segment.
+// Azure always sends the element, so the answer came from something else,
+// like a misconfigured proxy.
+var errListingWithoutBlobs = errors.New("azureblobfs: listing answer without Blobs element")
+
 // firstBlob returns the first blob that pager lists, or nil.
 // Azure can return an empty page with a continuation marker,
 // so it reads pages until one has a blob or there are no more.
@@ -365,6 +371,9 @@ func firstBlob(ctx context.Context, pager *runtime.Pager[container.ListBlobsFlat
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, redactErr(err)
+		}
+		if page.Segment == nil {
+			return nil, errListingWithoutBlobs
 		}
 		if len(page.Segment.BlobItems) > 0 {
 			return page.Segment.BlobItems[0], nil
@@ -444,6 +453,9 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return redactErr(err)
+		}
+		if page.Segment == nil {
+			return errListingWithoutBlobs
 		}
 		found = found || len(page.Segment.BlobPrefixes) > 0 || len(page.Segment.BlobItems) > 0
 		for _, blobPrefix := range page.Segment.BlobPrefixes {
@@ -541,6 +553,9 @@ func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patte
 		if err != nil {
 			return redactErr(err)
 		}
+		if page.Segment == nil {
+			return errListingWithoutBlobs
+		}
 		found = found || len(page.Segment.BlobItems) > 0
 		err = f.callbackBlobItems(ctx, prefix, page.Segment.BlobItems, patterns, callback)
 		if err != nil {
@@ -575,6 +590,13 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 			}
 			if response.Body == nil {
 				return nil, f.notModifiedError(blobName(filePath))
+			}
+			if offset > 0 && response.ContentRange == nil {
+				// The server ignored the range and sends the blob from its start
+				_, err = io.CopyN(io.Discard, response.Body, offset)
+				if err != nil {
+					return nil, errors.Join(redactErr(err), response.Body.Close())
+				}
 			}
 			return response.Body, nil
 		},
@@ -832,6 +854,9 @@ func (f *fileSystem) Remove(filePath string) error {
 		if err != nil {
 			return redactErr(err)
 		}
+		if page.Segment == nil {
+			return errListingWithoutBlobs
+		}
 		for _, item := range page.Segment.BlobItems {
 			if deref(item.Name) != marker {
 				return fs.NewErrDirectoryNotEmpty(info.File)
@@ -869,6 +894,9 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return redactErr(err)
+		}
+		if page.Segment == nil {
+			return errListingWithoutBlobs
 		}
 		for _, item := range page.Segment.BlobItems {
 			_, err := f.client.NewBlobClient(deref(item.Name)).Delete(ctx, nil)

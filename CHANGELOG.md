@@ -8,7 +8,8 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 ## [1.0.0-beta.3] - 2026-10-24
 
 Third beta: an empty indent of the `…Indent` writers puts every element on its
-own line. All modules are tagged in lockstep, the `tools` module is not tagged.
+own line, and `azureblobfs` handles unexpected answers without panicking. All
+modules are tagged in lockstep, the `tools` module is not tagged.
 
 ### Changed
 
@@ -26,6 +27,16 @@ own line. All modules are tagged in lockstep, the `tools` module is not tagged.
   v1.8.2), `s3fs` (AWS SDK v1.47.4, service/s3 v1.114.5, transfermanager
   v0.4.19), `sftpfs` (pkg/sftp v1.13.12) and `smbfs` (geoffgarside/ber v1.2.0,
   hashicorp/go-uuid v1.0.4).
+
+### Fixed
+
+- `azureblobfs` returns an error instead of panicking with a nil pointer for a
+  download answered with 304 Not Modified (azblob v1.8.2 returns it without
+  body and without error) and for a listing answer without a `Blobs` element.
+- The reader of `azureblobfs` `OpenReader` returns the bytes at its position
+  when a server ignores the Range header, instead of the start of the blob.
+- `azureblobfs` `WriteAll` uploads at most 4 blocks in parallel like
+  `OpenWriter`, azblob v1.8.1 raised its default to 8 to 96.
 
 ## [1.0.0-beta.2] - 2026-10-23
 
