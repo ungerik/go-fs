@@ -1375,23 +1375,35 @@ func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, p
 // every element on its own line.
 //
 // xml.MarshalIndent writes no newlines if prefix and indent are both empty,
-// so a NUL byte is used as prefix and every NUL byte is removed afterwards.
-// The first prefix does not have to start the output because an xml.Marshaler
-// can write tokens before its root element.
-// NUL is not allowed anywhere in an XML document and the encoder replaces it
-// in character data and attribute values with U+FFFD, so the removal
-// only changes output that is invalid XML anyway: a NUL in raw
-// ",innerxml", ",cdata" or ",comment" content, in a name
-// or in a token written by an xml.Marshaler is removed too.
+// so a NUL byte is used as indent and the NUL bytes following a newline
+// are removed afterwards. Elements at depth zero get no indentation,
+// so tokens an xml.Marshaler writes before its root element can't
+// separate the first indentation from a newline.
+// Every other NUL byte of the output is kept: removing one from raw
+// ",innerxml", ",cdata" or ",comment" content could join the bytes
+// around it to markup, like "]]\x00>" to the end of a CDATA section.
+// A removed NUL always follows a newline, which no XML delimiter contains.
+// The encoder replaces NUL in character data and attribute values
+// with U+FFFD, raw content after a newline is the only other source.
 func xmlMarshalIndent(input any, indent string) ([]byte, error) {
 	if indent != "" {
 		return xml.MarshalIndent(input, "", indent)
 	}
-	data, err := xml.MarshalIndent(input, "\x00", "")
+	data, err := xml.MarshalIndent(input, "", "\x00")
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(data, func(b byte) bool { return b == 0 }), nil
+	// Remove the indentation in place
+	result := data[:0]
+	afterNewline := false
+	for _, b := range data {
+		if b == 0 && afterNewline {
+			continue
+		}
+		afterNewline = b == '\n'
+		result = append(result, b)
+	}
+	return result, nil
 }
 
 // StdFS wraps the file as a StdFS struct that

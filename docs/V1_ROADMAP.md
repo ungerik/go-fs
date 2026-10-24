@@ -671,6 +671,17 @@ be hard to change after the freeze. Decisions taken 2026-10-21:
       errors wrap `os.ErrExist`/`os.ErrNotExist`. Deferred items are
       tracked outside the repository.
 
+### Beta 3 (v1.0.0-beta.3)
+
+Decided 2026-10-24:
+
+- **Empty indent.** `WriteJSONIndent`/`WriteXMLIndent` and their `MemFile`
+  variants put every element on its own line without indentation when the
+  indent is empty; only `WriteJSON`/`WriteXML` write compact output. Because
+  `xml.MarshalIndent` writes no newlines for an empty prefix and indent, the
+  XML functions indent with a NUL byte and remove it only where it follows a
+  newline, so no other byte of the encoder's output changes.
+
 ## Verification (overall)
 
 - `./test-workspace.sh` (with `-race`) green locally; GitHub Actions green on

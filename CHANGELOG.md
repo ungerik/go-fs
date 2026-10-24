@@ -15,9 +15,7 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   the compact output of `WriteJSON`/`WriteXML`. For JSON that is the output of
   beta.1's `WriteJSON(ctx, v, "")` again. For XML the newlines are new and are
   read back as part of mixed content (character data next to child elements);
-  `WriteXML` still writes XML that round-trips exactly. With an empty indent the
-  XML functions also remove NUL bytes, which are invalid in XML, from raw
-  `,innerxml`, `,cdata` and `,comment` content.
+  `WriteXML` still writes XML that round-trips exactly.
 
 ## [1.0.0-beta.2] - 2026-10-23
 

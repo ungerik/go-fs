@@ -1269,6 +1269,17 @@ func Test_xmlMarshalIndent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "<doc>\n  <item name=\"a\uFFFD\">\uFFFDx</item>\n  <item name=\"b\">y</item>\n</doc>", string(data))
 
+	// Deeper elements are not indented either
+	type nested struct {
+		XMLName xml.Name `xml:"a"`
+		B       struct {
+			C int `xml:"c"`
+		} `xml:"b"`
+	}
+	data, err = xmlMarshalIndent(nested{}, "")
+	require.NoError(t, err)
+	require.Equal(t, "<a>\n<b>\n<c>0</c>\n</b>\n</a>", string(data))
+
 	// Multiple top level elements start a new line each
 	data, err = xmlMarshalIndent(input.Items, "")
 	require.NoError(t, err)
@@ -1280,15 +1291,25 @@ func Test_xmlMarshalIndent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `<?xml-stylesheet href="a.xsl"?><!-- c --><doc>`+"\n<a>1</a>\n</doc>", string(data))
 
-	// NUL is invalid in XML, an empty indent also removes it
-	// from raw content that the encoder writes without escaping
+	// Only NUL bytes after a newline are indentation, raw content
+	// that the encoder writes without escaping keeps every other NUL
 	type rawDoc struct {
 		XMLName xml.Name `xml:"doc"`
 		Inner   string   `xml:",innerxml"`
 	}
 	data, err = xmlMarshalIndent(rawDoc{Inner: "<x>a\x00b</x>\n\x00<y/>"}, "")
 	require.NoError(t, err)
-	require.Equal(t, "<doc><x>ab</x>\n<y/></doc>", string(data))
+	require.Equal(t, "<doc><x>a\x00b</x>\n<y/></doc>", string(data))
+
+	// Removing the indentation must not join the bytes around a NUL
+	// to markup: "]]\x00>" in a CDATA section must not become "]]>"
+	type cdataDoc struct {
+		XMLName xml.Name `xml:"doc"`
+		Data    string   `xml:",cdata"`
+	}
+	data, err = xmlMarshalIndent(cdataDoc{Data: "]]\x00><b/>"}, "")
+	require.NoError(t, err)
+	require.Equal(t, "<doc><![CDATA[]]\x00><b/>]]></doc>", string(data))
 
 	_, err = xmlMarshalIndent(make(chan int), "")
 	require.Error(t, err)
