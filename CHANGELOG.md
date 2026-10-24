@@ -5,7 +5,10 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## [Unreleased]
+## [1.0.0-beta.3] - 2026-10-24
+
+Third beta: an empty indent of the `…Indent` writers puts every element on its
+own line. All modules are tagged in lockstep, the `tools` module is not tagged.
 
 ### Changed
 
@@ -19,6 +22,10 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   directly before a `<` in content the encoder writes without escaping
   (`,innerxml`, `,cdata`, `,comment`, names and `xml.Marshaler` tokens) is
   removed together with the line markers.
+- Backend dependencies are bumped: `azureblobfs` (azcore v1.23.3, azblob
+  v1.8.2), `s3fs` (AWS SDK v1.47.4, service/s3 v1.114.5, transfermanager
+  v0.4.19), `sftpfs` (pkg/sftp v1.13.12) and `smbfs` (geoffgarside/ber v1.2.0,
+  hashicorp/go-uuid v1.0.4).
 
 ## [1.0.0-beta.2] - 2026-10-23
 
