@@ -121,7 +121,7 @@ func NewMemFileWriteXML(name string, input any) (MemFile, error) {
 // An empty indent still puts every element on its own line.
 // The added whitespace is read back as part of mixed content
 // (character data next to child elements),
-// use NewMemFileWriteXML for XML that round-trips exactly.
+// use NewMemFileWriteXML for XML without added whitespace.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func NewMemFileWriteXMLIndent(name string, input any, indent string) (MemFile, error) {
@@ -540,7 +540,7 @@ func (f *MemFile) WriteXML(ctx context.Context, input any) error {
 // An empty indent still puts every element on its own line.
 // The added whitespace is read back as part of mixed content
 // (character data next to child elements),
-// use WriteXML for XML that round-trips exactly.
+// use WriteXML for XML without added whitespace.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (f *MemFile) WriteXMLIndent(ctx context.Context, input any, indent string) error {

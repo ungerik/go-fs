@@ -679,8 +679,10 @@ Decided 2026-10-24:
   variants put every element on its own line without indentation when the
   indent is empty; only `WriteJSON`/`WriteXML` write compact output. Because
   `xml.MarshalIndent` writes no newlines for an empty prefix and indent, the
-  XML functions indent with a NUL byte and remove it only where it follows a
-  newline, so no other byte of the encoder's output changes.
+  XML functions indent with a NUL byte and remove it while writing, only where
+  it follows a newline. A NUL after a newline in raw content, invalid XML
+  anyway, goes with it (kept simple on purpose instead of a random indent
+  token); every other byte of the encoder's output stays unchanged.
 
 ## Verification (overall)
 

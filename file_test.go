@@ -1248,6 +1248,18 @@ func (d xmlLeadingTokensDoc) MarshalXML(e *xml.Encoder, start xml.StartElement) 
 	}{d.A}, start)
 }
 
+func Test_xmlIndentRemover(t *testing.T) {
+	// The encoder writes in chunks, a newline at the end of one chunk
+	// still removes the indentation at the start of the next
+	var w xmlIndentRemover
+	for _, chunk := range []string{"<a>\n", "\x00\x00<b>x\x00", "</b>\n", "</a>"} {
+		n, err := w.Write([]byte(chunk))
+		require.NoError(t, err)
+		require.Equal(t, len(chunk), n)
+	}
+	require.Equal(t, "<a>\n<b>x\x00</b>\n</a>", string(w.data))
+}
+
 func Test_xmlMarshalIndent(t *testing.T) {
 	type item struct {
 		Name string `xml:"name,attr"`

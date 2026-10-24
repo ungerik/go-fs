@@ -1356,7 +1356,7 @@ func (file File) WriteXML(ctx context.Context, input any, perm ...Permissions) e
 // An empty indent still puts every element on its own line.
 // The added whitespace is read back as part of mixed content
 // (character data next to child elements),
-// use WriteXML for XML that round-trips exactly.
+// use WriteXML for XML without added whitespace.
 //
 // Returns a wrapped ErrMarshalXML when the marshalling failed.
 func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, perm ...Permissions) error {
@@ -1375,35 +1375,53 @@ func (file File) WriteXMLIndent(ctx context.Context, input any, indent string, p
 // every element on its own line.
 //
 // xml.MarshalIndent writes no newlines if prefix and indent are both empty,
-// so a NUL byte is used as indent and the NUL bytes following a newline
-// are removed afterwards. Elements at depth zero get no indentation,
-// so tokens an xml.Marshaler writes before its root element can't
-// separate the first indentation from a newline.
-// Every other NUL byte of the output is kept: removing one from raw
-// ",innerxml", ",cdata" or ",comment" content could join the bytes
-// around it to markup, like "]]\x00>" to the end of a CDATA section.
+// so the encoder indents with a NUL byte and xmlIndentRemover drops
+// the NUL bytes following a newline while they are written,
+// which keeps the memory linear in the nesting depth.
+// Elements at depth zero get no indentation, so tokens an xml.Marshaler
+// writes before its root element can't separate indentation from a newline.
+// Every other NUL byte is kept: removing one from raw ",innerxml", ",cdata"
+// or ",comment" content could join the bytes around it to markup,
+// like "]]\x00>" to the end of a CDATA section.
 // A removed NUL always follows a newline, which no XML delimiter contains.
 // The encoder replaces NUL in character data and attribute values
-// with U+FFFD, raw content after a newline is the only other source.
+// with U+FFFD, so only a NUL directly after a newline in raw content,
+// which is invalid XML, is removed together with the indentation.
 func xmlMarshalIndent(input any, indent string) ([]byte, error) {
 	if indent != "" {
 		return xml.MarshalIndent(input, "", indent)
 	}
-	data, err := xml.MarshalIndent(input, "", "\x00")
+	var w xmlIndentRemover
+	enc := xml.NewEncoder(&w)
+	enc.Indent("", "\x00")
+	err := enc.Encode(input)
 	if err != nil {
 		return nil, err
 	}
-	// Remove the indentation in place
-	result := data[:0]
-	afterNewline := false
-	for _, b := range data {
-		if b == 0 && afterNewline {
+	err = enc.Close()
+	if err != nil {
+		return nil, err
+	}
+	return w.data, nil
+}
+
+// xmlIndentRemover is an io.Writer that keeps everything
+// written to it except the NUL bytes following a newline,
+// also when the newline ended the previous write.
+type xmlIndentRemover struct {
+	data         []byte
+	afterNewline bool
+}
+
+func (w *xmlIndentRemover) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b == 0 && w.afterNewline {
 			continue
 		}
-		afterNewline = b == '\n'
-		result = append(result, b)
+		w.afterNewline = b == '\n'
+		w.data = append(w.data, b)
 	}
-	return result, nil
+	return len(p), nil
 }
 
 // StdFS wraps the file as a StdFS struct that
