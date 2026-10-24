@@ -605,6 +605,30 @@ func newHTTPTestFileSystem(t *testing.T, handler http.HandlerFunc) *fileSystem {
 	return f.(*fileSystem)
 }
 
+// TestReadNotModified checks that ReadAll and the reader of OpenReader
+// return an error for a download answered with 304 Not Modified.
+// azblob returns that answer as a response without body and without error,
+// reading it panicked with a nil pointer dereference.
+func TestReadNotModified(t *testing.T) {
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "5")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotModified)
+	})
+
+	_, err := blobFS.ReadAll(t.Context(), "/file.txt")
+	require.ErrorContains(t, err, "304 Not Modified")
+
+	reader, err := blobFS.OpenReader("/file.txt")
+	require.NoError(t, err)
+	_, err = io.ReadAll(reader)
+	require.ErrorContains(t, err, "304 Not Modified")
+	require.NoError(t, reader.Close())
+}
+
 // TestRemoveRootOffline checks that Remove and RemoveAll refuse the root
 // with an error wrapping os.ErrInvalid, like the other file systems, without
 // any request. The test server answers every request with an error.

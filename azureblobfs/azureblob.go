@@ -56,6 +56,7 @@ const (
 	// uploads of OpenWriter: blocks of 4 MiB allow blobs of up to
 	// 195 GiB with the 50000 blocks of a block blob, at most
 	// uploadConcurrency blocks are buffered and staged in parallel.
+	// WriteAll stages at most uploadConcurrency blocks in parallel too.
 	uploadBlockSize   = 4 << 20
 	uploadConcurrency = 4
 )
@@ -572,6 +573,9 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 			if err != nil {
 				return nil, redactErr(err)
 			}
+			if response.Body == nil {
+				return nil, f.notModifiedError(blobName(filePath))
+			}
 			return response.Body, nil
 		},
 	}, nil
@@ -604,6 +608,9 @@ func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, erro
 			return nil, f.notExistError(filePath)
 		}
 		return nil, redactErr(err)
+	}
+	if response.Body == nil {
+		return nil, f.notModifiedError(name)
 	}
 	defer response.Body.Close()
 	size := max(deref(response.ContentLength), 0)
@@ -638,8 +645,17 @@ func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 	if err := f.checkNotDir(ctx, name); err != nil {
 		return err
 	}
-	_, err := f.client.NewBlockBlobClient(name).UploadBuffer(ctx, data, nil)
+	_, err := f.client.NewBlockBlobClient(name).UploadBuffer(ctx, data, &blockblob.UploadBufferOptions{
+		Concurrency: uploadConcurrency,
+	})
 	return redactErr(err)
+}
+
+// notModifiedError is returned for a download without body:
+// azblob reports a 304 Not Modified answer as a response
+// without body and without error.
+func (f *fileSystem) notModifiedError(name string) error {
+	return fmt.Errorf("azureblobfs: download of %s returned no body (304 Not Modified)", f.file(name))
 }
 
 // OpenWriter returns a writer that streams the written data to an upload
