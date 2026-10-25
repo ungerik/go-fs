@@ -76,7 +76,11 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   destination or below a moved directory, or a newer version of the
   destination blob, is not overwritten: `Move` stops with an error wrapping
   `fs.ErrAlreadyExists` (`os.ErrExist`) for it. Both errors copy nothing
-  more and delete no source blob. Only a move within one file system
+  more and delete no source blob. When the SDK retries a copy whose answer
+  was lost and the retry fails the destination condition against the copy
+  Azure already made, `Move` recognizes the completed copy of the source
+  blob it found (copy source, size, Content-MD5, completed after the source
+  was last modified) and finishes the move. Only a move within one file system
   is pinned; `fs.Move` to another container or file system copies and calls
   `RemoveAll`, which isn't. The generic move copied first and
   then failed to delete a source with snapshots, after it had replaced the
