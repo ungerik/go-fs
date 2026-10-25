@@ -65,7 +65,7 @@ type testFTPServer struct {
 	noEPSV           bool           // EPSV is not implemented
 	pasvHost         string         // host part of PASV replies like "10,1,2,3" instead of the real address
 	rntoNoReplace    bool           // RNTO onto an existing path fails like on servers that don't replace files
-	refuse           map[string]int // the next RNFR, RNTO or RMD commands like "RNFR /path" are refused with 550
+	refuse           map[string]int // the next RNFR, RNTO, RMD or DELE commands like "RNFR /path" are refused with 550
 	deleteOnRNFR     string         // RNFR of this path deletes it first, like another client right before
 	dotEntries       bool           // LIST and MLSD list the entries "." and ".." first like most servers
 	lsArgs           bool           // LIST of a file or a symbolic link lists it itself like "ls -l" instead of failing or following the link
@@ -791,8 +791,13 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			}
 			reply("250 removed")
 		case "DELE":
+			p := abs(arg)
+			if s.refused(verb, p) {
+				reply("550 permission denied")
+				continue
+			}
 			s.mu.Lock()
-			p := s.followDir(abs(arg))
+			p = s.followDir(p)
 			node, ok := s.nodes[p]
 			if ok && !node.isDir {
 				delete(s.nodes, p)

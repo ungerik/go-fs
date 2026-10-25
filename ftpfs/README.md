@@ -120,7 +120,9 @@ connection is checked with `NOOP`, so a connection that the server closed
 while it was idle is replaced first.
 
 `OpenReader` dials a dedicated connection for the transfer, so a streaming
-read never blocks other operations.
+read never blocks other operations. `RemoveAll` of a directory on a server
+with MLST support dials a second connection for `LIST` while it runs, see
+**Symbolic links** below.
 
 Operations with a `context.Context` are aborted when the context is done.
 `Close` unregisters the file system, aborts running operations, reconnects
@@ -171,7 +173,16 @@ and open readers, and afterwards every method returns
   reads as a file, so their links look like files and directories:
   `ListDirRecursive` lists the files below a link to a directory.
   `RemoveAll` still deletes such a link itself, because it tries `DELE`
-  for a directory before it deletes its content. FTP has no command to create a link, so `ftpfs`
+  for a directory before it deletes its content. If `DELE` fails, like for
+  a link that the server refuses to delete, `RemoveAll` deletes the content
+  only if `LIST` of the parent directory, which these servers answer like
+  `ls -l`, lists the path as a directory, and returns an error otherwise;
+  the FTP client library lists with `MLSD` on these servers, so `RemoveAll`
+  of a directory dials a second connection for `LIST`. `Remove` of a link
+  to a directory fails like for a directory and deletes nothing, and `Move`
+  onto such a link is refused with an error wrapping `os.ErrExist`. A
+  dangling link looks missing to `Stat`, because MLST follows links, but
+  `Remove` and `RemoveAll` delete it and `Move` renames it. FTP has no command to create a link, so `ftpfs`
   doesn't implement `fs.SymbolicLinkFileSystem`: `fs.CopyRecursive` copies
   a link to a file as a file and fails with an error wrapping
   `errors.ErrUnsupported` for a link to a directory before it writes

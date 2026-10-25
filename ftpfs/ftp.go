@@ -40,7 +40,21 @@
 // files below it. RemoveAll deletes such a link itself, because on these
 // servers it tries DELE for a directory before it deletes its content,
 // which deletes a link and fails for a directory, one extra command per
-// directory. Writes into a link to a directory on these servers write into
+// directory. DELE also fails for a link that the server refuses to delete,
+// so after a failed DELE RemoveAll deletes the content only if LIST of the
+// parent directory, which these servers answer like "ls -l", lists the
+// path as a directory and not as a link, and else returns an error.
+// The FTP client library lists with MLSD on a connection with MLST
+// support, so RemoveAll of a directory dials a second connection for LIST,
+// which lists the parent directory of every removed directory once.
+// Remove of a link to a directory fails like for a directory, with an
+// fs.ErrDirectoryNotEmpty or the error of RMD, and deletes nothing, and
+// Move onto such a link is refused with an error wrapping os.ErrExist.
+// MLST follows links, so Stat reports a dangling link or a cycle of links
+// as not existing and ListDir can describe it as a file, but Remove and
+// RemoveAll delete it and Move renames it, because they try DELE or the
+// rename for a path that MLST reports as missing.
+// Writes into a link to a directory on these servers write into
 // the directory that it points to: fs.CopyRecursive and the generic Move
 // can't tell that a destination directory is a link. FTP has no command
 // to create a link, so the file system doesn't implement
@@ -952,9 +966,11 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 
 // Move renames filePath to destPath via the RNFR and RNTO commands.
 // A symbolic link at either path is renamed or replaced itself, like by
-// os.Rename, on servers that list links as such: servers with MLST support
-// describe a link to a directory as the directory, see the package
-// documentation.
+// os.Rename. Servers with MLST support describe a link to a directory as
+// the directory, so Move onto such a link is refused with an error wrapping
+// os.ErrExist like onto a directory. A source that MLST reports as missing,
+// which can be a dangling link, is renamed on these servers if the server
+// can, see the package documentation.
 //
 // FTP servers differ in what a rename onto an existing path does,
 // so Move checks the destination first: an existing directory is an
@@ -977,19 +993,28 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 		return f.begin(ctx, filePath, destPath)
 	}
 	return f.do(ctx, func(c *conn) error {
-		srcInfo, _, err := f.lstat(c, srcPath)
-		if err != nil {
-			return err
+		srcInfo, _, srcErr := f.lstat(c, srcPath)
+		// MLST follows symbolic links, so a source that it reports as
+		// missing can be a dangling link or a cycle of links, which the
+		// rename moves; for a missing source it fails with srcErr
+		unseen := isNotExist(srcErr) && c.IsTimePreciseInList()
+		if srcErr != nil && !unseen {
+			return srcErr
 		}
-		if srcInfo.IsDir && (srcPath == Separator || strings.HasPrefix(dest, srcPath+Separator)) {
+		srcIsDir := srcErr == nil && srcInfo.IsDir
+		if srcIsDir && (srcPath == Separator || strings.HasPrefix(dest, srcPath+Separator)) {
 			return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, srcInfo.File, f.JoinCleanFile(dest))
 		}
 		destInfo, _, err := f.lstat(c, dest)
 		replace := err == nil
 		switch {
+		case replace && destInfo.IsDir && unseen:
+			// Like os.Rename of a missing source, a link
+			// can't replace a directory either
+			return srcErr
 		case replace && destInfo.IsDir:
 			return fs.NewErrAlreadyExists(destInfo.File)
-		case replace && srcInfo.IsDir:
+		case replace && srcIsDir:
 			return fs.NewErrIsNotDirectory(destInfo.File)
 		case err != nil && !isNotExist(err):
 			return err
@@ -1044,10 +1069,14 @@ func isRoot(filePath string) bool {
 }
 
 // Remove deletes a file or a symbolic link with the DELE command
-// or an empty directory with the RMD command. Servers with MLST support
-// describe a link to a directory as the directory, see the package
-// documentation.
+// or an empty directory with the RMD command.
 // A non-empty directory is an fs.ErrDirectoryNotEmpty.
+//
+// Servers with MLST support describe a link to a directory as the
+// directory, so Remove of such a link fails like for a directory, with an
+// fs.ErrDirectoryNotEmpty or the error of RMD, and deletes nothing. A path
+// that MLST reports as missing, which can be a dangling link, is deleted
+// with DELE on these servers, see the package documentation.
 func (f *fileSystem) Remove(filePath string) error {
 	return f.do(context.Background(), func(c *conn) error {
 		filePath := path.Clean(filePath)
@@ -1055,6 +1084,13 @@ func (f *fileSystem) Remove(filePath string) error {
 			return fmt.Errorf("%w: ftpfs: can't remove the root directory of %s", os.ErrInvalid, f)
 		}
 		info, _, err := f.lstat(c, filePath)
+		if isNotExist(err) && c.IsTimePreciseInList() {
+			notExistErr := err
+			if err = c.beforeMutation(); err != nil {
+				return err
+			}
+			return deleteUnseen(c, filePath, notExistErr)
+		}
 		if err != nil {
 			return err
 		}
@@ -1086,9 +1122,14 @@ func hasEntries(entries []*ftp.Entry) bool {
 
 // RemoveAll deletes a file or a directory with its content.
 // A symbolic link is deleted itself, also below the directory,
-// so the files that a link to a directory points to are kept,
-// see removeFolder for servers with MLST support.
+// so the files that a link to a directory points to are kept.
 // A missing path is not an error.
+//
+// On servers with MLST support, which describe a link to a directory
+// as the directory, RemoveAll returns an error instead of deleting the
+// content of a directory that LIST of its parent directory doesn't list
+// as a directory, and deletes a path that MLST reports as missing with
+// DELE, which deletes a dangling link, see the package documentation.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return f.do(ctx, func(c *conn) error {
 		filePath := path.Clean(filePath)
@@ -1097,38 +1138,81 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		}
 		info, _, err := f.lstat(c, filePath)
 		if isNotExist(err) {
-			return nil
+			if !c.IsTimePreciseInList() {
+				return nil
+			}
+			if err = deleteUnseen(c, filePath, err); isNotExist(err) {
+				return nil
+			}
+			return err
 		}
 		if err != nil {
 			return err
 		}
-		if info.IsDir {
-			return removeFolder(c, filePath)
+		if !info.IsDir {
+			return c.Delete(filePath)
 		}
-		return c.Delete(filePath)
+		r := &remover{f: f, c: c, ctx: c.operationContext()}
+		defer r.close()
+		return r.removeFolder(filePath)
 	}, filePath)
+}
+
+// deleteUnseen deletes filePath with DELE after MLST reported it as missing
+// with notExistErr. MLST follows symbolic links, so the path can be a
+// dangling link or a cycle of links, which DELE deletes. For the failure
+// reply of a missing path deleteUnseen returns notExistErr.
+func deleteUnseen(c *conn, filePath string, notExistErr error) error {
+	err := c.Delete(filePath)
+	if fileUnavailable(err) {
+		return notExistErr
+	}
+	return err
+}
+
+// remover removes a directory tree for RemoveAll.
+type remover struct {
+	f   *fileSystem
+	c   *conn
+	ctx context.Context // of the operation, for the listing connection
+
+	lister    *conn                   // lists with LIST, dialed on first use, see list
+	listerErr error                   // why the listing connection can't be used
+	listings  map[string][]*ftp.Entry // LIST listings by directory path
+}
+
+// close closes the listing connection.
+func (r *remover) close() {
+	if r.lister != nil {
+		_ = r.lister.close()
+	}
 }
 
 // removeFolder removes dirPath, which the server described as a directory,
 // with its content. A server with MLST support can describe a symbolic link
 // to a directory like the directory, so on such a server DELE is tried
-// first: it deletes a link itself and fails for a directory, whose content
-// is deleted then. Removing the content through a link would delete the
-// files that it points to.
-func removeFolder(c *conn, dirPath string) error {
+// first: it deletes a link itself and fails for a directory. Removing the
+// content through a link would delete the files that it points to, and DELE
+// also fails for a link that the server refuses to delete, like in a
+// directory without write permission, so after a failed DELE the content is
+// only removed if confirmDir confirms that dirPath is a directory.
+func (r *remover) removeFolder(dirPath string) error {
 	// IsTimePreciseInList reports whether the connection uses MLSD and MLST
-	if c.IsTimePreciseInList() {
-		err := c.Delete(dirPath)
+	if r.c.IsTimePreciseInList() {
+		err := r.c.Delete(dirPath)
 		if err == nil || isConnectionError(err) {
 			return err
 		}
+		if err = r.confirmDir(dirPath, err); err != nil {
+			return err
+		}
 	}
-	return removeDirRecursive(c, dirPath)
+	return r.removeContent(dirPath)
 }
 
-// removeDirRecursive removes the directory dirPath with its content.
-func removeDirRecursive(c *conn, dirPath string) error {
-	entries, err := c.List(dirPath)
+// removeContent removes the directory dirPath with its content.
+func (r *remover) removeContent(dirPath string) error {
+	entries, err := r.c.List(dirPath)
 	if err != nil {
 		return err
 	}
@@ -1138,15 +1222,79 @@ func removeDirRecursive(c *conn, dirPath string) error {
 		}
 		entryPath := path.Join(dirPath, entry.Name)
 		if entry.Type == ftp.EntryTypeFolder {
-			err = removeFolder(c, entryPath)
+			err = r.removeFolder(entryPath)
 		} else {
-			err = c.Delete(entryPath)
+			err = r.c.Delete(entryPath)
 		}
 		if err != nil {
 			return err
 		}
 	}
-	return c.RemoveDir(dirPath)
+	delete(r.listings, dirPath)
+	return r.c.RemoveDir(dirPath)
+}
+
+// confirmDir returns nil if LIST of its parent directory lists dirPath as
+// a directory, and else an error wrapping deleteErr, the failure of DELE
+// for dirPath. Servers with MLST support still answer LIST like "ls -l",
+// which lists a symbolic link as such. An entry that LIST doesn't list,
+// or a parent directory that can't be listed, is no directory either.
+func (r *remover) confirmDir(dirPath string, deleteErr error) error {
+	dir, name := path.Split(dirPath)
+	dir = path.Clean(dir)
+	entries, err := r.list(dir)
+	if err != nil {
+		// The listing error is not wrapped: a broken listing
+		// connection is no failure of the connection of the operation
+		return fmt.Errorf("ftpfs: not removing %s: DELE failed, and LIST of %s, which tells a directory from a symbolic link, failed (%v): %w", r.f.JoinCleanFile(dirPath), r.f.JoinCleanFile(dir), err, deleteErr)
+	}
+	for _, entry := range entries {
+		if entry.Name == name && entry.Type == ftp.EntryTypeFolder {
+			return nil
+		}
+	}
+	return fmt.Errorf("ftpfs: not removing %s: DELE failed, and LIST of %s doesn't list it as a directory, so it may be a symbolic link to one: %w", r.f.JoinCleanFile(dirPath), r.f.JoinCleanFile(dir), deleteErr)
+}
+
+// list returns the LIST listing of the directory dirPath. The FTP client
+// library lists with MLSD on a connection with MLST support, so list uses
+// a connection of its own that lists with "LIST -a", which also lists
+// hidden files. It is dialed on first use and closed by close, and the
+// listings are kept until their directory is removed.
+func (r *remover) list(dirPath string) ([]*ftp.Entry, error) {
+	if entries, ok := r.listings[dirPath]; ok {
+		return entries, nil
+	}
+	if r.listerErr != nil {
+		return nil, r.listerErr
+	}
+	if r.lister == nil {
+		username, password, _, err := r.f.cfg.credentials()
+		if err == nil {
+			r.lister, err = dial(r.ctx, r.f.cfg, username, password, ftp.DialWithForceListHidden(true))
+		}
+		if err != nil {
+			r.listerErr = fmt.Errorf("dialing a connection for LIST: %w", err)
+			return nil, r.listerErr
+		}
+	}
+	var entries []*ftp.Entry
+	err := r.lister.run(r.ctx, func() (err error) {
+		entries, err = r.lister.List(dirPath)
+		return err
+	})
+	if r.lister.broken {
+		// It is not used again
+		r.listerErr = errors.Join(errors.New("the connection for LIST broke"), err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if r.listings == nil {
+		r.listings = make(map[string][]*ftp.Entry)
+	}
+	r.listings[dirPath] = entries
+	return entries, nil
 }
 
 // isNotExist reports whether err wraps os.ErrNotExist.

@@ -1008,6 +1008,295 @@ func TestSymbolicLinks_MLSD(t *testing.T) {
 	assert.Zero(t, srv.count("LIST"), "the server supports MLSD")
 }
 
+// TestSymbolicLinks_MLSDRemoveAllRefusedDelete is the regression test for
+// RemoveAll on a server with MLST support, which describes a link to a
+// directory like the directory, when the server refuses to delete the link,
+// like in a directory without write permission: RemoveAll took the failed
+// DELE for the failure of a directory and deleted the files that the link
+// points to, outside of the removed tree. It must fail and keep them unless
+// LIST of the parent directory lists the path as a directory.
+func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		removed   string // the path of RemoveAll
+		link      string // the link to /outside whose DELE is refused
+		failLists string // LIST and MLSD of paths containing it fail
+	}{
+		{name: "link below the removed directory", removed: "/tree", link: "/tree/link"},
+		{name: "link in a subdirectory", removed: "/tree", link: "/tree/sub/link"},
+		{name: "link at the removed path", removed: "/tree/link", link: "/tree/link"},
+		{name: "parent directory can't be listed", removed: "/tree/link", link: "/tree/link", failLists: "/tree"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestFTPServer(t)
+			srv.writeFile("/outside/keep.txt", "keep")
+			srv.writeFile("/outside/sub/keep.txt", "keep")
+			srv.writeFile("/tree/file.txt", "data")
+			srv.writeFile("/tree/sub/file.txt", "data")
+			srv.symlink("/outside", tc.link)
+			srv.configure(func(s *testFTPServer) {
+				s.refuse["DELE "+tc.link] = 100
+				s.failListContains = tc.failLists
+			})
+			ftpFS := dialInProcess(t, srv)
+
+			err := ftpFS.RemoveAll(t.Context(), tc.removed)
+			require.Error(t, err, "RemoveAll must fail for a link that the server doesn't delete")
+			assert.ErrorContains(t, err, "permission denied", "the error of the refused DELE")
+			assert.ErrorContains(t, err, string(ftpFS.JoinCleanFile(tc.link)), "the error names the link")
+			assert.Equal(t, "keep", string(srv.fileContent("/outside/keep.txt")), "RemoveAll must keep the files that the link points to")
+			assert.Equal(t, "keep", string(srv.fileContent("/outside/sub/keep.txt")), "RemoveAll must keep the files that the link points to")
+			assert.True(t, srv.exists(tc.link), "the link is kept")
+			// The connection for LIST is closed after the operation
+			require.Eventually(t, func() bool { return srv.open.Load() == 1 }, 5*time.Second, time.Millisecond,
+				"%d connections are open", srv.open.Load())
+
+			// Once the server deletes the link, the tree is removed
+			srv.configure(func(s *testFTPServer) {
+				s.refuse = map[string]int{}
+				s.failListContains = ""
+			})
+			require.NoError(t, ftpFS.RemoveAll(t.Context(), tc.removed))
+			assert.False(t, srv.exists(tc.removed))
+			assert.Equal(t, "keep", string(srv.fileContent("/outside/keep.txt")))
+			assert.Equal(t, "keep", string(srv.fileContent("/outside/sub/keep.txt")))
+		})
+	}
+}
+
+// TestSymbolicLinks_MLSTRemoveAndMove checks Remove, RemoveAll and Move of
+// symbolic links on a server with MLST support, which describes a link with
+// the facts of its target, see the package documentation: a link to a file
+// is deleted, renamed or replaced itself, a link to a directory is renamed
+// itself, Remove of it fails like for a directory and Move onto it is
+// refused like onto a directory. MLST reports a dangling link or a cycle of
+// links as missing; RemoveAll kept such a link, and Remove and Move of it
+// failed with os.ErrNotExist.
+func TestSymbolicLinks_MLSTRemoveAndMove(t *testing.T) {
+	type check func(t *testing.T, srv *testFTPServer, before []string)
+	// unchanged checks that nothing was changed on the server
+	unchanged := func(t *testing.T, srv *testFTPServer, before []string) {
+		assert.Equal(t, before, srv.paths(), "nothing must be changed")
+	}
+	// gone returns a check that the paths no longer exist,
+	// and that the targets of the links are kept
+	gone := func(paths ...string) check {
+		return func(t *testing.T, srv *testFTPServer, _ []string) {
+			for _, p := range paths {
+				assert.False(t, srv.exists(p), "%s must be removed", p)
+			}
+			assert.Equal(t, "data", string(srv.fileContent("/root/file.txt")), "the target of the links is kept")
+			assert.Equal(t, "content", string(srv.fileContent("/root/dir/file.txt")), "the target of the links is kept")
+		}
+	}
+	// renamed returns a check that the link from was renamed to to
+	// with its target, which is kept
+	renamed := func(from, to, target string) check {
+		return func(t *testing.T, srv *testFTPServer, _ []string) {
+			gone(from)(t, srv, nil)
+			srv.mu.Lock()
+			node := srv.nodes[to]
+			srv.mu.Unlock()
+			if assert.NotNil(t, node, "%s must exist", to) {
+				assert.Equal(t, target, node.link, "%s is the renamed link", to)
+			}
+		}
+	}
+	// replaced returns a check that /root/new.txt replaced the link at dest
+	replaced := func(dest string) check {
+		return func(t *testing.T, srv *testFTPServer, _ []string) {
+			gone("/root/new.txt")(t, srv, nil)
+			assert.Equal(t, "new", string(srv.fileContent(dest)), "%s is replaced", dest)
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		op      func(ctx context.Context, f *fileSystem) error
+		wantErr error
+		check   check
+	}{
+		{
+			name:  "Remove of a link to a file",
+			op:    func(_ context.Context, f *fileSystem) error { return f.Remove("/root/filelink") },
+			check: gone("/root/filelink"),
+		},
+		{
+			name:  "RemoveAll of a link to a file",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.RemoveAll(ctx, "/root/filelink") },
+			check: gone("/root/filelink"),
+		},
+		{
+			name:  "Move of a link to a file",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.Move(ctx, "/root/filelink", "/root/moved") },
+			check: renamed("/root/filelink", "/root/moved", "file.txt"),
+		},
+		{
+			name:  "Move onto a link to a file",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.Move(ctx, "/root/new.txt", "/root/filelink") },
+			check: replaced("/root/filelink"),
+		},
+		{
+			name:    "Remove of a link to a directory",
+			op:      func(_ context.Context, f *fileSystem) error { return f.Remove("/root/dirlink") },
+			wantErr: fs.ErrDirectoryNotEmpty{},
+			check:   unchanged,
+		},
+		{
+			name:  "RemoveAll of a link to a directory",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.RemoveAll(ctx, "/root/dirlink") },
+			check: gone("/root/dirlink"),
+		},
+		{
+			name:  "Move of a link to a directory",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.Move(ctx, "/root/dirlink", "/root/moved") },
+			check: renamed("/root/dirlink", "/root/moved", "dir"),
+		},
+		{
+			name:    "Move onto a link to a directory",
+			op:      func(ctx context.Context, f *fileSystem) error { return f.Move(ctx, "/root/new.txt", "/root/dirlink") },
+			wantErr: os.ErrExist,
+			check:   unchanged,
+		},
+		{
+			name:  "Remove of a dangling link",
+			op:    func(_ context.Context, f *fileSystem) error { return f.Remove("/root/dangling") },
+			check: gone("/root/dangling"),
+		},
+		{
+			name:  "RemoveAll of a dangling link",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.RemoveAll(ctx, "/root/dangling") },
+			check: gone("/root/dangling"),
+		},
+		{
+			name:  "Move of a dangling link",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.Move(ctx, "/root/dangling", "/root/moved") },
+			check: renamed("/root/dangling", "/root/moved", "missing.txt"),
+		},
+		{
+			name:  "Move onto a dangling link",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.Move(ctx, "/root/new.txt", "/root/dangling") },
+			check: replaced("/root/dangling"),
+		},
+		{
+			name:  "Remove of a cycle of links",
+			op:    func(_ context.Context, f *fileSystem) error { return f.Remove("/root/loop1") },
+			check: gone("/root/loop1"),
+		},
+		{
+			name:  "RemoveAll of a cycle of links",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.RemoveAll(ctx, "/root/loop1") },
+			check: gone("/root/loop1"),
+		},
+		{
+			name:    "Remove of a missing path",
+			op:      func(_ context.Context, f *fileSystem) error { return f.Remove("/root/missing") },
+			wantErr: os.ErrNotExist,
+			check:   unchanged,
+		},
+		{
+			name:  "RemoveAll of a missing path",
+			op:    func(ctx context.Context, f *fileSystem) error { return f.RemoveAll(ctx, "/root/missing") },
+			check: unchanged,
+		},
+		{
+			name:    "Move of a missing path",
+			op:      func(ctx context.Context, f *fileSystem) error { return f.Move(ctx, "/root/missing", "/root/moved") },
+			wantErr: os.ErrNotExist,
+			check:   unchanged,
+		},
+		{
+			name:    "Move of a missing path onto a directory",
+			op:      func(ctx context.Context, f *fileSystem) error { return f.Move(ctx, "/root/missing", "/root/dir") },
+			wantErr: os.ErrNotExist,
+			check:   unchanged,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestFTPServer(t)
+			seedLinks(srv)
+			srv.writeFile("/root/new.txt", "new")
+			ftpFS := dialInProcess(t, srv)
+			before := srv.paths()
+
+			err := tc.op(t.Context(), ftpFS)
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+			tc.check(t, srv, before)
+		})
+	}
+}
+
+// TestSymbolicLinks_MLSDDangling checks a dangling symbolic link that
+// a server with MLST support lists with the RFC 3659 type
+// "OS.unix=slink:<target>": the FTP client library reads it as a file,
+// Stat reports it as missing, because MLST follows the link, and RemoveAll
+// of its directory deletes it.
+func TestSymbolicLinks_MLSDDangling(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	srv.writeFile("/root/file.txt", "data")
+	srv.symlink("missing.txt", "/root/dangling")
+	ftpFS := dialInProcess(t, srv)
+
+	infos := map[string]*fs.FileInfo{}
+	err := ftpFS.ListDir(ctx, "/root", nil, func(info *fs.FileInfo) error {
+		infos[info.Name] = info
+		return nil
+	})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"dangling", "file.txt"}, slices.Collect(maps.Keys(infos)))
+	assert.True(t, infos["dangling"].IsRegular, "the client library reads OS.unix=slink as a file")
+	assert.False(t, infos["dangling"].IsSymlink)
+
+	_, err = ftpFS.Stat("/root/dangling")
+	assert.ErrorIs(t, err, os.ErrNotExist, "MLST follows the dangling link")
+
+	require.NoError(t, ftpFS.RemoveAll(ctx, "/root"))
+	assert.Empty(t, srv.paths(), "RemoveAll deletes the dangling link with its directory")
+}
+
+// TestListDir_EntryNamedLikeDirectory checks a directory whose only entry
+// has the name of the directory, like /logs/app with the file app, which
+// looks like the listing of a file or a link that the server lists itself:
+// ListDir and ListDirRecursive list the entry.
+func TestListDir_EntryNamedLikeDirectory(t *testing.T) {
+	for _, variant := range []struct {
+		name   string
+		noMLST bool
+	}{
+		{"MLSD", false},
+		{"LIST", true},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			ctx := t.Context()
+			srv := newTestFTPServer(t)
+			srv.configure(func(s *testFTPServer) { s.noMLST = variant.noMLST })
+			srv.writeFile("/logs/app/app", "log")
+			ftpFS := dialInProcess(t, srv)
+
+			for name, list := range map[string]func(context.Context, string, []string, func(*fs.FileInfo) error) error{
+				"ListDir":          ftpFS.ListDir,
+				"ListDirRecursive": ftpFS.ListDirRecursive,
+			} {
+				var listed []*fs.FileInfo
+				err := list(ctx, "/logs/app", nil, func(info *fs.FileInfo) error {
+					listed = append(listed, info)
+					return nil
+				})
+				require.NoError(t, err, name)
+				assert.Equal(t, []string{"/logs/app/app"}, relPaths(ftpFS, listed), name)
+				if assert.Len(t, listed, 1, name) {
+					assert.True(t, listed[0].IsRegular, "%s: the entry is a file", name)
+				}
+			}
+		})
+	}
+}
+
 // TestCopyRecursive_SymbolicLinks checks fs.CopyRecursive from a server
 // that lists symbolic links: a link to a file is copied as a file with the
 // content of its target, and a link to a directory fails the copy with an
