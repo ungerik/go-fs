@@ -138,16 +138,25 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   a symbolic link to a directory points to, outside of the removed tree, when
   the server refused to delete the link, for example in a directory without
   write permission. After a failed `DELE` it now deletes the content of a
-  directory only if `LIST` of the parent directory lists it as a directory,
-  and otherwise returns an error wrapping the `DELE` error. The client
-  library lists with `MLSD` on these servers, so `RemoveAll` of a directory
-  dials a second connection for `LIST`; on a server that allows only one
-  connection per user it fails instead of deleting.
+  directory only if `LIST` of the parent directory lists it once and as a
+  directory, and otherwise returns an error wrapping the `DELE` error. The
+  client library lists with `MLSD` on these servers, so `RemoveAll` of a
+  directory dials a second connection for `LIST`; on a server that allows
+  only one connection per user it fails instead of deleting. That connection
+  changes to the parent directory with `CWD` and sends `LIST -a` without a
+  path argument, which servers like ProFTPD with `UseGlobbing` and Pure-FTPd
+  would expand as a glob pattern, and it is dialed again once for a listing
+  if the server closed it while it was idle. FTP servers on Windows and
+  ProFTPD with `ShowSymlinks off` list a link to a directory as a directory
+  with `LIST` too, so `RemoveAll` still deletes through such links there.
 - `ftpfs` `RemoveAll` kept a dangling symbolic link or a cycle of links on
   servers with MLST support, and `Remove` and `Move` of it failed with
   `os.ErrNotExist`, because MLST follows links and reports such a link as
   missing. They now try `DELE` or the rename for a path that MLST reports as
-  missing. `Stat` still reports a dangling link as not existing.
+  missing. If the server refuses the `DELE`, `Remove` and `RemoveAll` return
+  its error if `LIST` of the parent directory lists the path, and report the
+  path as missing only if it doesn't. `Stat` still reports a dangling link
+  as not existing.
 - `s3fs` `Stat`, the directory check of the writes and `Touch`, and the
   not-empty check of `Remove` read further `ListObjectsV2` pages while a page
   is truncated and has fewer keys than requested, even none, instead of
