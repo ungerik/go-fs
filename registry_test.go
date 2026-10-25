@@ -3,8 +3,10 @@ package fs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -467,4 +469,34 @@ func TestRedactURI_Errors(t *testing.T) {
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), "hunter2", "EnsureRegistered error for %q", uri)
 	}
+}
+
+// TestParseRawURI_LocalUnregistered is a regression test: with Local
+// unregistered, ParseRawURI converted a file URI without decoding its
+// path, so "file:///tmp/a%20b" was "/tmp/a%20b", another file than with
+// Local registered. The root package has no parallel tests that could
+// see the registry without Local.
+func TestParseRawURI_LocalUnregistered(t *testing.T) {
+	dir := t.TempDir()
+	withLocal := map[string]string{}
+	uris := []string{
+		Local.URI(filepath.Join(dir, "a b")),
+		LocalPrefix + "localhost" + strings.TrimPrefix(Local.URI(dir), LocalPrefix),
+		LocalPrefix + "server/share/x",
+		LocalPrefix + "./x",
+	}
+	for _, uri := range uris {
+		fileSystem, fsPath := ParseRawURI(uri)
+		withLocal[uri] = fmt.Sprint(fileSystem == Local, fsPath)
+	}
+
+	require.True(t, Unregister(Local))
+	t.Cleanup(func() { _ = Register(Local) })
+	for _, uri := range uris {
+		fileSystem, fsPath := ParseRawURI(uri)
+		assert.Equal(t, withLocal[uri], fmt.Sprint(fileSystem == Local, fsPath), "ParseRawURI(%q) like with Local registered", uri)
+	}
+	fileSystem, fsPath := ParseRawURI(uris[0])
+	assert.Equal(t, Local, fileSystem)
+	assert.Equal(t, filepath.Join(dir, "a b"), fsPath, "the path is decoded")
 }

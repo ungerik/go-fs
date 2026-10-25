@@ -427,14 +427,27 @@ func (s *fileSystem) dirInfo(k string, modified time.Time) *fs.FileInfo {
 // the listing would decide from an incomplete one.
 var errTruncatedWithoutToken = errors.New("s3fs: truncated listing page without a new continuation token")
 
+// maxListingPages limits the ListObjectsV2 pages that findObject reads.
+// A store that keeps answering with truncated pages without a matching
+// key, each with a new continuation token, would otherwise make Stat and
+// Remove send paid requests without end, and they get no context that
+// could stop them. A real listing reaches the decision long before.
+const maxListingPages = 1000
+
+// errListingTooLong is returned by findObject after maxListingPages pages.
+var errListingTooLong = errors.New("s3fs: listing has too many pages without a decision")
+
 // findObject returns the first object with the key prefix for which
 // match returns true, or nil if there is none, reading pages of at most
 // maxKeys keys. A page can have fewer keys than MaxKeys and still be
 // truncated, even no key at all, which S3-compatible stores do, so it
 // reads pages until one has a matching object or the listing ends.
 // A truncated page without a new continuation token, one that no earlier
-// page returned, is an error wrapping errTruncatedWithoutToken. Stat and
-// Remove call it without a context that could end a cycle of tokens.
+// page returned, is an error wrapping errTruncatedWithoutToken, and the
+// page after maxListingPages pages an error wrapping errListingTooLong:
+// Stat and Remove call it without a context that could end the listing.
+// The pages after a truncated page without a match ask for 1000 keys,
+// the maximum of S3, so that every request gets as far as it can.
 func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix string, maxKeys int32, match func(key string) bool) (*types.Object, error) {
 	input := &s3.ListObjectsV2Input{
 		Bucket:  &s.bucketName,
@@ -442,7 +455,10 @@ func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix s
 		MaxKeys: &maxKeys,
 	}
 	var tokens map[string]bool // the continuation tokens of the listed pages
-	for {
+	for pages := 1; ; pages++ {
+		if pages > maxListingPages {
+			return nil, fmt.Errorf("listing %s: %w", s.file(prefix), errListingTooLong)
+		}
 		page, err := client.ListObjectsV2(ctx, input)
 		if err != nil {
 			return nil, err
@@ -464,6 +480,7 @@ func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix s
 		}
 		tokens[token] = true
 		input.ContinuationToken = &token
+		input.MaxKeys = aws.Int32(1000)
 	}
 }
 

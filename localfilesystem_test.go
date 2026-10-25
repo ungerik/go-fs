@@ -842,7 +842,15 @@ func TestFileURILocalPath(t *testing.T) {
 		{"localhost/etc/hosts", false, "/etc/hosts", true},
 		{"LocalHost/etc/hosts", false, "/etc/hosts", true},
 		{"/", false, "/", true},
-		{"", false, "", true},
+		{"", false, "/", true},          // RFC 8089 requires an absolute path
+		{"localhost", false, "/", true}, // it used to be the working directory
+		{"", true, "/", true},
+		{"localhost", true, "/", true},
+		{"//?/C:/x", true, "//?/C:/x", true},                             // long path, written by beta.3 too
+		{"//?/UNC/server/share/x", true, "//?/UNC/server/share/x", true}, // long UNC path
+		{"/??/PhysicalDrive0", true, "/??/PhysicalDrive0", false},        // NT object namespace
+		{`/??\C:\x`, true, `/??\C:\x`, false},
+		{"/??/x", false, "/??/x", true}, // a directory named "??" on other platforms
 		{"/~/x", false, "/~/x", true},
 		{"/C:/x", false, "/C:/x", true},
 		{"server/share/x", false, "/server/share/x", false},
@@ -872,9 +880,10 @@ func TestFileURILocalPath(t *testing.T) {
 		{"./PhysicalDrive0", true, "/./PhysicalDrive0", false},
 		{`.\x`, true, `/.\x`, false},
 		{"../x", true, "/../x", false},
-		{"?/C:/x", true, "/?/C:/x", false},
+		{"?/C:/x", true, "//?/C:/x", true},               // the long path of a drive is local
+		{"?/Volume{1}/x", true, "/?/Volume{1}/x", false}, // other paths of the file namespace
 		{"//./PhysicalDrive0", true, "/./PhysicalDrive0", false},
-		{`\\?\C:\x`, true, `/?\C:\x`, false},
+		{`\\?\C:\x`, true, `\\?\C:\x`, true},
 		{"//./x", false, "//./x", true}, // only a path on other platforms
 		{"//.x/share", true, "//.x/share", true},
 	} {
@@ -921,14 +930,15 @@ func TestFileURIPathOf(t *testing.T) {
 
 	// Regression test: a Windows long path like `\\?\C:\x` got the URI
 	// "file://?/C:/x", which names no file since "?" is no host, while
-	// go-fs before v1.0.0 round-tripped it. Its URI is that of the same
-	// path without the prefix, which the os package adds back if needed.
-	// Device paths like `\\.\COM1` still get a URI that names no file.
+	// go-fs before v1.0.0 round-tripped it as "file:////?/C:/x". The URI
+	// keeps the long path, whose prefix turns off the normalization of
+	// names like "name." and "aux". Device paths like `\\.\COM1` and
+	// other paths of the file namespace get a URI that names no file.
 	for slashPath, wantPath := range map[string]string{
-		"//?/C:/dir/file":           "C:/dir/file",
-		"//?/c:/":                   "c:/",
-		"//?/UNC/server/share/x":    "//server/share/x",
-		"//?/unc/server/share/x":    "//server/share/x",
+		"//?/C:/dir/name.":          "//?/C:/dir/name.",
+		"//?/c:/":                   "//?/c:/",
+		"//?/UNC/server/share/x":    "//?/UNC/server/share/x",
+		"//?/unc/server/share/aux":  "//?/unc/server/share/aux",
 		"//?/Volume{1234}/dir/file": "",
 		"//./COM1":                  "",
 	} {

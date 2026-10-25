@@ -3,6 +3,7 @@ package fs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -40,4 +41,20 @@ func localShortPath(t *testing.T, filePath string) string {
 	require.NoError(t, err, "GetShortPathName(%q)", filePath)
 	require.Less(t, int(n), len(buf), "GetShortPathName(%q) needs a larger buffer", filePath)
 	return syscall.UTF16ToString(buf[:n])
+}
+
+// TestLocalFileSystem_LongPathURI checks that the file URI of a long path
+// keeps the prefix `\\?\`, which keeps the trailing dot of the name "name."
+// that Windows would remove from a normal path, so that the URI resolves
+// to the same file, with the content written through the long path.
+func TestLocalFileSystem_LongPathURI(t *testing.T) {
+	long := `\\?\` + filepath.Join(t.TempDir(), "name.")
+	require.NoError(t, os.WriteFile(long, []byte("long"), 0o600))
+
+	uri := File(long).URI()
+	assert.True(t, strings.HasPrefix(uri, LocalPrefix+"//?/"), "the URI %q keeps the long path", uri)
+	assert.Equal(t, long, File(uri).LocalPath(), "the URI resolves to the long path")
+	data, err := File(uri).ReadAll(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "long", string(data))
 }

@@ -102,6 +102,12 @@ These hold for v1.0.0. Where an earlier design differs, the decision here wins.
   `file://C:/…` form of the betas. A file URI with another host is a UNC path
   on Windows and the `Invalid` file system elsewhere, never a path relative
   to the working directory. `file://~/x` is the home directory like `~/x`.
+  `file://` and `file://localhost` without a path are the root. The hosts
+  `.`, `..` and `?` name no host; on Windows the device and file namespaces
+  (`\\.\`, `\\?\`, `\??\`) have no file URI that names a file, except the
+  long paths of a drive or a UNC path, which keep their prefix:
+  `\\?\C:\x` is `file:////?/C:/x`, the form beta.3 wrote. On Windows a file
+  URI with a host connects over SMB (with NTLM), documented at `ParseRawURI`.
 - **Error contract.** `errors.Is` holds for `os.ErrNotExist`, `os.ErrExist`,
   `os.ErrPermission` (where the backend can tell), `ErrReadOnlyFileSystem`,
   `ErrWriteOnlyFileSystem`, `ErrFileSystemClosed`, `ErrIsDirectory`,
@@ -203,7 +209,9 @@ These hold for v1.0.0. Where an earlier design differs, the decision here wins.
 
 ## Not in v1.0.0
 
-Additive or internal, so they can land in v1.x releases:
+Additive or internal, so they can land in v1.x releases. The deferred
+findings of the pre-landing review of 2026-10-25 are in
+[TODOS.md](../TODOS.md).
 
 - A pre-flight check of the names a destination file system rejects, like
   the backslash rule of sftpfs, ftpfs and webdavfs, so that a copy or move

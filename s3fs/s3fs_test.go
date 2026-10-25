@@ -619,7 +619,8 @@ type listedObject struct {
 // sends the number of the page itself, so the next request gets the
 // same page again, and "cycled" alternates between the empty pages
 // brokenFrom and brokenFrom+2, which must be even, so the listing never
-// ends. HeadObject finds no object, DeleteObject records the key, other
+// ends, and "endless" answers every page from brokenFrom on with an
+// empty truncated page and a new token. HeadObject finds no object, DeleteObject records the key, other
 // requests fail.
 type shortPageStore struct {
 	keys        []string // sorted
@@ -635,7 +636,8 @@ type shortPageStore struct {
 
 // maxListRequests limits the ListObjectsV2 requests of a shortPageStore,
 // so that a listing that doesn't end fails instead of hanging the test.
-const maxListRequests = 100
+// It is above the limit of findObject for a test with a few listings.
+const maxListRequests = 4 * maxListingPages
 
 func (st *shortPageStore) handler(w http.ResponseWriter, r *http.Request) {
 	st.mtx.Lock()
@@ -693,6 +695,10 @@ func (st *shortPageStore) handler(w http.ResponseWriter, r *http.Request) {
 		result.KeyCount = 1
 	}
 	switch {
+	case st.brokenToken == "endless" && n >= st.brokenFrom:
+		result.Contents, result.KeyCount = nil, 0
+		result.IsTruncated = true
+		result.NextContinuationToken = strconv.Itoa(n + 2)
 	case st.brokenToken == "cycled" && n >= st.brokenFrom:
 		result.IsTruncated = true
 		next := st.brokenFrom + 2
@@ -782,6 +788,18 @@ func TestShortTruncatedListingPages(t *testing.T) {
 		st.mtx.Lock()
 		assert.Equal(t, []string{"empty/"}, st.deleted)
 		st.mtx.Unlock()
+	})
+
+	// Empty truncated pages with new tokens without end
+	t.Run("EndlessPages", func(t *testing.T) {
+		st, f := newStore(t, "endless", 0)
+		_, err := f.Stat("/dir")
+		assert.ErrorIs(t, err, errListingTooLong, "Stat")
+		assert.ErrorIs(t, f.Remove("/dir"), errListingTooLong, "Remove")
+		st.mtx.Lock()
+		defer st.mtx.Unlock()
+		assert.Empty(t, st.deleted, "nothing must be deleted")
+		assert.LessOrEqual(t, st.lists, 2*maxListingPages+1, "every listing stops at maxListingPages")
 	})
 
 	for _, brokenToken := range []string{"missing", "repeated", "cycled"} {

@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"runtime"
@@ -46,24 +45,9 @@ func ReadHeader(ctx context.Context, fr FileReader, maxNumBytes int) ([]byte, er
 	}
 	defer r.Close()
 
-	// A single Read may return fewer bytes than available,
-	// so read until maxNumBytes or the end of the file
-	data := make([]byte, maxNumBytes)
-	n := 0
-	for n < len(data) {
-		if err := ctx.Err(); err != nil {
-			return data[:n], err
-		}
-		m, err := r.Read(data[n:])
-		n += m
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return data[:n], err
-		}
-	}
-	return data[:n], nil
+	// ReadAll reads until the limit or the end of the file and checks ctx
+	// before every Read, a single Read may return fewer bytes than available
+	return ReadAll(ctx, io.LimitReader(r, int64(maxNumBytes)))
 }
 
 // ReadHeaderString reads up to maxNumBytes as string from the beginning

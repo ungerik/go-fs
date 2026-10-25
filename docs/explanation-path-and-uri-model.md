@@ -185,7 +185,19 @@ the go-fs shorthand for `~/x` in the home directory. The hosts `.`, `..` and
 `?` name no host on any platform, `file://./x` resolves to the `Invalid` file
 system, also on Windows, where it would be the device path `\\.\x`. A relative
 path that can't be made absolute, because the working directory can't be
-determined, has such a URI: `file://./data/x` names no file.
+determined, has such a URI: `file://./data/x` names no file. `file://` and
+`file://localhost` without a path are the root `/`.
+
+On Windows the long paths of a drive or a UNC path keep their prefix:
+`\\?\C:\dir\name.` has the URI `file:////?/C:/dir/name.`, because the prefix
+keeps names that Windows would normalize, like a trailing dot or `aux`. Other
+paths of the device and file namespaces, `\\.\COM1`, `\\?\Volume{…}\x` and
+`\??\PhysicalDrive0`, have no file URI that names a file.
+
+Because a file URI with a host is a UNC path on Windows, a file operation on
+a `File` from an untrusted file URI can connect to any host over SMB, with
+the automatic NTLM login of Windows, just like one on an untrusted UNC path.
+Check the host of such URIs before you use them.
 
 ## Registration
 

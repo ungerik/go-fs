@@ -353,7 +353,9 @@ signatures. Changes compared to v0.1:
   `file://../x` and `file://?/x` name no host and resolve to the `Invalid`
   file system on every platform (on Windows they would be the device paths
   `\\.\x` and `\\?\x`). Convert stored relative file URIs to paths, or to
-  absolute file URIs, before upgrading.
+  absolute file URIs, before upgrading. `file://` and `file://localhost`
+  without a path are the root `/`, not the working directory. Windows long
+  paths keep their URI `file:////?/C:/x`; `file:///??/…` names no file.
 - `sftpfs`, `ftpfs` and `webdavfs` reject paths with a backslash
   (`os.ErrInvalid`), because a server on Windows takes it for a separator.
   For a server on Unix that has files with backslashes in their names, set

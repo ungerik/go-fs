@@ -35,10 +35,15 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   file system, also on Windows, where it would be the device path `\\.\x`.
   `File.URI()` of a relative path that can't be made absolute, because the
   working directory can't be determined, is `file://./…`, which names no
-  file. A Windows long path like `\\?\C:\x` or `\\?\UNC\server\share` gets
-  the URI of the path without the prefix, `file:///C:/x` or
-  `file://server/share`; other paths of the device and file namespaces,
-  like `\\.\COM1`, get a URI that names no file.
+  file. `file://` and `file://localhost` without a path are the root `/`
+  instead of the working directory. A Windows long path of a drive or a UNC
+  path keeps its prefix, `\\?\C:\x` has the URI `file:////?/C:/x` like in
+  beta.3, because the prefix keeps names that Windows would normalize, like
+  a trailing dot. Other paths of the device and file namespaces, like
+  `\\.\COM1`, `\\?\Volume{…}\x` and `\??\PhysicalDrive0`, get a URI that
+  names no file. On Windows a file URI with a host is a UNC path, so opening
+  a `File` from an untrusted file URI can connect to that host over SMB, see
+  `ParseRawURI`.
 - `sftpfs`, `ftpfs` and `webdavfs` reject a path with a backslash with an
   error wrapping `os.ErrInvalid`, in `sftpfs` also a symbolic link target
   and in `ftpfs` a listed link target that `Stat` follows.
@@ -96,7 +101,8 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   object onto a directory, and let `Remove` delete the marker of a directory
   with content. A truncated page without a new continuation token, also
   with the token of an earlier page, is now an error instead of a listing
-  that never ends.
+  that never ends, and so is a listing that has no decision after 1000
+  pages; the pages after an empty truncated one ask for 1000 keys.
 
 ## [1.0.0-beta.3] - 2026-10-24
 

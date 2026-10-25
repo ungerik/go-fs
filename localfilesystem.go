@@ -284,20 +284,16 @@ func (local *LocalFileSystem) URI(cleanPath string) string {
 // A relative path gets the authority "." of no host ("data/x" becomes
 // "./data/x"), see fileURILocalPath. windows selects the rules of Windows.
 //
-// On Windows the long path prefix `\\?\` is removed from a path with
-// a drive letter or a UNC path, `\\?\C:\x` gets the URI of `C:\x` and
-// `\\?\UNC\server\share` that of `\\server\share`: the os package adds
-// the prefix back where it is needed. Other paths of the file and device
-// namespaces, like `\\?\Volume{…}\x` and `\\.\COM1`, keep a URI with the
-// authority "?" or "." that names no file.
+// On Windows a long path of a drive or a UNC path keeps its prefix `\\?\`
+// after the empty authority, `\\?\C:\x` gets the URI "file:////?/C:/x",
+// because the prefix turns off the normalization of names with a trailing
+// dot or space and of reserved names like "aux". Other paths of the file
+// and device namespaces, like `\\?\Volume{…}\x` and `\\.\COM1`, get a URI
+// with the authority "?" or "." that names no file.
 func fileURIPathOf(slashPath string, windows bool) string {
-	if long, ok := strings.CutPrefix(slashPath, "//?/"); ok && windows {
-		switch {
-		case isDriveLetterPath(long):
-			return "/" + long
-		case len(long) > 4 && strings.EqualFold(long[:4], "UNC/"):
-			return long[4:]
-		}
+	if windows && isLongPath(slashPath) {
+		// The empty authority keeps the long path: "file:////?/C:/x"
+		return slashPath
 	}
 	switch {
 	case strings.HasPrefix(slashPath, "//"):
@@ -330,7 +326,14 @@ func fileURIPathOf(slashPath string, windows bool) string {
 // v1.0.0 resolved "file://./x" relative to the working directory, and on
 // Windows `\\.\` and `\\?\` begin the device and file namespaces,
 // `\\.\PhysicalDrive0` is a disk, so on Windows the form "file:////./x"
-// of such a UNC path is not local either.
+// of such a UNC path is not local either, and neither is a path with the
+// NT object namespace prefix `\??\`, like "file:///??/PhysicalDrive0".
+// The exceptions are the long paths of a drive or a UNC path,
+// "file:////?/C:/x" and "file://?/C:/x" are `\\?\C:\x` and
+// "file:////?/UNC/server/share/x" is `\\?\UNC\server\share\x`,
+// which name local files.
+// A local URI without a path, "file://" or "file://localhost",
+// is the root "/", because RFC 8089 requires an absolute path.
 func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool) {
 	separators := "/"
 	if windows {
@@ -356,7 +359,14 @@ func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool)
 	default:
 		return "/" + authority + filePath, false
 	}
-	if windows && isNoServerUNCPath(filePath) {
+	if filePath == "" {
+		// RFC 8089 requires an absolute path, "file://localhost" is the root
+		filePath = "/"
+	}
+	if windows && isLongPath(filePath) {
+		return filePath, true
+	}
+	if windows && (isNoServerUNCPath(filePath) || isNTNamespacePath(filePath)) {
 		return "/" + strings.TrimLeft(filePath, `/\`), false
 	}
 	if windows && len(filePath) == 2 && filePath[1] == ':' {
@@ -378,6 +388,30 @@ func isNoServerUNCPath(p string) bool {
 		server = server[:i]
 	}
 	return server == "." || server == ".." || server == "?"
+}
+
+// isLongPath reports if the Windows path p with forward or backward
+// slashes is a long path of a drive or a UNC path in the file namespace,
+// like `\\?\C:\x` or `\\?\UNC\server\share\x`, the only paths
+// of the file namespace that name local files, see fileURILocalPath.
+func isLongPath(p string) bool {
+	if len(p) < 4 || !isSlash(p[0]) || !isSlash(p[1]) || p[2] != '?' || !isSlash(p[3]) {
+		return false
+	}
+	rest := p[4:]
+	return isDriveLetterPath(rest) || len(rest) > 4 && strings.EqualFold(rest[:3], "UNC") && isSlash(rest[3])
+}
+
+// isNTNamespacePath reports if the Windows path p with forward or
+// backward slashes begins with the NT object namespace prefix `\??\`,
+// like `\??\PhysicalDrive0`, which reaches devices, see fileURILocalPath.
+func isNTNamespacePath(p string) bool {
+	return len(p) >= 3 && isSlash(p[0]) && p[1] == '?' && p[2] == '?' && (len(p) == 3 || isSlash(p[3]))
+}
+
+// isSlash reports if c is a forward or a backward slash.
+func isSlash(c byte) bool {
+	return c == '/' || c == '\\'
 }
 
 // isDriveLetterPath reports if filePath begins with a Windows drive letter
