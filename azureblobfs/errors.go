@@ -37,6 +37,15 @@ func isPermissionDenied(err error) bool {
 	return false
 }
 
+// isPreconditionFailed reports whether err is a 412 Precondition Failed
+// response, like the ConditionNotMet answer to a failed If-Match.
+func isPreconditionFailed(err error) bool {
+	if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok {
+		return respErr.StatusCode == http.StatusPreconditionFailed
+	}
+	return false
+}
+
 var (
 	// urlQuery matches URLs with a query in error messages,
 	// the query can carry the signature of a SAS token.

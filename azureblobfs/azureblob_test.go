@@ -1462,6 +1462,141 @@ func TestMoveRetriedCopyAzurite(t *testing.T) {
 	}
 }
 
+// TestMoveBlobDeletedAfterCopyAzurite checks on Azurite that a source blob
+// that another client deletes after Move copied it is no error, for a blob
+// and for a blob of a directory: only the copies are left. Azurite answers
+// the pinned delete of the deleted blob with 412 ConditionNotMet, not with
+// 404 BlobNotFound like an unpinned one, which Move returned as the error
+// telling that the blob changed while it was being moved. The policy of the
+// client deletes the source right after the copy of it and records the
+// status of the answer to the delete of Move.
+func TestMoveBlobDeletedAfterCopyAzurite(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	other := testClient(t)
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/move-deleted-after") })
+	tests := []struct {
+		name      string
+		sources   []string // blobs below the directory of the case
+		src, dest string   // names below the directory of the case
+	}{
+		{name: "blob", sources: []string{"src.txt"}, src: "src.txt", dest: "dest.txt"},
+		{name: "directory", sources: []string{"dir/a.txt", "dir/b.txt"}, src: "dir", dest: "moved"},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			prefix := fmt.Sprintf("move-deleted-after/%d/", i)
+			for _, name := range tt.sources {
+				require.NoError(t, blobFS.WriteAll(ctx, "/"+prefix+name, []byte(name), 0))
+			}
+			deleted := prefix + tt.sources[0]
+			copyTarget := prefix + tt.dest + strings.TrimPrefix(tt.sources[0], tt.src)
+			var deletedSource atomic.Bool
+			var deleteStatus atomic.Int64
+			racing := newPolicyFileSystem(t, func(req *policy.Request) (*http.Response, error) {
+				raw := req.Raw()
+				response, err := req.Next()
+				if err != nil {
+					return response, err
+				}
+				// The only PUT requests of Move are the copies
+				copyRequest := raw.Method == http.MethodPut && strings.HasSuffix(raw.URL.Path, "/"+copyTarget)
+				if copyRequest && deletedSource.CompareAndSwap(false, true) {
+					if _, err := other.NewBlobClient(deleted).Delete(raw.Context(), nil); err != nil {
+						_ = response.Body.Close()
+						return nil, err
+					}
+				}
+				if raw.Method == http.MethodDelete && strings.HasSuffix(raw.URL.Path, "/"+deleted) {
+					deleteStatus.Store(int64(response.StatusCode))
+				}
+				return response, nil
+			})
+
+			require.NoError(t, racing.Move(ctx, "/"+prefix+tt.src, "/"+prefix+tt.dest))
+			require.True(t, deletedSource.Load(), "the policy must have deleted the source after its copy")
+			assert.Equal(t, int64(http.StatusPreconditionFailed), deleteStatus.Load(), "Azurite answers the pinned delete of a missing blob with 412")
+			for _, name := range tt.sources {
+				_, err := blobFS.Stat("/" + prefix + name)
+				assert.ErrorIs(t, err, os.ErrNotExist, "the source %s must be gone", name)
+				target := prefix + tt.dest + strings.TrimPrefix(name, tt.src)
+				data, err := blobFS.ReadAll(ctx, "/"+target)
+				require.NoError(t, err)
+				assert.Equal(t, name, string(data), "the copy of %s", name)
+			}
+		})
+	}
+}
+
+// TestMoveRetriedDeleteAzurite checks on Azurite that Move goes on when the
+// SDK retried a delete whose answer was lost. The policy of the client lets
+// Azurite delete the source blob for the first delete request and then
+// answers it with 500 Internal Server Error or fails it like a broken
+// connection, so the SDK retries the delete, which Azurite answers with 412
+// ConditionNotMet for the deleted blob. Move returned that answer as the
+// error telling that the blob changed while it was being moved. The policy
+// records the status of the answer to the retried delete.
+func TestMoveRetriedDeleteAzurite(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/move-retried-delete") })
+	tests := []struct {
+		name      string
+		sources   []string // blobs below the directory of the case
+		src, dest string   // names below the directory of the case
+	}{
+		{name: "blob", sources: []string{"src.txt"}, src: "src.txt", dest: "dest.txt"},
+		{name: "directory", sources: []string{"dir/a.txt", "dir/b.txt"}, src: "dir", dest: "moved"},
+	}
+	for i, lost := range []string{"500", "drop"} {
+		for j, tt := range tests {
+			t.Run(lost+"/"+tt.name, func(t *testing.T) {
+				ctx := t.Context()
+				prefix := fmt.Sprintf("move-retried-delete/%d-%d/", i, j)
+				for _, name := range tt.sources {
+					require.NoError(t, blobFS.WriteAll(ctx, "/"+prefix+name, []byte(name), 0))
+				}
+				var lostAnswer atomic.Bool
+				var retryStatus atomic.Int64
+				retrying := newRetryPolicyFileSystem(t, func(req *policy.Request) (*http.Response, error) {
+					raw := req.Raw()
+					response, err := req.Next()
+					if err != nil || raw.Method != http.MethodDelete {
+						return response, err
+					}
+					if !lostAnswer.CompareAndSwap(false, true) {
+						retryStatus.CompareAndSwap(0, int64(response.StatusCode))
+						return response, nil
+					}
+					// Azurite deleted the blob, the answer gets lost
+					_ = response.Body.Close()
+					if lost == "drop" {
+						return nil, fmt.Errorf("connection closed: %w", io.ErrUnexpectedEOF)
+					}
+					return &http.Response{
+						Status:     "500 Internal Server Error",
+						StatusCode: http.StatusInternalServerError,
+						Header:     http.Header{},
+						Body:       http.NoBody,
+						Request:    raw,
+					}, nil
+				})
+
+				require.NoError(t, retrying.Move(ctx, "/"+prefix+tt.src, "/"+prefix+tt.dest))
+				require.True(t, lostAnswer.Load(), "the policy must have lost the answer to the first delete")
+				assert.Equal(t, int64(http.StatusPreconditionFailed), retryStatus.Load(), "Azurite answers the retried pinned delete of the deleted blob with 412")
+				for _, name := range tt.sources {
+					_, err := blobFS.Stat("/" + prefix + name)
+					assert.ErrorIs(t, err, os.ErrNotExist, "Move must delete the source %s", name)
+					target := prefix + tt.dest + strings.TrimPrefix(name, tt.src)
+					data, err := blobFS.ReadAll(ctx, "/"+target)
+					require.NoError(t, err)
+					assert.Equal(t, name, string(data), "the copy of %s", name)
+				}
+			})
+		}
+	}
+}
+
 // moveTestServer stands in for Azure in the offline tests of Move, with
 // blobs in memory that are only an ETag and some headers. Listings return
 // the blobs with a prefix and their ETags, GetProperties the ETag of a
@@ -1509,6 +1644,17 @@ type moveTestServer struct {
 	// close the connection without an answer ("drop"), so the SDK retries it
 	loseCopyAnswer string
 	lostCopyAnswer bool
+	// loseDeleteAnswer makes the server delete the blob for the first
+	// delete request and then lose the answer like loseCopyAnswer
+	loseDeleteAnswer string
+	lostDeleteAnswer bool
+	// pinnedDeleteMissing412 makes the server answer a delete pinned with
+	// If-Match of a missing blob with 412 ConditionNotMet like Azurite,
+	// else with 404 BlobNotFound like an unpinned one
+	pinnedDeleteMissing412 bool
+	// leased is a blob that another client leased, its delete without
+	// lease ID is answered with 412 LeaseIdMissing
+	leased string
 	// failPropertiesAfterCopy is a blob whose GetProperties fails with 403
 	// Forbidden after the first copy request
 	failPropertiesAfterCopy string
@@ -1634,14 +1780,7 @@ func (s *moveTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if s.loseCopyAnswer != "" && !s.lostCopyAnswer {
 			s.lostCopyAnswer = true
-			if s.loseCopyAnswer == "drop" {
-				conn, _, err := http.NewResponseController(w).Hijack()
-				if err == nil {
-					_ = conn.Close()
-				}
-				return
-			}
-			w.WriteHeader(http.StatusInternalServerError)
+			loseAnswer(w, s.loseCopyAnswer)
 			return
 		}
 		w.Header().Set("x-ms-copy-status", string(blob.CopyStatusTypeSuccess))
@@ -1650,21 +1789,43 @@ func (s *moveTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ifMatch := r.Header.Get("If-Match")
 		s.deletes = append(s.deletes, name+" "+ifMatch)
 		switch {
-		case s.etags[name] == "":
+		case s.etags[name] == "" && (ifMatch == "" || !s.pinnedDeleteMissing412):
 			w.Header().Set("x-ms-error-code", string(bloberror.BlobNotFound))
 			w.WriteHeader(http.StatusNotFound)
 		case ifMatch != "" && ifMatch != s.etags[name]:
 			w.Header().Set("x-ms-error-code", string(bloberror.ConditionNotMet))
 			w.WriteHeader(http.StatusPreconditionFailed)
+		case name == s.leased:
+			w.Header().Set("x-ms-error-code", string(bloberror.LeaseIDMissing))
+			w.WriteHeader(http.StatusPreconditionFailed)
 		default:
 			delete(s.etags, name)
 			s.setHeaders(name, nil)
+			if s.loseDeleteAnswer != "" && !s.lostDeleteAnswer {
+				s.lostDeleteAnswer = true
+				loseAnswer(w, s.loseDeleteAnswer)
+				return
+			}
 			w.WriteHeader(http.StatusAccepted)
 		}
 	default:
 		w.Header().Set("x-ms-error-code", string(bloberror.BlobNotFound))
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// loseAnswer loses the answer to a request that the server carried out:
+// it answers with 500 Internal Server Error for how "500" and closes the
+// connection without an answer for how "drop", so the SDK retries it.
+func loseAnswer(w http.ResponseWriter, how string) {
+	if how == "drop" {
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+		return
+	}
+	w.WriteHeader(http.StatusInternalServerError)
 }
 
 // setHeaders sets the headers of the blob name to a copy of header,
@@ -1817,37 +1978,149 @@ func TestMoveOntoBlobThatIsADirectory(t *testing.T) {
 // TestMoveBlobDeletedAfterCopy checks on a test server that a source blob
 // that another client deletes after Move copied it is no error, for a blob
 // and for a blob of a directory: the copy is at the destination and the
-// source is gone, like after the move.
+// source is gone, like after the move. The pinned delete of the deleted
+// blob is answered with 404 BlobNotFound or, like by Azurite, with 412
+// ConditionNotMet, which Move returned as the error telling that the blob
+// changed while it was being moved. Now Move looks the blob up after a
+// 412 answer and goes on for a blob that is gone.
 func TestMoveBlobDeletedAfterCopy(t *testing.T) {
 	tests := []struct {
-		name      string
-		etags     map[string]string // the blobs before the move
-		src, dest string
-		wantBlobs map[string]string
+		name        string
+		etags       map[string]string // the blobs before the move
+		src, dest   string
+		wantDeletes []string
+		wantBlobs   map[string]string
 	}{
 		{
 			name:  "blob",
 			etags: map[string]string{"dir/a.txt": `"a1"`},
 			src:   "/dir/a.txt", dest: "/moved.txt",
-			wantBlobs: map[string]string{"moved.txt": `"a1"`},
+			wantDeletes: []string{`dir/a.txt "a1"`},
+			wantBlobs:   map[string]string{"moved.txt": `"a1"`},
 		},
 		{
 			name:  "directory",
 			etags: map[string]string{"dir/a.txt": `"a1"`, "dir/b.txt": `"b1"`},
 			src:   "/dir", dest: "/moved",
-			wantBlobs: map[string]string{"moved/a.txt": `"a1"`, "moved/b.txt": `"b1"`},
+			wantDeletes: []string{`dir/a.txt "a1"`, `dir/b.txt "b1"`},
+			wantBlobs:   map[string]string{"moved/a.txt": `"a1"`, "moved/b.txt": `"b1"`},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := &moveTestServer{etags: tt.etags, deleteAfterCopy: "dir/a.txt"}
-			blobFS := newHTTPTestFileSystem(t, server.ServeHTTP)
+	for _, missing412 := range []bool{false, true} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("%s/pinned delete of a missing blob answered with 412=%t", tt.name, missing412), func(t *testing.T) {
+				server := &moveTestServer{
+					etags:                  maps.Clone(tt.etags),
+					deleteAfterCopy:        "dir/a.txt",
+					pinnedDeleteMissing412: missing412,
+				}
+				blobFS := newHTTPTestFileSystem(t, server.ServeHTTP)
 
-			require.NoError(t, blobFS.Move(t.Context(), tt.src, tt.dest))
-			server.mu.Lock()
-			defer server.mu.Unlock()
-			assert.Equal(t, tt.wantBlobs, server.etags, "blobs left")
-		})
+				require.NoError(t, blobFS.Move(t.Context(), tt.src, tt.dest))
+				server.mu.Lock()
+				defer server.mu.Unlock()
+				assert.Equal(t, tt.wantDeletes, server.deletes, "delete requests")
+				assert.Equal(t, tt.wantBlobs, server.etags, "blobs left")
+			})
+		}
+	}
+}
+
+// TestMoveSourceDeletedUnconfirmed checks on a test server that a pinned
+// delete answered with 412 ConditionNotMet is the error telling that the
+// blob changed while it was being moved if Move can't look the blob up
+// afterwards to see that it is gone, although another client deleted it
+// after its copy: Move can't tell it from a blob that was replaced.
+func TestMoveSourceDeletedUnconfirmed(t *testing.T) {
+	server := &moveTestServer{
+		etags:                   map[string]string{"dir/a.txt": `"a1"`},
+		deleteAfterCopy:         "dir/a.txt",
+		pinnedDeleteMissing412:  true,
+		failPropertiesAfterCopy: "dir/a.txt",
+	}
+	blobFS := newHTTPTestFileSystem(t, server.ServeHTTP)
+
+	err := blobFS.Move(t.Context(), "/dir/a.txt", "/moved.txt")
+	require.ErrorContains(t, err, string(blobFS.file("dir/a.txt"))+" changed while it was being moved")
+	assert.True(t, bloberror.HasCode(err, bloberror.ConditionNotMet), "the error wraps the 412 answer: %v", err)
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	assert.Equal(t, []string{`dir/a.txt "a1"`}, server.deletes, "delete requests")
+	assert.Equal(t, map[string]string{"moved.txt": `"a1"`}, server.etags, "blobs left")
+}
+
+// TestMoveSourceLeased checks on a test server that Move returns the 412
+// LeaseIdMissing answer to the delete of a source blob that another client
+// leased as it is, not as the error telling that the blob changed while it
+// was being moved, which only a 412 ConditionNotMet answer is. The source
+// blob and its copy are kept.
+func TestMoveSourceLeased(t *testing.T) {
+	server := &moveTestServer{
+		etags:  map[string]string{"dir/a.txt": `"a1"`},
+		leased: "dir/a.txt",
+	}
+	blobFS := newHTTPTestFileSystem(t, server.ServeHTTP)
+
+	err := blobFS.Move(t.Context(), "/dir/a.txt", "/moved.txt")
+	require.Error(t, err)
+	assert.True(t, bloberror.HasCode(err, bloberror.LeaseIDMissing), "the error is the 412 answer: %v", err)
+	assert.NotContains(t, err.Error(), "changed while it was being moved")
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	assert.Equal(t, []string{`dir/a.txt "a1"`}, server.deletes, "delete requests")
+	assert.Equal(t, map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"a1"`}, server.etags, "blobs left")
+}
+
+// TestMoveRetriedDelete checks on a test server that Move goes on when the
+// SDK retried a delete whose answer was lost: the server deletes the source
+// blob for the first delete request and then answers it with 500 Internal
+// Server Error or closes the connection, so the retry finds the blob
+// deleted. The pinned retry is answered with 404 BlobNotFound or, like by
+// Azurite, with 412 ConditionNotMet, which Move returned as the error
+// telling that the blob changed while it was being moved.
+func TestMoveRetriedDelete(t *testing.T) {
+	tests := []struct {
+		name        string
+		etags       map[string]string // the blobs before the move
+		src, dest   string
+		wantDeletes []string
+		wantBlobs   map[string]string
+	}{
+		{
+			name:  "blob",
+			etags: map[string]string{"dir/a.txt": `"a1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			wantDeletes: []string{`dir/a.txt "a1"`, `dir/a.txt "a1"`},
+			wantBlobs:   map[string]string{"moved.txt": `"a1"`},
+		},
+		{
+			name:  "directory",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "dir/b.txt": `"b1"`},
+			src:   "/dir", dest: "/moved",
+			wantDeletes: []string{`dir/a.txt "a1"`, `dir/a.txt "a1"`, `dir/b.txt "b1"`},
+			wantBlobs:   map[string]string{"moved/a.txt": `"a1"`, "moved/b.txt": `"b1"`},
+		},
+	}
+	for _, lost := range []string{"500", "drop"} {
+		for _, missing412 := range []bool{false, true} {
+			for _, tt := range tests {
+				t.Run(fmt.Sprintf("%s/%s/pinned delete of a missing blob answered with 412=%t", lost, tt.name, missing412), func(t *testing.T) {
+					server := &moveTestServer{
+						etags:                  maps.Clone(tt.etags),
+						loseDeleteAnswer:       lost,
+						pinnedDeleteMissing412: missing412,
+					}
+					blobFS := newHTTPTestFileSystemWithOptions(t, server.ServeHTTP, fastRetries)
+
+					require.NoError(t, blobFS.Move(t.Context(), tt.src, tt.dest))
+					server.mu.Lock()
+					defer server.mu.Unlock()
+					assert.True(t, server.lostDeleteAnswer, "the server must have lost the answer to the first delete")
+					assert.Equal(t, tt.wantDeletes, server.deletes, "delete requests, the first one retried")
+					assert.Equal(t, tt.wantBlobs, server.etags, "blobs left")
+				})
+			}
+		}
 	}
 }
 
@@ -2259,6 +2532,40 @@ func TestMoveDestinationCopyCheck(t *testing.T) {
 			name: "copy of another blob",
 			change: func(header http.Header) {
 				header.Set("x-ms-copy-source", strings.Replace(header.Get("x-ms-copy-source"), "a.txt", "c.txt", 1))
+			},
+		},
+		{
+			// Like another client that copies an older snapshot or version of
+			// the source with the same size: a large block blob has no
+			// Content-MD5, so only the copy source tells them apart
+			name: "copy of a snapshot of the source",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-source", header.Get("x-ms-copy-source")+"?snapshot=2026-10-25T11:00:00.0000000Z")
+			},
+		},
+		{
+			name: "copy of a version of the source",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-source", header.Get("x-ms-copy-source")+"?versionid=2026-10-25T11:00:00.0000000Z")
+			},
+		},
+		{
+			name: "copy of a version of the source without Content-MD5, parameter name in another case",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-source", header.Get("x-ms-copy-source")+"?versionId=2026-10-25T11:00:00.0000000Z")
+				header.Del("Content-MD5")
+			},
+		},
+		{
+			name: "copy of a snapshot of the source with a SAS",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-source", header.Get("x-ms-copy-source")+"?sv=2025-01-01&snapshot=2026-10-25T11:00:00.0000000Z&sig=SECRET")
+			},
+		},
+		{
+			name: "copy from the URL of the source with a malformed query",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-source", header.Get("x-ms-copy-source")+"?snapshot=%ZZ")
 			},
 		},
 		{

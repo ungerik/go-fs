@@ -846,8 +846,9 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 // Options.DeleteSnapshots is set. Azure refuses to delete a blob with
 // snapshots otherwise, that is an error wrapping ErrSnapshotsPresent.
 // A non-nil etag pins the delete to that version of the blob (If-Match),
-// Azure keeps a blob that changed since and answers 412 Condition Not Met.
-// Other errors, like a missing blob, are returned redacted.
+// Azure keeps a blob that changed since and answers 412 Condition Not Met,
+// Azurite also for a missing blob. Other errors, like 404 Blob Not Found
+// for a missing blob, are returned redacted.
 func (f *fileSystem) deleteBlob(ctx context.Context, name string, etag *azcore.ETag) error {
 	opts := &blob.DeleteOptions{}
 	if f.deleteSnapshots {
@@ -1081,7 +1082,8 @@ func (f *fileSystem) deleteBlobs(ctx context.Context, blobs []listedBlob) error 
 // changed while it was being moved, which wrap the 412 answer of Azure.
 // A source blob that another client deletes before its copy is an error
 // wrapping os.ErrNotExist with the same effect, one deleted after its copy
-// is no error.
+// is no error, also not for a delete that the SDK retried after its answer
+// was lost and that finds the blob deleted by the first try.
 //
 // The copies are pinned to the destination too: a copy to a destination
 // that Move found missing, like every copy of a directory, requires that no
@@ -1096,7 +1098,8 @@ func (f *fileSystem) deleteBlobs(ctx context.Context, blobs []listedBlob) error 
 // a 500 answer or a broken connection, and the retry fails the destination
 // condition against the copy that Azure made before, so for a failed
 // destination condition Move takes a destination blob that is the completed
-// copy of the source blob it found (same copy source, size and Content-MD5,
+// copy of the source blob it found (copied from the source blob itself, not
+// from a snapshot or version of it, with the same size and Content-MD5,
 // completed after the source was last modified) as its copy and goes on.
 //
 // Without Options.DeleteSnapshots a blob with snapshots at or below
@@ -1198,7 +1201,10 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 // copy it keeps the blob and those not deleted yet. A destination that
 // fails destCond is an error wrapping os.ErrExist (destChangedError), a blob
 // that was deleted before its copy one wrapping os.ErrNotExist, both copy
-// and delete nothing more. A blob that was deleted after its copy is no error.
+// and delete nothing more. A blob that was deleted after its copy is no error:
+// after a 412 answer to its delete moveBlobs looks the blob up and goes on
+// if it is gone. Else a 412 ConditionNotMet answer means that the blob
+// changed, other 412 answers, like LeaseIdMissing, are returned as they are.
 // A destination that failed destCond but is the completed copy of the blob
 // (isCopyOf) counts as copied: the SDK retried a copy whose answer was lost.
 func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, dest string, destCond *blob.ModifiedAccessConditions) error {
@@ -1232,12 +1238,23 @@ func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, des
 	}
 	for _, b := range blobs {
 		err := f.deleteBlob(ctx, b.name, b.etag)
-		switch {
-		case b.etag != nil && bloberror.HasCode(err, bloberror.ConditionNotMet):
-			return f.changedError(b.name, "moved", err)
-		case err != nil && !isNotFound(err):
-			return err
+		if err == nil || isNotFound(err) {
+			continue
 		}
+		if b.etag != nil && isPreconditionFailed(err) {
+			// Azurite answers the pinned delete of a missing blob with 412
+			// ConditionNotMet like that of a changed one, also the retry of
+			// a delete whose answer was lost. A blob that is gone was deleted.
+			if _, propsErr := f.client.NewBlobClient(b.name).GetProperties(ctx, nil); isNotFound(propsErr) {
+				continue
+			}
+			// Another 412 answer, like LeaseIdMissing for a blob that
+			// another client leased, is no change of the blob
+			if bloberror.HasCode(err, bloberror.ConditionNotMet) {
+				return f.changedError(b.name, "moved", err)
+			}
+		}
+		return err
 	}
 	return nil
 }
@@ -1287,14 +1304,17 @@ func (f *fileSystem) blobChanged(ctx context.Context, name string, etag *azcore.
 // of src, completed after src was last modified, with the size of src and
 // its Content-MD5 if both have one. The copy properties survive a change
 // of the metadata of dest, so an older copy of src, from before it was
-// last modified, doesn't count. A dest whose properties can't be
-// requested isn't the copy either.
+// last modified, doesn't count. A copy of a snapshot or a version of src
+// doesn't count either, its content can be older than that of src with
+// the same size, and a large block blob has no Content-MD5 to tell them
+// apart. A dest whose properties can't be requested isn't the copy.
 func (f *fileSystem) isCopyOf(ctx context.Context, dest string, src listedBlob) bool {
 	props, err := f.client.NewBlobClient(dest).GetProperties(ctx, nil)
 	if err != nil || deref(props.CopyStatus) != blob.CopyStatusTypeSuccess || props.CopyCompletionTime == nil {
 		return false
 	}
-	if !sameBlobURL(deref(props.CopySource), f.client.NewBlobClient(src.name).URL()) {
+	copySource := deref(props.CopySource)
+	if !sameBlobURL(copySource, f.client.NewBlobClient(src.name).URL()) || isSnapshotOrVersionURL(copySource) {
 		return false
 	}
 	if deref(props.ContentLength) != src.size {
@@ -1308,7 +1328,7 @@ func (f *fileSystem) isCopyOf(ctx context.Context, dest string, src listedBlob) 
 
 // sameBlobURL reports if the URLs a and b address the same blob: they have
 // the same host and unescaped path. Their queries don't matter, a query
-// can carry a SAS token.
+// can carry a SAS token, but see isSnapshotOrVersionURL.
 func sameBlobURL(a, b string) bool {
 	urlA, err := url.Parse(a)
 	if err != nil {
@@ -1319,6 +1339,27 @@ func sameBlobURL(a, b string) bool {
 		return false
 	}
 	return strings.EqualFold(urlA.Host, urlB.Host) && urlA.Path == urlB.Path
+}
+
+// isSnapshotOrVersionURL reports if the blob URL u addresses a snapshot or
+// a version of the blob: its query has a snapshot or versionid parameter,
+// whose name is compared in any case. A URL or query that can't be parsed
+// counts as one, so that isCopyOf rejects it.
+func isSnapshotOrVersionURL(u string) bool {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return true
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return true
+	}
+	for key := range query {
+		if strings.EqualFold(key, "snapshot") || strings.EqualFold(key, "versionid") {
+			return true
+		}
+	}
+	return false
 }
 
 // copyBlob copies the blob src server-side to the blob dest
