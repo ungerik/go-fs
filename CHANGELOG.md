@@ -80,7 +80,13 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   was lost and the retry fails the destination condition against the copy
   Azure already made, `Move` recognizes the completed copy of the source
   blob it found (copy source, size, Content-MD5, completed after the source
-  was last modified) and finishes the move. Only a move within one file system
+  was last modified) and finishes the move. A copy of a snapshot or version
+  of the source (a `snapshot` or `versionid` parameter in the copy source)
+  is not taken for that copy. A source blob that another client deletes
+  after its copy, or whose delete the SDK retried after a lost answer, is no
+  error also when the pinned delete is answered with 412 instead of 404, as
+  Azurite does: `Move` looks the blob up after a 412 and goes on if it is
+  gone. Only a move within one file system
   is pinned; `fs.Move` to another container or file system copies and calls
   `RemoveAll`, which isn't. The generic move copied first and
   then failed to delete a source with snapshots, after it had replaced the
