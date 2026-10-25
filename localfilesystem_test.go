@@ -941,6 +941,8 @@ func TestFileURIPathOf(t *testing.T) {
 		"//?/unc/server/share/aux":  "//?/unc/server/share/aux",
 		"//?/Volume{1234}/dir/file": "",
 		"//./COM1":                  "",
+		"//?/UNCx/server/share":     "", // no long UNC path without the slash after UNC
+		"//?/UNC/":                  "", // nor without a server
 	} {
 		rest := fileURIPathOf(slashPath, true)
 		gotPath, isLocal := fileURILocalPath(rest, true)

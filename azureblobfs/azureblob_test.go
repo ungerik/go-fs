@@ -1274,6 +1274,7 @@ type moveTestServer struct {
 	deletes           []string          // "name If-Match" of every delete request
 	replaceBeforeCopy string
 	replaceAfterCopy  string
+	deleteAfterCopy   string // another client deletes this blob right after its copy
 	failCopy          int
 }
 
@@ -1327,6 +1328,9 @@ func (s *moveTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.etags[name] = s.etags[src]
 		if src == s.replaceAfterCopy {
 			s.etags[src] = `"new"`
+		}
+		if src == s.deleteAfterCopy {
+			delete(s.etags, src)
 		}
 		w.Header().Set("x-ms-copy-status", string(blob.CopyStatusTypeSuccess))
 		w.WriteHeader(http.StatusAccepted)
@@ -1464,6 +1468,40 @@ func TestMoveDirectoryCopyFails(t *testing.T) {
 	assert.Len(t, server.copies, 2, "copy requests")
 	assert.Empty(t, server.deletes, "Move must not delete a source blob before every copy succeeded")
 	assert.Equal(t, map[string]string{"dir/a.txt": `"a1"`, "dir/b.txt": `"b1"`, "moved/a.txt": `"a1"`}, server.etags, "blobs left")
+}
+
+// TestMoveOntoBlobThatIsADirectory checks on a test server that Move of a
+// blob onto a name that is a blob and a directory, with blobs below it,
+// is an fs.ErrIsDirectory without a copy or a delete. Move checks that
+// itself since it no longer copies with CopyFile.
+func TestMoveOntoBlobThatIsADirectory(t *testing.T) {
+	server := &moveTestServer{
+		etags: map[string]string{"a.txt": `"a1"`, "dest": `"d1"`, "dest/x.txt": `"x1"`},
+	}
+	blobFS := newHTTPTestFileSystem(t, server.ServeHTTP)
+
+	err := blobFS.Move(t.Context(), "/a.txt", "/dest")
+	assert.ErrorIs(t, err, fs.ErrIsDirectory{})
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	assert.Empty(t, server.copies, "no copy onto a directory")
+	assert.Empty(t, server.deletes, "no delete")
+}
+
+// TestMoveBlobDeletedAfterCopy checks on a test server that a source blob
+// that another client deletes after Move copied it is no error: the copy
+// is at the destination and the source is gone, like after the move.
+func TestMoveBlobDeletedAfterCopy(t *testing.T) {
+	server := &moveTestServer{
+		etags:           map[string]string{"dir/a.txt": `"a1"`, "dir/b.txt": `"b1"`},
+		deleteAfterCopy: "dir/a.txt",
+	}
+	blobFS := newHTTPTestFileSystem(t, server.ServeHTTP)
+
+	require.NoError(t, blobFS.Move(t.Context(), "/dir", "/moved"))
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	assert.Equal(t, map[string]string{"moved/a.txt": `"a1"`, "moved/b.txt": `"b1"`}, server.etags, "blobs left")
 }
 
 // TestRemoveAllScanError checks that RemoveAll deletes nothing

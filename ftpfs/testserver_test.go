@@ -57,6 +57,7 @@ type testFTPServer struct {
 
 	// Hooks, guarded by mu
 	failListContains string         // LIST and MLSD of a path containing it fail with 550
+	listOmits        string         // LIST, not MLSD, of the parent directory leaves out the entry at this path
 	dropBefore       map[string]int // the next commands with the verb close the connection without executing them
 	dropReplyOf      map[string]int // the next commands with the verb are executed, then the connection closes instead of the final reply
 	hang             string         // commands with this verb are never answered
@@ -511,6 +512,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		failList := s.failListContains
 		rntoNoReplace := s.rntoNoReplace
 		dotEntries, lsArgs, statArgs := s.dotEntries, s.lsArgs, s.statArgs
+		listOmits := s.listOmits
 		tooManyListings := (verb == "LIST" || verb == "MLSD") && s.maxListings > 0 && s.commands["LIST"]+s.commands["MLSD"] > s.maxListings
 		s.mu.Unlock()
 
@@ -740,6 +742,9 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			if ok && node.isDir {
 				for _, name := range s.children(p) {
 					child := s.nodes[path.Join(p, name)]
+					if verb == "LIST" && path.Join(p, name) == listOmits {
+						continue
+					}
 					if verb == "MLSD" {
 						lines = append(lines, fmt.Sprintf("%s %s", s.mlsdFact(path.Join(p, name), child), name))
 					} else {

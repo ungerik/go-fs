@@ -1021,11 +1021,15 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 		removed   string // the path of RemoveAll
 		link      string // the link to /outside whose DELE is refused
 		failLists string // LIST and MLSD of paths containing it fail
+		listOmits string // LIST of its parent leaves out this path
 	}{
 		{name: "link below the removed directory", removed: "/tree", link: "/tree/link"},
 		{name: "link in a subdirectory", removed: "/tree", link: "/tree/sub/link"},
 		{name: "link at the removed path", removed: "/tree/link", link: "/tree/link"},
 		{name: "parent directory can't be listed", removed: "/tree/link", link: "/tree/link", failLists: "/tree"},
+		// The check must accept only a directory that LIST shows,
+		// not refuse only an entry that LIST shows as a link
+		{name: "LIST doesn't show the link", removed: "/tree", link: "/tree/link", listOmits: "/tree/link"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newTestFTPServer(t)
@@ -1037,6 +1041,7 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 			srv.configure(func(s *testFTPServer) {
 				s.refuse["DELE "+tc.link] = 100
 				s.failListContains = tc.failLists
+				s.listOmits = tc.listOmits
 			})
 			ftpFS := dialInProcess(t, srv)
 
@@ -1055,6 +1060,7 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 			srv.configure(func(s *testFTPServer) {
 				s.refuse = map[string]int{}
 				s.failListContains = ""
+				s.listOmits = ""
 			})
 			require.NoError(t, ftpFS.RemoveAll(t.Context(), tc.removed))
 			assert.False(t, srv.exists(tc.removed))
