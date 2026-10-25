@@ -93,6 +93,20 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   files it points to, outside of the removed tree, on servers with MLST
   support, which describe such a link like the directory: it tries `DELE`
   before it deletes the content of a directory.
+- `ftpfs` `RemoveAll` on servers with MLST support could delete the files that
+  a symbolic link to a directory points to, outside of the removed tree, when
+  the server refused to delete the link, for example in a directory without
+  write permission. After a failed `DELE` it now deletes the content of a
+  directory only if `LIST` of the parent directory lists it as a directory,
+  and otherwise returns an error wrapping the `DELE` error. The client
+  library lists with `MLSD` on these servers, so `RemoveAll` of a directory
+  dials a second connection for `LIST`; on a server that allows only one
+  connection per user it fails instead of deleting.
+- `ftpfs` `RemoveAll` kept a dangling symbolic link or a cycle of links on
+  servers with MLST support, and `Remove` and `Move` of it failed with
+  `os.ErrNotExist`, because MLST follows links and reports such a link as
+  missing. They now try `DELE` or the rename for a path that MLST reports as
+  missing. `Stat` still reports a dangling link as not existing.
 - `s3fs` `Stat`, the directory check of the writes and `Touch`, and the
   not-empty check of `Remove` read further `ListObjectsV2` pages while a page
   is truncated and has fewer keys than requested, even none, instead of
