@@ -695,6 +695,14 @@ func (f *fileSystem) changedError(name, action string, err error) error {
 	return fmt.Errorf("azureblobfs: %s changed while it was being %s: %w", f.file(name), action, err)
 }
 
+// destChangedError is returned by Move for the blob dest that another client
+// created, replaced or deleted after Move checked it, so that the copy of
+// src to it failed its destination condition with err. The error wraps an
+// fs.ErrAlreadyExists for dest, and with it os.ErrExist, and err.
+func (f *fileSystem) destChangedError(src, dest string, err error) error {
+	return fmt.Errorf("azureblobfs: can't move %s, its destination was created or changed during the move: %w: %w", f.file(src), fs.NewErrAlreadyExists(f.file(dest)), err)
+}
+
 // OpenWriter returns a writer that streams the written data to an upload
 // started by the first Write: blocks of 4 MiB are staged while the data
 // is written and committed on Close, smaller data is uploaded with a single
@@ -1067,6 +1075,21 @@ func (f *fileSystem) deleteBlobs(ctx context.Context, blobs []listedBlob) error 
 // the source blobs that it has not deleted yet, and destPath holds the copy
 // of the version that Move found. Both are errors telling that the blob
 // changed while it was being moved, which wrap the 412 answer of Azure.
+// A source blob that another client deletes before its copy is an error
+// wrapping os.ErrNotExist with the same effect, one deleted after its copy
+// is no error.
+//
+// The copies are pinned to the destination too: a copy to a destination
+// that Move found missing, like every copy of a directory, requires that no
+// blob exists there (If-None-Match: *), the copy onto an existing destination
+// blob requires the version that Move found (If-Match). So Move never
+// overwrites a blob that another client creates at destPath, or below the
+// destination of a directory, after Move checked it, nor a newer version of
+// the destination blob: the copy fails, also for a destination blob that was
+// deleted, and Move stops with an error wrapping fs.ErrAlreadyExists
+// (os.ErrExist) for that destination blob, copies nothing more and deletes
+// no source blob.
+//
 // Only a move within one file system is pinned: fs.Move to another
 // container or file system copies with the generic implementation and
 // deletes the source with RemoveAll, which doesn't check the ETags.
@@ -1098,7 +1121,7 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 	if err != nil {
 		return err
 	}
-	destInfo, _, err := f.stat(ctx, destPath)
+	destInfo, destETag, err := f.stat(ctx, destPath)
 	switch {
 	case err == nil && destInfo.IsDir:
 		return fs.NewErrAlreadyExists(destInfo.File)
@@ -1111,6 +1134,9 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 	if err = ctx.Err(); err != nil {
 		return err
 	}
+	// The copies must not overwrite a blob that is created at the missing
+	// destination, or below it, after this check
+	destCond := &blob.ModifiedAccessConditions{IfNoneMatch: new(azcore.ETagAny)}
 	if !srcInfo.IsDir {
 		if !f.deleteSnapshots {
 			// The blob is listed with its snapshots before the other names
@@ -1130,8 +1156,13 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 			if err = f.checkNotDir(ctx, dest); err != nil {
 				return err
 			}
+			// Replace only the version of the destination blob that stat found
+			destCond = nil
+			if destETag != nil {
+				destCond = &blob.ModifiedAccessConditions{IfMatch: destETag}
+			}
 		}
-		return f.moveBlobs(ctx, []listedBlob{{name: src, etag: srcETag}}, src, dest)
+		return f.moveBlobs(ctx, []listedBlob{{name: src, etag: srcETag}}, src, dest, destCond)
 	}
 	// No blob is below destPath, which is no directory. The listing returns
 	// the ETags of the blobs, and their snapshots without DeleteSnapshots.
@@ -1142,24 +1173,41 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 	if snapshotted != "" {
 		return f.snapshotsError(snapshotted)
 	}
-	return f.moveBlobs(ctx, blobs, src, dest)
+	return f.moveBlobs(ctx, blobs, src, dest, destCond)
 }
 
 // moveBlobs copies every blob to its name with the prefix src replaced
 // by dest and then deletes the blobs, each copy and delete pinned to the
-// ETag of the blob. A blob that changed since is an error telling that it
-// changed while it was being moved: before its copy Move copies and deletes
-// nothing more, after its copy it keeps the blob and those not deleted yet.
-// A blob that was deleted after its copy is no error.
-func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, dest string) error {
+// ETag of the blob, each copy also to destCond if not nil. A blob that
+// changed since is an error telling that it changed while it was being
+// moved: before its copy Move copies and deletes nothing more, after its
+// copy it keeps the blob and those not deleted yet. A destination that
+// fails destCond is an error wrapping os.ErrExist (destChangedError), a blob
+// that was deleted before its copy one wrapping os.ErrNotExist, both copy
+// and delete nothing more. A blob that was deleted after its copy is no error.
+func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, dest string, destCond *blob.ModifiedAccessConditions) error {
 	for _, b := range blobs {
-		err := f.copyBlob(ctx, b.name, b.etag, dest+strings.TrimPrefix(b.name, src))
-		// Azure answers a failed source condition with SourceConditionNotMet,
-		// Azurite with ConditionNotMet
-		if b.etag != nil && bloberror.HasCode(err, bloberror.SourceConditionNotMet, bloberror.ConditionNotMet) {
-			return f.changedError(b.name, "moved", err)
+		target := dest + strings.TrimPrefix(b.name, src)
+		err := f.copyBlob(ctx, b.name, b.etag, target, destCond)
+		if err == nil {
+			continue
 		}
-		if err != nil {
+		switch {
+		case b.etag != nil && bloberror.HasCode(err, bloberror.SourceConditionNotMet):
+			return f.changedError(b.name, "moved", err)
+		case destCond != nil && bloberror.HasCode(err, bloberror.BlobAlreadyExists, bloberror.TargetConditionNotMet):
+			// Azurite answers If-None-Match: * for an existing
+			// destination with 409 BlobAlreadyExists
+			return f.destChangedError(b.name, target, err)
+		case (b.etag != nil || destCond != nil) && bloberror.HasCode(err, bloberror.ConditionNotMet):
+			// A failed destination condition is answered with ConditionNotMet,
+			// by Azurite also a failed source condition, which Azure answers
+			// with SourceConditionNotMet. Then the source tells which failed.
+			if destCond == nil || (b.etag != nil && f.blobChanged(ctx, b.name, b.etag)) {
+				return f.changedError(b.name, "moved", err)
+			}
+			return f.destChangedError(b.name, target, err)
+		default:
 			return err
 		}
 	}
@@ -1205,20 +1253,31 @@ func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 	if err := f.checkNotDir(ctx, dest); err != nil {
 		return err
 	}
-	return f.copyBlob(ctx, src, nil, dest)
+	return f.copyBlob(ctx, src, nil, dest, nil)
+}
+
+// blobChanged reports if the blob name no longer has etag:
+// it was replaced or deleted, or its properties can't be requested.
+func (f *fileSystem) blobChanged(ctx context.Context, name string, etag *azcore.ETag) bool {
+	props, err := f.client.NewBlobClient(name).GetProperties(ctx, nil)
+	return err != nil || props.ETag == nil || !props.ETag.Equals(*etag)
 }
 
 // copyBlob copies the blob src server-side to the blob dest
 // and waits until the copy completed. A non-nil srcETag pins the copy
 // to that version of src (x-ms-source-if-match), Azure copies nothing
 // if src changed since and answers 412 with SourceConditionNotMet.
-func (f *fileSystem) copyBlob(ctx context.Context, src string, srcETag *azcore.ETag, dest string) error {
+// A non-nil destCond are the conditions (If-Match, If-None-Match) that
+// dest must meet, else Azure copies nothing and answers 412 (Azurite
+// 409 BlobAlreadyExists for If-None-Match: * and an existing dest).
+func (f *fileSystem) copyBlob(ctx context.Context, src string, srcETag *azcore.ETag, dest string, destCond *blob.ModifiedAccessConditions) error {
 	destBlob := f.client.NewBlobClient(dest)
-	var opts *blob.StartCopyFromURLOptions
+	opts := &blob.StartCopyFromURLOptions{}
 	if srcETag != nil {
-		opts = &blob.StartCopyFromURLOptions{
-			SourceModifiedAccessConditions: &blob.SourceModifiedAccessConditions{SourceIfMatch: srcETag},
-		}
+		opts.SourceModifiedAccessConditions = &blob.SourceModifiedAccessConditions{SourceIfMatch: srcETag}
+	}
+	if destCond != nil {
+		opts.AccessConditions = &blob.AccessConditions{ModifiedAccessConditions: destCond}
 	}
 	response, err := destBlob.StartCopyFromURL(ctx, f.client.NewBlobClient(src).URL(), opts)
 	if err != nil {

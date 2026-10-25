@@ -148,6 +148,17 @@ messages of the errors it returns, so they don't leak into logs.
   client replaces during the move is never deleted: `Move` keeps it and
   returns an error telling that the blob changed while it was being moved
   (after its copy, the destination holds the copy of the old version).
+  The copies are pinned to the destination as well: to no blob
+  (`If-None-Match: *`) for a destination that `Move` found missing, like
+  every copy of a directory, and to the ETag of an existing destination blob
+  (`If-Match`). So `Move` never overwrites a blob that another client creates
+  at the destination, or below the destination of a directory, after `Move`
+  checked it, nor a newer version of the destination blob: the copy fails
+  (also for a deleted destination blob), and `Move` stops with an error
+  wrapping `os.ErrExist` (`fs.ErrAlreadyExists` for the destination blob)
+  and deletes no source blob. A source blob that another client deletes
+  before its copy stops `Move` the same way with an error wrapping
+  `os.ErrNotExist`; the copies made before stay at the destination.
   `Touch` updates the modification time by setting the metadata of the blob
   again, which keeps the metadata (with the case of their names), the
   content headers and the content. `Touch` of a missing path creates an
