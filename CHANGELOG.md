@@ -62,9 +62,13 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   `azureblobfs.ErrSnapshotsPresent`, `RemoveAll` checks the whole tree for
   snapshots before it deletes anything, and `Move` before it copies anything.
 - `azureblobfs` implements `fs.MoveFileSystem`: `Move` copies the blobs
-  server-side and deletes the source after every copy succeeded. The generic
-  move copied first and then failed to delete a source with snapshots, after
-  it had replaced the destination.
+  server-side and deletes the source after every copy succeeded. Every copy
+  and delete is pinned to the ETag the source blob had when `Move` found it
+  (`x-ms-source-if-match`, `If-Match`), so a blob that another client
+  replaces during the move is kept, and `Move` returns an error saying that
+  it changed while it was being moved. The generic move copied first and
+  then failed to delete a source with snapshots, after it had replaced the
+  destination.
 - `fsimpl.CheckNoBackslash` returns the error of the backslash rule of the
   remote file systems with the separator `/`, which `ftpfs`, `sftpfs`,
   `webdavfs` and `smbfs` share.
