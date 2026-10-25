@@ -2,6 +2,7 @@ package ftpfs
 
 import (
 	"bufio"
+	"cmp"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,16 +54,21 @@ type testFTPServer struct {
 	mu       sync.Mutex
 	nodes    map[string]*testFTPNode // clean paths, "/" is the root
 	commands map[string]int          // number of received commands per verb
+	args     map[string][]string     // arguments of the received commands per verb, except PASS
 	lastUser string
 	lastPass string
 
 	// Hooks, guarded by mu
 	failListContains string         // LIST and MLSD of a path containing it fail with 550
 	listOmits        string         // LIST, not MLSD, of the parent directory leaves out the entry at this path
+	listForged       map[string]int // LIST, not MLSD, of the parent directory adds this many lines that list the entry at the path as a directory, like a file whose name contains a line feed followed by such a line
+	globArgs         bool           // LIST expands glob characters in its path argument like ProFTPD with UseGlobbing and lists the first directory that matches
 	dropBefore       map[string]int // the next commands with the verb close the connection without executing them
+	dropAt           map[string]int // the command with the verb that the server receives as the nth one, counted in commands, closes the connection without executing it
 	dropReplyOf      map[string]int // the next commands with the verb are executed, then the connection closes instead of the final reply
 	hang             string         // commands with this verb are never answered
 	silent           bool           // new connections get no greeting
+	home             string         // the working directory after the login if not empty, else "/"
 	noMLST           bool           // MLST and MLSD are not supported, listings use LIST
 	noEPSV           bool           // EPSV is not implemented
 	pasvHost         string         // host part of PASV replies like "10,1,2,3" instead of the real address
@@ -102,8 +109,11 @@ func newTestFTPServerOn(t *testing.T, address string) *testFTPServer {
 		tlsCfg:   testTLSConfig(t),
 		nodes:    map[string]*testFTPNode{"/": {isDir: true, modified: time.Now()}},
 		commands: make(map[string]int),
+		args:     make(map[string][]string),
 
+		listForged:  make(map[string]int),
 		dropBefore:  make(map[string]int),
+		dropAt:      make(map[string]int),
 		dropReplyOf: make(map[string]int),
 		refuse:      make(map[string]int),
 	}
@@ -154,6 +164,13 @@ func (s *testFTPServer) count(verb string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.commands[verb]
+}
+
+// argsOf returns the arguments of the received commands with verb.
+func (s *testFTPServer) argsOf(verb string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.args[verb])
 }
 
 // credentials returns the arguments of the last USER and PASS commands.
@@ -297,6 +314,22 @@ func (s *testFTPServer) refused(verb, p string) bool {
 	return takeHook(s.refuse, verb+" "+p)
 }
 
+// globDir returns the first of the sorted paths that match the glob
+// pattern p and are a directory, or "" if none does.
+// The caller must hold s.mu.
+func (s *testFTPServer) globDir(p string) string {
+	var matches []string
+	for name, node := range s.nodes {
+		if ok, _ := path.Match(p, name); ok && node.isDir {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) == 0 {
+		return ""
+	}
+	return slices.Min(matches)
+}
+
 // children returns the sorted names of the entries of the directory dir.
 // The caller must hold s.mu.
 func (s *testFTPServer) children(dir string) []string {
@@ -364,7 +397,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 	defer func() { conn.Close() }()
 
 	s.mu.Lock()
-	silent := s.silent
+	silent, home := s.silent, cmp.Or(s.home, "/")
 	s.mu.Unlock()
 	if silent {
 		_, _ = io.Copy(io.Discard, conn)
@@ -393,7 +426,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		dataLn     net.Listener
 		dataTLS    bool
 		renameFrom string
-		cwd        = "/"
+		cwd        = home
 	)
 	localHost, _, _ := net.SplitHostPort(rawConn.LocalAddr().String())
 	// abs resolves a command argument against the working directory.
@@ -505,14 +538,17 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 
 		s.mu.Lock()
 		s.commands[verb]++
-		dropBefore := takeHook(s.dropBefore, verb)
+		if verb != "PASS" {
+			s.args[verb] = append(s.args[verb], arg)
+		}
+		dropBefore := takeHook(s.dropBefore, verb) || s.dropAt[verb] == s.commands[verb]
 		dropReply = takeHook(s.dropReplyOf, verb)
 		hang := s.hang == verb
 		noMLST, noEPSV, pasvHost := s.noMLST, s.noEPSV, s.pasvHost
 		failList := s.failListContains
 		rntoNoReplace := s.rntoNoReplace
 		dotEntries, lsArgs, statArgs := s.dotEntries, s.lsArgs, s.statArgs
-		listOmits := s.listOmits
+		listOmits, globArgs := s.listOmits, s.globArgs
 		tooManyListings := (verb == "LIST" || verb == "MLSD") && s.maxListings > 0 && s.commands["LIST"]+s.commands["MLSD"] > s.maxListings
 		s.mu.Unlock()
 
@@ -696,7 +732,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply("250-Listing\r\n %s %s\r\n250 End", fact, p)
 		case "MLSD", "LIST":
 			p := abs(strings.TrimPrefix(arg, "-a "))
-			if arg == "" || arg == "-a" {
+			pathArg := arg != "" && arg != "-a"
+			if !pathArg {
 				p = cwd
 			}
 			if verb == "MLSD" && noMLST {
@@ -712,6 +749,13 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				continue
 			}
 			s.mu.Lock()
+			if verb == "LIST" && globArgs && pathArg && strings.ContainsAny(p, "*?[") {
+				if p = s.globDir(p); p == "" {
+					s.mu.Unlock()
+					reply("550 no match")
+					continue
+				}
+			}
 			if verb == "LIST" && lsArgs {
 				if node, ok := s.nodes[s.followDir(p)]; ok && !node.isDir {
 					line := listLine(node, path.Base(p))
@@ -749,6 +793,13 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 						lines = append(lines, fmt.Sprintf("%s %s", s.mlsdFact(path.Join(p, name), child), name))
 					} else {
 						lines = append(lines, listLine(child, name))
+					}
+				}
+				for forged, n := range s.listForged {
+					if verb == "LIST" && path.Dir(forged) == p {
+						for range n {
+							lines = append(lines, listLine(&testFTPNode{isDir: true, modified: time.Now()}, path.Base(forged)))
+						}
 					}
 				}
 			}

@@ -121,8 +121,11 @@ while it was idle is replaced first.
 
 `OpenReader` dials a dedicated connection for the transfer, so a streaming
 read never blocks other operations. `RemoveAll` of a directory on a server
-with MLST support dials a second connection for `LIST` while it runs, see
-**Symbolic links** below.
+with MLST support, and `Remove` and `RemoveAll` of a path that MLST reports
+as missing if `DELE` fails, dial a second connection for `LIST` while they
+run. It follows the context of the operation and `Close`, and if it breaks,
+like when the server closed it while it was idle, it is dialed again once
+for the listing, see **Symbolic links** below.
 
 Operations with a `context.Context` are aborted when the context is done.
 `Close` unregisters the file system, aborts running operations, reconnects
@@ -176,13 +179,25 @@ and open readers, and afterwards every method returns
   for a directory before it deletes its content. If `DELE` fails, like for
   a link that the server refuses to delete, `RemoveAll` deletes the content
   only if `LIST` of the parent directory, which these servers answer like
-  `ls -l`, lists the path as a directory, and returns an error otherwise;
-  the FTP client library lists with `MLSD` on these servers, so `RemoveAll`
-  of a directory dials a second connection for `LIST`. `Remove` of a link
-  to a directory fails like for a directory and deletes nothing, and `Move`
-  onto such a link is refused with an error wrapping `os.ErrExist`. A
-  dangling link looks missing to `Stat`, because MLST follows links, but
-  `Remove` and `RemoveAll` delete it and `Move` renames it. FTP has no command to create a link, so `ftpfs`
+  `ls -l`, lists the path once and as a directory, and returns an error
+  otherwise; the FTP client library lists with `MLSD` on these servers, so
+  `RemoveAll` of a directory dials a second connection for `LIST`. It
+  changes to the parent directory with `CWD` and sends `LIST` without a
+  path argument, because servers like ProFTPD with `UseGlobbing` and
+  Pure-FTPd expand glob characters like `[` in that argument. FTP servers
+  on Windows (IIS with listings in the DOS format, and FileZilla Server or
+  IIS with listings in the Unix format, which list junctions and links to
+  directories as directories) and ProFTPD with `ShowSymlinks off` list a
+  link to a directory as a directory with `LIST` too, so `RemoveAll` can't
+  tell them apart there and deletes the files that such a link points to,
+  as before v1.0. `Remove` of a link to a directory fails like for a
+  directory and deletes nothing, and `Move` onto such a link is refused
+  with an error wrapping `os.ErrExist`. A dangling link looks missing to
+  `Stat`, because MLST follows links, but `Remove` and `RemoveAll` delete
+  it and `Move` renames it. If the server refuses to delete it, `Remove`
+  and `RemoveAll` return the error of `DELE` if `LIST` of the parent
+  directory lists the path, and report it as missing otherwise. FTP has no
+  command to create a link, so `ftpfs`
   doesn't implement `fs.SymbolicLinkFileSystem`: `fs.CopyRecursive` copies
   a link to a file as a file and fails with an error wrapping
   `errors.ErrUnsupported` for a link to a directory before it writes
