@@ -67,7 +67,16 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   and delete is pinned to the ETag the source blob had when `Move` found it
   (`x-ms-source-if-match`, `If-Match`), so a blob that another client
   replaces during the move is kept, and `Move` returns an error saying that
-  it changed while it was being moved. Only a move within one file system
+  it changed while it was being moved. A source blob that another client
+  deletes before its copy stops `Move` with an error wrapping
+  `os.ErrNotExist`. Every copy is pinned to its destination too: to a
+  missing destination, like every blob of a directory, with
+  `If-None-Match: *`, onto an existing destination blob with `If-Match` and
+  the ETag `Move` found. A blob that another client creates at the
+  destination or below a moved directory, or a newer version of the
+  destination blob, is not overwritten: `Move` stops with an error wrapping
+  `fs.ErrAlreadyExists` (`os.ErrExist`) for it. Both errors copy nothing
+  more and delete no source blob. Only a move within one file system
   is pinned; `fs.Move` to another container or file system copies and calls
   `RemoveAll`, which isn't. The generic move copied first and
   then failed to delete a source with snapshots, after it had replaced the
