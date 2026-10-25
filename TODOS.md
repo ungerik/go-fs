@@ -365,6 +365,34 @@ fail closed otherwise, or find another way to detect reparse points.
 **Priority:** P2
 **Depends on:** None
 
+### List without a path argument on servers without MLST that glob LIST arguments
+
+**What:** On servers without MLST support, `removeContent`, the `lstat`
+fallback, `ListDir` and `ListDirRecursive` send `LIST <path>` on the
+connection of the operation. Servers that expand glob characters in that
+argument (wu-ftpd, ProFTPD with `UseGlobbing` but without `mod_facts`) list
+another directory for a path with `*`, `?` or `[`.
+
+**Why:** `RemoveAll` can take a link to a directory for a directory and
+delete the files it points to: `/tree/a[b]/L` linking to `/victim`, next to
+`/tree/ab/L/keep.txt`, deletes `/victim/keep.txt`
+(`TestRemoveAll_GlobbedLISTKnownLimitation`). `Stat` and `ListDir` describe
+entries of the other directory.
+
+**Context:** Documented in the package doc. Either send `CWD <dir>` and
+`LIST` without an argument on the main connection and restore the working
+directory (the login directory read with `PWD`, which relative paths resolve
+against; a failed restore must mark the connection broken), about two round
+trips more per listing, or use a listing connection like on MLST servers,
+which fails on servers that allow one connection per user and must list
+without `-a`, because the `-a` check needs MLST. Check how vsftpd (no MLST)
+treats glob characters: it seems to filter by the last element only when the
+literal path is no directory.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
 ### Separate TLS sessions for the extra FTPS connections
 
 **What:** The LIST connection of `Remove` and `RemoveAll` and the dedicated
@@ -407,8 +435,10 @@ call.
 **Why:** It is how a link that MLST describes as a directory gets deleted
 itself, and how a real directory is confirmed, but it costs a failing
 command per directory, a CWD and a LIST per parent directory and an extra
-login per `RemoveAll`, plus a PWD for relative paths and a redial after a
-broken listing connection. For the removed path itself the LIST lists its
+login per `RemoveAll`, plus a PWD for relative paths, an MLST of the entry
+`-a` per listed directory and a redial after a broken listing connection.
+The parent is listed again for every directory that is confirmed, so that
+a sibling replaced with a link isn't confirmed from an earlier listing. For the removed path itself the LIST lists its
 parent, which can be large: removing the N children of a directory one by
 one lists it N times. A directory with subdirectories is listed twice, with
 MLSD to enumerate it and with LIST to confirm its subdirectories. `Remove`

@@ -161,9 +161,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   directory, and otherwise returns an error wrapping the `DELE` error. The
   client library lists with `MLSD` on these servers, so `RemoveAll` of a
   directory dials a second connection for `LIST`; on a server that allows
-  only one connection per user it fails instead of deleting. That connection
-  changes to the parent directory with `CWD` and sends `LIST -a` without a
-  path argument, which servers like ProFTPD with `UseGlobbing` and Pure-FTPd
+  only one connection per user it fails instead of deleting. For every such
+  directory that connection changes to the parent directory with `CWD` and
+  sends `LIST -a` without a path argument, which servers like ProFTPD with `UseGlobbing` and Pure-FTPd
   would expand as a glob pattern, and it is dialed again once for a listing
   if the server closed it while it was idle. A symbolic link whose name
   contains ` -> `, which the client library cuts at the first ` -> `, is
@@ -171,9 +171,16 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   of a directory with an entry named `-a` is not used: servers that don't
   parse the options of `LIST` (like ftpserverlib with `DisableLISTArgs`) list
   that entry for `LIST -a`, so `RemoveAll` fails for the directories in such
-  a directory. FTP servers on Windows and ProFTPD with `ShowSymlinks off`
-  list a link to a directory as a directory with `LIST` too, so `RemoveAll`
-  still deletes through such links there.
+  a directory. The parent directory is listed again for every directory, so
+  a directory that another client replaces with a link while `RemoveAll`
+  removes the directories next to it is not confirmed from an earlier
+  listing; a replacement between the `LIST` and the deletion of the content
+  still goes unnoticed. FTP servers on Windows and ProFTPD with
+  `ShowSymlinks off` list a link to a directory as a directory with `LIST`
+  too, so `RemoveAll` still deletes through such links there, and so do
+  servers without MLST support that expand glob characters in the path
+  argument of `LIST` (wu-ftpd, ProFTPD with `UseGlobbing` but without
+  `mod_facts`) for paths with `*`, `?` or `[`.
 - `ftpfs` `RemoveAll` kept a dangling symbolic link or a cycle of links on
   servers with MLST support, and `Remove` and `Move` of it failed with
   `os.ErrNotExist`, because MLST follows links and reports such a link as
