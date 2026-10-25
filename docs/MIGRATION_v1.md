@@ -360,8 +360,8 @@ signatures. Changes compared to v0.1:
   collide at the destination (case or Unicode normalization) instead of
   silently keeping one. Moves always detect it; `CopyRecursive` does in new
   directories and in existing local ones. They also fail on an existing named
-  pipe, device or socket at the destination (Windows files reported as
-  irregular, like OneDrive placeholders, are replaced). To the local file
+  pipe, device or socket at the destination (OneDrive placeholders, which
+  Windows reports as irregular files, are replaced). To the local file
   system, they fail with `os.ErrInvalid` on names like `NUL`, `COM1`, `a:b`,
   `name.` (Windows) or names with a NUL byte, before writing anything, also
   for empty directories.

@@ -151,22 +151,29 @@ before these rules apply.
 
 Below the root of a directory copy, an entry that the copy already wrote for
 another source name is not replaced in a move, in a directory that
-`CopyRecursive` creates and in an existing local directory; other file
+`CopyRecursive` creates and in an existing local directory (also through a
+`SubFileSystem` or as the upper layer of an `OverlayFileSystem`); other file
 systems replace it in an existing directory. This happens when the destination
 doesn't tell two names apart, like another case or Unicode normalization. In
 a move, and in any directory that `CopyRecursive` creates, every existing
-entry is an error wrapping `os.ErrExist`. In an existing directory, only local
-destinations detect it, by file identity; two hard links of one file are two
-entries there, and both are written. A destination file that the copy would
-write into (named pipe, device, socket) is an error wrapping `os.ErrExist`,
-not written into. Local destinations are told by their file mode, so files
-that Windows reports as irregular, like OneDrive placeholders, are replaced
-like regular files; other file systems refuse every entry that
-`FileInfo.IsRegular` doesn't describe as regular. For local destinations,
-names that `filepath.Localize` rejects, and on Windows names ending in a dot
-or space, are errors wrapping `os.ErrInvalid`. These names are checked for
-every entry of the source, also empty directories and entries the patterns
-don't select, before anything is written.
+entry is an error wrapping `os.ErrExist`, also one that another process
+creates during the move; in an existing local directory the entries are told
+apart by file identity. Two hard links of one file are two entries there:
+both are written into the one file, which keeps the data written last, like
+`cp`.
+
+A destination file that the copy would write into (named pipe, device,
+socket) is an error wrapping `os.ErrExist`, not written into. Local
+destinations are told by their file mode, so the placeholders of OneDrive
+files, which Windows reports as irregular, are replaced like regular files;
+writing over other reparse points, like AppExecLinks, fails with the error of
+the write. Other file systems refuse every entry that `FileInfo.IsRegular`
+doesn't describe as regular. For local destinations, names that
+`filepath.Localize` rejects, and on Windows names ending in a dot or space,
+are errors wrapping `os.ErrInvalid`. Between file systems these names are
+checked for every entry of the source, also empty directories and entries
+the patterns don't select, before anything is written. A malformed pattern
+fails before anything is written too.
 
 ### Capabilities with no fallback
 
