@@ -109,6 +109,20 @@ func (f *fileSystem) file(filePath string) fs.File {
 	return f.JoinCleanFile(filePath)
 }
 
+// checkPath returns an error wrapping os.ErrInvalid for a path with
+// a backslash unless Options.AllowBackslashInNames is set.
+func (f *fileSystem) checkPath(paths ...string) error {
+	if f.opts.AllowBackslashInNames {
+		return nil
+	}
+	for _, filePath := range paths {
+		if strings.Contains(filePath, `\`) {
+			return fmt.Errorf("%w: sftpfs path %q contains a backslash, which SFTP servers on Windows take for a separator, see Options.AllowBackslashInNames", os.ErrInvalid, filePath)
+		}
+	}
+	return nil
+}
+
 // pathErr returns err with the os.ErrNotExist and os.ErrPermission
 // errors of pkg/sftp mapped to the typed errors of package fs for filePath.
 func (f *fileSystem) pathErr(err error, filePath string) error {
@@ -146,6 +160,9 @@ func (f *fileSystem) stat(client *sftp.Client, filePath string) (*fs.FileInfo, e
 }
 
 func (f *fileSystem) Stat(filePath string) (info *fs.FileInfo, err error) {
+	if err := f.checkPath(filePath); err != nil {
+		return nil, err
+	}
 	err = f.run(context.Background(), func(c *conn, _ func()) error {
 		info, err = f.stat(c.sftp, filePath)
 		return err
@@ -160,6 +177,9 @@ func (f *fileSystem) Stat(filePath string) (info *fs.FileInfo, err error) {
 // callback after the listing, so that a lost connection never
 // repeats a callback.
 func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	if err := f.checkPath(dirPath); err != nil {
+		return err
+	}
 	var infos []os.FileInfo
 	err := f.run(ctx, func(c *conn, _ func()) (err error) {
 		infos, err = c.sftp.ReadDirContext(ctx, dirPath)
@@ -205,6 +225,9 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 // has IsDir false, see fs.ListDirRecursiveFileSystem.
 // A lost connection is only retried before the first callback.
 func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	if err := f.checkPath(dirPath); err != nil {
+		return err
+	}
 	err := f.run(ctx, func(c *conn, noRetry func()) error {
 		info, err := c.sftp.Stat(dirPath)
 		if err != nil {
@@ -298,6 +321,9 @@ func (f *sftpFile) readErr(err error) error {
 // openFile opens a file with the flags. A file created by the
 // call gets the permissions perm if perm is not zero.
 func (f *fileSystem) openFile(filePath string, flags int, perm fs.Permissions) (*sftpFile, error) {
+	if err := f.checkPath(filePath); err != nil {
+		return nil, err
+	}
 	var opened *sftpFile
 	err := f.run(context.Background(), func(c *conn, noRetry func()) error {
 		created := false
@@ -391,6 +417,9 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 }
 
 func (f *fileSystem) Truncate(ctx context.Context, filePath string, size int64) error {
+	if err := f.checkPath(filePath); err != nil {
+		return err
+	}
 	return f.run(ctx, func(c *conn, _ func()) error {
 		return f.pathErr(c.sftp.Truncate(filePath, size), filePath)
 	})
@@ -400,6 +429,9 @@ func (f *fileSystem) Truncate(ctx context.Context, filePath string, size int64) 
 // via the SFTP SETSTAT packet and only creates an empty file
 // with the permissions perm when it does not exist yet.
 func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
+	if err := f.checkPath(filePath); err != nil {
+		return err
+	}
 	return f.run(context.Background(), func(c *conn, noRetry func()) error {
 		_, err := c.sftp.Stat(filePath)
 		if errors.Is(err, os.ErrNotExist) {
@@ -422,6 +454,9 @@ func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 }
 
 func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
+	if err := f.checkPath(dirPath); err != nil {
+		return err
+	}
 	return f.run(context.Background(), func(c *conn, noRetry func()) error {
 		noRetry()
 		err := c.sftp.Mkdir(dirPath)
@@ -446,6 +481,9 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 // MakeAllDirs creates the directory and all missing parents
 // with a single SFTP client MkdirAll call.
 func (f *fileSystem) MakeAllDirs(dirPath string, perm fs.Permissions) error {
+	if err := f.checkPath(dirPath); err != nil {
+		return err
+	}
 	return f.run(context.Background(), func(c *conn, _ func()) error {
 		info, err := c.sftp.Stat(dirPath)
 		if err == nil {
@@ -466,6 +504,9 @@ func (f *fileSystem) MakeAllDirs(dirPath string, perm fs.Permissions) error {
 }
 
 func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error {
+	if err := f.checkPath(filePath); err != nil {
+		return err
+	}
 	return f.run(context.Background(), func(c *conn, _ func()) error {
 		return f.pathErr(c.sftp.Chmod(filePath, os.FileMode(perm)), filePath)
 	})
@@ -492,6 +533,9 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 // Unlike LocalFileSystem.Move, a move onto another hard link of the file
 // is refused too.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
+	if err := f.checkPath(filePath, destPath); err != nil {
+		return err
+	}
 	// The checks before f.run need no request, but must not answer after Close
 	if err := f.checkOpen(ctx); err != nil {
 		return err
@@ -626,6 +670,9 @@ func (f *fileSystem) moveViaTemp(client *sftp.Client, filePath, destPath string)
 // also for a relative path like "", "." or "dir/..", which the server
 // resolves against the login directory.
 func (f *fileSystem) Remove(filePath string) error {
+	if err := f.checkPath(filePath); err != nil {
+		return err
+	}
 	if isRoot(filePath) {
 		return f.removeRootErr(context.Background())
 	}
@@ -655,6 +702,9 @@ func (f *fileSystem) Remove(filePath string) error {
 // The root directory is never removed, that is an error wrapping os.ErrInvalid,
 // also for a relative path like "", "." or "dir/..", see Remove.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
+	if err := f.checkPath(filePath); err != nil {
+		return err
+	}
 	if isRoot(filePath) {
 		return f.removeRootErr(ctx)
 	}
@@ -711,6 +761,9 @@ func removeAll(ctx context.Context, client *sftp.Client, path string, info os.Fi
 
 // Lstat returns the FileInfo of the file without following a symbolic link.
 func (f *fileSystem) Lstat(filePath string) (fileInfo *fs.FileInfo, err error) {
+	if err := f.checkPath(filePath); err != nil {
+		return nil, err
+	}
 	err = f.run(context.Background(), func(c *conn, _ func()) error {
 		info, err := c.sftp.Lstat(filePath)
 		if err != nil {
@@ -726,6 +779,9 @@ func (f *fileSystem) Lstat(filePath string) (fileInfo *fs.FileInfo, err error) {
 }
 
 func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
+	if err := f.checkPath(targetPath, linkPath); err != nil {
+		return err
+	}
 	return f.run(context.Background(), func(c *conn, noRetry func()) error {
 		noRetry()
 		err := c.sftp.Symlink(targetPath, linkPath)
@@ -740,6 +796,9 @@ func (f *fileSystem) CreateSymbolicLink(targetPath, linkPath string) error {
 }
 
 func (f *fileSystem) ReadSymbolicLink(linkPath string) (targetPath string, err error) {
+	if err := f.checkPath(linkPath); err != nil {
+		return "", err
+	}
 	err = f.run(context.Background(), func(c *conn, _ func()) error {
 		targetPath, err = c.sftp.ReadLink(linkPath)
 		return f.pathErr(err, linkPath)

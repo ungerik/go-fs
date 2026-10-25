@@ -31,6 +31,14 @@ import (
 // self-signed certificate. It exercises the ftpfs client without Docker
 // or a real server on every platform.
 //
+// Symbolic links, seeded with symlink, are followed like the kernel
+// follows them for vsftpd: in every element of the path of CWD, RETR,
+// SIZE, MDTM, MFMT, STOR, APPE, MLST and of the directory that LIST and
+// MLSD list, while DELE, RMD, MKD and RNFR/RNTO act on a link itself.
+// LIST lists a link like "ls -l" with its target. MLSD and MLST describe
+// a link with the facts of its target like ProFTPD by default, MLSD
+// a dangling link with the RFC 3659 type "OS.unix=slink:<target>".
+//
 // The hook fields simulate failures and server variants for the
 // regression tests; set them with configure.
 type testFTPServer struct {
@@ -65,6 +73,7 @@ type testFTPServer struct {
 
 type testFTPNode struct {
 	isDir    bool
+	link     string // target of a symbolic link as stored, empty for files and directories
 	data     []byte
 	modified time.Time
 }
@@ -205,6 +214,51 @@ func (s *testFTPServer) writeFile(p, content string) {
 	s.nodes[path.Clean(p)] = &testFTPNode{data: []byte(content), modified: time.Now()}
 }
 
+// symlink stores a symbolic link at p to target for seeding tests,
+// creating its parents. The target is stored as given.
+func (s *testFTPServer) symlink(target, p string) {
+	s.mkdirAll(path.Dir(p))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodes[path.Clean(p)] = &testFTPNode{link: target, modified: time.Now()}
+}
+
+// maxTestLinkHops is the number of symbolic links that follow
+// resolves for one path, the limit of Linux.
+const maxTestLinkHops = 40
+
+// follow returns the path that the clean absolute path p refers to with
+// the symbolic links of all its elements followed, like the kernel resolves
+// the paths of a server: a relative target from the directory of the link,
+// whose ".." goes up from the directory that the path of the link resolved
+// to. The path of a cycle of links is "", which is no node.
+// The caller must hold s.mu.
+func (s *testFTPServer) follow(p string) string {
+	resolved := "/"
+	rest := strings.Split(p, "/")
+	for hops := 0; len(rest) > 0; {
+		name := rest[0]
+		rest = rest[1:]
+		if name == "" || name == "." {
+			continue
+		}
+		next := path.Join(resolved, name)
+		node, ok := s.nodes[next]
+		if !ok || node.link == "" {
+			resolved = next
+			continue
+		}
+		if hops++; hops > maxTestLinkHops {
+			return ""
+		}
+		if path.IsAbs(node.link) {
+			resolved = "/"
+		}
+		rest = append(strings.Split(node.link, "/"), rest...)
+	}
+	return resolved
+}
+
 func (s *testFTPServer) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
@@ -255,13 +309,29 @@ func dirFact(typ string, node *testFTPNode) string {
 	return fmt.Sprintf("type=%s;modify=%s;", typ, node.modified.UTC().Format("20060102150405"))
 }
 
-// listLine formats a node like ls -l for the LIST command.
+// listLine formats a node like ls -l for the LIST command,
+// a symbolic link with its target.
 func listLine(node *testFTPNode, name string) string {
-	mode := "-rw-r--r--"
-	if node.isDir {
-		mode = "drwxr-xr-x"
+	switch {
+	case node.link != "":
+		return fmt.Sprintf("lrwxrwxrwx 1 owner group %d %s %s -> %s", len(node.link), node.modified.UTC().Format("Jan _2 15:04"), name, node.link)
+	case node.isDir:
+		return fmt.Sprintf("drwxr-xr-x 1 owner group 0 %s %s", node.modified.UTC().Format("Jan _2 15:04"), name)
 	}
-	return fmt.Sprintf("%s 1 owner group %d %s %s", mode, len(node.data), node.modified.UTC().Format("Jan _2 15:04"), name)
+	return fmt.Sprintf("-rw-r--r-- 1 owner group %d %s %s", len(node.data), node.modified.UTC().Format("Jan _2 15:04"), name)
+}
+
+// mlsdFact formats the RFC 3659 facts of the entry p of MLSD: the facts of
+// the target of a symbolic link and the type "OS.unix=slink:<target>"
+// of a dangling one. The caller must hold s.mu.
+func (s *testFTPServer) mlsdFact(p string, node *testFTPNode) string {
+	if node.link == "" {
+		return mlstFact(node)
+	}
+	if target, ok := s.nodes[s.follow(p)]; ok {
+		return mlstFact(target)
+	}
+	return fmt.Sprintf("type=OS.unix=slink:%s;modify=%s;", node.link, node.modified.UTC().Format("20060102150405"))
 }
 
 // takeHook returns true and decrements the count of verb if it is positive.
@@ -481,8 +551,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			cwd = path.Dir(cwd)
 			reply("250 ok")
 		case "CWD":
-			p := abs(arg)
 			s.mu.Lock()
+			p := s.follow(abs(arg))
 			node, ok := s.nodes[p]
 			s.mu.Unlock()
 			if !ok || !node.isDir {
@@ -514,8 +584,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			}
 			reply("227 Entering Passive Mode (%s,%d,%d)", host, port/256, port%256)
 		case "STOR", "APPE":
-			p := abs(arg)
 			s.mu.Lock()
+			p := s.follow(abs(arg))
 			parent, parentOK := s.nodes[path.Dir(p)]
 			existing, exists := s.nodes[p]
 			s.mu.Unlock()
@@ -547,7 +617,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply("226 Transfer complete")
 		case "RETR":
 			s.mu.Lock()
-			node, ok := s.nodes[abs(arg)]
+			node, ok := s.nodes[s.follow(abs(arg))]
 			var content []byte
 			if ok {
 				content = append([]byte(nil), node.data...)
@@ -560,7 +630,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			sendData(content)
 		case "SIZE":
 			s.mu.Lock()
-			node, ok := s.nodes[abs(arg)]
+			node, ok := s.nodes[s.follow(abs(arg))]
 			s.mu.Unlock()
 			if !ok || node.isDir {
 				reply("550 file not found")
@@ -569,7 +639,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply("213 %d", len(node.data))
 		case "MDTM":
 			s.mu.Lock()
-			node, ok := s.nodes[abs(arg)]
+			node, ok := s.nodes[s.follow(abs(arg))]
 			s.mu.Unlock()
 			if !ok {
 				reply("550 file not found")
@@ -580,7 +650,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			timeval, p, _ := strings.Cut(arg, " ")
 			modified, err := time.Parse("20060102150405", timeval)
 			s.mu.Lock()
-			node, ok := s.nodes[abs(p)]
+			node, ok := s.nodes[s.follow(abs(p))]
 			if ok && err == nil {
 				node.modified = modified
 			}
@@ -593,7 +663,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		case "MLST":
 			p := abs(arg)
 			s.mu.Lock()
-			node, ok := s.nodes[p]
+			node, ok := s.nodes[s.follow(p)]
 			var fact string
 			if ok {
 				fact = mlstFact(node)
@@ -626,6 +696,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				continue
 			}
 			s.mu.Lock()
+			p = s.follow(p)
 			node, ok := s.nodes[p]
 			var lines []string
 			if ok && node.isDir && dotEntries {
@@ -640,7 +711,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				for _, name := range s.children(p) {
 					child := s.nodes[path.Join(p, name)]
 					if verb == "MLSD" {
-						lines = append(lines, fmt.Sprintf("%s %s", mlstFact(child), name))
+						lines = append(lines, fmt.Sprintf("%s %s", s.mlsdFact(path.Join(p, name), child), name))
 					} else {
 						lines = append(lines, listLine(child, name))
 					}

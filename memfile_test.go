@@ -123,7 +123,7 @@ func TestMemFile_DirReadsFail(t *testing.T) {
 	isDirErr(d.ReadJSON(ctx, new(any)))
 	isDirErr(d.ReadXML(ctx, new(any)))
 
-	// ContentHash returns an empty string for a directory, matching File and MemDir
+	// ContentHash returns an empty string for a directory, matching File.ContentHash
 	hash, err := d.ContentHash(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "", hash)

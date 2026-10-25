@@ -63,27 +63,27 @@ func TestPathHelper_CleanPath(t *testing.T) {
 
 func TestPathHelper_URL(t *testing.T) {
 	rooted := PathHelper{URIPrefix: "s3://bucket", Rooted: true}
-	assert.Equal(t, "s3://bucket/a/b", rooted.URL("/a/b"))
+	assert.Equal(t, "s3://bucket/a/b", rooted.URI("/a/b"))
 	assert.Equal(t, "s3://bucket/a/b", rooted.JoinCleanURI("a", "b"))
-	assert.Equal(t, "/a/b", rooted.CleanPath(rooted.URL("/a/b")), "CleanPath(URL(p)) == p")
-	assert.Equal(t, "s3://bucket/100%2525%2520a.txt", rooted.URL("/100%25%20a.txt"), "the URI escapes every %")
+	assert.Equal(t, "/a/b", rooted.CleanPath(rooted.URI("/a/b")), "CleanPath(URI(p)) == p")
+	assert.Equal(t, "s3://bucket/100%2525%2520a.txt", rooted.URI("/100%25%20a.txt"), "the URI escapes every %")
 	assert.Equal(t, "s3://bucket/100%2525%2520a.txt", rooted.JoinCleanURI("100%25%20a.txt"), "URI parts are joined as path elements")
 
 	// A prefix that is only a scheme is followed by the whole rooted path,
 	// the URI of "/a" used to be "file://a" with the host "a".
 	schemePrefix := PathHelper{URIPrefix: "file://", Rooted: true}
-	assert.Equal(t, "file:///a", schemePrefix.URL("/a"))
+	assert.Equal(t, "file:///a", schemePrefix.URI("/a"))
 	assert.Equal(t, "file:///a", schemePrefix.JoinCleanURI("a"))
-	assert.Equal(t, "/a", schemePrefix.CleanPath(schemePrefix.URL("/a")), "CleanPath(URL(p)) == p")
-	assert.Equal(t, "file:///", schemePrefix.URL("/"))
+	assert.Equal(t, "/a", schemePrefix.CleanPath(schemePrefix.URI("/a")), "CleanPath(URI(p)) == p")
+	assert.Equal(t, "file:///", schemePrefix.URI("/"))
 
 	slashPrefix := PathHelper{URIPrefix: "mem://id/", Rooted: true}
-	assert.Equal(t, "mem://id/a", slashPrefix.URL("/a"), "no doubled separator after a host prefix ending with a separator")
-	assert.Equal(t, "/a", slashPrefix.CleanPath(slashPrefix.URL("/a")), "CleanPath(URL(p)) == p")
-	assert.Equal(t, "mem://id/a%25b", slashPrefix.URL("/a%b"))
+	assert.Equal(t, "mem://id/a", slashPrefix.URI("/a"), "no doubled separator after a host prefix ending with a separator")
+	assert.Equal(t, "/a", slashPrefix.CleanPath(slashPrefix.URI("/a")), "CleanPath(URI(p)) == p")
+	assert.Equal(t, "mem://id/a%25b", slashPrefix.URI("/a%b"))
 
 	unrooted := PathHelper{URIPrefix: "http://"}
-	assert.Equal(t, "http://example.com/a", unrooted.URL("example.com/a"))
+	assert.Equal(t, "http://example.com/a", unrooted.URI("example.com/a"))
 	assert.Equal(t, "http://example.com/a", unrooted.JoinCleanURI("example.com", "a"))
 	assert.Equal(t, "example.com/a", unrooted.CleanPath("http://example.com/a"))
 }

@@ -432,7 +432,7 @@ func (f MemFile) OpenReader() (ReadCloser, error) {
 	if f.IsDir() {
 		return nil, NewErrIsDirectory(f)
 	}
-	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
+	return fsimpl.NewReadOnlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
 // OpenReadSeeker opens the file and returns a ReadAtSeekCloser,
@@ -443,7 +443,7 @@ func (f MemFile) OpenReadSeeker() (ReadAtSeekCloser, error) {
 	if f.IsDir() {
 		return nil, NewErrIsDirectory(f)
 	}
-	return fsimpl.NewReadonlyFileBuffer(f.FileData, memFileInfo{f}), nil
+	return fsimpl.NewReadOnlyFileBuffer(f.FileData, memFileInfo{f}), nil
 }
 
 // ReadJSON reads and unmarshals the JSON content of the file to output.

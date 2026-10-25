@@ -67,7 +67,7 @@ Everything on the cost list above disappears:
 - There is no embedded file system reference, so a `File` is trivially
   copyable, comparable, and usable as a map key.
 
-`File` still implements `fmt.Stringer`. `String()` returns `URL()`, so a local
+`File` still implements `fmt.Stringer`. `String()` returns `URI()`, so a local
 path prints with its `file://` scheme rather than as a bare path, which makes
 `%s` and `%v` output say which file system the value belongs to:
 
@@ -75,7 +75,7 @@ path prints with its `file://` scheme rather than as a bare path, which makes
 f := fs.File("/etc/hosts")
 f.Path()    // "/etc/hosts"
 f.RawURI()  // "/etc/hosts"   the string as stored
-f.URL()     // "file:///etc/hosts"
+f.URI()     // "file:///etc/hosts"
 f.String()  // "file:///etc/hosts"
 ```
 

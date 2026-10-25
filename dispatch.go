@@ -26,18 +26,18 @@ const errStopListing SentinelError = "stop listing"
 ///////////////////////////////////////////////////////////////////////////////
 // Derived path helpers
 
-// fsURL returns the URI of a clean path within fileSystem.
-func fsURL(fileSystem FileSystem, cleanPath string) string {
+// fsURI returns the URI of a clean path within fileSystem.
+func fsURI(fileSystem FileSystem, cleanPath string) string {
 	if local, ok := fileSystem.(*LocalFileSystem); ok {
-		return local.URL(cleanPath)
+		return local.URI(cleanPath)
 	}
 	if u, ok := fileSystem.(URIFileSystem); ok {
 		return u.URIFromPath(cleanPath)
 	}
-	// Same rule as PathHelper.URL: a prefix ending with the separator
+	// Same rule as PathHelper.URI: a prefix ending with the separator
 	// after a host doesn't double it, a scheme-only prefix like "x://"
 	// is followed by the whole rooted path
-	return fsimpl.PathHelper{URIPrefix: fileSystem.Prefix(), PathSep: fileSystem.Separator()}.URL(cleanPath)
+	return fsimpl.PathHelper{URIPrefix: fileSystem.Prefix(), PathSep: fileSystem.Separator()}.URI(cleanPath)
 }
 
 // fsFile returns the File for a clean path within fileSystem.
@@ -49,7 +49,7 @@ func fsFile(fileSystem FileSystem, cleanPath string) File {
 	if _, ok := fileSystem.(InvalidFileSystem); ok && cleanPath == "" {
 		return InvalidFile
 	}
-	return File(fsURL(fileSystem, cleanPath))
+	return File(fsURI(fileSystem, cleanPath))
 }
 
 // fsJoinCleanFile returns the File for the cleaned and joined uriParts.

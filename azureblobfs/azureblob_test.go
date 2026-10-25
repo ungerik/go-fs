@@ -690,6 +690,107 @@ func TestOpenReaderIgnoredRange(t *testing.T) {
 	require.NoError(t, reader.Close())
 }
 
+// TestOpenReaderBlobChanged checks on Azurite that the reader of OpenReader
+// fails when the blob is replaced while it is open. Its range requests were
+// not pinned to the ETag of the blob, so after a seek it returned the bytes
+// of the new blob after those of the old one. They send If-Match now.
+func TestOpenReaderBlobChanged(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	ctx := t.Context()
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/changed") })
+	require.NoError(t, blobFS.WriteAll(ctx, "/changed/data.txt", []byte("0123456789"), 0))
+
+	reader, err := blobFS.OpenReader("/changed/data.txt")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	buf := make([]byte, 4)
+	_, err = io.ReadFull(reader, buf)
+	require.NoError(t, err)
+	assert.Equal(t, "0123", string(buf))
+	_, err = reader.(io.ReaderAt).ReadAt(buf, 4)
+	require.NoError(t, err, "a range request for the unchanged blob")
+	assert.Equal(t, "4567", string(buf))
+
+	require.NoError(t, blobFS.WriteAll(ctx, "/changed/data.txt", []byte("abcdefghij"), 0))
+
+	_, err = reader.(io.ReaderAt).ReadAt(buf, 4)
+	require.ErrorContains(t, err, "changed while it was being read", "ReadAt after the blob changed")
+	assert.True(t, bloberror.HasCode(err, bloberror.ConditionNotMet), "the error wraps the 412 answer: %v", err)
+	// The seek closes the body, the next read opens a new range
+	_, err = reader.(io.Seeker).Seek(6, io.SeekStart)
+	require.NoError(t, err)
+	_, err = reader.Read(buf)
+	require.ErrorContains(t, err, "changed while it was being read", "Read after the blob changed")
+
+	// A reader opened after the change reads the new blob
+	reopened, err := blobFS.OpenReader("/changed/data.txt")
+	require.NoError(t, err)
+	data, err := io.ReadAll(reopened)
+	require.NoError(t, err)
+	assert.Equal(t, "abcdefghij", string(data))
+	require.NoError(t, reopened.Close())
+}
+
+// TestOpenReaderPinsETag checks on a test server that every range request
+// of the reader of OpenReader sends If-Match with the ETag of the blob when
+// the reader was opened, that a 412 answer is an error telling that the blob
+// changed, and that so is an answer with another ETag from a server that
+// ignores If-Match, instead of returning the bytes of another version.
+func TestOpenReaderPinsETag(t *testing.T) {
+	const content = "0123456789"
+	var (
+		etag     atomic.Value // ETag of the blob on the server
+		honor    atomic.Bool  // the server answers a wrong If-Match with 412
+		gets     atomic.Int32
+		unpinned atomic.Int32 // GET requests without the If-Match of the opened blob
+	)
+	etag.Store(`"v1"`)
+	honor.Store(true)
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		current := etag.Load().(string)
+		w.Header().Set("ETag", current)
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+			return
+		}
+		gets.Add(1)
+		if r.Header.Get("If-Match") != `"v1"` {
+			unpinned.Add(1)
+		}
+		if honor.Load() && r.Header.Get("If-Match") != current {
+			w.Header().Set("x-ms-error-code", string(bloberror.ConditionNotMet))
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		// The server ignores the Range header, the reader skips to its offset
+		w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+		_, _ = io.WriteString(w, content)
+	})
+	reader, err := blobFS.OpenReader("/file.txt")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	readerAt := reader.(io.ReaderAt)
+
+	buf := make([]byte, 3)
+	_, err = readerAt.ReadAt(buf, 2)
+	require.NoError(t, err)
+	assert.Equal(t, "234", string(buf))
+
+	etag.Store(`"v2"`)
+	_, err = readerAt.ReadAt(buf, 2)
+	require.ErrorContains(t, err, "changed while it was being read", "412 answer")
+	assert.True(t, bloberror.HasCode(err, bloberror.ConditionNotMet), "the error wraps the 412 answer: %v", err)
+
+	honor.Store(false)
+	_, err = readerAt.ReadAt(buf, 2)
+	require.ErrorContains(t, err, "changed while it was being read", "answer with another ETag")
+	_, err = io.ReadAll(reader)
+	require.ErrorContains(t, err, "changed while it was being read", "sequential read of another ETag")
+
+	assert.Equal(t, int32(4), gets.Load(), "range requests")
+	assert.Zero(t, unpinned.Load(), "every range request must send If-Match with the ETag of the opened blob")
+}
+
 // TestRemoveRootOffline checks that Remove and RemoveAll refuse the root
 // with an error wrapping os.ErrInvalid, like the other file systems, without
 // any request. The test server answers every request with an error.
@@ -708,6 +809,141 @@ func TestRemoveRootOffline(t *testing.T) {
 		assert.ErrorContains(t, err, "can't remove root directory", "Remove(%q)", root)
 	}
 	assert.Zero(t, requests.Load(), "removing the root must not send a request")
+}
+
+// listedWithSnapshots returns the names of the blobs with prefix and of
+// their snapshots, a snapshot as "name@snapshot".
+func listedWithSnapshots(t *testing.T, client *container.Client, prefix string) []string {
+	t.Helper()
+	var names []string
+	pager := client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
+		Prefix:  new(prefix),
+		Include: container.ListBlobsInclude{Snapshots: true},
+	})
+	for pager.More() {
+		page, err := pager.NextPage(t.Context())
+		require.NoError(t, err)
+		for _, item := range page.Segment.BlobItems {
+			name := deref(item.Name)
+			if snapshot := deref(item.Snapshot); snapshot != "" {
+				name += "@" + snapshot
+			}
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// TestRemoveSnapshots checks on Azurite that Remove and RemoveAll keep a
+// blob with snapshots and return an error wrapping ErrSnapshotsPresent,
+// RemoveAll before it deleted anything, and that Options.DeleteSnapshots
+// deletes the snapshots with the blobs. Azure refuses to delete a blob with
+// snapshots without them, which stopped RemoveAll with a 409 SnapshotsPresent
+// error after it had deleted the blobs before that one.
+func TestRemoveSnapshots(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	client := testClient(t)
+	ctx := t.Context()
+	f, err := New(ctx, client, &Options{DeleteSnapshots: true})
+	require.NoError(t, err)
+	deleting := f.(*fileSystem)
+	t.Cleanup(func() { _ = deleting.RemoveAll(context.Background(), "/snapshots") })
+
+	// dir/a.txt is listed before dir/b.txt with its snapshot,
+	// file has no snapshot but file.txt with its prefix has one
+	for _, name := range []string{"snapshots/file", "snapshots/file.txt", "snapshots/dir/a.txt", "snapshots/dir/b.txt", "snapshots/dir/sub/c.txt"} {
+		require.NoError(t, blobFS.WriteAll(ctx, "/"+name, []byte(name), 0))
+	}
+	require.NoError(t, blobFS.MakeDir("/snapshots/marker", 0))
+	for _, name := range []string{"snapshots/file.txt", "snapshots/dir/b.txt", "snapshots/marker/"} {
+		_, err := client.NewBlobClient(name).CreateSnapshot(ctx, nil)
+		require.NoError(t, err, "snapshot of %q", name)
+	}
+	before := listedWithSnapshots(t, client, "snapshots/")
+	require.Len(t, before, 9, "6 blobs and 3 snapshots: %v", before)
+
+	err = blobFS.Remove("/snapshots/dir/b.txt")
+	require.ErrorIs(t, err, ErrSnapshotsPresent, "Remove of a blob with snapshots")
+	assert.ErrorContains(t, err, string(blobFS.file("snapshots/dir/b.txt")), "the error names the blob")
+	assert.ErrorContains(t, err, "Options.DeleteSnapshots", "the error tells how to delete the snapshots")
+	assert.ErrorIs(t, blobFS.Remove("/snapshots/marker"), ErrSnapshotsPresent, "Remove of a directory marker with snapshots")
+	for _, filePath := range []string{"/snapshots/dir", "/snapshots/file.txt", "/snapshots/marker", "/snapshots"} {
+		assert.ErrorIs(t, blobFS.RemoveAll(ctx, filePath), ErrSnapshotsPresent, "RemoveAll(%q)", filePath)
+	}
+	assert.Equal(t, before, listedWithSnapshots(t, client, "snapshots/"), "nothing must be deleted")
+
+	// The snapshot of file.txt, a blob with file as prefix, doesn't stop RemoveAll of file
+	require.NoError(t, blobFS.RemoveAll(ctx, "/snapshots/file"))
+	_, err = blobFS.Stat("/snapshots/file")
+	assert.ErrorIs(t, err, os.ErrNotExist, "RemoveAll must delete the blob without snapshots")
+
+	// The generic Move copies the blob without its snapshots and keeps the source
+	src := blobFS.RootDir().Join("snapshots", "dir", "b.txt")
+	err = src.MoveTo(ctx, blobFS.RootDir().Join("snapshots", "moved.txt"))
+	assert.ErrorIs(t, err, ErrSnapshotsPresent, "Move of a blob with snapshots")
+	assert.True(t, src.Exists(), "Move must keep the source with snapshots")
+
+	require.NoError(t, deleting.Remove("/snapshots/dir/b.txt"), "Remove with DeleteSnapshots")
+	assert.Empty(t, listedWithSnapshots(t, client, "snapshots/dir/b.txt"), "Remove must delete the blob and its snapshots")
+	require.NoError(t, deleting.Remove("/snapshots/marker"), "Remove of a directory marker with DeleteSnapshots")
+	assert.Empty(t, listedWithSnapshots(t, client, "snapshots/marker/"), "Remove must delete the marker and its snapshots")
+	require.NoError(t, deleting.RemoveAll(ctx, "/snapshots"), "RemoveAll with DeleteSnapshots")
+	assert.Empty(t, listedWithSnapshots(t, client, "snapshots/"), "RemoveAll must delete the blobs and their snapshots")
+}
+
+// TestRemoveSnapshotsOffline checks the requests of Remove and RemoveAll on
+// a test server. A delete answered with 409 SnapshotsPresent, here for a
+// blob that the snapshot listing of RemoveAll reported without snapshots,
+// like for a snapshot that another client created after it, is an error
+// wrapping ErrSnapshotsPresent. With Options.DeleteSnapshots every delete
+// sends "x-ms-delete-snapshots: include" and RemoveAll lists no snapshots.
+func TestRemoveSnapshotsOffline(t *testing.T) {
+	var deletes, deletesWithSnapshots, snapshotListings atomic.Int32
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		switch {
+		case query.Get("comp") == "list":
+			if strings.Contains(query.Get("include"), "snapshots") {
+				snapshotListings.Add(1)
+			}
+			var blobs string
+			if strings.HasPrefix("dir/a.txt", query.Get("prefix")) {
+				blobs = `<Blob><Name>dir/a.txt</Name><Properties><Content-Length>1</Content-Length></Properties></Blob>`
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="utf-8"?><EnumerationResults ContainerName="container"><Blobs>`+blobs+`</Blobs></EnumerationResults>`)
+		case r.URL.Path == "/account/container/dir/a.txt" && r.Method == http.MethodHead:
+			w.Header().Set("Content-Length", "1")
+		case r.URL.Path == "/account/container/dir/a.txt" && r.Method == http.MethodDelete:
+			deletes.Add(1)
+			if r.Header.Get("x-ms-delete-snapshots") != "include" {
+				w.Header().Set("x-ms-error-code", string(bloberror.SnapshotsPresent))
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+			deletesWithSnapshots.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.Header().Set("x-ms-error-code", string(bloberror.BlobNotFound))
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	ctx := t.Context()
+
+	err := blobFS.Remove("/dir/a.txt")
+	require.ErrorIs(t, err, ErrSnapshotsPresent, "Remove")
+	err = blobFS.RemoveAll(ctx, "/dir")
+	require.ErrorIs(t, err, ErrSnapshotsPresent, "RemoveAll of a blob that got a snapshot after the listing")
+	assert.ErrorContains(t, err, string(blobFS.file("dir/a.txt")), "the error names the blob")
+	assert.Equal(t, int32(2), snapshotListings.Load(), "RemoveAll lists the blob and the tree below it with snapshots")
+	assert.Equal(t, int32(2), deletes.Load())
+
+	blobFS.deleteSnapshots = true
+	snapshotListings.Store(0)
+	require.NoError(t, blobFS.Remove("/dir/a.txt"), "Remove with DeleteSnapshots")
+	require.NoError(t, blobFS.RemoveAll(ctx, "/dir"), "RemoveAll with DeleteSnapshots")
+	assert.Equal(t, int32(2), deletesWithSnapshots.Load(), "every delete must send x-ms-delete-snapshots: include")
+	assert.Zero(t, snapshotListings.Load(), "RemoveAll with DeleteSnapshots must not list snapshots")
 }
 
 // transportFunc is the transport of a test client,

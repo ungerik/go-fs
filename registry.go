@@ -360,8 +360,13 @@ func fsPrefixMatchLen(fileSystem FileSystem, uri string) int {
 // that the URI starts with at a boundary is used: the prefix "s3://logs"
 // matches "s3://logs/key" but not "s3://logs-archive/key".
 //
-// URL escapes in a URI that carries a scheme are decoded, a scheme-less
+// Percent-encoded characters in a URI that carries a scheme are decoded, a scheme-less
 // local path is used verbatim, so a local file literally named "a%20b" is reachable.
+//
+// File URIs are converted to local paths as defined by RFC 8089,
+// see [LocalFileSystem.CleanPath]. A file URI with another host than
+// localhost, like "file://server/share/x", is a UNC path on Windows;
+// on other platforms it returns the [InvalidFileSystem].
 func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	if uri == "" {
 		return Invalid, ""
@@ -379,6 +384,11 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 		}
 	}
 	if bestFS != nil {
+		if _, ok := bestFS.(*LocalFileSystem); ok && isRemoteFileURI(uri) {
+			// A file URI with a host like "file://server/share/x"
+			// has no local path on platforms without UNC paths
+			return Invalid, uri
+		}
 		return bestFS, uriPath(bestFS, uri)
 	}
 
@@ -390,8 +400,9 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	// against the local file system would read or write a bogus local path.
 	// The only scheme that maps to the local file system is file:// (matched
 	// above via the registered Local file system), so any other scheme is
-	// reported as the invalid file system instead.
-	if strings.Contains(uri, PrefixSeparator) && !strings.HasPrefix(uri, LocalPrefix) {
+	// reported as the invalid file system instead, like a file URI
+	// with a host that has no local path.
+	if strings.Contains(uri, PrefixSeparator) && (!strings.HasPrefix(uri, LocalPrefix) || isRemoteFileURI(uri)) {
 		return Invalid, uri
 	}
 
@@ -400,8 +411,8 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 }
 
 // uriPath returns the clean path of uri within fileSystem,
-// the inverse of fsURL: the longest matching prefix of fileSystem
-// or one of its prefix aliases is trimmed and the URL escapes
+// the inverse of fsURI: the longest matching prefix of fileSystem
+// or one of its prefix aliases is trimmed and the percent-encoded characters
 // of the rest are decoded, see [fsimpl.UnescapeURIPath].
 // A uri without such a prefix is a path that is only cleaned.
 // File systems implementing URIFileSystem map the URI themselves.

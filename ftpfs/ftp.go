@@ -24,6 +24,22 @@
 // "ftps://" uses explicit TLS (AUTH TLS) on port 21 by default and
 // implicit TLS if the port is 990. The server certificate is verified
 // unless Options.InsecureSkipVerify is set.
+//
+// Servers without MLST support list symbolic links like "ls -l" with their
+// target. Stat follows such a link like os.Stat: it resolves the listed
+// target relative to the directory of the link and describes the file or
+// directory it points to, with IsSymlink set. ListDir and ListDirRecursive
+// describe a link itself, with IsSymlink set and neither IsDir nor
+// IsRegular, because a listing doesn't tell what a link points to.
+// ListDirRecursive follows only a link at the listed path, and Remove,
+// RemoveAll and Move act on a link itself.
+// Servers with MLST support describe a link with the facts of its target
+// or with a type that the FTP client library reads as a file, so ftpfs
+// can't tell their links from files and directories. FTP has no command
+// to create a link, so the file system doesn't implement
+// fs.SymbolicLinkFileSystem: fs.CopyRecursive copies a link to a file as
+// a file and fails with an error wrapping errors.ErrUnsupported for a link
+// to a directory before it writes anything.
 package ftpfs
 
 import (
@@ -192,11 +208,16 @@ func (f *fileSystem) opContext(ctx context.Context) (context.Context, context.Ca
 	}
 }
 
-// checkPath returns an error for an empty path and for a path that
-// would corrupt the FTP command it is an argument of.
-func checkPath(filePath string) error {
+// checkPath returns an error for an empty path, for a path that
+// would corrupt the FTP command it is an argument of, and an error
+// wrapping os.ErrInvalid for a path with a backslash unless
+// Options.AllowBackslashInNames is set.
+func (f *fileSystem) checkPath(filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
+	}
+	if !f.cfg.opts.AllowBackslashInNames && strings.Contains(filePath, `\`) {
+		return fmt.Errorf("%w: ftpfs path %q contains a backslash, which FTP servers on Windows take for a separator, see Options.AllowBackslashInNames", os.ErrInvalid, filePath)
 	}
 	return checkCommandArg("path", filePath, false)
 }
@@ -204,7 +225,7 @@ func checkPath(filePath string) error {
 // begin checks the paths and the state for a new operation.
 func (f *fileSystem) begin(ctx context.Context, paths ...string) error {
 	for _, p := range paths {
-		if err := checkPath(p); err != nil {
+		if err := f.checkPath(p); err != nil {
 			return err
 		}
 	}
@@ -385,7 +406,14 @@ func (f *fileSystem) JoinCleanFile(uriParts ...string) fs.File {
 	return fs.File(f.JoinCleanURI(uriParts...))
 }
 
+// maxLinkHops is the number of symbolic links that stat follows for one
+// path, the limit of Linux, so that a cycle of links ends with an error.
+const maxLinkHops = 40
+
 // entryToFileInfo converts an ftp.Entry to the fs.FileInfo of filePath.
+// The FileInfo of a link describes the link itself like for ListDir:
+// a listing doesn't tell what a link points to, so IsDir and IsRegular
+// are false, see fs.FileInfo.
 func (f *fileSystem) entryToFileInfo(entry *ftp.Entry, filePath string) *fs.FileInfo {
 	isDir := entry.Type == ftp.EntryTypeFolder
 	name := path.Base(filePath)
@@ -394,7 +422,7 @@ func (f *fileSystem) entryToFileInfo(entry *ftp.Entry, filePath string) *fs.File
 		Name:        name,
 		Exists:      true,
 		IsDir:       isDir,
-		IsRegular:   !isDir,
+		IsRegular:   entry.Type == ftp.EntryTypeFile,
 		IsSymlink:   entry.Type == ftp.EntryTypeLink,
 		IsHidden:    strings.HasPrefix(name, "."),
 		Modified:    entry.Time,
@@ -418,47 +446,97 @@ func (f *fileSystem) rootInfo() *fs.FileInfo {
 	}
 }
 
-// stat returns the FileInfo of the clean filePath. It uses the MLST
-// command and falls back to listing the parent directory for servers
-// without MLST support.
-func (f *fileSystem) stat(c *conn, filePath string) (*fs.FileInfo, error) {
+// lstat returns the FileInfo of the clean filePath without following
+// a symbolic link, and the target of a link as the server listed it.
+// It uses the MLST command and falls back to listing the parent directory
+// for servers without MLST support, which list links as such.
+func (f *fileSystem) lstat(c *conn, filePath string) (info *fs.FileInfo, linkTarget string, err error) {
 	if filePath == Separator {
-		return f.rootInfo(), nil
+		return f.rootInfo(), "", nil
 	}
 	entry, err := c.GetEntry(filePath)
 	switch {
 	case err == nil:
-		return f.entryToFileInfo(entry, filePath), nil
+		return f.entryToFileInfo(entry, filePath), entry.Target, nil
 	case isConnectionError(err):
-		return nil, err
+		return nil, "", err
 	case statusCode(err) == ftp.StatusFileUnavailable:
 		// The server supports MLST and the file does not exist
-		return nil, fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
+		return nil, "", fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
 	}
 	dir, name := path.Split(filePath)
 	entries, err := c.List(path.Clean(dir))
 	if err == nil {
 		for _, entry := range entries {
 			if entry.Name == name {
-				return f.entryToFileInfo(entry, filePath), nil
+				return f.entryToFileInfo(entry, filePath), entry.Target, nil
 			}
 		}
-		return nil, fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
+		return nil, "", fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
 	}
 	if isConnectionError(err) {
-		return nil, err
+		return nil, "", err
 	}
 	// Last resort for servers without listing support: SIZE works for files
 	size, err := c.FileSize(filePath)
 	if err != nil {
 		if isConnectionError(err) {
-			return nil, err
+			return nil, "", err
 		}
-		return nil, fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
+		return nil, "", fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
 	}
-	return f.entryToFileInfo(&ftp.Entry{Name: name, Type: ftp.EntryTypeFile, Size: uint64(size)}, filePath), nil //#nosec G115 -- sizes are not negative
+	return f.entryToFileInfo(&ftp.Entry{Name: name, Type: ftp.EntryTypeFile, Size: uint64(size)}, filePath), "", nil //#nosec G115 -- sizes are not negative
 }
 
+// stat returns the FileInfo of the clean filePath following symbolic
+// links like Stat: for a link the FileInfo describes the file or directory
+// it points to, with the File and Name of the link and IsSymlink set.
+// A link whose target the server didn't list is described like by lstat.
+// A link to a missing file is an error wrapping os.ErrNotExist.
+func (f *fileSystem) stat(c *conn, filePath string) (*fs.FileInfo, error) {
+	link, linkTarget, err := f.lstat(c, filePath)
+	if err != nil || !link.IsSymlink {
+		return link, err
+	}
+	info, current := link, filePath
+	for hops := 0; info.IsSymlink && linkTarget != ""; hops++ {
+		if hops == maxLinkHops {
+			return nil, fmt.Errorf("ftpfs: too many levels of symbolic links: %s", link.File)
+		}
+		current = resolveLinkTarget(current, linkTarget)
+		if err = checkCommandArg("link target", current, false); err != nil {
+			return nil, err
+		}
+		info, linkTarget, err = f.lstat(c, current)
+		if isNotExist(err) {
+			return nil, fs.NewErrDoesNotExist(link.File)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	followed := *info
+	followed.File = link.File
+	followed.Name = link.Name
+	followed.IsHidden = link.IsHidden
+	followed.IsSymlink = true
+	return &followed, nil
+}
+
+// resolveLinkTarget returns the path that the target of the symbolic link
+// at linkPath refers to: an absolute target cleaned and a relative one
+// joined to the directory of the link. The resolution is lexical, so a ".."
+// of the target goes up from the path of the link even if that path
+// contains links, where the server goes up from the directory they point to.
+func resolveLinkTarget(linkPath, linkTarget string) string {
+	if path.IsAbs(linkTarget) {
+		return path.Clean(linkTarget)
+	}
+	return path.Join(path.Dir(linkPath), linkTarget)
+}
+
+// Stat returns the FileInfo of filePath, following a symbolic link,
+// see the package documentation for the links that ftpfs can follow.
 func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	var info *fs.FileInfo
 	err := f.do(context.Background(), func(c *conn) (err error) {
@@ -470,6 +548,8 @@ func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 
 // ListDir lists the directory. The connection is released before the
 // callbacks are called, so callbacks can use the file system.
+// The FileInfo of a symbolic link describes the link itself,
+// with IsSymlink set and neither IsDir nor IsRegular.
 func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	var infos []*fs.FileInfo
 	err := f.do(ctx, func(c *conn) error {
@@ -517,6 +597,8 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 // for every file (not directory) matching the patterns.
 // The connection is released before the callbacks are called.
 // A directory that can't be listed is an error.
+// Symbolic links are passed to the callback like by ListDir and never
+// followed, only a link at dirPath is, see fs.ListDirRecursiveFileSystem.
 func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
 	var infos []*fs.FileInfo
 	err := f.do(ctx, func(c *conn) error {
@@ -778,7 +860,7 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 		if err == nil || isConnectionError(err) {
 			return err
 		}
-		if _, statErr := f.stat(c, dirPath); statErr == nil {
+		if _, _, statErr := f.lstat(c, dirPath); statErr == nil {
 			return fs.NewErrAlreadyExists(f.JoinCleanFile(dirPath))
 		}
 		return f.notExist(dirPath, err)
@@ -786,6 +868,7 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 }
 
 // Move renames filePath to destPath via the RNFR and RNTO commands.
+// A symbolic link at either path is renamed or replaced itself, like by os.Rename.
 //
 // FTP servers differ in what a rename onto an existing path does,
 // so Move checks the destination first: an existing directory is an
@@ -808,14 +891,14 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 		return f.begin(ctx, filePath, destPath)
 	}
 	return f.do(ctx, func(c *conn) error {
-		srcInfo, err := f.stat(c, srcPath)
+		srcInfo, _, err := f.lstat(c, srcPath)
 		if err != nil {
 			return err
 		}
 		if srcInfo.IsDir && (srcPath == Separator || strings.HasPrefix(dest, srcPath+Separator)) {
 			return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, srcInfo.File, f.JoinCleanFile(dest))
 		}
-		destInfo, err := f.stat(c, dest)
+		destInfo, _, err := f.lstat(c, dest)
 		replace := err == nil
 		switch {
 		case replace && destInfo.IsDir:
@@ -848,7 +931,7 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 // renamed to a temporary name in its directory and deleted after the
 // source was renamed onto its path, or renamed back if that failed.
 func (f *fileSystem) replaceFile(c *conn, srcPath, dest string, renameErr error) error {
-	if _, err := f.stat(c, srcPath); err != nil {
+	if _, _, err := f.lstat(c, srcPath); err != nil {
 		// The source vanished since it was checked
 		return err
 	}
@@ -874,7 +957,7 @@ func isRoot(filePath string) bool {
 	return path.Clean(Separator+filePath) == Separator
 }
 
-// Remove deletes a file with the DELE command
+// Remove deletes a file or a symbolic link with the DELE command
 // or an empty directory with the RMD command.
 // A non-empty directory is an fs.ErrDirectoryNotEmpty.
 func (f *fileSystem) Remove(filePath string) error {
@@ -883,7 +966,7 @@ func (f *fileSystem) Remove(filePath string) error {
 		if isRoot(filePath) {
 			return fmt.Errorf("%w: ftpfs: can't remove the root directory of %s", os.ErrInvalid, f)
 		}
-		info, err := f.stat(c, filePath)
+		info, _, err := f.lstat(c, filePath)
 		if err != nil {
 			return err
 		}
@@ -914,6 +997,8 @@ func hasEntries(entries []*ftp.Entry) bool {
 }
 
 // RemoveAll deletes a file or a directory with its content.
+// A symbolic link is deleted itself, also below the directory,
+// so the files that a link to a directory points to are kept.
 // A missing path is not an error.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return f.do(ctx, func(c *conn) error {
@@ -921,7 +1006,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		if isRoot(filePath) {
 			return fmt.Errorf("%w: ftpfs: can't remove the root directory of %s", os.ErrInvalid, f)
 		}
-		info, err := f.stat(c, filePath)
+		info, _, err := f.lstat(c, filePath)
 		if isNotExist(err) {
 			return nil
 		}

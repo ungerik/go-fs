@@ -69,7 +69,7 @@ surprise. Add one for every optional interface you later implement.
 
 Embedding `fsimpl.PathHelper` is what makes this short. It supplies the
 `Prefix`, `Separator` and `CleanPath` methods of the interface, plus
-`SplitDirAndName`, `SplitPath`, `URL`, `JoinCleanURI`, `TrimPrefix` and
+`SplitDirAndName`, `SplitPath`, `URI`, `JoinCleanURI`, `TrimPrefix` and
 `PrefixAliases`. The type is unexported, so the fields of the embedded
 `PathHelper` don't become API of your package; `New` returns the
 `fs.FileSystem` interface, like the backends of go-fs do.

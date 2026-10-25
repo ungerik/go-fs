@@ -218,7 +218,7 @@ func (f *FileSystem) cleanPath(filePath string) string {
 }
 
 // PathFromURI returns the clean path of an URL starting with the prefix,
-// implementing fs.URIFileSystem. URL escapes are not decoded.
+// implementing fs.URIFileSystem. Percent-encoded characters are not decoded.
 func (f *FileSystem) PathFromURI(uri string) string {
 	return f.CleanPath(uri)
 }

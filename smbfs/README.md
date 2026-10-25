@@ -159,10 +159,12 @@ and the requests of open file handles, and afterwards every method returns
 The tests run the go-fs conformance suite and the reconnect tests against a
 Samba server in a Docker container (`dperson/samba`) with a share for a test
 user and a share with guest access, both on tmpfs together with the session
-databases of smbd, so a full Docker disk doesn't fail the tests. Docker is
-required for them; if it is
-not installed they are skipped, if it is installed but the container can't
-be started they fail. The other tests run offline.
+databases of smbd, so a full Docker disk doesn't fail the tests. These
+tests are skipped when Docker is unavailable, meaning the `docker` command
+is not installed or its daemon doesn't answer `docker info`. When Docker is
+available but the container can't be started, the test run fails instead of
+skipping, except on Windows, where Docker usually can't run the Linux image
+and the tests are skipped. The other tests run offline.
 
 ```bash
 go test ./...

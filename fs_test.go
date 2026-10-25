@@ -92,7 +92,7 @@ func TestMove_CrossFileSystemSymlinks(t *testing.T) {
 		// The source file system has no RemoveAll,
 		// so the emulation would remove the source.
 		m := newMinimalLocalFS(t)
-		tree, outside := symlinkTree(t, fs.File(m.URL(t.TempDir())), os.Symlink)
+		tree, outside := symlinkTree(t, fs.File(m.URI(t.TempDir())), os.Symlink)
 		dest := newMinimalMemFS(t).RootDir().Join("moved")
 
 		err := tree.MoveTo(t.Context(), dest)

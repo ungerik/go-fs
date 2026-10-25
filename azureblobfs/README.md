@@ -75,6 +75,7 @@ err = azureblobfs.NewAndRegister(ctx, client, nil)
 &azureblobfs.Options{
     ReadOnly:           true, // writes return fs.ErrReadOnlyFileSystem
     SkipContainerCheck: true, // New sends no request
+    DeleteSnapshots:    true, // Remove and RemoveAll delete blob snapshots too
 }
 ```
 
@@ -84,6 +85,17 @@ roles and SAS tokens with the list permission, also container SAS tokens,
 which don't allow reading the container properties that v0 requested.
 Set it for credentials without the list permission, like an upload-only SAS;
 writes then skip their directory check, which needs a listing too.
+
+Azure refuses to delete a blob that has snapshots unless they are deleted
+with it. By default the file system keeps such a blob: `Remove` returns an
+error wrapping `azureblobfs.ErrSnapshotsPresent`, and `RemoveAll` first lists
+the tree with its snapshots and returns that error before it deletes
+anything (a snapshot that another client creates after that listing still
+stops `RemoveAll` with the same error, after it deleted some blobs). The
+generic `Move` and `Rename`, which copy the blob without its snapshots and
+remove the source, fail the same way and keep the source. Set
+`DeleteSnapshots` to delete the snapshots together with the blobs; deleted
+snapshots are gone unless soft delete is enabled for the storage account.
 
 File URIs have the form `azblob://<host>/<container>/<blob name>`, for
 example `azblob://myaccount.blob.core.windows.net/assets/images/logo.png`.
@@ -111,7 +123,11 @@ messages of the errors it returns, so they don't leak into logs.
   instead of creating a blob that would turn the directory into a file.
 - **Native operations.** `ReadAll`, `WriteAll`, `OpenReadWriter`, `Touch`,
   `RemoveAll`, `ListDirRecursive` and `CopyFile` are native, and readers
-  seek with range requests; everything else uses the generic emulation of
+  seek with range requests that are pinned to the ETag of the blob when the
+  reader was opened (`If-Match`): after the blob was replaced, the next range
+  request fails with an error telling that the blob changed while it was
+  being read, instead of returning bytes of the new blob after those of the
+  old one. Everything else uses the generic emulation of
   the `fs` package, `Move` and `Rename` copy and delete. `ReadAll` allocates
   its buffer once for the `Content-Length` of the download, up to 16 MiB,
   so a huge blob grows the buffer while it is read instead of allocating
@@ -132,7 +148,9 @@ messages of the errors it returns, so they don't leak into logs.
   reported permissions are the constants `azureblobfs.DefaultPermissions` /
   `azureblobfs.DefaultDirPermissions`. There are no symbolic links and no
   append; `Append` is emulated by rewriting the blob.
-- **Errors.** Missing blobs wrap `os.ErrNotExist`; after `Close` every
+- **Errors.** Missing blobs wrap `os.ErrNotExist`; removing a blob with
+  snapshots without `Options.DeleteSnapshots` wraps
+  `azureblobfs.ErrSnapshotsPresent`; after `Close` every
   method returns `fs.ErrFileSystemClosed`, also the `Close` of a writer that
   was opened before.
 
@@ -144,9 +162,12 @@ a Docker container (`mcr.microsoft.com/azure-storage/azurite`), plus tests
 for container SAS tokens, streaming writers and the regressions of the v1
 review. Azurite stores metadata names in lower case, so the case
 preservation of `Touch` is only exercised on Azure. Docker is required for
-most tests; if it is not installed they are skipped, if it is installed but
-the container can't be started the tests fail. The offline tests
-(constructors, error redaction, writers) always run.
+most tests. They are skipped when Docker is unavailable, meaning the
+`docker` command is not installed or its daemon doesn't answer
+`docker info`. When Docker is available but the container can't be started,
+the test run fails instead of skipping, except on Windows, where Docker
+usually can't run the Linux image and the tests are skipped. The offline
+tests (constructors, error redaction, writers) always run.
 
 ```bash
 go test ./...

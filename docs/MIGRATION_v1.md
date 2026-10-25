@@ -3,7 +3,9 @@
 v1.0 changes the consumer-facing `File`, `FileReader` and `MemFile` API in a
 mechanical way, and redesigns the implementer-facing `FileSystem` interface.
 Nobody outside this repository implements `FileSystem`, so this guide covers
-the consumer side; implementers read `docs/V1_ROADMAP.md`.
+the consumer side; implementers read
+[reference-filesystem-interfaces.md](reference-filesystem-interfaces.md) and
+[tutorial-implement-a-filesystem.md](tutorial-implement-a-filesystem.md).
 
 Code that already uses v1.0.0-beta.1 reads
 [Upgrading from v1.0.0-beta.1](#upgrading-from-v100-beta1); the rest of the
@@ -131,6 +133,8 @@ Behaviour changes:
 | `fs.CopyFileBuf(ctx, src, dest, &buf)` | `fs.CopyFileBuf(ctx, src, dest, buf)` with a `[]byte` (nil allocates) |
 | `fs.ReadAllContext(ctx, r)`, `fs.WriteAllContext(ctx, w, data)` | `fs.ReadAll(ctx, r)`, `fs.WriteAll(ctx, w, data)` |
 | `fs.Remove(uris...)`, `fs.RemoveFile(f)` | `fs.RemoveFiles(files...)`, `fs.File.Remove` as callback |
+| `fs.ReadHeader(fr, n)`, `fs.ReadHeaderString(fr, n)` | `fs.ReadHeader(ctx, fr, n)`, `fs.ReadHeaderString(ctx, fr, n)` |
+| `f.URL()`, `fs.FileURLs(files)` | `f.URI()`, `fs.FileURIs(files)`: a go-fs URI escapes only `%`, it is no URL for `net/url` or HTTP clients |
 | `fs.ReadSeekCloser` | `fs.ReadAtSeekCloser` |
 | `f.SetXAttr(name, data, xattr.XATTR_CREATE)` | `f.SetXAttr(name, data, fs.XAttrCreate)` |
 | `perm.CanUserRead()` and the other `Can…` methods | `perm.Can(fs.UserRead)` |
@@ -211,7 +215,9 @@ Behaviour changes:
 `MoveFileSystem.Move` and `TruncateFileSystem.Truncate` take a ctx,
 `SymbolicLinkFileSystem.Lstat` replaces `IsSymbolicLink`, `SetXAttr` takes
 `fs.XAttrFlags`, `RenameFileSystem` and `ListDirMaxFileSystem` are removed,
-`fsimpl.PathHelper` has no `IsAbsPath`/`AbsPath`/`IsHidden`, and
+`fsimpl.PathHelper` has no `IsAbsPath`/`AbsPath`/`IsHidden`,
+`fsimpl.PathHelper.URL` and `LocalFileSystem.URL` are `URI`,
+`fsimpl.ReadonlyFileBuffer` and its constructors are spelled `ReadOnly…`, and
 `fstest.DockerAvailable`/`DockerSetupFailed` are internal. Writers that commit
 on `Close` should implement `fs.WriteAborter`. Run `fstest.RunConformance`,
 which checks the new contracts. Its XAttr check requires `XAttrCreate` errors
@@ -283,8 +289,8 @@ signatures. Changes compared to v0.1:
   `Options.InsecureSkipVerify` is set. `ftps://host` connects with explicit
   TLS on port 21; use `ftps://host:990` for implicit TLS.
 - `dropboxfs`: `New(ctx, token, opts)` fetches the account; the prefix is
-  `dropbox://<account id>` instead of a random string, so URIs can be
-  persisted.
+  `dropbox://<account id without "dbid:">` instead of a random string, so
+  URIs can be persisted. `ID()` returns the account id with `dbid:`.
 - `s3fs`, `azureblobfs`: `New(...)` with `Options.ReadOnly`; s3fs objects
   written by v0 have keys with a leading `/`, see "Migrating from v0" in
   `s3fs/README.md`.
@@ -313,8 +319,8 @@ signatures. Changes compared to v0.1:
 - `fs.MemDir`: a `MemFile` with a `FileName` ending in `/` is a directory.
 - `fs.FileInfoCache`: it was only used by dropboxfs and is internal there now.
 - `fs.ReadOnlyBase`, `fs.FullyFeaturedFileSystem`, `fs.RelPathFileSystem`,
-  `fs.RunFileSystemTests`, the `tests` package: implementer-facing, see the
-  roadmap.
+  `fs.RunFileSystemTests`, the `tests` package: implementer-facing, see
+  [reference-filesystem-interfaces.md](reference-filesystem-interfaces.md).
 
 ## Behaviour changes
 
@@ -329,12 +335,22 @@ signatures. Changes compared to v0.1:
   merging into it.
 - `File.IsSymbolicLink` is `false` on file systems without symbolic link
   support instead of calling the backend.
-- A `File` with a scheme is URL-decoded once when parsed; a scheme-less local
+- A `File` with a scheme is percent-decoded once when parsed; a scheme-less local
   path is used verbatim, so a local file literally named `a%20b` is reachable.
   The URIs the package builds escape every `%` of the path as `%25`, so
   `dir.Join("a%20b")` addresses a file named `a%20b` on every file system.
   Code that builds a URI by concatenation (`fs.File(prefix + path)`) has to
   escape the path with `fsimpl.EscapeURIPath`, or use `File.Join`.
+- File URIs follow RFC 8089. `File.URI()` (was `File.URL()`) of a Windows path is
+  `file:///C:/dir/file` instead of `file://C:/dir/file`, and of a UNC path
+  `file://server/share/file`; the old Windows form is still parsed, and so is
+  `file://localhost/…`. A file URI with another host than `localhost`
+  resolves to the `Invalid` file system on platforms other than Windows
+  instead of a path relative to the working directory.
+- `sftpfs`, `ftpfs` and `webdavfs` reject paths with a backslash
+  (`os.ErrInvalid`), because a server on Windows takes it for a separator.
+  For a server on Unix that has files with backslashes in their names, set
+  `Options.AllowBackslashInNames`.
 - `WriteJSON`, `WriteXML`, `MemFile.WriteJSON`/`WriteXML` and
   `NewMemFileWriteJSON`/`NewMemFileWriteXML` don't take an indent any more,
   the `…Indent` variants do. `WriteXMLIndent` with an empty indent puts every
@@ -377,8 +393,14 @@ find . -name '*.go' -exec perl -pi \
   {} +
 ```
 
+`File.URL()` is `File.URI()` and `fs.FileURLs` is `fs.FileURIs`. The
+compiler lists the call sites; don't rewrite every `.URL()` with a regex,
+`*http.Request`, `*url.URL` and SDK clients have methods or fields with
+that name too.
+
 `WriteAll`, `WriteAllString`, `ListDirMax`, `ListDirIter`, `Glob`, `Truncate`,
-`MoveTo`, `Rename` and `RemoveDirContents` take other arguments before, so their
+`MoveTo`, `Rename`, `RemoveDirContents` and the package functions `ReadHeader`
+and `ReadHeaderString` take other arguments before, so their
 call sites are easiest to fix from the compiler errors: insert `ctx, ` as the
 first argument. Callers of `FileSystem` implementation methods with the same
 names (`fileSystem.WriteAll(ctx, path, ...)`) already pass a context and must

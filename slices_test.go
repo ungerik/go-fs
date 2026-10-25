@@ -128,14 +128,14 @@ func TestFileURLsPathsNames(t *testing.T) {
 		dir.Join("c.txt").Path(),
 	}, fs.FilePaths(files))
 	assert.Equal(t, []string{
-		dir.Join("a.txt").URL(),
-		dir.Join("b.txt").URL(),
-		dir.Join("c.txt").URL(),
-	}, fs.FileURLs(files))
+		dir.Join("a.txt").URI(),
+		dir.Join("b.txt").URI(),
+		dir.Join("c.txt").URI(),
+	}, fs.FileURIs(files))
 
 	assert.Empty(t, fs.FileNames([]fs.File(nil)))
 	assert.Empty(t, fs.FilePaths([]fs.File(nil)))
-	assert.Empty(t, fs.FileURLs([]fs.File(nil)))
+	assert.Empty(t, fs.FileURIs([]fs.File(nil)))
 }
 
 // TestSortBy verifies that every sort function orders by its own key.

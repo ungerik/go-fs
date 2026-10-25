@@ -28,8 +28,8 @@ type (
 // and absolute for the file system (starting with the separator or a volume)
 // with the exception of file systems where the path starts with a host name.
 // The URI of a path is Prefix() followed by the path with every "%" escaped
-// as "%25" (see [fsimpl.EscapeURIPath]), because [ParseRawURI] decodes URL
-// escapes after the prefix. The package guarantees that implementations
+// as "%25" (see [fsimpl.EscapeURIPath]), because [ParseRawURI] decodes
+// percent-encoded characters after the prefix. The package guarantees that implementations
 // are called with such clean paths and never with the prefix.
 //
 // Implementations must return errors that satisfy [errors.Is] for
@@ -167,7 +167,7 @@ type WriteAborter interface {
 // URIFileSystem can be implemented by file systems whose paths
 // are URIs in their escaped form, like HTTP URLs with query strings.
 //
-// The package then doesn't decode URL escapes of URIs, but uses
+// The package then doesn't decode percent-encoded characters of URIs, but uses
 // PathFromURI and URIFromPath to convert between URIs and paths,
 // and SplitDirAndName to get the name of a file.
 type URIFileSystem interface {

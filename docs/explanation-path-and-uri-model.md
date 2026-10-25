@@ -101,9 +101,9 @@ if _, ok := f.FileSystem().(fs.InvalidFileSystem); ok {
 }
 ```
 
-## URL escapes: decoded for URIs, verbatim for local paths
+## Percent-encoding: decoded for URIs, verbatim for local paths
 
-A URI that carries a scheme has its URL escapes decoded, so
+A URI that carries a scheme has its percent-encoded characters decoded, so
 `s3://bucket/a%20b` addresses the key `a b`. A scheme-less local path is used
 **verbatim**, so a local file literally named `a%20b` is reachable by that
 name.
@@ -133,6 +133,13 @@ as `%25` (`fsimpl.EscapeURIPath`). That is what lets `File` round-trip: parse
 to `(fileSystem, path)`, decoding the escapes, and rebuild with the prefix and
 the escaped path, so a file literally named `a%20b` keeps its name.
 
+Such a go-fs URI is not an RFC 3986 URL. Only `%` is percent-encoded; spaces,
+`?`, `#` and non-ASCII characters of names stay as they are, so
+`file:///tmp/a#b.txt` is the file `a#b.txt`, where `net/url` would read
+`#b.txt` as a fragment. Store, log and parse go-fs URIs with go-fs (`File`,
+`ParseRawURI`), but don't hand them to an HTTP client or a browser. That is why
+the method is `File.URI()`, not `URL()`.
+
 File systems whose paths are URIs in escaped form, like the URLs of `httpfs`
 with their query strings, implement `URIFileSystem` instead. The package then
 decodes nothing and lets the file system convert between URIs and paths with
@@ -150,14 +157,31 @@ path, not as `file:///etc/hosts`.
 f := fs.File("/etc/hosts")
 f.Path()    // "/etc/hosts"
 f.RawURI()  // "/etc/hosts"          the string as stored
-f.URL()     // "file:///etc/hosts"
-f.String()  // "file:///etc/hosts"   String() returns URL()
+f.URI()     // "file:///etc/hosts"
+f.String()  // "file:///etc/hosts"   String() returns URI()
 ```
 
 This is what makes `readFile("../my-local-file.txt")` work with a plain string
-literal, which is the whole reason `File` is a string. `URL()` produces the
+literal, which is the whole reason `File` is a string. `URI()` produces the
 `file://` form when you need a real URI; `Path()` gives the file system path;
 `RawURI()` gives the string as stored.
+
+File URIs follow RFC 8089 in both directions. The authority is empty, so a
+Windows path keeps a slash before its drive letter, and a UNC path puts its
+server in the authority:
+
+| Local path              | `URI()`                       |
+| ----------------------- | ----------------------------- |
+| `/etc/hosts`            | `file:///etc/hosts`           |
+| `C:\dir\file.txt`       | `file:///C:/dir/file.txt`     |
+| `\\server\share\x.txt`  | `file://server/share/x.txt`   |
+
+Parsing accepts `file://localhost/...` as a local path too, and on Windows
+the form `file://C:/dir/file.txt` written before v1.0.0. A URI with another
+host, like `file://server/share/x.txt`, is a UNC path on Windows; on other
+platforms there is no local path for it, so it resolves to the `Invalid` file
+system instead of a path relative to the working directory. `file://~/x` is
+the go-fs shorthand for `~/x` in the home directory.
 
 ## Registration
 

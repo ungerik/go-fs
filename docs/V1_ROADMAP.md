@@ -2,705 +2,264 @@
 
 Plan of record for reaching v1.0.0: clean, durable abstractions and a complete
 feature surface for the areas the library touches, so the API can be frozen.
-It replaced the earlier `TODOS.md`; every still-open item from it is folded into
-the phases below. The new `TODOS.md` only lists the dependents to update after v1.0.0. Breaking changes are explicitly allowed before v1.0.0.
+Breaking changes are allowed until v1.0.0 is tagged.
 
-Two audits of the whole tree (core package, all backends, test infrastructure)
-plus a design pass produced the findings and decisions recorded here.
+This document keeps the decisions that freeze with v1.0.0 and the work that is
+left. What changed in each release is in [CHANGELOG.md](../CHANGELOG.md), the
+way from v0.1.0 in [MIGRATION_v1.md](MIGRATION_v1.md), and the API in the
+[README](../README.md) and the [docs](README.md).
+
+## Status
+
+| Release        | Date       | Pull request                     |
+| -------------- | ---------- | -------------------------------- |
+| v1.0.0-beta.1  | 2026-10-20 | #18, #21 (v1.0 phases), #24      |
+| v1.0.0-beta.2  | 2026-10-23 | #25 (full review of beta.1)      |
+| v1.0.0-beta.3  | 2026-10-24 | #27                              |
+| v1.0.0         | open       | see [Remaining for v1.0.0](#remaining-for-v100) |
 
 ## Decisions
 
-> Design of 2026-09. Where it differs, the Beta 2 decisions below and the
-> CHANGELOG win: ctx on Move, Truncate and Rename, `Lstat`, no
-> `RenameFileSystem`/`ListDirMaxFileSystem`/`MustGlob`, `fs.EnsureRegistered`,
-> `MemFileSystemOptions`.
+These hold for v1.0.0. Where an earlier design differs, the decision here wins.
 
-Taken 2026-09-05/06:
+### API shape
 
-- **Context arguments.** The `*Context` twins are dropped. A method takes
-  `ctx context.Context` as its first parameter only if it is a potentially
-  long-running read or write operation:
-  - content transfer: `ReadAll*`, `WriteAll*`, `Append*`, `ContentHash`,
-    `ReadJSON`/`WriteJSON`/`ReadXML`/`WriteXML`, `CopyFile`, `CopyRecursive`,
-    `Move`/`MoveTo`, `Truncate`;
-  - directory iteration: `ListDir*`, `Glob`, `RemoveRecursive`,
-    `RemoveDirContents*`, `RemoveAll`;
-  - long-running connect/constructor functions: `sftpfs.Dial*` /
-    `EnsureRegistered`, `ftpfs.Dial*` / `EnsureRegistered`,
-    `s3fs.NewLoadDefaultConfig`, `dropboxfs.New*` (fetches the account id).
-
-  Metadata and open operations stay ctx-less (`Stat`, `Info`, `Exists`, `IsDir`,
-  `Size`, `Open*`, `MakeDir`, `MakeAllDirs`, `Remove`, `Touch`, `Rename`,
-  permissions/owner/symlink/xattr), as do pure path methods and methods that
-  implement standard library interfaces (`WriteTo`, `ReadFrom`, `GobEncode`,
-  `String`). Where a pair exists today, the ctx variant survives under the
-  short name.
-- **`FileSystem.ID()` stays** as `ID() string`: a string that identifies the
-  file system uniquely among the registered ones and never changes, computed
-  at construction, never blocking. Where the backing store has an identifier
-  of its own it is used - local: the real underlying file system id of the root
-  volume (`statfs` `f_fsid` on Unix, `GetVolumeInformation` volume serial on
-  Windows), obtained lazily once via `sync.Once`; dropbox: the account id
-  fetched by the constructor (which takes ctx and may fail). No other remote
-  protocol in this repo exposes one (checked for SFTP, FTP, WebDAV, SMB, S3
-  and Azure Blob Storage), so those use the coordinates that identify the
-  store: s3: bucket; azblob: `host/container`; smb: `user@host/share`;
-  webdav: `host/base path`; sftp/ftp: the connection prefix
-  (`sftp://user@host`). Mem and the archive/form file systems use a generated
-  id. The format is implementation specific and promises nothing beyond
-  uniqueness and stability - useful as meta information, e.g.
-  `fs.File("/path").FileSystem().ID()`, not for parsing. The per-file-system
-  values are tabulated in the README.
-- **Errors:** standard library `errors`/`fmt` only, no `go-errs` dependency
-  (see `AGENTS.md`).
-- **`MemDir` is dropped**; `MemFile` keeps its trailing-slash directory
-  semantics.
-- **Delivery:** this roadmap lives in the repo; all of the v1.0 work lands
-  in one pull request (#18, the v1.0 PR), one commit per phase (backends:
-  one commit each), so master jumps from v0.1.0 to v1.0.0-beta.1 in one
-  step; further beta releases in follow-up PRs iterate before v1.0.0.
-- **Go version policy:** every module (and `go.work`) declares one minor
-  version behind the currently released Go: Go 1.27 is current, so all modules
-  are on `go 1.26.0`. Bump all modules together on each Go release.
-
-## What bounds the breakage
-
-Downstream corpus: 1536 Go files under `/Users/erik/go/src/github.com`
-(mainly domonda-service).
-
-| Identifier                            | Uses  |
-| ------------------------------------- | ----- |
-| `fs.FileReader`                       | 3201  |
-| `fs.File`                             | 2545  |
-| `fs.MemFile` / `NewMemFile`           | 1581  |
-| `ReadMemFile` / `ReadMemFileRename`   | 161   |
-| `CopyFile`, `TempDir`, `MakeTempDir`  | ~170  |
-| `FileInfo`                            | 36    |
-| everything else in the root package   | < 30 each, most 0 |
-
-Nobody outside this repo implements `FileSystem`; only the in-repo backends
-and the `fstest` mocks must be migrated when the interface changes. Hot
-`File` methods: `Join`, `Name`, `Info`, `Exists`, `ReadAll`, `LocalPath`,
-`WriteAll`, `AbsPath`, `Ext`, `IsDir`, `Remove`, `ReadAllContext`, `Path`,
-`Size`, `Dir`, `RemoveRecursive`, `Joinf`. Unused downstream: `ListDirChan`,
-`MemDir`, `StdFS`, `SortBy*`, `Glob`, `FileInfoCache`, `Watch` (1 use).
-
-## Target architecture
-
-> Design of 2026-09. Where it differs, the Beta 2 decisions below and the
-> CHANGELOG win: ctx on Move, Truncate and Rename, `Lstat`, no
-> `RenameFileSystem`/`ListDirMaxFileSystem`/`MustGlob`, `fs.EnsureRegistered`,
-> `MemFileSystemOptions`.
-
-### Core `FileSystem` interface (implementer-facing)
-
-```go
-type FileSystem interface {
-	ID() string           // stable backing-store id, computed at construction, never blocks
-	Prefix() string       // URI prefix; Prefix()+path == URI
-	Name() string
-	String() string
-	Separator() string
-	ReadableWritable() (readable, writable bool) // dynamic (mem SetReadOnly, s3 readOnly, zip mode)
-	RootDir() File        // may be InvalidFile (httpfs)
-	CleanPath(uriParts ...string) string // pure, never mutates input, strips Prefix() from uriParts[0]
-
-	Stat(path string) (*FileInfo, error)
-	ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error
-	OpenReader(path string) (io.ReadCloser, error)
-	Close() error // idempotent; unregisters if registered; Local only stops its watcher and stays usable; no-op for Invalid
-}
-
-type WriteFileSystem interface {
-	FileSystem
-	OpenWriter(path string, perm Permissions) (io.WriteCloser, error) // create|truncate
-	MakeDir(dirPath string, perm Permissions) error                   // os.ErrExist if exists
-	Remove(path string) error                                         // os.ErrNotExist if missing; non-empty dir is an error
-}
-```
-
-Removed from the interface: `URL`, `CleanPathFromURI`, `JoinCleanFile`,
-`JoinCleanPath`, `SplitPath`, `SplitDirAndName`, `MatchAnyPattern`,
-`IsAbsPath`/`AbsPath` (optional, local only), `IsHidden`, `IsSymbolicLink`
-(become `FileInfo` fields), `OpenReadWriter` (optional),
-`FullyFeaturedFileSystem`, `ReadOnlyBase`.
-
-`FileInfo` gains `IsSymlink bool` and `Sys any`; the `fs` package fills
-`File`, `Name` and `IsHidden` (dot rule) when a backend leaves them empty.
-
-Optional interfaces, all embedding `FileSystem`:
-
-- ctx-taking (content transfer, iteration): `ReadAllFileSystem`
-  (`ReadAll(ctx, path)`), `WriteAllFileSystem` (`WriteAll(ctx, path, data,
-  perm)`), `AppendFileSystem`, `CopyFileSystem` (`CopyFile(ctx, src, dest)`;
-  the `buf *[]byte` parameter is dropped), `RemoveAllFileSystem`
-  (`RemoveAll(ctx, path)`; new: `os.RemoveAll`, S3 batch delete, Dropbox
-  recursive delete), `ListDirMaxFileSystem`, `ListDirRecursiveFileSystem`.
-- ctx-less: `ExistsFileSystem` (`Exists(path) (bool, error)`),
-  `AppendWriterFileSystem`, `ReadWriterFileSystem` (`OpenReadWriter`),
-  `TruncateFileSystem`, `TouchFileSystem`, `MakeAllDirsFileSystem`,
-  `MoveFileSystem` (`Move(src, dest)`, same-FS rename semantics, dest is
-  always the final path; `File.MoveTo(ctx, ...)` handles "into directory" and
-  the cross-FS copy fallback), `RenameFileSystem`, `WatchFileSystem` (the
-  cancel func is the lifetime), `PermissionsFileSystem`, `UserFileSystem`,
-  `GroupFileSystem`, `SymbolicLinkFileSystem`, `XAttrFileSystem`,
-  `VolumeNameFileSystem`, `AbsPathFileSystem` (`IsAbsPath`, `AbsPath`,
-  `RelPath`; merges `RelPathFileSystem`).
-
-The `fs` package emulates an optional interface generically where a
-primitive-based fallback exists (Exists via Stat, ReadAll via OpenReader,
-WriteAll via OpenWriter, Append via ReadAll+WriteAll, Truncate, MakeAllDirs,
-RemoveAll, CopyFile, Move via copy+delete, ListDirMax, ListDirRecursive) and
-returns `ErrUnsupported` otherwise. A backend implements an optional interface
-only when it is more efficient or more capable than the emulation, never just
-to return `ErrUnsupported` (the s3fs `Watch` stub goes away).
-
-### Contracts enforced by the conformance suite
-
-- **Paths.** A file-system path is the output of `CleanPath`: cleaned, uses
-  `Separator()`, carries no prefix, and is absolute for that file system
-  (rooted at the separator or a volume; httpfs is the one unrooted file system
-  where the path starts with the host). The `fs` package guarantees that
-  backends never see the prefix (`ParseRawURI` calls `CleanPath`). URL
-  unescaping happens only in `ParseRawURI` for inputs that carried a scheme,
-  and only in the path after the prefix, never in `CleanPath`, so a local
-  file literally named `a%20b` is reachable. In the other direction the URI
-  of a path escapes every `%` as `%25` (`fsimpl.EscapeURIPath`, used by
-  `PathHelper.URL`, `LocalFileSystem.URL` and the `fs` package), so every
-  path survives the round trip; the conformance seed contains a file named
-  `100%25 a%20b.txt`.
-  Default-port aliases (`sftp://u@h:22`, `ftp://h:21`, `ftps://h:990`) resolve
-  via `PathHelper.AltPrefixes` and registry matching on all prefixes.
-- **Errors.** `errors.Is` must hold for `os.ErrNotExist`
-  (Stat/OpenReader/Remove/ListDir), `os.ErrExist` (MakeDir), `os.ErrPermission`
-  where the backend can tell (optional per backend, FTP 550 is ambiguous),
-  `ErrReadOnlyFileSystem`/`ErrWriteOnlyFileSystem` (pre-gated in the `fs`
-  package via `ReadableWritable()` so backends need no stubs),
-  `ErrFileSystemClosed` after `Close`, `ErrIsDirectory`/`ErrIsNotDirectory`,
-  and `ctx.Err()` on cancellation. A typed `ErrFileSystemsDoNotMatch` is added
-  for cross-FS Move/Copy/Rename/RelPath/Symlink.
-- **Permissions.** A single `Permissions` value on the interface; `0` means
-  "file system default". `File` methods keep `perm ...Permissions` (OR-joined,
-  none = default).
-- **Touch.** The fallback creates only when missing; on an existing file
-  without `TouchFileSystem` it returns `ErrUnsupported` and never truncates.
-- **Remove / MakeDir.** `Remove` of a missing path is `ErrNotExist`; of a
-  non-empty directory an error. `MakeDir` on an existing path is `ErrExist`;
-  implicit-directory file systems (s3, zip writer) may return nil.
-- **Close.** Idempotent; unregisters if registered; ref-counting stays a
-  backend concern (`sftpfs`/`ftpfs` `EnsureRegistered`). Constructors do not
-  register as a side effect except the documented `*AndRegister` variants;
-  `NewMemFileSystem` gets a separate `Register` step (or
-  `NewMemFileSystemAndRegister`).
-- **Readers.** Backends return a plain `io.ReadCloser` and stream where the
-  transport allows (S3 `GetObject` body, HTTP body, Dropbox download).
-  `File.OpenReader` still returns `fs.ReadCloser` (= `iofs.File`): passed
-  through when the backend reader already implements it, otherwise wrapped
-  with a lazy `Stat`.
-
-### `fsimpl` (implementer helpers)
-
-- Add `fsimpl.PathHelper{Prefix, Separator string; Rooted bool; AltPrefixes
-  []string; VolumeLen func(string) int}` with `CleanPath`, `File(path)`,
-  `SplitPath`, `SplitDirAndName`, `URL`, `PathFromURI`, `IsHidden`;
-  separator-aware (convert to `/`, `path.Clean`, convert back) so the mem `\`
-  mode is correct. Backends embed it and drop their copy-pasted path methods.
-- Add `NewWriteAllOnCloseBuffer(seed []byte, write func([]byte) error)`
-  replacing the seven self-referential `FileBuffer` closures, and a shared
-  closed-state guard.
-- Fix `FileBuffer.WriteAt` (negative offset panic, `io.WriterAt` contract),
-  add `FileBuffer.Truncate`, make `NewFileBuffer` set a `FileInfo`.
-- Remove dead exports: `DirEntryFromFileInfo`, `NewReadonlyFileBufferWithClose`,
-  `ReadWriteAllSeekCloser.InvalidateBuffer`.
-- `fsimpl` stays public (downstream uses `RandomString`, `Ext`, `TrimExt` and
-  the buffers).
-
-### `File` / `FileReader` / `MemFile` (consumer-facing)
-
-- Post-v1 `FileReader`: `String`, `Name`, `Ext`, `LocalPath`, `Size`, `Exists`,
-  `CheckExists`, `IsDir`, `CheckIsDir`, `OpenReader`, `OpenReadSeeker` (no
-  ctx); `ContentHash(ctx)`, `ReadAll(ctx)`, `ReadAllContentHash(ctx)`,
-  `ReadAllString(ctx)`, `ReadJSON(ctx, v)`, `ReadXML(ctx, v)`; `WriteTo(w)` and
-  `GobEncode()` keep their standard library signatures.
-- On `File` the ctx-taking set is `ContentHash`, `ReadAll*`, `WriteAll*`,
-  `WriteJSON`, `WriteXML`, `Append*`, `Truncate`, `ListDir*`, `ListDirIter*`,
-  `ListDirMax*`, `ListDirRecursive*`, `Glob`, `MustGlob`, `MoveTo`,
-  `RemoveRecursive`, `RemoveDirContents*`. Everything else (`Stat`, `Info`,
-  `Exists`, `IsDir`, `Size`, `Modified`, `Permissions`, `Open*`, `Touch`,
-  `MakeDir`, `MakeAllDirs`, `Remove`, `Rename*`, `User`/`Group`, `*XAttr`,
-  symlinks, `Watch`, `IsEmptyDir`, `IsReadable`, `IsWritable`, `IsHidden`) is
-  ctx-less.
-- Listing keeps the callback (`ListDir(ctx, cb, patterns...)`), iterator
-  (`ListDirIter(ctx, patterns...)`) and slice (`ListDirMax(ctx, max,
-  patterns...)`) idioms. `ListDirChan`/`ListDirRecursiveChan` are dropped. One
-  package-level `errStopListing` sentinel replaces the per-call sentinels
-  (fixes the empty-string `SentinelError` in `ListDirIterContext`).
-- Dropped: `File.GobEncode`/`GobDecode` (encoding a struct with a `File` field
-  silently reads the whole file; `MemFile` keeps gob), `MemDir`,
-  `FileInfoCache` from the public API (becomes an internal, mutex-protected
-  cache in dropboxfs), `ReadOnlyBase`, `FullyFeaturedFileSystem`, the optional
-  methods of `InvalidFileSystem`, the bogus type parameter of `SortByModified`
-  (signature fixed), the `tests/` package (merged into the conformance suite).
-- `IsWritable` is true for an existing writable regular file or directory and
-  documents that it checks mode bits, not effective access.
-- `Rename` on backends without native Rename/Move keeps copy+delete; `MoveTo`
-  resolves "into directory" before dispatch.
-- `MemFile`: shape unchanged; `Stat()` returns a deterministic zero `ModTime`
-  (not `time.Now()`); the doc comment no longer claims `json.Marshaler`.
-- `MemFileSystem`: the id is a counter/random string, not a heap address; the
-  prefix ends with the separator; `WithID`/`WithVolume` become constructor
-  options (no unlocked mutation after registration); writer/reader aliasing
-  and lock gaps fixed; `JoinCleanPath` is separator-aware.
-- `LocalFileSystem`: use the receiver's defaults instead of the `Local`
-  singleton; no stderr writes (the Windows hidden-attribute lookup moves into
-  `Stat`/`ListDir`); tilde expansion once in `CleanPath`; `Watch` expands the
-  tilde and maps errors; the watcher goroutine is stopped on `Close`;
-  compile-time interface assertions; `MakeAllDirs`/`RemoveAll` use
-  `os.MkdirAll`/`os.RemoveAll`; `ID()` = real file system id of the root volume (`statfs` `f_fsid` /
-  Windows volume serial), obtained once via `sync.Once`.
-- `temp.go`: `TempFile` documented as path-only; add `CreateTempFile` (atomic,
-  wraps `os.CreateTemp`); `MakeTempDir` uses `os.MkdirTemp`.
-- `copy.go`: guard `src == dest`. `stdfs.go`: `checkStdFSName` uses
-  `iofs.ValidPath`.
-
-### Backends
-
-- **s3fs:** one `key(path)` helper (`TrimPrefix "/"`) fixing the write/list
-  mismatch (objects are written with a leading slash but listed without);
-  un-gate `Test_fileSystem` (`GOFS_S3_CONFORMANCE`) once the conformance
-  suite passes;
-  implicit-directory `Stat` via `ListObjectsV2 MaxKeys=1`; `Remove` reports
-  NotExist and refuses non-empty directories; `RemoveAll` via `DeleteObjects`;
-  streaming `OpenReader`; drop the `Watch` stub; `closed` flag under a mutex;
-  configurable multipart thresholds; fix the `Name()` test literal.
-- **sftpfs:** ctx into `getClient` for the ctx-taking operations; native
-  `MakeAllDirs` (`MkdirAll`), `ListDirRecursive` (`Walk`), `Symlink`/`ReadLink`,
-  `SetPermissions` (`Chmod`); honor `perm` in `openFile`; alt prefix `:22`;
-  never downgrade to `AcceptAnyHostKey` on reconnect; either make reconnect
-  reachable (detect a broken client) or delete it together with
-  `isConnectionError`.
-- **ftpfs:** mutex around the single `ServerConn` (or a small connection pool);
-  ctx; alt prefixes `:21`/`:990` and a consistent FTPS port; `AbsPath` uses the
-  instance prefix; replace reply-text substring matching with
-  `textproto.Error` code checks; `Remove` no longer falls back to `RemoveDir`
-  for files; TLS verification on by default with an explicit
-  `InsecureSkipVerify` option; share the credentials/`EnsureRegistered` layer
-  with sftpfs via `fsimpl`.
-- **dropboxfs:** ctx checked before every SDK call; `ID()` (account id) fetched
-  once by the constructor, which takes ctx and may fail; typed `not_found`
-  detection only (no substring match); `MakeDir` on an existing path maps to
-  `ErrExist`; `Touch` on an existing file returns `ErrUnsupported`; native
-  `RemoveAll`; mutex-protected internal info cache; streaming reader.
-- **httpfs:** injectable `*http.Client` (package var + constructor),
-  `http.NewRequestWithContext`; `PathHelper{Rooted:false}` fixing `Join`
-  producing `http:///h/x/y`; `OpenReader` streams the GET body and does not
-  HEAD first; `Close` documented as a no-op; not a `WriteFileSystem`.
-- **multipartfs:** real `Size` from the `FileHeader` (`Modified` stays the zero
-  time: a multipart part carries no modification time); delete the
-  `EscapePath` stub (or apply it consistently); idempotent `Close` and
-  `ErrFileSystemClosed` from every method afterwards, because the parts that
-  stayed in memory would otherwise still be served; an existing root
-  directory; `ListDir` patterns applied on the form field level too; unique
-  file system names for files uploaded under the same name (and for names
-  like `..` which are not path elements); `FileInfo.File` carries the prefix;
-  real tests.
-- **zipfs:** split into `Reader` and `Writer` types (no mode branches);
-  `dirtree` panics become errors and handle `a` + `a/b` and
-  trailing-slash entries; entry map built at open (no O(n) `findFile`);
-  `FileInfo.File` carries the prefix; `Stat` reports `ErrFileSystemClosed`
-  after `Close`.
-- **uuiddir:** fix `Make` (it creates `baseDir` instead of `uuidDir`), the
-  `RemoveDir` boundary check (`/base` matches `/basement`), `Enum` no longer
-  aborts on one unparsable directory; add `Test_Make`.
-
-### Test infrastructure and CI
-
-- Move `RunFileSystemTests` and `tests/filereads.go` into `fstest` so `testing`
-  and testify leave the root package's non-test build. New suite
-  `fstest.RunConformance(t, fs FileSystem, opts)`: seeds content through the
-  file system when writable, otherwise takes a caller-provided seeded tree,
-  and runs the read tests on every backend; error-contract section;
-  ctx-cancellation section; `FileInfo` invariants; `CleanPath` purity;
-  `OpenAppendWriter`/`OpenReadWriter`/`CopyFile` content verified; optional
-  interfaces asserted, not logged; cleanup via `t.Cleanup`.
-- `fstest.MockFileSystem` regenerated for the new signatures (embeds
-  `PathHelper`; adds the missing RelPath/Symlink/XAttr hooks).
-- CI: `go test -race` for every `go.work` module (via `test-workspace.sh`),
-  `go vet`, staticcheck and gosec, on ubuntu/macos/windows; CodeQL kept and
-  modernised. Docker-backed integration tests (MinIO, sshd, vsftpd) run in a
-  separate job that skips when Docker is absent; Dropbox runs only with a repo
-  secret. Tests that hit public internet servers are gated behind
-  `GOFS_ONLINE_TESTS=1`.
-
-## Phases
-
-One PR per phase unless noted.
-
-### Phase 0 — Roadmap, CI, baseline
-
-- [x] This document replaces `TODOS.md`; repo `CLAUDE.md` records the errors
-      decision.
-- [x] `.github/workflows/test.yml` (test/vet/staticcheck/gosec matrix on three
-      OSes, every module); CodeQL workflow modernised; `test-workspace.sh` runs
-      with `-race`, staticcheck and gosec (staticcheck pinned in `tools`).
-- [x] Internet-dependent tests gated or replaced with `httptest`; s3fs `Name()`
-      test literal fixed; data race in `TestFile_Watch` and the staticcheck
-      findings fixed.
-- [x] Verify: CI green on ubuntu and macOS for all modules; the Windows build
-      compiles and vets `localfilesystem_windows.go` for the first time.
-      The Windows *test* job is `continue-on-error` for now: it had never run
-      before and fails in `Test_FileJoin`, `Test_Join`, `TestFile_Glob`,
-      `TestGlob`, `TestFile_Watch` (rename), `TestLocalFileSystem/
-      RenameNonEmptyDir`, `TestSourceFile`, `TestStdFS`, `TestZipFileSystem`,
-      `TestZipWriter_*` and `uuiddir` (separator and drive-letter
-      assumptions). Making the Windows job blocking is part of Phase 4
-      (local file system rework).
-
-### Phase 1 — Conformance suite v2 and the bugs it finds
-
-- [x] `fstest/conformance.go` (`fstest.RunConformance`, replacing
-      `RunFileSystemTests` and `tests/filereads.go`) with the sections listed
-      above; callers for Local and Mem (both separators) in
-      `conformance_test.go`, `s3fs`, `sftpfs`, `ftpfs`, `dropboxfs`, plus new
-      callers in `httpfs` (httptest server), `zipfs` (reader + writer) and
-      `multipartfs` (synthetic form). `tests/` deleted; `testing`/testify no
-      longer compiled into the root package.
-- [x] Fixed what the suite surfaced: `JoinCleanPath` mutating its input
-      (fsimpl, local, mem, invalid); mem `\` separator cleaning, Remove of
-      non-empty directories, Stat/reads following symlinks,
-      `ErrFileSystemClosed` after Close; httpfs `http:///host` URLs and
-      unreadable file infos; zipfs `FileInfo.File` without prefix,
-      `ListDirInfoRecursive` listing directories and panicking on
-      conflicting entries, `Remove`/`Stat` errors; multipartfs fake sizes and
-      times, `FileInfo.File` without prefix, listing errors, non-idempotent
-      Close; sftpfs `MakeDir` on existing paths and listing a file;
-      `uuiddir.Make`, `RemoveDir` boundary check, `Enum` aborting.
-- [x] Verify: `./test-workspace.sh` green; the suite runs on Local, Mem,
-      httpfs, zipfs, multipartfs offline and on sftpfs and ftpfs with Docker.
-      **s3fs is the exception:** its conformance run is skipped unless
-      `GOFS_S3_CONFORMANCE=1` because it fails on the object key slash
-      mismatch and the implicit directory semantics (Stat/Exists of listed
-      directories, `MakeDir` on existing, `Remove` of missing, `CopyFile`
-      onto itself, emulated append/truncate reading stale keys, markers left
-      after cleanup). All of that is the Phase 5 s3fs rework; un-gate the test
-      there. dropboxfs still needs a token to run.
-
-### Phase 2 — `fsimpl.PathHelper` and de-duplication
-
-- [x] `fsimpl/pathhelper.go` (`fsimpl.PathHelper`: `URIPrefix`, `AltPrefixes`,
-      `PathSep`, `Rooted`, `VolumeLen`) with tests for `/`, `\`, volume,
-      rooted/unrooted, alt prefixes, non-mutation, idempotence.
-- [x] s3fs, sftpfs, ftpfs, dropboxfs, httpfs, multipartfs, zipfs and
-      `MemFileSystem` embed it; `InvalidFileSystem` delegates to it. Removed
-      ~90 duplicated path methods. Behaviour changes: `CleanPathFromURI`
-      always cleans; sftpfs/ftpfs accept URIs with the default port; `AbsPath`
-      of sftpfs/ftpfs returns a rooted path instead of a URI; sftpfs, ftpfs
-      and httpfs use the dot rule for `IsHidden` (was always false);
-      `InvalidFileSystem` paths are unrooted like httpfs. URL unescaping
-      still happens in `CleanPath`; moving it to `ParseRawURI` is part of
-      Phase 3.
-- [x] `fsimpl.NewWriteOnCloseFileBuffer` replaces the seven self-referential
-      closures; `FileBuffer.WriteAt` rejects negative offsets and honors the
-      `io.WriterAt` contract, `FileBuffer.Truncate` added, `Stat` without a
-      `FileInfo` returns an error; dead exports removed
-      (`DirEntryFromFileInfo`, `NewReadonlyFileBufferWithClose`,
-      `InvalidateBuffer`). A shared closed-state guard was not worth a helper
-      (two identical one-liners); revisit with the Phase 3 interface flip.
-- [x] Verify: conformance (Local, Mem, httpfs, zipfs, multipartfs, sftpfs and
-      ftpfs via Docker) and `fsimpl` tests green.
-
-### Phase 3 — `FileSystem` interface flip (implementer-facing)
-
-- [x] `dispatch.go`: every `File` method calls the file system through
-      unexported helpers (`fsStat`, `fsListDir`, `fsOpenReader`, ...) that
-      apply the readable/writable gates (`ErrReadOnlyFileSystem` /
-      `ErrWriteOnlyFileSystem` come from the package now, no stubs needed),
-      complete `FileInfo.File`/`Name`/`IsHidden`, and hold the generic
-      emulations of every optional interface.
-- [x] New `FileSystem` (primitives only) and `WriteFileSystem`, plus the
-      optional interfaces as designed; `PrefixAliasFileSystem` for default-port
-      URIs; `HiddenFileSystem`; `SymbolicLinkFileSystem` keeps `IsSymbolicLink`;
-      `AbsPathFileSystem` merges `RelPathFileSystem`; `RemoveAllFileSystem` is
-      new; `ReadOnlyBase`, `FullyFeaturedFileSystem` and `FileSystem.ID()`'s
-      error result are gone. `FileInfo` gained `IsSymlink` and `Sys`.
-      Because everything lands in one PR, no `LegacyFileSystem` adapter was
-      written: all in-repo backends were migrated to the new signatures
-      directly (semantic reworks stay in Phase 5).
-- [x] `ParseRawURI` cleans the path with `CleanPath`, decodes URL escapes only
-      for URIs with a scheme, and resolves prefix aliases; reads use `RLock`.
-- [x] Local file system: `ID()` is the real file system id (statfs
-      `f_fsid`, Windows volume serial), `Stat` follows symlinks and reports
-      `IsSymlink`, receiver defaults instead of the `Local` singleton, no
-      stderr writes, `RemoveAll` via `os.RemoveAll`, `Watch` expands `~`,
-      `MakeAllDirs` on a file reports `ErrIsNotDirectory`.
-- [x] Mem file system: `RelPath`, `RemoveAll`, `Move` with final destination
-      semantics.
-- [x] `fstest` mocks regenerated; conformance suite on the new interface
-      (also checks prefix aliases, `IsSymlink`, `RemoveAll`, native
-      `OpenReadWriter`, `MoveTo` into a directory and across file systems).
-- [x] Verify: conformance on Local, Mem, httpfs, zipfs, multipartfs, sftpfs
-      and ftpfs (Docker); `file_mock_test.go` ported.
-
-### Phase 4 — `File`/`FileReader`/`MemFile` v1 API (consumer-facing)
-
-- [x] ctx rule applied to `File`, `FileReader`, `MemFile` (the `*Context`
-      twins are gone, the ctx variant survives under the short name;
-      `Truncate`, `MoveTo`, `Glob`, `TempFileCopy`, `uuiddir.Remove`/`RemoveDir`
-      gained ctx). Dropped: `ListDirChan`/`ListDirRecursiveChan`, `MemDir`,
-      `File.GobEncode`/`GobDecode` (and `GobEncode` from `FileReader`),
-      public `FileInfoCache` (internal, mutex protected, in dropboxfs);
-      `SortByModified` signature fixed; `IsWritable` true for writable
-      directories; `checkStdFSName` uses `iofs.ValidPath`; `CreateTempFile`
-      added, `MakeTempDir` uses `os.MkdirTemp`.
-- [x] `LocalFileSystem`: tilde expansion only in `CleanPath`, `Close` stops
-      the watcher goroutine. `MemFileSystem`: random id instead of the heap
-      address, writer rejects writes after `Close`, `Seek` takes the lock.
-      Not done (deliberately): the mem prefix keeps no trailing separator
-      (the URL rule makes it unnecessary) and `WithID`/`WithVolume` stay
-      methods; reader aliasing of `FileData` is documented behaviour shared
-      with `MemFile`.
-- [x] Windows test suite green (see the Phase 0 list) and the Windows CI job
-      made blocking (`continue-on-error` removed). Fixes: separator-agnostic
-      test expectations, `StdFS` name validation like `os.DirFS`, local XAttr
-      methods return `ErrUnsupported` where the platform has no xattrs, the
-      conformance suite only checks the write bit for local `SetPermissions`
-      on Windows, `zipfs` writer mode closes its file handle, `fs.Glob`
-      cleans the yielded file for its file system.
-- [x] `docs/MIGRATION_v1.md` with the rename table, removals, behaviour
-      changes and sed recipes.
-- [x] Verify: conformance green; smoke-compiled go-docdb and domonda-service
-      copies against this branch after applying the recipes: the remaining
-      errors are the documented hand-fix class (call sites without a `ctx` in
-      scope, `WriteAll`/`ListDirMax`-style calls that need `ctx, ` inserted,
-      package-level functions that share a method name).
-
-### Phase 5 — Backends (one commit each: s3fs, sftpfs, ftpfs, dropboxfs)
-
-- [x] s3fs: `key`/`dirKey` helpers (paths are rooted, keys are not), `Stat`
-      of marker and implicit directories via one `ListObjectsV2 MaxKeys=1`,
-      `MakeDir` reports `ErrExist`, `Remove` reports `ErrNotExist` and refuses
-      non-empty directories, native `RemoveAll` (batched `DeleteObjects`) and
-      `ListDirRecursive`, streaming `OpenReader`, `OpenReadWriter` creates a
-      missing object, URL-encoded `CopySource`, `Exists` dropped (the `Stat`
-      emulation handles implicit directories), client guarded by a mutex,
-      multipart thresholds are package variables, `DefaultDirPermissions`
-      fixed (it was `0660 + 0666`). `Test_fileSystem` is no longer gated.
-      Found on the way: the `OpenAppendWriter` emulation in `dispatch.go`
-      wrote at offset 0 instead of appending.
-- [x] sftpfs: every operation goes through `do`, which reconnects with the
-      stored credentials and host key callback and retries once on a
-      connection error; a `Wait` goroutine drops a dead client early; the
-      initial dial retries with backoff (`MaxConnectRetries`,
-      `InitialRetryBackoff`). URIs with embedded credentials verify host keys
-      with the new `URLHostKeyCallback` (nil by default, so they fail closed
-      instead of accepting any host key). Native `MakeAllDirs`,
-      `ListDirRecursive` (`Walk`), `RemoveAll`, `SetPermissions`, symbolic
-      links; `Stat` reports `IsSymlink`; `perm` honoured for created files
-      and directories. The public-server tests are gated behind
-      `GOFS_ONLINE_TESTS=1`.
-- [x] ftpfs: one control connection used by one operation at a time (mutex),
-      reconnect with the stored credentials and one retry on a connection
-      error; `OpenReader` streams over a dedicated connection so it never
-      blocks other operations; `Options{TLSConfig, InsecureSkipVerify,
-      DebugOut}` replaces the `debugOut` parameter and **TLS verification is
-      on by default** (`ftps://` = explicit TLS on port 21, implicit TLS on
-      port 990, alias prefix `:21`); reply codes instead of reply-text
-      matching (`ignoreSuccessReply`, 550 mapped to `ErrNotExist` only where
-      that is what it means); `Remove` stats first and never falls back to
-      `RMD` for files; `MakeDir` reports `ErrExist`; native `RemoveAll`
-      (`RemoveDirRecur`) and `ListDirRecursive` (`Walk`); `OpenReadWriter`
-      creates a missing file; `Stat` falls back to `SIZE` for servers
-      without listing support. Sharing the credentials layer with sftpfs via
-      `fsimpl` was deliberately not done: two small copies are simpler than
-      a cross-package abstraction. The in-process test server grew into a
-      small FTP(S) server with a directory tree, RFC 3659 listings and
-      AUTH TLS, and runs the full conformance suite for FTP and FTPS on
-      every platform. The dockerized vsftpd was removed: it had silently
-      been skipped (its 1024-bit certificate is rejected by OpenSSL 3) and,
-      once fixed, segfaulted on connection close on Docker Desktop, in the
-      Alpine and the Debian builds alike. TestMain of the remaining Docker
-      backed tests (s3fs, sftpfs) fails instead of skipping when Docker is
-      installed but the server can't be started (`fstest.DockerSetupFailed`,
-      since beta.2 `internal/dockertest.SetupFailed`).
-- [x] dropboxfs: `NewAndRegister(ctx, token, cacheTimeout, mute)` fetches the
-      account and uses the account id as `ID()` and prefix suffix, so the
-      same account always gets the same prefix; typed `not_found` and
-      `conflict` detection only (no error-string matching); `MakeDir` on an
-      existing path wraps `ErrExist`; `Touch` of an existing file returns
-      `ErrUnsupported`; `Remove` refuses a non-empty folder, native
-      `RemoveAll`; `OpenReader` streams the download; `OpenReadWriter`
-      creates a missing file; the metadata cache is invalidated by every
-      write; `closed` is atomic.
-
-### Phase 6 — Docs and release
-
-- [x] README updated for the v1 API: migration pointer, backend table with
-      constructors and ids, support matrix regenerated from the implemented
-      optional interfaces, error contract and context rule, backend examples
-      for the new constructors, implementer section (`fsimpl.PathHelper`,
-      `fstest.RunConformance`). Package docs for `fs` (`doc.go`), `zipfs`
-      and `multipartfs`; s3fs README rewritten for the v1 API.
-- [x] Remaining `TODO`s resolved: `httpfs` streams `OpenReader`, uses
-      `NewRequestWithContext` and an injectable `Client`;
-      `multipartfs.EscapePath` removed; `CopyRecursive` uses `MakeAllDirs`;
-      the local `ReadAll`/`WriteAll`/`Append` document that the OS call is not
-      cancelable. Commented-out `MemFile` JSON marshalling removed.
-- [x] CHANGELOG `v1.0.0-beta.1` with the migration link, `VERSION` =
-      `v1.0.0-beta.1`.
-- [x] Tag all modules in lockstep after the PR is merged
-      (`v1.0.0-beta.1`, `s3fs/v1.0.0-beta.1`, `sftpfs/v1.0.0-beta.1`,
-      `ftpfs/v1.0.0-beta.1`, `dropboxfs/v1.0.0-beta.1`,
-      `webdavfs/v1.0.0-beta.1`, `smbfs/v1.0.0-beta.1`,
-      `azureblobfs/v1.0.0-beta.1`; not the `tools` module, which only pins
-      development tools). The intermediate tags `v0.2.0`/`v0.3.0` were not
-      created because everything lands in one PR.
-- [ ] v1.0.0: after the beta iterations in follow-up PRs, tagged with
-      `tag-release.sh` (the `tools` module is never tagged).
-- [ ] After v1.0.0: update the ungerik and domonda repositories that use
-      go-fs, listed in `TODOS.md`.
-
-### Beta iterations (after Phase 6)
-
-Landed on the same branch after Phase 6, one commit each. All of it stays
-inside the API surface v1.0.0 freezes: new file systems and implementer
-helpers, no change to the `File` API.
-
-- [x] `StdFileSystem` adapts any `io/fs.FS` as a read-only file system
-      (`embed.FS`, `os.DirFS`, `zip.Reader`, `testing/fstest.MapFS`);
-      `SubFileSystem` is a view of a directory of another file system that
-      forwards every operation with translated paths, so the parent's
-      native implementations are used and paths cannot escape.
-- [x] `OverlayFileSystem`: a writable upper layer over a read-only base
-      with union listings, copy-up on write and in-memory whiteouts for
-      removed base entries.
-- [x] `tarfs` (tar, `.tar.gz`, `.tgz`) on the new shared archive index
-      `fsimpl.NewDirTree`; `zipfs.Reader` became a `StdFileSystem` over
-      `archive/zip.Reader`; both packages split their mode-switching file
-      system into `Reader` and `Writer` types (`NewReader`/`NewWriter`), so
-      the wrong direction reports `ErrReadOnlyFileSystem` /
-      `ErrWriteOnlyFileSystem` instead of "does not exist".
-- [x] Three new backend modules: `webdavfs` (standard library only,
-      `PROPFIND`/`MOVE`/`COPY`, range reads), `smbfs` (SMB2/3 via go-smb2,
-      nearly every optional interface native) and `azureblobfs` (Azure Blob
-      Storage, marker blobs and range reads like s3fs).
-- [x] multipartfs: `ErrFileSystemClosed` from every method after `Close`,
-      an existing root directory, `ListDir` patterns applied on the form
-      field level, unique names for files uploaded under the same name, and
-      `New` for a `*multipart.Form` parsed by the caller.
-- [x] Backends keep only the optional interfaces they do better than the
-      generic emulation in `dispatch.go`; the rest was dropped (-475 lines
-      across the core and all seven backends). `fsimpl` gained
-      `RangeReader`, shared by webdavfs and azureblobfs instead of two
-      copies of an unexported `rangeReader`, and lost `JoinCleanPath`,
-      which moved into `PathHelper`.
-- [x] Test coverage for the `slices` helpers, the closed and empty-path
-      guards of `SubFileSystem`/`OverlayFileSystem`, `fsimpl.DirTree` and
-      the generic emulations in `dispatch.go`.
-- [x] API freeze polish: the 23 `Permissions` values became `const` instead
-      of `var`, every exported symbol of every package has a doc comment,
-      runnable `Example` functions for `fs`, `httpfs`, `zipfs`, `tarfs`,
-      `multipartfs` and `uuiddir` plus compile-only examples for the seven
-      backend modules, a README for every module and every `FileSystem`
-      sub package, and the CI dependency cache covers all modules.
-- [x] URI escaping (2026-10-20): the URI of a path escapes every `%` as
-      `%25` and `ParseRawURI` decodes only the path after the prefix, so
-      names that look URL escaped keep their name on every file system
-      (`File.Join("a%20b.txt")` created `a b.txt` before); new
-      `fsimpl.EscapeURIPath`/`UnescapeURIPath`; webdavfs decodes PROPFIND
-      hrefs once; multipartfs escapes field names as directory names, so no
-      field or file name can address an upload of another field (the
-      `..%2Fother%2Fx.txt` upload read the `other` field's file).
-
-### Beta 2 (v1.0.0-beta.2)
-
-A full review of beta.1 (core, File API, implementations, sub-packages,
-backends, release readiness; `docs/MIGRATION_v1.md` lists the resulting
-changes) found data loss, security and crash bugs and API shapes that would
-be hard to change after the freeze. Decisions taken 2026-10-21:
-
-- **Constructors never register implicitly.** `New…`/`Dial…` return the
-  file system, and an error where construction can fail, `…AndRegister`
-  registers and returns only an error. Every constructor whose registration behaviour changed also changed
-  its signature, so old call sites fail to compile instead of losing the
-  registration silently. Temporary file systems use `New` + `fs.Register` +
-  `defer Close`.
-- **Atomic registry.** Prefix matching at a boundary, longest match over
-  prefixes and aliases, `Register` returns `ErrAlreadyRegistered` for another
-  instance and is not reference counted, `fs.EnsureRegistered` is the atomic
-  reference counted get-or-create, `Close` always unregisters.
-- **Per-instance `*Options` in every backend**, no mutable package
+- **Context rule.** A method takes `ctx context.Context` as its first
+  parameter only if it can take long: content transfer, listings, recursive
+  removal, moves and copies (also `Rename`, `MoveFileSystem.Move` and
+  `TruncateFileSystem.Truncate`, which may copy), and dialing. Paths,
+  metadata, open, single-entry operations, ownership, links, xattrs and
+  watches are ctx-less, as are the standard library interfaces (`WriteTo`,
+  `ReadFrom`, `String`). There are no `*Context` twins. The full table is in
+  [explanation-context-rule.md](explanation-context-rule.md).
+- **Implementer interface.** `FileSystem` holds the primitives only (`ID`,
+  `Prefix`, `Name`, `String`, `Separator`, `ReadableWritable`, `RootDir`,
+  `CleanPath`, `Stat`, `ListDir`, `OpenReader`, `Close`), `WriteFileSystem`
+  adds `OpenWriter`, `MakeDir` and `Remove`. Everything else is an optional
+  interface, emulated generically in `dispatch.go` where a fallback exists.
+  A backend implements an optional interface only when it does the operation
+  better than the emulation, never to return `ErrUnsupported`. The read-only
+  and write-only gates live in the `fs` package. See
+  [reference-filesystem-interfaces.md](reference-filesystem-interfaces.md).
+- **`FileSystem.ID()`** is a string that identifies the file system uniquely
+  among the registered ones, computed at construction and never blocking: the
+  backing store's own id where it has one (local: `statfs` `f_fsid`, `statvfs`
+  on NetBSD, Solaris and illumos, Windows volume serial; dropbox: the account
+  id), otherwise the coordinates of the store (bucket, `host/container`,
+  `user@host/share`, ...). The values are tabulated in the README.
+- **Constructors never register implicitly.** `New…`/`Dial…` return the file
+  system (and an error where construction can fail); `…AndRegister` registers
+  and returns only an error. Every constructor whose registration behaviour
+  changed also changed its signature, so old call sites fail to compile.
+- **Atomic registry.** Prefixes match at a boundary, the longest match over
+  prefixes and aliases wins, `Register` returns `ErrAlreadyRegistered` for
+  another instance and is not reference counted, `fs.EnsureRegistered` is the
+  atomic, reference counted get-or-create, `Close` always unregisters.
+- **Per-instance `*Options`** in every backend, no mutable package
   configuration; permission defaults are constants.
-- **ctx on the native Move and Truncate**, `WriteAborter` for writers that
-  commit on Close, `Rename` takes a ctx because without native move it copies.
-- **Error contract.** Typed errors store the `FileReader` they were created
-  for (behind a pointer, so `errors.Is` never panics for non-comparable
-  readers), `File() (File, bool)`, `FileReader()`, `Is` matching any value of
-  the type; `ErrDirectoryNotEmpty`, `ErrFileSystemsDoNotMatch`,
-  `ErrAlreadyRegistered`; `ErrEmptyPath` does not wrap `os.ErrNotExist`;
-  unregistered prefixes report `ErrInvalidFileSystem`.
-- **Overwrite semantics** for Move/Rename/CopyFile: a file destination is
-  replaced, a directory destination is an error, never merged or deleted;
-  moving into itself is `os.ErrInvalid`.
-- `CopyFileBuf` stays with a plain `buf []byte`; `IsSymbolicLink` stays on
-  `File` and `FileReader`, implementers provide `Lstat`.
+- **Writers.** Writers that commit on `Close` implement `WriteAborter`; the
+  generic emulations commit only complete data.
+- `CopyFileBuf` takes a plain `buf []byte`. `IsSymbolicLink` stays on `File`
+  and `FileReader`; implementers provide `Lstat`.
+- Dropped: `MemDir` (`MemFile` keeps its trailing-slash directory semantics),
+  `File.GobEncode`/`GobDecode`, `ListDirChan`, public `FileInfoCache`,
+  `ReadOnlyBase`, `FullyFeaturedFileSystem`.
+- **`fsimpl` stays public** (decided again 2026-10-25). An `internal`
+  package would compile in the backend modules, because the internal rule
+  is path based, but it would buy no freedom: the backends require the root
+  module at the placeholder pseudo-version, so `s3fs v1.0.0` can be built
+  against any later `go-fs v1.x`, and every helper they use has to stay
+  compatible anyway. Third-party backends need `PathHelper` and
+  `EscapeURIPath` to pass the conformance suite, and downstream code uses
+  `Ext`, `TrimExt`, `RandomString` and `DropboxContentHash`. Its whole API
+  stays, also `ReadWriteAllSeekCloser`, which only the root module uses.
+- **Content hash** (2026-10-25). `DefaultContentHash` stays the Dropbox
+  content hash algorithm, always computed from the content, with no optional
+  interface for hashes from metadata. Of all backends only Dropbox stores this
+  algorithm (`FileMetadata.ContentHash`); S3 (ETag, CRC64NVME and other
+  checksums), Azure (Content-MD5 only for single-request uploads) and zip
+  (CRC-32) store other algorithms, and only under conditions. An optional
+  interface tagged with the algorithm can be added in a v1.x release without
+  breaking anything.
 
-- [x] Core API (registry, errors, interfaces, root constructors, PathHelper
-      hiding, `internal/dockertest`).
-- [x] fstest: stdlib only, `Config.Skip`, seed-derived names, new contract
-      checks (errors, Close, cancellation, overwrite, into-itself, 1 MiB
-      content, `WriteAborter`, URI boundary and round trip).
-- [x] Generic emulations commit only complete data; File/FileReader/MemFile
-      signatures; fsimpl (`WriteAborter`, `RangeReader`), `internal/dirtree`,
-      httpfs as `URIFileSystem`, zipfs/tarfs/multipartfs/uuiddir fixes.
-- [x] Mem, Local (all Unix platforms; wasm builds), Sub, Overlay and Std pass
-      the conformance suite, Invalid its error-contract tests; s3fs
-      (transfermanager, streaming), azureblobfs, webdavfs, dropboxfs (offline
-      fake client), sftpfs (Options, keep-alive, safe retries), ftpfs and
-      smbfs (cloudsoda/go-smb2 fork) rework.
-- [x] CI: Go stable, cross-compiles, govulncheck, tidy and `GOWORK=off`
-      checks, lint on all OSes, Dependabot, `tag-release.sh`, `SECURITY.md`.
-- [x] Pre-release review of the beta.2 branch (2026-10-22): confinement
-      escapes (SubFileSystem link chains, `~` on Local, `\` on smbfs),
-      password and signature leaks in errors and webdavfs redirects,
-      `ServeFileHTTP` range amplification, move and copy data loss
-      (symlinks, hard links, case-only renames, refused RNFR), setuid
-      propagation from archives, link cycles, reconnect and keep-alive
-      bugs, `RemoveAll` of the root in s3fs, azureblobfs and sftpfs.
-      Decided: copies keep only the 9 permission bits of the source unless
-      `perm` is passed; overlay layers must be case-sensitive; XAttr flag
-      errors wrap `os.ErrExist`/`os.ErrNotExist`. Deferred items are
-      tracked outside the repository.
+### Semantics
 
-### Beta 3 (v1.0.0-beta.3)
+- **Paths.** A file system path is the output of `CleanPath`: cleaned, with
+  `Separator()`, without the prefix, absolute for the file system (httpfs is
+  the one unrooted file system). Backends never see the prefix.
+- **URIs.** The URI of a path escapes every `%` as `%25`
+  (`fsimpl.EscapeURIPath`); `ParseRawURI` decodes percent-encoded characters only for URIs
+  with a scheme and only after the prefix, so every name survives the round
+  trip. Default-port aliases resolve via `PrefixAliasFileSystem`.
+- **URI, not URL** (2026-10-25). The string of a `File` and of
+  `File.URI()` (`File.URL()` before) is a go-fs URI: the prefix plus the path
+  with only `%` percent-encoded, so it is no RFC 3986 URL. "URL" is used only
+  for real HTTP(S) URLs (httpfs, the webdavfs base URL, the Azure container
+  URL). A conversion to a `*url.URL` can be added in v1.x.
+- **File URIs** follow RFC 8089 (2026-10-25): `file:///etc/hosts`,
+  `file:///C:/dir` for a Windows drive and `file://server/share/x` for a UNC
+  path. Parsing also accepts `file://localhost/…` and, on Windows, the
+  `file://C:/…` form of the betas. A file URI with another host is a UNC path
+  on Windows and the `Invalid` file system elsewhere, never a path relative
+  to the working directory. `file://~/x` is the home directory like `~/x`.
+- **Error contract.** `errors.Is` holds for `os.ErrNotExist`, `os.ErrExist`,
+  `os.ErrPermission` (where the backend can tell), `ErrReadOnlyFileSystem`,
+  `ErrWriteOnlyFileSystem`, `ErrFileSystemClosed`, `ErrIsDirectory`,
+  `ErrIsNotDirectory`, `ErrDirectoryNotEmpty`, `ErrFileSystemsDoNotMatch`,
+  `ErrAlreadyRegistered` and `ctx.Err()`. Typed errors store the `FileReader`
+  behind a pointer, so `errors.Is` never panics for non-comparable readers.
+  `ErrEmptyPath` does not wrap `os.ErrNotExist`; unregistered prefixes report
+  `ErrInvalidFileSystem`. See [reference-errors.md](reference-errors.md).
+- **Overwrite.** Move, Rename and CopyFile replace a file destination; a
+  directory destination is an error, never merged or deleted. Moving into
+  itself and removing the root are `os.ErrInvalid` on every file system.
+- **Links.** Recursive walks never descend into directory links
+  (`filepath.WalkDir` semantics). Links to directories are recreated only
+  within one file system instance; between instances `CopyRecursive` and
+  `Move` fail with `errors.ErrUnsupported`. Moving a link onto its target is
+  `os.ErrInvalid`.
+- **Copies** keep only the 9 permission bits of the source unless `perm` is
+  passed (no setuid from archives).
+- Overlay layers must be case-sensitive. XAttr flag errors wrap
+  `os.ErrExist`/`os.ErrNotExist`.
+- **Empty indent** (beta.3). `WriteJSONIndent`/`WriteXMLIndent` put every
+  element on its own line without indentation when the indent is empty; only
+  `WriteJSON`/`WriteXML` write compact output. XML uses a NUL line prefix
+  that is removed only directly before a `<`.
+- **Backslashes in names** (2026-10-25). sftpfs, ftpfs and webdavfs reject
+  a path with `\` (and sftpfs a link target) with `os.ErrInvalid`, like
+  smbfs: their separator is `/`, but a server on Windows takes `\` for a
+  separator, so `..\x` would leave the directory it is meant to be in.
+  `Options.AllowBackslashInNames` allows it for servers on Unix that store
+  backslashes in names. Only the paths passed to a file system are checked,
+  names a server lists are passed through.
+- **Azure snapshots** (2026-10-25). Azure deletes a blob with snapshots only
+  if the request says what to do with them. `azureblobfs` refuses by default
+  (`ErrSnapshotsPresent`; `RemoveAll` checks the whole tree before it deletes
+  anything) and deletes the snapshots with the blob only with
+  `Options.DeleteSnapshots`, like rclone's `delete_snapshots`.
 
-Decided 2026-10-24:
+### Project rules
 
-- **Empty indent.** `WriteJSONIndent`/`WriteXMLIndent` and their `MemFile`
-  variants put every element on its own line without indentation when the
-  indent is empty; only `WriteJSON`/`WriteXML` write compact output. Because
-  `xml.MarshalIndent` writes no newlines for an empty prefix and indent, the
-  XML functions start every line with a NUL byte as prefix (one byte per line,
-  linear in the nesting depth) and remove it while writing, only where it
-  directly precedes a `<`. A NUL before a `<` in raw content, invalid XML
-  anyway, goes with it (kept simple on purpose instead of a random marker
-  token); every other byte of the encoder's output stays unchanged.
+- Standard library errors only, no `go-errs` (see `AGENTS.md`).
+- Go version policy: every module and `go.work` declares one minor version
+  behind the current Go release, bumped together.
+- All modules are tagged in lockstep with `tag-release.sh`; the `tools`
+  module is never tagged.
+- `docs/MIGRATION_v1.md` covers only the way from v0.1.0 to the latest
+  release, no beta-to-beta sections.
+- Unit tests run offline; Docker-backed tests skip without Docker; tests
+  that need credentials or public servers are gated behind
+  `GOFS_ONLINE_TESTS=1` or a token variable.
 
-## Verification (overall)
+## Remaining for v1.0.0
+
+### Fixed before the freeze (2026-10-25)
+
+- [x] File URIs follow RFC 8089 (`file:///C:/…`, UNC, `localhost`, other
+      hosts no longer cwd-relative).
+- [x] azureblobfs: blobs with snapshots (see the decision above); range reads
+      of `OpenReader` pinned to the ETag.
+- [x] ftpfs: link entries are no longer reported as regular files; `Stat`
+      follows links, `Remove`, `RemoveAll` and `Move` act on the link.
+- [x] s3fs: `Stat`, the directory check before writes and the not-empty check
+      of `Remove` follow truncated short `ListObjectsV2` pages.
+- [x] The docs no longer claim that dropboxfs answers `ContentHash` from
+      metadata.
+- [x] sftpfs, ftpfs and webdavfs reject backslashes in paths unless
+      `Options.AllowBackslashInNames` is set (see the decision above).
+- [x] `File.URL()` → `File.URI()`, `FileURLs` → `FileURIs`,
+      `PathHelper.URL` and `LocalFileSystem.URL` → `URI` (see the decision
+      above).
+- [x] `fs.ReadHeader`/`ReadHeaderString` take a ctx (content transfer);
+      `fsimpl.ReadonlyFileBuffer` → `ReadOnlyFileBuffer`;
+      `fs.NewFileReadWriteAllSeekCloser` stays and got a test.
+- [x] Pre-release audit: doc drift (Docker skip rules, conformance how-to,
+      Dropbox prefix vs id, buffering of `OpenReadWriter`, tutorial,
+      `FileInfo` field docs) and hygiene (`.gitignore`, `#nosec` reasons,
+      cross-compile targets).
+
+### Verification
+
+- [ ] Migrate go-docdb and domonda-service against the latest beta. The last
+      smoke compile was in Phase 4, before beta.2 changed constructors,
+      registry and errors.
+- [ ] azureblobfs against real Azure: x-ms-version 2026-12-06 is unverified
+      (Azurite 3.37 rejects it without `--skipApiVersionCheck`), snapshots and
+      ETag-pinned reads included.
+- [ ] dropboxfs with a real `DROPBOX_ACCESS_TOKEN`.
+- [ ] Everything in [Verification](#verification) below.
+
+### Release
+
+- [ ] CHANGELOG `[1.0.0]`, `VERSION` = `v1.0.0`, the MIGRATION intro names
+      v1.0.0 instead of the betas.
+- [ ] Tag all modules with `tag-release.sh` after the merge.
+- [ ] Update the dependents of go-fs (tracked outside this repository).
+
+## Not in v1.0.0
+
+Additive or internal, so they can land in v1.x releases:
+
+- Performance: `sftp.UseConcurrentWrites` in sftpfs (uploads are capped at
+  32 KiB per round trip); the Azure blob batch API for `RemoveAll` (one
+  DELETE per blob today); `fsimpl.RangeReader` reopens the body on every
+  seek instead of skipping short forward gaps; ftpfs `ListDirRecursive`
+  collects the whole tree before the first callback.
+- s3fs and azureblobfs send a listing request before every write to check
+  that the destination is no directory; an `Options` flag to skip it.
+- s3fs `ListDir`, `ListDirRecursive` and `RemoveAll` trust the SDK paginator,
+  which ends silently at a truncated page without a continuation token.
+- An algorithm-tagged optional interface for content hashes from metadata
+  (Dropbox `content_hash`, S3 checksums).
+- ftpfs detects links only on servers without MLST: with MLSD/MLST,
+  `jlaffaye/ftp` reads `type=OS.unix=slink:…` as a file and drops the target,
+  and servers like ProFTPD report the facts of the target. Fixing it needs
+  raw MLSD access, which the client library doesn't offer.
+- smbfs link behaviour is not covered by the conformance link check (the test
+  Samba server rejects links); uuiddir walks a link to a directory like a
+  directory.
+- Copies check the destination with `Lstat` and then open it by path; a real
+  fix for Local needs `os.Root` or `O_NOFOLLOW` based writes.
+- `fsimpl.RedactURI` edge cases (`http://localhost:8080/me@example.com`, a
+  password with `/` and `@`); webdavfs rejects base URLs with a port and a
+  raw `@` in the path.
+- azureblobfs: pin the listing `ResponseFormat` to XML.
+
+## Verification
 
 - `./test-workspace.sh` (with `-race`) green locally; GitHub Actions green on
-  ubuntu/macos/windows for every module.
+  ubuntu, macos and windows for every module.
 - `fstest.RunConformance` passes on Local, Mem (both separators and with a
-  volume), Sub, Overlay, Std, httpfs (httptest), zipfs and tarfs reader +
-  writer, multipartfs, s3fs (S3Mock, MinIO until its Docker images were
-  removed in 2026), azureblobfs (Azurite), sftpfs (in-process and Docker
-  sshd), ftpfs (in-process FTP and FTPS server), smbfs (Docker Samba),
-  webdavfs (x/net/webdav with nginx and Apache behaviour), dropboxfs
-  (offline fake and token).
+  volume), Sub, Overlay, Std, httpfs (httptest), zipfs and tarfs reader and
+  writer, multipartfs, s3fs (S3Mock), azureblobfs (Azurite), sftpfs
+  (in-process and Docker sshd), ftpfs (in-process FTP and FTPS server), smbfs
+  (Docker Samba), webdavfs (x/net/webdav with nginx and Apache behaviour) and
+  dropboxfs (offline fake and token).
 - The root module builds for linux, darwin, windows, the BSDs, solaris,
   illumos, aix, wasip1 and js/wasm.
 - `go vet`, staticcheck, gosec and govulncheck clean, `go mod tidy -diff`
   clean for every module.
-- domonda-service and go-docdb compile against the v1 branch after applying
-  `docs/MIGRATION_v1.md`.
 - `grep -rn 'TODO\|FIXME' --include='*.go'` returns nothing unaddressed; no
   commented-out code blocks remain.
+
+## History
+
+- **Phases 0–6** (2026-09, PR #18, released as v1.0.0-beta.1): CI on three
+  operating systems, the conformance suite `fstest.RunConformance`,
+  `fsimpl.PathHelper`, the primitives-only `FileSystem` interface with the
+  generic emulations in `dispatch.go`, the ctx rule on `File`, `FileReader`
+  and `MemFile`, the reworked s3fs, sftpfs, ftpfs and dropboxfs, and the
+  docs. The breaking changes were bounded by a downstream corpus of 1536 Go
+  files (mainly domonda-service): `fs.FileReader`, `fs.File` and `MemFile`
+  dominate, nobody outside this repository implements `FileSystem`.
+- **Beta iterations** (same PR): `StdFileSystem`, `SubFileSystem`,
+  `OverlayFileSystem`, `tarfs`, the `Reader`/`Writer` split of zipfs and
+  tarfs, the backend modules webdavfs, smbfs and azureblobfs, URI `%`
+  escaping (#24).
+- **Beta 2** (#25): the decisions on constructors, the registry, options,
+  writers, errors and overwrite semantics above, after a full review of
+  beta.1 that found data loss, security and crash bugs; a pre-release review
+  of confinement escapes, password leaks and link handling.
+- **Beta 3** (#27): empty-indent newlines, inlined marshal helpers, backend
+  dependency bumps, azureblobfs fixes for unexpected server answers.

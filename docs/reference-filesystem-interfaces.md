@@ -113,7 +113,7 @@ are only called on file systems that report themselves as writable.
 | `VolumeNameFileSystem`       | `VolumeName`                      | `""`, the path has no volume.                      |
 | `PrefixAliasFileSystem`      | `PrefixAliases`                   | No aliases; only `Prefix()` resolves to this file system. |
 | `AbsPathFileSystem`          | `IsAbsPath`, `AbsPath`, `RelPath` | Every path counts as absolute, `AbsPath` returns the path unchanged, and `RelPath` is computed by the package from the split path elements. |
-| `URIFileSystem`              | `PathFromURI`, `URIFromPath`, `SplitDirAndName` | The package decodes the URL escapes after the prefix and cleans the rest with `CleanPath`; the URI of a path is the prefix followed by the path with `%` escaped. For file systems whose paths are URIs in escaped form, like `httpfs`. |
+| `URIFileSystem`              | `PathFromURI`, `URIFromPath`, `SplitDirAndName` | The package decodes the percent-encoded characters after the prefix and cleans the rest with `CleanPath`; the URI of a path is the prefix followed by the path with `%` escaped. For file systems whose paths are URIs in escaped form, like `httpfs`. |
 
 ### Writing
 

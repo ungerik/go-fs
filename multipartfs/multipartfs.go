@@ -71,7 +71,7 @@ var (
 // already used name gets a " (2)" suffix before its extension, the third a
 // " (3)" and so on. Uploaded names that are not usable as a path element
 // (like "." and "..") are replaced by "unnamed". All other file names are
-// used as they are, including names that look URL escaped like "a%20b.pdf".
+// used as they are, including names that look percent-encoded like "a%20b.pdf".
 //
 // Form field names are not restricted by mime/multipart, so the directory
 // name of a field is escaped: "%" becomes "%25", "/" becomes "%2F", and the
@@ -141,10 +141,16 @@ func New(form *multipart.Form, id string) (*MultipartFileSystem, error) {
 // NewFromRequest parses the multipart form of a http.Request
 // with http.Request.ParseMultipartForm and returns it
 // as MultipartFileSystem, see New.
-// Files larger than maxMemory are stored in temporary
-// files which are removed by Close.
+// Up to maxMemory bytes of the uploaded files are kept in memory,
+// the files that don't fit are stored in temporary files
+// which are removed by Close.
+//
+// maxMemory doesn't bound the size of an upload: the temporary files
+// have no size limit. Limit the request body with http.MaxBytesReader
+// before calling NewFromRequest to bound the memory and disk space
+// an upload can use.
 func NewFromRequest(request *http.Request, maxMemory int64, id string) (*MultipartFileSystem, error) {
-	err := request.ParseMultipartForm(maxMemory) //#nosec G120 -- caller bounds memory via maxMemory parameter
+	err := request.ParseMultipartForm(maxMemory) //#nosec G120 -- maxMemory doesn't bound the upload, callers must limit the body with http.MaxBytesReader as documented
 	if err != nil {
 		return nil, err
 	}
@@ -259,13 +265,13 @@ func uploadPath(field, fileName string) string {
 
 // fieldFile returns the directory of a form field.
 func (f *MultipartFileSystem) fieldFile(field string) fs.File {
-	return fs.File(f.paths.URL(fieldPath(field)))
+	return fs.File(f.paths.URI(fieldPath(field)))
 }
 
 // uploadFile returns the uploaded file with the
 // file system name fileName under the form field.
 func (f *MultipartFileSystem) uploadFile(field, fileName string) fs.File {
-	return fs.File(f.paths.URL(uploadPath(field, fileName)))
+	return fs.File(f.paths.URI(uploadPath(field, fileName)))
 }
 
 // fileNames returns the file system names of the passed uploaded files

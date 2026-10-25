@@ -15,6 +15,9 @@ type ContentHashFunc func(ctx context.Context, reader io.Reader) (string, error)
 
 // DefaultContentHash configures the default content hash function
 // used by methods like File.ContentHash and FileReader.ContentHash.
+// The default is the Dropbox content hash algorithm, the value Dropbox
+// stores as content_hash in its file metadata. The hash is always
+// computed by reading the content, on every file system.
 var DefaultContentHash ContentHashFunc = fsimpl.DropboxContentHash
 
 // FileContentHash returns the hashFunc result for fileReader

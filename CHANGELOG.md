@@ -5,6 +5,73 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+### Changed
+
+- `File.URL()` is renamed to `File.URI()`, `fs.FileURLs` to `fs.FileURIs`,
+  and `fsimpl.PathHelper.URL` and `LocalFileSystem.URL` to `URI`. The value
+  is a go-fs URI, which percent-encodes only `%`: names keep their spaces,
+  `?` and `#`, so it is no RFC 3986 URL to pass to `net/url`, an HTTP client
+  or a browser. The value itself is unchanged.
+- `fs.ReadHeader` and `fs.ReadHeaderString` take a `ctx` as first argument
+  like the other functions that read content. It is checked before the file
+  is opened and between the reads.
+- `fsimpl.ReadonlyFileBuffer`, `NewReadonlyFileBuffer` and
+  `NewReadonlyFileBufferReadAll` are renamed to `ReadOnlyFileBuffer`,
+  `NewReadOnlyFileBuffer` and `NewReadOnlyFileBufferReadAll`, the spelling of
+  every other read-only identifier.
+- File URIs follow RFC 8089. `File.URI()` (was `File.URL()`) of a Windows path is
+  `file:///C:/dir/file` instead of `file://C:/dir/file`, and of a UNC path
+  `file://server/share/file`. Parsing accepts `file://localhost/…`, on
+  Windows also the old `file://C:/…` form, and maps `file://server/share/…`
+  to the UNC path `\\server\share\…`. On other platforms a file URI with a
+  host other than `localhost` resolves to the `Invalid` file system instead
+  of a path relative to the working directory.
+- `sftpfs`, `ftpfs` and `webdavfs` reject a path with a backslash with an
+  error wrapping `os.ErrInvalid`, in `sftpfs` also a symbolic link target.
+  For their separator `/` the backslash is part of a name, but a server on
+  Windows takes it for a separator and resolves `..`, so a name like `..\x`
+  from a `SubFileSystem`, an archive or `CopyRecursive` reached a file outside
+  of its directory, like the backslash rule of `smbfs`. The new
+  `Options.AllowBackslashInNames` of the three backends allows backslashes
+  for servers that store them in names, like servers on Unix.
+
+### Added
+
+- `azureblobfs.Options.DeleteSnapshots` deletes the snapshots of a blob
+  together with it in `Remove` and `RemoveAll`, and so in the generic `Move`
+  and `Rename`. Without it, removing a blob with snapshots keeps the blob and
+  returns an error wrapping the new `azureblobfs.ErrSnapshotsPresent`, and
+  `RemoveAll` checks the whole tree for snapshots before it deletes anything.
+
+### Fixed
+
+- `azureblobfs` `RemoveAll` stopped with a 409 `SnapshotsPresent` error at
+  the first blob with snapshots, after it had already deleted the blobs
+  before it, and `Remove` returned that raw error.
+- The reader of `azureblobfs` `OpenReader` pins its range requests to the
+  ETag the blob had when it was opened (`If-Match`). After the blob was
+  replaced, a seek or `ReadAt` returned bytes of the new blob after those of
+  the old one; now it returns an error saying that the blob changed while it
+  was being read.
+- `ftpfs` reports a symbolic link that a server lists with LIST with
+  `IsSymlink` set and neither `IsDir` nor `IsRegular` in `ListDir` and
+  `ListDirRecursive`, instead of as a regular file. `Stat` follows the listed
+  target and describes the file or directory it points to, so
+  `fs.CopyRecursive` from `ftpfs` copies a link to a file as a file and fails
+  with an error wrapping `errors.ErrUnsupported` before it writes anything
+  for a link to a directory, instead of copying that link like a file.
+  `Remove`, `RemoveAll` and `Move` still act on the link itself.
+- `s3fs` `Stat`, the directory check of the writes and `Touch`, and the
+  not-empty check of `Remove` read further `ListObjectsV2` pages while a page
+  is truncated and has fewer keys than requested, even none, instead of
+  deciding from the first page. S3-compatible stores that answer with such
+  pages made `Stat` report a directory as missing, let writes create an
+  object onto a directory, and let `Remove` delete the marker of a directory
+  with content. A truncated page without a new continuation token is now an
+  error.
+
 ## [1.0.0-beta.3] - 2026-10-24
 
 Third beta: an empty indent of the `…Indent` writers puts every element on its

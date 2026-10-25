@@ -134,7 +134,7 @@ func (m *minimalFileSystem) ID() string     { return m.id }
 func (m *minimalFileSystem) Name() string   { return "minimal file system" }
 func (m *minimalFileSystem) String() string { return m.Name() + " with prefix " + m.Prefix() }
 func (m *minimalFileSystem) RootDir() fs.File {
-	return fs.File(m.URL(m.Separator()))
+	return fs.File(m.URI(m.Separator()))
 }
 
 func (m *minimalFileSystem) ReadableWritable() (readable, writable bool) {
@@ -167,7 +167,7 @@ func (m *minimalFileSystem) ListDir(ctx context.Context, dirPath string, pattern
 		return err
 	}
 	if parent, name := m.SplitDirAndName(m.ghostDir); parent == m.CleanPath(dirPath) {
-		return callback(&fs.FileInfo{File: fs.File(m.URL(m.ghostDir)), Name: name, Exists: true, IsDir: true})
+		return callback(&fs.FileInfo{File: fs.File(m.URI(m.ghostDir)), Name: name, Exists: true, IsDir: true})
 	}
 	return nil
 }
@@ -185,7 +185,7 @@ func (m *minimalFileSystem) OpenWriter(filePath string, perm fs.Permissions) (io
 		return m.backing.OpenWriter(filePath, perm)
 	}
 	if info, err := m.backing.Stat(filePath); err == nil && info.IsDir {
-		return nil, fs.NewErrIsDirectory(fs.File(m.URL(filePath)))
+		return nil, fs.NewErrIsDirectory(fs.File(m.URI(filePath)))
 	}
 	return &uploadWriter{fs: m, filePath: filePath, perm: perm}, nil
 }
@@ -642,7 +642,7 @@ func TestRemoveAllEmulation_DoesNotFollowSymlinks(t *testing.T) {
 		// Local without SymbolicLinkFileSystem: the emulation
 		// only knows the links from ListDir and Stat.
 		m := newMinimalLocalFS(t)
-		dir := fs.File(m.URL(t.TempDir()))
+		dir := fs.File(m.URI(t.TempDir()))
 		tree, outside := symlinkTree(t, dir, os.Symlink)
 
 		require.NoError(t, tree.RemoveRecursive(t.Context()))
@@ -659,7 +659,7 @@ func TestRemoveAllEmulation_DoesNotFollowSymlinks(t *testing.T) {
 	})
 	t.Run("link to a directory", func(t *testing.T) {
 		m := newMinimalLocalFS(t)
-		dir := fs.File(m.URL(t.TempDir()))
+		dir := fs.File(m.URI(t.TempDir()))
 		tree, outside := symlinkTree(t, dir, os.Symlink)
 
 		require.NoError(t, tree.Join("link").RemoveRecursive(t.Context()))
@@ -688,7 +688,7 @@ func TestMoveEmulation_Symlinks(t *testing.T) {
 		// The link to a directory can't be recreated, the move used to copy
 		// the directory it points to. It must fail before anything is copied.
 		m := newMinimalLocalFS(t)
-		dir := fs.File(m.URL(t.TempDir()))
+		dir := fs.File(m.URI(t.TempDir()))
 		tree, outside := symlinkTree(t, dir, os.Symlink)
 		moved := dir.Join("moved")
 

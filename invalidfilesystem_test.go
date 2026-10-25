@@ -51,7 +51,7 @@ func TestInvalidFileSystem_Methods(t *testing.T) {
 			// Paths of the prefix are cleaned without leading separator
 			assert.Equal(t, "a/b", invalid.CleanPath(invalid.Prefix()+"a//b/"))
 			assert.Equal(t, "a/b", invalid.PathFromURI(invalid.Prefix()+"a/b"))
-			assert.Equal(t, "a b", invalid.PathFromURI(invalid.Prefix()+"a%20b"), "URL escapes are decoded")
+			assert.Equal(t, "a b", invalid.PathFromURI(invalid.Prefix()+"a%20b"), "percent-encoded characters are decoded")
 			assert.Equal(t, invalid.Prefix()+"a/b", invalid.URIFromPath("a/b"))
 			dir, name := invalid.SplitDirAndName("a/b")
 			assert.Equal(t, "a", dir)

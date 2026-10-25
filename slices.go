@@ -94,13 +94,13 @@ func AllExist[F interface{ Exists() bool }](files []F) bool {
 	return true
 }
 
-// FileURLs returns the URLs of the passed files
-func FileURLs[F interface{ URL() string }](files []F) []string {
-	fileURLs := make([]string, len(files))
+// FileURIs returns the URIs of the passed files, see File.URI.
+func FileURIs[F interface{ URI() string }](files []F) []string {
+	fileURIs := make([]string, len(files))
 	for i, file := range files {
-		fileURLs[i] = file.URL()
+		fileURIs[i] = file.URI()
 	}
-	return fileURLs
+	return fileURIs
 }
 
 // FilePaths returns the FileSystem specific paths the passed files

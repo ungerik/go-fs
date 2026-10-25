@@ -182,7 +182,7 @@ func (s *recordingServer) host() string {
 }
 
 // TestURLsVerbatim verifies that URLs are requested exactly as passed.
-// The path of a URI used to be URL decoded and cleaned as a whole, so
+// The path of a URI used to be percent-decoded and cleaned as a whole, so
 // "?q=a%26b" arrived as "q=a&b", "?to=https://x" as "to=https:/x",
 // "/file%3Fname" as path "/file" with the query "name", "/a%2Fb" as
 // "/a/b", and the trailing slash of "/dir/" was lost. Name included
@@ -197,7 +197,7 @@ func TestURLsVerbatim(t *testing.T) {
 	tests := []struct {
 		target   string // appended to the server URL
 		received string // request target the server must receive
-		uri      string // File.URL, the cleaned target
+		uri      string // File.URI, the cleaned target
 		name     string
 	}{
 		{"/search?q=a%26b", "/search?q=a%26b", "", "search"},
@@ -219,7 +219,7 @@ func TestURLsVerbatim(t *testing.T) {
 			}
 			file := fs.File(uri)
 			assert.Same(t, Default, file.FileSystem())
-			assert.Equal(t, wantURI, file.URL(), "URL")
+			assert.Equal(t, wantURI, file.URI(), "URI")
 			assert.Equal(t, strings.TrimPrefix(wantURI, Prefix), file.Path(), "Path")
 			assert.Equal(t, tt.name, file.Name(), "Name without query")
 			assert.False(t, file.IsHidden())
@@ -272,7 +272,7 @@ func TestHostOnly(t *testing.T) {
 		assert.Equal(t, "", file.Name(), "Name of %s", uri)
 		assert.False(t, file.IsHidden(), "IsHidden of %s", uri)
 		assert.Equal(t, file, file.Dir(), "the host is its own parent")
-		assert.Equal(t, uri, file.URL(), "the trailing slash is kept")
+		assert.Equal(t, uri, file.URI(), "the trailing slash is kept")
 
 		info, err := file.Stat()
 		require.NoError(t, err)

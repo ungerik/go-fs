@@ -97,14 +97,14 @@ func TestParseRawURI_escapes(t *testing.T) {
 
 	fs, fsPath := ParseRawURI(escapedFS.Prefix() + "a%20b/100%2525.txt")
 	assert.Equal(t, escapedFS, fs)
-	assert.Equal(t, "a b/100%25.txt", fsPath, "URL escapes after the prefix are decoded once")
+	assert.Equal(t, "a b/100%25.txt", fsPath, "percent-encoded characters after the prefix are decoded once")
 
 	fs, fsPath = ParseRawURI(escapedFS.Prefix() + "50% off.txt")
 	assert.Equal(t, escapedFS, fs)
 	assert.Equal(t, "50% off.txt", fsPath, "a path with an invalid escape is used as it is")
 
 	// The URI of a path is its inverse, so a name that looks
-	// URL escaped keeps its name through File methods.
+	// percent-encoded keeps its name through File methods.
 	file := fsFile(escapedFS, "a b/100%25.txt")
 	assert.Equal(t, escapedFS.Prefix()+"a b/100%2525.txt", string(file))
 	fs, fsPath = file.ParseRawURI()

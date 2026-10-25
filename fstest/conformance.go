@@ -36,7 +36,7 @@ type Seed map[string][]byte
 
 // DefaultSeed returns the tree used by RunConformance when
 // Config.Seed is nil. It contains an empty file, a hidden file,
-// a file with URL escapes in its name that must not be decoded,
+// a file with percent-encoded characters in its name that must not be decoded,
 // and two levels of sub directories.
 func DefaultSeed() Seed {
 	return Seed{
@@ -60,7 +60,7 @@ func FlatSeed() Seed {
 	}
 }
 
-// escapedSeedName is a file name that looks URL escaped.
+// escapedSeedName is a file name that looks percent-encoded .
 // It must keep its name, a file named "100% a b.txt" is another file.
 const escapedSeedName = "100%25 a%20b.txt"
 
@@ -383,12 +383,12 @@ func (c *conformance) fileOf(cleanPath string) fs.File {
 // as "%25", or the result of URIFromPath for a fs.URIFileSystem.
 func (c *conformance) url(cleanPath string) string {
 	if c.isLocalFS() {
-		return fs.File(cleanPath).URL()
+		return fs.File(cleanPath).URI()
 	}
 	if u, ok := c.fs.(fs.URIFileSystem); ok {
 		return u.URIFromPath(cleanPath)
 	}
-	return fsimpl.PathHelper{URIPrefix: c.fs.Prefix(), PathSep: c.fs.Separator()}.URL(cleanPath)
+	return fsimpl.PathHelper{URIPrefix: c.fs.Prefix(), PathSep: c.fs.Separator()}.URI(cleanPath)
 }
 
 // boundaryPrefix returns the longest prefix or prefix alias of fileSystem
@@ -599,12 +599,12 @@ func (c *conformance) testPaths(t *testing.T) {
 	c.checkURI(t, fs.File(uri), testPath, "the URI of a path")
 	checkEqual(t, testPath, c.fs.CleanPath(uri), "CleanPath(uri) must return the path")
 	checkEqual(t, testPath, fs.File(uri).Path(), "File(uri).Path() must return the path")
-	checkEqual(t, uri, fs.File(uri).URL(), "File(uri).URL() must return the URI")
+	checkEqual(t, uri, fs.File(uri).URI(), "File(uri).URI() must return the URI")
 	checkSameFS(t, c.fs, fs.File(uri).FileSystem(), "File(uri) must resolve to the file system")
 
 	// File path methods
 	f := c.file("x/y.txt")
-	checkEqual(t, uri, f.URL(), "File.URL()")
+	checkEqual(t, uri, f.URI(), "File.URI()")
 	checkEqual(t, "y.txt", f.Name(), "File.Name()")
 	checkEqual(t, c.file("x"), f.Dir(), "File.Dir()")
 	c.checkURI(t, f.Dir(), c.path("x"), "File.Dir()")
@@ -613,13 +613,13 @@ func (c *conformance) testPaths(t *testing.T) {
 	c.checkURI(t, f.Dir().Join("y.txt"), testPath, "File.Join()")
 	checkEqual(t, ".txt", f.Ext(), "File.Ext()")
 
-	// Names that look URL escaped must not be decoded on the way
+	// Names that look percent-encoded must not be decoded on the way
 	// from a path to a File and back, the URI escapes every "%".
 	escPath := c.fs.CleanPath(c.cfg.TestDir, "50% a%20b", "100%25.txt")
 	escURI := c.url(escPath)
 	c.checkURI(t, fs.File(escURI), escPath, "the URI of a path with escaped names")
 	checkEqual(t, escPath, fs.File(escURI).Path(), "File(uri).Path() must not decode the names of the path")
-	checkEqual(t, escURI, fs.File(escURI).URL(), "File(uri).URL() must return the URI with escaped names")
+	checkEqual(t, escURI, fs.File(escURI).URI(), "File(uri).URI() must return the URI with escaped names")
 	escFile := c.file("50% a%20b/100%25.txt")
 	checkEqual(t, escPath, escFile.Path(), "File.Path() with escaped names")
 	checkEqual(t, "100%25.txt", escFile.Name(), "File.Name() must not decode the name")

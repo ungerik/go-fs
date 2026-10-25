@@ -113,7 +113,7 @@ func (fs InvalidFileSystem) CleanPath(uriParts ...string) string {
 
 // PathFromURI returns the clean path of a URI with the prefix
 // of the file system, implementing URIFileSystem.
-// URL escapes after the prefix are decoded.
+// Percent-encoded characters after the prefix are decoded.
 func (fs InvalidFileSystem) PathFromURI(uri string) string {
 	return fs.CleanPath(fs.Prefix() + fsimpl.UnescapeURIPath(strings.TrimPrefix(uri, fs.Prefix())))
 }
@@ -125,7 +125,7 @@ func (fs InvalidFileSystem) URIFromPath(cleanPath string) string {
 	if uriVolumeLen(cleanPath) > 0 {
 		return cleanPath
 	}
-	return fsimpl.PathHelper{URIPrefix: fs.Prefix()}.URL(cleanPath)
+	return fsimpl.PathHelper{URIPrefix: fs.Prefix()}.URI(cleanPath)
 }
 
 // SplitDirAndName returns the parent directory and the name of the last

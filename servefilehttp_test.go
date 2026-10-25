@@ -384,7 +384,7 @@ func TestServeFileHTTP_SendFile(t *testing.T) {
 		if _, isFile := fileReader.(File); isFile {
 			assert.IsType(t, (*os.File)(nil), limited.R, "the *os.File is passed to net/http")
 		} else {
-			assert.IsType(t, (*fsimpl.ReadonlyFileBuffer)(nil), limited.R, "a reader that can seek is passed to net/http")
+			assert.IsType(t, (*fsimpl.ReadOnlyFileBuffer)(nil), limited.R, "a reader that can seek is passed to net/http")
 		}
 	}
 }

@@ -129,9 +129,15 @@ and open readers, and afterwards every method returns
 
 ## How FTP concepts map to the file system
 
-- **Paths.** The server's paths, separator `/`. Listings are parsed by the
-  FTP client library, so what a server reports about modification times and
-  sizes is what the `FileInfo` contains.
+- **Paths.** The server's paths, separator `/`. Listings are parsed by the FTP
+  client library, so what a server reports about modification times and sizes
+  is what the `FileInfo` contains. A path with a backslash is an error
+  wrapping `os.ErrInvalid` unless `Options.AllowBackslashInNames` is set: for
+  the separator `/` the backslash is part of a name, but a server on Windows
+  (IIS, FileZilla Server) takes it for a separator and resolves `..`, so a
+  name like `..\x` from a `SubFileSystem` or `CopyRecursive` would reach a
+  file outside of its directory. Set the option only for servers that store
+  backslashes in names, like servers on Unix.
 - **Native operations.** `ReadAll`, `WriteAll`, `Append`,
   `OpenAppendWriter`, `OpenReadWriter`, `Touch`, `RemoveAll`,
   `ListDirRecursive` and `Move` are native; everything else uses the generic
@@ -150,6 +156,21 @@ and open readers, and afterwards every method returns
 - **Permissions.** FTP has no portable permission model. The reported
   permissions are the constants `ftpfs.DefaultPermissions` /
   `ftpfs.DefaultDirPermissions`, and `SetPermissions` is not supported.
+- **Symbolic links.** Servers without MLST support list links like
+  `ls -l` with their target. `Stat` follows such a link like `os.Stat`:
+  it resolves the listed target relative to the directory of the link and
+  describes the file or directory it points to, with `IsSymlink` set; a
+  dangling link wraps `os.ErrNotExist`. `ListDir` and `ListDirRecursive`
+  describe a link itself, with `IsSymlink` set and neither `IsDir` nor
+  `IsRegular`, `ListDirRecursive` follows only a link at the listed path,
+  and `Remove`, `RemoveAll` and `Move` act on the link itself. Servers with
+  MLST support describe a link with the facts of its target or with a type
+  that the FTP client library reads as a file, so their links look like
+  files and directories. FTP has no command to create a link, so `ftpfs`
+  doesn't implement `fs.SymbolicLinkFileSystem`: `fs.CopyRecursive` copies
+  a link to a file as a file and fails with an error wrapping
+  `errors.ErrUnsupported` for a link to a directory before it writes
+  anything.
 - **Errors.** Missing files wrap `os.ErrNotExist`, reading or writing a
   directory is an `fs.ErrIsDirectory`, `MakeDir` on an existing path wraps
   `os.ErrExist`, removing a non-empty directory is an

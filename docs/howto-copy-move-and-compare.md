@@ -311,9 +311,10 @@ hash, err := file.ContentHash(ctx)
 data, hash, err := file.ReadAllContentHash(ctx) // one pass
 ```
 
-The default is the Dropbox content hash algorithm, chosen so `dropboxfs` can
-answer from metadata instead of downloading. To use a standard hash, replace it
-once at startup:
+The default is the Dropbox content hash algorithm, the value Dropbox stores as
+`content_hash` in its file metadata. The hash is always computed from the
+content, on every file system. To use a standard hash, replace it once at
+startup:
 
 ```go
 fs.DefaultContentHash = fs.ContentHashFuncFrom(sha256.New)
@@ -360,8 +361,8 @@ retry move the source into it.
 `CopyRecursive` is sequential by design; parallelise at your call site if the
 backend tolerates it.
 
-**`ContentHash` downloads the whole file** — expected, unless the backend can
-answer from metadata. Compare sizes first, which is what
+**`ContentHash` downloads the whole file** — expected, the hash is computed
+from the content on every backend. Compare sizes first, which is what
 `IdenticalFileContents` already does.
 
 **Two files hash differently after a copy** — you changed

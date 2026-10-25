@@ -101,6 +101,15 @@ type Options struct {
 	// PASV reply, which could point to another or an internal host.
 	DisableEPSV bool
 
+	// AllowBackslashInNames lets paths contain backslashes, which are
+	// an error wrapping os.ErrInvalid by default. For the separator "/"
+	// of FTP a backslash is part of a name, but an FTP server on Windows
+	// takes it for a separator: a name like `..\x` would reach a file
+	// outside of the directory that it is meant to be in, also for
+	// fs.SubFileSystem and fs.CopyRecursive. Set it only for servers
+	// that store backslashes in names, like servers on Unix.
+	AllowBackslashInNames bool
+
 	// DebugOut receives the FTP protocol log if not nil.
 	// The argument of the PASS command is replaced with "****".
 	DebugOut io.Writer

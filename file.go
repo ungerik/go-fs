@@ -65,15 +65,24 @@ func (file File) RawURI() string {
 }
 
 // String implements the fmt.Stringer interface
-// by returning the URL of the file.
+// by returning the URI of the file.
 func (file File) String() string {
-	return file.URL()
+	return file.URI()
 }
 
-// URL returns the URL of the file.
-func (file File) URL() string {
+// URI returns the URI of the file: the prefix of its file system
+// followed by its clean path, for a local file the file URI of
+// RFC 8089 like "file:///etc/hosts", see LocalFileSystem.URI.
+//
+// Only "%" is percent-encoded, as "%25", so the URI resolves to the same
+// file with ParseRawURI. Other characters of names, like spaces, "?" and "#",
+// are kept as they are, so the URI is no RFC 3986 URL to pass to net/url,
+// an HTTP client or a browser: there "#b.txt" of "a#b.txt" is a fragment.
+// File systems that implement URIFileSystem, like httpfs, define their own
+// URIs; for httpfs the URI is the HTTP URL with its query.
+func (file File) URI() string {
 	fileSystem, path := file.ParseRawURI()
-	return fsURL(fileSystem, path)
+	return fsURI(fileSystem, path)
 }
 
 // Path returns the cleaned path of the file.
@@ -497,9 +506,8 @@ func (file File) Size() int64 {
 	return info.Size
 }
 
-// ContentHash returns the DefaultContentHash for the file.
-// If the FileSystem implementation does not have this hash pre-computed,
-// then the whole file is read to compute it.
+// ContentHash returns the DefaultContentHash for the file,
+// computed by reading the whole file.
 // If the file is a directory, then an empty string will be returned.
 func (file File) ContentHash(ctx context.Context) (string, error) {
 	if file == "" {
@@ -1089,7 +1097,7 @@ func (file File) OpenReadSeeker() (ReadAtSeekCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fsimpl.NewReadonlyFileBufferReadAll(reader, info)
+	return fsimpl.NewReadOnlyFileBufferReadAll(reader, info)
 }
 
 // OpenWriter opens the file for writing and returns a WriteCloser that has to be closed after writing.

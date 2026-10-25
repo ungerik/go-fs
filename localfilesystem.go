@@ -262,18 +262,117 @@ func (local *LocalFileSystem) RelPath(basePath, targPath string) (string, error)
 	return filepath.Rel(basePath, targPath)
 }
 
-// URL returns the [LocalPrefix] followed by the absolute path with
-// platform separators converted to forward slashes, so a Windows path like
-// `C:\dir\file` becomes "file://C:/dir/file".
-func (local *LocalFileSystem) URL(cleanPath string) string {
-	return LocalPrefix + fsimpl.EscapeURIPath(filepath.ToSlash(local.AbsPath(cleanPath)))
+// URI returns the file URI of the absolute path as defined by RFC 8089:
+// the [LocalPrefix] followed by the path with forward slashes,
+// "file:///dir/file" on Unix, "file:///C:/dir/file" for the Windows path
+// `C:\dir\file` and "file://server/share/file" for the UNC path
+// `\\server\share\file`. Every "%" of the path is escaped as "%25".
+func (local *LocalFileSystem) URI(cleanPath string) string {
+	return LocalPrefix + fsimpl.EscapeURIPath(fileURIPathOf(filepath.ToSlash(local.AbsPath(cleanPath))))
 }
 
-// CleanPath strips a leading [LocalPrefix] from the first element,
-// expands a first element that is "~" or begins with "~" followed
-// by a separator to the home directory of the current user,
+// fileURIPathOf returns the part of the file URI after the [LocalPrefix]
+// for an absolute path with forward slashes: a path with a drive letter
+// gets the leading slash of the empty authority ("C:/x" becomes "/C:/x"),
+// the server of a UNC path becomes the authority ("//server/share/x"
+// becomes "server/share/x"), and a Unix path is used as is.
+func fileURIPathOf(slashPath string) string {
+	switch {
+	case strings.HasPrefix(slashPath, "//"):
+		return slashPath[2:]
+	case !strings.HasPrefix(slashPath, "/"):
+		return "/" + slashPath
+	}
+	return slashPath
+}
+
+// fileURILocalPath returns the local path for rest, the part of a file
+// URI after the [LocalPrefix], as defined by RFC 8089, and reports if
+// the URI names a local file. windows selects the rules of Windows.
+//
+// The authority before the first slash of rest is empty or "localhost"
+// for a local file: "file:///etc/hosts" and "file://localhost/etc/hosts"
+// are "/etc/hosts". On Windows the slash before a drive letter is removed,
+// "file:///C:/x" is "C:/x", the form "file://C:/x" written by go-fs before
+// v1.0.0 is accepted too, and another authority is the server of a UNC
+// path, "file://server/share/x" is "//server/share/x". On other platforms
+// a file URI with another authority names a file on another host, then
+// isLocal is false and the authority is returned as the first element
+// of an absolute path, "/server/share/x".
+//
+// The authority "~" is no host but the home directory: "file://~/x"
+// is returned as "~/x" for expandTilde.
+func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool) {
+	separators := "/"
+	if windows {
+		separators = `/\`
+	}
+	authority, filePath := rest, ""
+	if i := strings.IndexAny(rest, separators); i >= 0 {
+		authority, filePath = rest[:i], rest[i:]
+	}
+	if strings.EqualFold(authority, "localhost") {
+		authority = ""
+	}
+	switch {
+	case authority == "~":
+		return rest, true
+	case authority == "" && windows && isDriveLetterPath(filePath[min(1, len(filePath)):]):
+		filePath = filePath[1:]
+	case authority == "":
+	case windows && isDriveLetterPath(authority):
+		filePath = authority + filePath
+	case windows:
+		filePath = "//" + authority + filePath
+	default:
+		return "/" + authority + filePath, false
+	}
+	if windows && len(filePath) == 2 && filePath[1] == ':' {
+		// "file:///C:" is the root of the drive, not its current directory
+		filePath += "/"
+	}
+	return filePath, true
+}
+
+// isDriveLetterPath reports if filePath begins with a Windows drive letter
+// and a colon that are the whole path or followed by a separator.
+func isDriveLetterPath(filePath string) bool {
+	if len(filePath) < 2 || filePath[1] != ':' {
+		return false
+	}
+	if c := filePath[0] | 0x20; c < 'a' || c > 'z' { // | 0x20 lower-cases ASCII letters
+		return false
+	}
+	return len(filePath) == 2 || filePath[2] == '/' || filePath[2] == '\\'
+}
+
+// isRemoteFileURI reports if uri is a file URI with an authority
+// that names another host on this platform, see fileURILocalPath.
+// The path of uri is percent-encoded like in a File.
+func isRemoteFileURI(uri string) bool {
+	rest, ok := strings.CutPrefix(uri, LocalPrefix)
+	if !ok {
+		return false
+	}
+	_, isLocal := fileURILocalPath(fsimpl.UnescapeURIPath(rest), filepath.Separator == '\\')
+	return !isLocal
+}
+
+// CleanPath converts a first element that begins with the [LocalPrefix]
+// from a file URI to a local path, expands a first element that is "~"
+// or begins with "~" followed by a separator
+// to the home directory of the current user,
 // and joins the parts with [filepath.Join], which cleans the result.
 // It is the only method that expands the tilde.
+//
+// A file URI is converted as defined by RFC 8089: "file:///etc/hosts" and
+// "file://localhost/etc/hosts" are "/etc/hosts", on Windows "file:///C:/x"
+// is `C:\x` and "file://server/share/x" is the UNC path `\\server\share\x`.
+// A tilde in place of the host is the home directory like in a path,
+// "file://~/x" is "~/x" expanded, every other tilde of a file URI is
+// a name, "file:///~/x" is "/~/x". On platforms other than Windows a URI with another host than localhost
+// has no local path, [ParseRawURI] returns the [InvalidFileSystem] for it,
+// and CleanPath returns the host as first element of an absolute path.
 //
 // Only the tilde at the start of the first element is expanded,
 // so a "~" after a relative directory, like in CleanPath(".", "~", "x"),
@@ -281,22 +380,29 @@ func (local *LocalFileSystem) URL(cleanPath string) string {
 // cleaning is returned with a leading "./", like "./~/x",
 // so cleaning it again doesn't expand it either.
 //
-// URL escapes are not decoded, that is done by
+// Percent-encoded characters are not decoded, that is done by
 // [ParseRawURI] for URIs with the [LocalPrefix].
 func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 	if len(uriParts) == 0 {
 		return "."
 	}
 	// Don't modify the passed slice
-	first := expandTilde(strings.TrimPrefix(uriParts[0], LocalPrefix))
+	first := uriParts[0]
+	if rest, ok := strings.CutPrefix(first, LocalPrefix); ok {
+		first, _ = fileURILocalPath(rest, filepath.Separator == '\\')
+	}
+	first = expandTilde(first)
 	return literalTilde(filepath.Clean(filepath.Join(append([]string{first}, uriParts[1:]...)...)))
 }
 
-// SplitPath trims an optional [LocalPrefix] and splits on [Separator].
+// SplitPath converts a file URI like [LocalPrefix] and splits on [Separator].
 // Leading and trailing separators are dropped, so the result has no
 // empty elements. An empty or root-only path returns nil.
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, LocalPrefix)
+	if rest, ok := strings.CutPrefix(filePath, LocalPrefix); ok {
+		filePath, _ = fileURILocalPath(rest, filepath.Separator == '\\')
+		filePath = filepath.FromSlash(filePath)
+	}
 	filePath = strings.Trim(filePath, Separator)
 	if filePath == "" {
 		return nil
@@ -462,11 +568,11 @@ func (local *LocalFileSystem) ListDir(ctx context.Context, dirPath string, patte
 		return NewErrIsNotDirectory(localFile(dirPath))
 	}
 
-	f, err := os.Open(dirPath) //#nosec G304
+	f, err := os.Open(dirPath) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return fmt.Errorf("error opening directory: %w", err)
 	}
-	defer f.Close() //#nosec G307
+	defer f.Close()
 
 	for eof := false; !eof; {
 		if ctx.Err() != nil {
@@ -538,7 +644,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm Permissions) error {
 		now := time.Now()
 		return wrapOSErr(filePath, os.Chtimes(filePath, now, now))
 	}
-	f, err := os.OpenFile(filePath, os.O_CREATE, local.filePermissions(perm).FileMode(false)) //#nosec G304
+	f, err := os.OpenFile(filePath, os.O_CREATE, local.filePermissions(perm).FileMode(false)) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return wrapOSErr(filePath, err)
 	}
@@ -622,7 +728,7 @@ func (local *LocalFileSystem) MakeAllDirs(dirPath string, perm Permissions) erro
 // with its FileInfo. A directory is an [ErrIsDirectory], because opening
 // a directory for reading succeeds, only reading it fails.
 func openFileReader(filePath string) (*os.File, os.FileInfo, error) {
-	f, err := os.Open(filePath) //#nosec G304
+	f, err := os.Open(filePath) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return nil, nil, wrapOSErr(filePath, err)
 	}
@@ -653,7 +759,7 @@ func (local *LocalFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close() //#nosec G307
+	defer f.Close()
 
 	// Like os.ReadFile, use the size as hint for the buffer,
 	// a file can change while it is read and the files
@@ -725,7 +831,7 @@ func (local *LocalFileSystem) OpenWriter(filePath string, perm Permissions) (io.
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, local.filePermissions(perm).FileMode(false)) //#nosec G304
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, local.filePermissions(perm).FileMode(false)) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return nil, wrapFileOpErr(filePath, err)
 	}
@@ -740,7 +846,7 @@ func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm Permissions
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, local.filePermissions(perm).FileMode(false)) //#nosec G304
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, local.filePermissions(perm).FileMode(false)) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return nil, wrapFileOpErr(filePath, err)
 	}
@@ -755,7 +861,7 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm Permissions) 
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, local.filePermissions(perm).FileMode(false)) //#nosec G304
+	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, local.filePermissions(perm).FileMode(false)) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return nil, wrapFileOpErr(filePath, err)
 	}
@@ -805,7 +911,7 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 	if err != nil {
 		return err
 	}
-	defer r.Close() //#nosec G307
+	defer r.Close()
 
 	if destStat, err := os.Stat(destFilePath); err == nil {
 		if os.SameFile(srcStat, destStat) {
@@ -816,7 +922,7 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 		}
 	}
 
-	w, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm()) //#nosec G304
+	w, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm()) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return wrapFileOpErr(destFilePath, err)
 	}

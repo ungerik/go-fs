@@ -420,27 +420,63 @@ func (s *fileSystem) dirInfo(k string, modified time.Time) *fs.FileInfo {
 	}
 }
 
+// errTruncatedWithoutToken is returned for a truncated ListObjectsV2 page
+// without a new continuation token. S3 always sends one, the request for
+// the next page without it would list the same page again, and ending the
+// listing would decide from an incomplete one.
+var errTruncatedWithoutToken = errors.New("s3fs: truncated listing page without a new continuation token")
+
+// findObject returns the first object with the key prefix for which
+// match returns true, or nil if there is none, reading pages of at most
+// maxKeys keys. A page can have fewer keys than MaxKeys and still be
+// truncated, even no key at all, which S3-compatible stores do, so it
+// reads pages until one has a matching object or the listing ends.
+// A truncated page without a new continuation token is an error
+// wrapping errTruncatedWithoutToken.
+func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix string, maxKeys int32, match func(key string) bool) (*types.Object, error) {
+	input := &s3.ListObjectsV2Input{
+		Bucket:  &s.bucketName,
+		Prefix:  &prefix,
+		MaxKeys: &maxKeys,
+	}
+	for {
+		page, err := client.ListObjectsV2(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		for i := range page.Contents {
+			if match(aws.ToString(page.Contents[i].Key)) {
+				return &page.Contents[i], nil
+			}
+		}
+		if !aws.ToBool(page.IsTruncated) {
+			return nil, nil
+		}
+		token := aws.ToString(page.NextContinuationToken)
+		if token == "" || token == aws.ToString(input.ContinuationToken) {
+			return nil, fmt.Errorf("listing %s: %w", s.file(prefix), errTruncatedWithoutToken)
+		}
+		input.ContinuationToken = &token
+	}
+}
+
 // dirExists reports if k is a directory: a marker object "k/" exists
-// or an object below it (implicit directory), checked with a single
-// ListObjectsV2 request limited to one key. modified is the
-// LastModified time of the marker or zero for an implicit directory.
+// or an object below it (implicit directory), checked with a ListObjectsV2
+// request limited to one key, which reads more pages only while they are
+// truncated without a key. modified is the LastModified time of the marker
+// or zero for an implicit directory.
 // The root directory with the empty key always exists.
 func (s *fileSystem) dirExists(ctx context.Context, client *s3.Client, k string) (exists bool, modified time.Time, err error) {
 	if k == "" {
 		return true, time.Time{}, nil
 	}
-	out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:  &s.bucketName,
-		Prefix:  aws.String(k + Separator),
-		MaxKeys: aws.Int32(1),
-	})
-	if err != nil {
+	marker := k + Separator
+	// The marker is the first key with its prefix, S3 lists keys in order
+	obj, err := s.findObject(ctx, client, marker, 1, func(string) bool { return true })
+	if err != nil || obj == nil {
 		return false, time.Time{}, err
 	}
-	if len(out.Contents) == 0 {
-		return false, time.Time{}, nil
-	}
-	if obj := out.Contents[0]; aws.ToString(obj.Key) == k+Separator {
+	if aws.ToString(obj.Key) == marker {
 		modified = aws.ToTime(obj.LastModified)
 	}
 	return true, modified, nil
@@ -472,7 +508,8 @@ func (s *fileSystem) checkNotDir(ctx context.Context, client *s3.Client, k strin
 // Objects are looked up with HeadObject. A path that is not an object
 // is a directory if a marker object with a trailing slash exists or
 // if any object key starts with the path and a slash (implicit directory),
-// checked with a single ListObjectsV2 request limited to one key.
+// checked with a ListObjectsV2 request limited to one key, which reads
+// more pages only while they are truncated without a key.
 func (s *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	client, err := s.getClient()
 	if err != nil {
@@ -920,19 +957,16 @@ func (s *fileSystem) Remove(filePath string) error {
 	if k == "" {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, s)
 	}
+	// The directory is empty if no object but its marker has the prefix.
+	// A truncated page can have only the marker or no key at all,
+	// so the listing is read until it has another object or ends.
 	marker := k + Separator
-	out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:  &s.bucketName,
-		Prefix:  &marker,
-		MaxKeys: aws.Int32(2),
-	})
+	content, err := s.findObject(ctx, client, marker, 2, func(key string) bool { return key != marker })
 	if err != nil {
 		return err
 	}
-	for _, obj := range out.Contents {
-		if aws.ToString(obj.Key) != marker {
-			return fs.NewErrDirectoryNotEmpty(info.File)
-		}
+	if content != nil {
+		return fs.NewErrDirectoryNotEmpty(info.File)
 	}
 	_, err = client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: &s.bucketName,

@@ -1334,3 +1334,24 @@ func Test_xmlMarshalIndent(t *testing.T) {
 	_, err = xmlMarshalIndent(make(chan int), "")
 	require.Error(t, err)
 }
+
+// TestNewFileReadWriteAllSeekCloser checks that the reads see the content
+// of the file and that the changes are written back with Close.
+func TestNewFileReadWriteAllSeekCloser(t *testing.T) {
+	ctx := t.Context()
+	file := File(t.TempDir()).Join("rw.txt")
+	require.NoError(t, file.WriteAllString(ctx, "hello world"))
+
+	rw := NewFileReadWriteAllSeekCloser(file)
+	buf := make([]byte, 5)
+	_, err := io.ReadFull(rw, buf)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(buf))
+	_, err = rw.Seek(0, io.SeekEnd)
+	require.NoError(t, err)
+	_, err = rw.Write([]byte("!"))
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", mustReadString(t, file), "the changes are buffered until Close")
+	require.NoError(t, rw.Close())
+	assert.Equal(t, "hello world!", mustReadString(t, file))
+}

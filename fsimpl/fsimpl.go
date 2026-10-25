@@ -32,14 +32,14 @@ func RandomString() string {
 // every "%" becomes "%25" and nothing else is changed,
 // so UnescapeURIPath returns filePath for the result.
 //
-// fs.ParseRawURI decodes the URL escapes in the path part of a URI,
+// fs.ParseRawURI decodes the percent-encoded characters in the path part of a URI,
 // so the URI of a path is the prefix of its file system followed by
 // the escaped path. That way a file named "a%20b" keeps its name.
 func EscapeURIPath(filePath string) string {
 	return strings.ReplaceAll(filePath, "%", "%25")
 }
 
-// UnescapeURIPath decodes the URL escapes in the path part of a URI,
+// UnescapeURIPath decodes the percent-encoded characters in the path part of a URI,
 // the inverse of EscapeURIPath. If uriPath contains an invalid escape,
 // like "50% off", it is returned unchanged.
 func UnescapeURIPath(uriPath string) string {

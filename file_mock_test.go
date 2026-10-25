@@ -632,7 +632,7 @@ func TestFile(t *testing.T) {
 		})
 
 		t.Run("URL", func(t *testing.T) {
-			url := file.URL()
+			url := file.URI()
 			assert.Equal(t, string(file), url)
 		})
 

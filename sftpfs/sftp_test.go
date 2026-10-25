@@ -892,3 +892,71 @@ func writeTestFile(t *testing.T, f *fileSystem, filePath, content string) {
 	_, err = w.Write([]byte(content))
 	require.NoError(t, errors.Join(err, w.Close()))
 }
+
+// TestBackslashInNames checks that paths with a backslash are rejected
+// unless Options.AllowBackslashInNames is set, because an SFTP server
+// on Windows takes `..\x` for a name in the parent directory.
+func TestBackslashInNames(t *testing.T) {
+	s := startTestServer(t, testServerConfig{})
+	f := s.dial(t, nil)
+	ctx := t.Context()
+	require.NoError(t, f.MakeDir("/dir", 0))
+	listRoot := func() (names []string) {
+		require.NoError(t, f.ListDirRecursive(ctx, "/", nil, func(info *fs.FileInfo) error {
+			names = append(names, info.File.Path())
+			return nil
+		}))
+		return names
+	}
+	before := listRoot()
+
+	noCallback := func(*fs.FileInfo) error { return nil }
+	for _, name := range []string{`/dir/..\victim.txt`, `/dir\x`} {
+		for op, call := range map[string]func() error{
+			"Stat":                      func() error { _, err := f.Stat(name); return err },
+			"Lstat":                     func() error { _, err := f.Lstat(name); return err },
+			"ListDir":                   func() error { return f.ListDir(ctx, name, nil, noCallback) },
+			"ListDirRecursive":          func() error { return f.ListDirRecursive(ctx, name, nil, noCallback) },
+			"OpenReader":                func() error { _, err := f.OpenReader(name); return err },
+			"OpenWriter":                func() error { _, err := f.OpenWriter(name, 0); return err },
+			"OpenAppendWriter":          func() error { _, err := f.OpenAppendWriter(name, 0); return err },
+			"OpenReadWriter":            func() error { _, err := f.OpenReadWriter(name, 0); return err },
+			"Truncate":                  func() error { return f.Truncate(ctx, name, 0) },
+			"Touch":                     func() error { return f.Touch(name, 0) },
+			"MakeDir":                   func() error { return f.MakeDir(name, 0) },
+			"MakeAllDirs":               func() error { return f.MakeAllDirs(name, 0) },
+			"SetPermissions":            func() error { return f.SetPermissions(name, fs.UserReadWrite) },
+			"Move from":                 func() error { return f.Move(ctx, name, "/moved.txt") },
+			"Move to":                   func() error { return f.Move(ctx, "/dir", name) },
+			"Remove":                    func() error { return f.Remove(name) },
+			"RemoveAll":                 func() error { return f.RemoveAll(ctx, name) },
+			"CreateSymbolicLink":        func() error { return f.CreateSymbolicLink("/dir", name) },
+			"CreateSymbolicLink target": func() error { return f.CreateSymbolicLink(name, "/link") },
+			"ReadSymbolicLink":          func() error { _, err := f.ReadSymbolicLink(name); return err },
+		} {
+			assert.ErrorIs(t, call(), os.ErrInvalid, "%s(%q)", op, name)
+		}
+	}
+	assert.Equal(t, before, listRoot(), "nothing may be created on the server")
+
+	// Servers on Unix store a backslash as part of a name
+	opts := s.testOptions()
+	opts.AllowBackslashInNames = true
+	allowFS := s.dial(t, opts)
+	w, err := allowFS.OpenWriter(`/dir/a\b.txt`, 0)
+	require.NoError(t, err)
+	_, err = w.Write([]byte("unix name"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	var names []string
+	require.NoError(t, allowFS.ListDir(ctx, "/dir", nil, func(info *fs.FileInfo) error {
+		names = append(names, info.Name)
+		return nil
+	}))
+	assert.Equal(t, []string{`a\b.txt`}, names)
+	r, err := allowFS.OpenReader(`/dir/a\b.txt`)
+	require.NoError(t, err)
+	data, err := io.ReadAll(r)
+	require.NoError(t, errors.Join(err, r.Close()))
+	assert.Equal(t, "unix name", string(data))
+}

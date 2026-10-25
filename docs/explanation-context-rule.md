@@ -34,7 +34,7 @@ listing, plus dialing a connection.** Concretely:
 
 | Category          | Methods                                            |
 | ----------------- | -------------------------------------------------- |
-| Content transfer  | `ReadAll`, `ReadAllString`, `ReadAllContentHash`, `ReadJSON`, `ReadXML`, `WriteAll`, `WriteAllString`, `WriteJSON`, `WriteJSONIndent`, `WriteXML`, `WriteXMLIndent`, `Append`, `AppendString`, `Truncate`, `ContentHash`, `fs.ReadAll`, `fs.WriteAll` |
+| Content transfer  | `ReadAll`, `ReadAllString`, `ReadAllContentHash`, `ReadJSON`, `ReadXML`, `WriteAll`, `WriteAllString`, `WriteJSON`, `WriteJSONIndent`, `WriteXML`, `WriteXMLIndent`, `Append`, `AppendString`, `Truncate`, `ContentHash`, `fs.ReadAll`, `fs.WriteAll`, `fs.ReadHeader`, `fs.ReadHeaderString` |
 | Directory listing | `ListDir`, `ListDirInfo`, `ListDirRecursive`, `ListDirInfoRecursive`, `ListDirMax`, `ListDirRecursiveMax`, `ListDirIter`, `ListDirRecursiveIter`, `Glob`, `fs.Glob` |
 | Recursive removal | `RemoveRecursive`, `RemoveDirContents`, `RemoveDirContentsRecursive` |
 | Moves and copies  | `MoveTo`, `Rename`, `Renamef`, `fs.Move`, `fs.CopyFile`, `fs.CopyFileBuf`, `fs.CopyRecursive`, `fs.IdenticalFileContents`, `fs.IdenticalDirContents` |
@@ -44,7 +44,7 @@ listing, plus dialing a connection.** Concretely:
 
 | Category                        | Methods                                            |
 | ------------------------------- | -------------------------------------------------- |
-| Paths                           | `Name`, `Dir`, `DirAndName`, `Path`, `URL`, `RawURI`, `Ext`, `Join`, `Joinf`, `AbsPath`, `RelPathOf`, `VolumeName`, … |
+| Paths                           | `Name`, `Dir`, `DirAndName`, `Path`, `URI`, `RawURI`, `Ext`, `Join`, `Joinf`, `AbsPath`, `RelPathOf`, `VolumeName`, … |
 | Metadata                        | `Stat`, `Lstat`, `Info`, `Size`, `Exists`, `IsDir`, `IsHidden`, `Modified`, `Permissions`, `CheckExists`, `CheckIsDir` |
 | Open                            | `OpenReader`, `OpenWriter`, `OpenAppendWriter`, `OpenReadWriter`, `OpenReadSeeker` |
 | Streaming                       | `ReadFrom`, `WriteTo` — these are `io.ReaderFrom` / `io.WriterTo`, whose signatures the standard library fixes |

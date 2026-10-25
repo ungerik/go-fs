@@ -84,14 +84,32 @@ type Options struct {
 	// container exists and can be listed. Use it for credentials without
 	// the list permission, like a SAS token that only allows uploads.
 	SkipContainerCheck bool
+
+	// DeleteSnapshots makes Remove and RemoveAll delete the snapshots of
+	// a blob together with the blob, also when the generic Move and Rename
+	// remove the source after copying it, which doesn't copy its snapshots.
+	// Deleted snapshots are gone, unless soft delete is enabled for the
+	// blobs of the storage account.
+	//
+	// Azure refuses to delete a blob with snapshots without deleting them,
+	// so without DeleteSnapshots removing such a blob is an error wrapping
+	// ErrSnapshotsPresent, and RemoveAll checks the whole tree for
+	// snapshots before it deletes anything.
+	DeleteSnapshots bool
 }
+
+// ErrSnapshotsPresent is wrapped by the error of Remove and RemoveAll,
+// and so of the generic Move and Rename, for a blob with snapshots
+// unless Options.DeleteSnapshots is set. The blob is not deleted.
+const ErrSnapshotsPresent fs.SentinelError = "azureblobfs: blob has snapshots"
 
 type fileSystem struct {
 	fsimpl.PathHelper
 
-	client   *container.Client
-	readOnly bool
-	closed   atomic.Bool
+	client          *container.Client
+	readOnly        bool
+	deleteSnapshots bool
+	closed          atomic.Bool
 }
 
 // New returns a file system for the container of the client without
@@ -127,9 +145,10 @@ func New(ctx context.Context, client *container.Client, opts *Options) (fs.FileS
 		}
 	}
 	return &fileSystem{
-		PathHelper: fsimpl.PathHelper{URIPrefix: Prefix + containerPath, Rooted: true},
-		client:     client,
-		readOnly:   opts.ReadOnly,
+		PathHelper:      fsimpl.PathHelper{URIPrefix: Prefix + containerPath, Rooted: true},
+		client:          client,
+		readOnly:        opts.ReadOnly,
+		deleteSnapshots: opts.DeleteSnapshots,
 	}, nil
 }
 
@@ -569,27 +588,57 @@ func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patte
 }
 
 // OpenReader returns a reader that streams the blob and seeks with range requests.
+// Every range request is pinned to the ETag of the blob when it was opened
+// (If-Match), so the reader never mixes the bytes of two versions: after the
+// blob was replaced, the next range request fails with an error telling that
+// the blob changed while it was being read. A body that is already streaming
+// keeps delivering the bytes of the version it started with.
 func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
-	info, err := f.Stat(filePath)
-	if err != nil {
+	if err := f.checkClosed(); err != nil {
 		return nil, err
 	}
-	if info.IsDir {
-		return nil, fs.NewErrIsDirectory(info.File)
+	if filePath == "" {
+		return nil, fs.ErrEmptyPath
 	}
-	blobClient := f.client.NewBlobClient(blobName(filePath))
+	name := blobName(filePath)
+	if name == "" {
+		return nil, fs.NewErrIsDirectory(f.RootDir())
+	}
+	blobClient := f.client.NewBlobClient(name)
+	// The size and the ETag of the same answer describe the same version
+	props, err := blobClient.GetProperties(context.Background(), nil)
+	if err != nil {
+		if isNotFound(err) {
+			return nil, f.notExistError(filePath)
+		}
+		return nil, redactErr(err)
+	}
+	var access *blob.AccessConditions
+	if props.ETag != nil {
+		access = &blob.AccessConditions{
+			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: props.ETag},
+		}
+	}
 	return &fsimpl.RangeReader{
-		Size: info.Size,
+		Size: deref(props.ContentLength),
 		Open: func(offset, count int64) (io.ReadCloser, error) {
 			// A zero Count downloads from Offset to the end
 			response, err := blobClient.DownloadStream(context.Background(), &blob.DownloadStreamOptions{
-				Range: blob.HTTPRange{Offset: offset, Count: max(count, 0)},
+				Range:            blob.HTTPRange{Offset: offset, Count: max(count, 0)},
+				AccessConditions: access,
 			})
+			if bloberror.HasCode(err, bloberror.ConditionNotMet) {
+				return nil, f.changedError(name, redactErr(err))
+			}
 			if err != nil {
 				return nil, redactErr(err)
 			}
 			if response.Body == nil {
-				return nil, f.notModifiedError(blobName(filePath))
+				return nil, f.notModifiedError(name)
+			}
+			if props.ETag != nil && response.ETag != nil && !response.ETag.Equals(*props.ETag) {
+				// A server or proxy that ignored If-Match sent another version
+				return nil, errors.Join(f.changedError(name, nil), response.Body.Close())
 			}
 			if offset > 0 && response.ContentRange == nil {
 				// The server ignored the range and sends the blob from its start
@@ -678,6 +727,17 @@ func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte,
 // without body and without error.
 func (f *fileSystem) notModifiedError(name string) error {
 	return fmt.Errorf("azureblobfs: download of %s returned no body (304 Not Modified)", f.file(name))
+}
+
+// changedError is returned by the range requests of a reader of OpenReader
+// for a blob that no longer has the ETag it had when the reader was opened.
+// err is the 412 Condition Not Met answer, or nil for an answer with
+// another ETag from a server that ignored the condition.
+func (f *fileSystem) changedError(name string, err error) error {
+	if err == nil {
+		return fmt.Errorf("azureblobfs: %s changed while it was being read", f.file(name))
+	}
+	return fmt.Errorf("azureblobfs: %s changed while it was being read: %w", f.file(name), err)
 }
 
 // OpenWriter returns a writer that streams the written data to an upload
@@ -819,10 +879,68 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 	return redactErr(err)
 }
 
+// deleteBlob deletes the blob name, together with its snapshots if
+// Options.DeleteSnapshots is set. Azure refuses to delete a blob with
+// snapshots otherwise, that is an error wrapping ErrSnapshotsPresent.
+// Other errors, like a missing blob, are returned redacted.
+func (f *fileSystem) deleteBlob(ctx context.Context, name string) error {
+	var opts *blob.DeleteOptions
+	if f.deleteSnapshots {
+		opts = &blob.DeleteOptions{DeleteSnapshots: new(blob.DeleteSnapshotsOptionTypeInclude)}
+	}
+	_, err := f.client.NewBlobClient(name).Delete(ctx, opts)
+	if bloberror.HasCode(err, bloberror.SnapshotsPresent) {
+		return f.snapshotsError(name)
+	}
+	return redactErr(err)
+}
+
+// snapshotsError returns the error wrapping ErrSnapshotsPresent
+// for the blob name, which has snapshots.
+func (f *fileSystem) snapshotsError(name string) error {
+	return fmt.Errorf("%w: %s, set Options.DeleteSnapshots to delete them with the blob", ErrSnapshotsPresent, f.file(name))
+}
+
+// findSnapshot returns the name of the first blob with a snapshot that a
+// flat listing of the blobs and snapshots with prefix returns, or the empty
+// string if none has one. The listing ends at the first blob whose name
+// isn't within, blobs are listed in the order of their names, each one
+// together with its snapshots.
+func (f *fileSystem) findSnapshot(ctx context.Context, prefix string, maxResults *int32, within func(name string) bool) (string, error) {
+	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
+		Prefix:     new(prefix),
+		MaxResults: maxResults,
+		Include:    container.ListBlobsInclude{Snapshots: true},
+	})
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return "", redactErr(err)
+		}
+		if page.Segment == nil {
+			return "", errListingWithoutBlobs
+		}
+		for _, item := range page.Segment.BlobItems {
+			name := deref(item.Name)
+			if !within(name) {
+				return "", nil
+			}
+			// The base blob has no or an empty Snapshot element
+			if deref(item.Snapshot) != "" {
+				return name, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 // Remove deletes a blob or an empty directory marker.
 // It returns an error wrapping os.ErrNotExist for a missing path,
 // an fs.ErrDirectoryNotEmpty for a directory with content,
 // and an error wrapping os.ErrInvalid for the root directory.
+// A blob or directory marker with snapshots is deleted together with them
+// if Options.DeleteSnapshots is set, else it is kept and the error
+// wraps ErrSnapshotsPresent.
 func (f *fileSystem) Remove(filePath string) error {
 	if err := f.checkWritable(); err != nil {
 		return err
@@ -837,8 +955,7 @@ func (f *fileSystem) Remove(filePath string) error {
 	ctx := context.Background()
 	name := blobName(filePath)
 	if !info.IsDir {
-		_, err = f.client.NewBlobClient(name).Delete(ctx, nil)
-		return redactErr(err)
+		return f.deleteBlob(ctx, name)
 	}
 	if name == "" {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
@@ -863,17 +980,25 @@ func (f *fileSystem) Remove(filePath string) error {
 			}
 		}
 	}
-	_, err = f.client.NewBlobClient(marker).Delete(ctx, nil)
+	err = f.deleteBlob(ctx, marker)
 	if err != nil && isNotFound(err) {
 		return nil // implicit directory without marker and without content
 	}
-	return redactErr(err)
+	return err
 }
 
 // RemoveAll deletes the blob at filePath and every blob below it.
 // A missing path is not an error. The root directory can't be removed,
 // that would delete every blob of the container, it is an error
 // wrapping os.ErrInvalid.
+//
+// With Options.DeleteSnapshots the snapshots of the blobs are deleted
+// with them. Without it, RemoveAll first lists the blobs together with
+// their snapshots and, if one of them has snapshots, returns an error
+// wrapping ErrSnapshotsPresent before it deletes anything. That costs a
+// second listing of the tree. A snapshot that another client creates
+// after that listing still stops RemoveAll with the same error,
+// after it deleted the blobs before that one.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if err := f.checkWritable(); err != nil {
 		return err
@@ -885,9 +1010,25 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if name == "" {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
 	}
-	_, err := f.client.NewBlobClient(name).Delete(ctx, nil)
+	if !f.deleteSnapshots {
+		// The blob at filePath is listed with its snapshots before the other
+		// names that start with its name, so its scan ends at the first other
+		// name, usually on the first page of two results. The second scan
+		// lists the tree below it.
+		snapshotted, err := f.findSnapshot(ctx, name, new(int32(2)), func(n string) bool { return n == name })
+		if err == nil && snapshotted == "" {
+			snapshotted, err = f.findSnapshot(ctx, name+Separator, nil, func(string) bool { return true })
+		}
+		if err != nil {
+			return err
+		}
+		if snapshotted != "" {
+			return f.snapshotsError(snapshotted)
+		}
+	}
+	err := f.deleteBlob(ctx, name)
 	if err != nil && !isNotFound(err) {
-		return redactErr(err)
+		return err
 	}
 	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(name + Separator)})
 	for pager.More() {
@@ -899,9 +1040,9 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 			return errListingWithoutBlobs
 		}
 		for _, item := range page.Segment.BlobItems {
-			_, err := f.client.NewBlobClient(deref(item.Name)).Delete(ctx, nil)
+			err := f.deleteBlob(ctx, deref(item.Name))
 			if err != nil && !isNotFound(err) {
-				return redactErr(err)
+				return err
 			}
 		}
 	}

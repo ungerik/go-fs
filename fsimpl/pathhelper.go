@@ -97,7 +97,7 @@ func (h PathHelper) volumeLen(filePath string) int {
 // from the first part, "." and ".." elements and duplicate
 // separators are removed, and the path is made absolute (rooted)
 // or relative (not rooted) as configured.
-// URL escapes are not decoded, that is the job of fs.ParseRawURI.
+// Percent-encoded characters are not decoded, that is the job of fs.ParseRawURI.
 // The passed uriParts slice is not modified.
 func (h PathHelper) CleanPath(uriParts ...string) string {
 	sep := h.Separator()
@@ -129,14 +129,14 @@ func (h PathHelper) CleanPath(uriParts ...string) string {
 	return volume + rest
 }
 
-// URL returns the URI of a file system path: URIPrefix followed by
+// URI returns the URI of a file system path: URIPrefix followed by
 // cleanPath escaped with EscapeURIPath.
 //
 // If URIPrefix ends with the separator after a host, like "mem://id/",
 // the separator is not doubled. A prefix that is only a scheme
 // like "file://" is followed by the whole rooted path,
 // so the URI of "/a" is "file:///a".
-func (h PathHelper) URL(cleanPath string) string {
+func (h PathHelper) URI(cleanPath string) string {
 	sep := h.Separator()
 	if strings.HasSuffix(h.URIPrefix, sep) &&
 		!strings.HasSuffix(h.URIPrefix, "://") &&
@@ -148,7 +148,7 @@ func (h PathHelper) URL(cleanPath string) string {
 
 // JoinCleanURI returns the URI of the cleaned and joined uriParts.
 func (h PathHelper) JoinCleanURI(uriParts ...string) string {
-	return h.URL(h.CleanPath(uriParts...))
+	return h.URI(h.CleanPath(uriParts...))
 }
 
 // SplitPath returns the elements of filePath without prefix, volume,

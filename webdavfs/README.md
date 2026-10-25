@@ -101,7 +101,13 @@ The file system uses a copy of `Options.Client` with its own
 
 ## How WebDAV concepts map to the file system
 
-- **Paths.** File system paths map directly to URL paths below the base URL.
+- **Paths.** File system paths map directly to URL paths below the base URL. A
+  path with a backslash is an error wrapping `os.ErrInvalid` unless
+  `Options.AllowBackslashInNames` is set: for the separator `/` the backslash
+  is part of a name, but a server on Windows (IIS) takes it for a separator
+  and resolves `..`, so a name like `..\x` from a `SubFileSystem` or
+  `CopyRecursive` would reach a file outside of its directory. Set the option
+  only for servers that store backslashes in names, like servers on Unix.
 - **Methods.** `PROPFIND` backs `Stat` and `ListDir`, `GET` backs reads,
   `PUT` backs writes, `MKCOL` backs `MakeDir`, `DELETE` backs `Remove`, and
   `MOVE` and `COPY` back `Move` and `CopyFile`.

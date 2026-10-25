@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
+	"path"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -676,4 +679,316 @@ func TestRemoveRoot(t *testing.T) {
 	assert.ErrorIs(t, ftpFS.RemoveAll(t.Context(), ""), fs.ErrEmptyPath, `RemoveAll("")`)
 	_, err := ftpFS.Stat("/file.txt")
 	assert.NoError(t, err, "nothing must be removed")
+}
+
+// seedLinks seeds the test server with files, a directory and symbolic
+// links below /root: links to a file with a relative and an absolute
+// target, to a link, with a ".." in the target, to a directory,
+// a dangling link and a cycle of two links.
+func seedLinks(srv *testFTPServer) {
+	srv.writeFile("/root/file.txt", "data")
+	srv.writeFile("/root/dir/file.txt", "content")
+	srv.symlink("file.txt", "/root/filelink")
+	srv.symlink("/root/file.txt", "/root/abslink")
+	srv.symlink("filelink", "/root/chain")
+	srv.symlink("../file.txt", "/root/dir/uplink")
+	srv.symlink("dir", "/root/dirlink")
+	srv.symlink("missing.txt", "/root/dangling")
+	srv.symlink("loop2", "/root/loop1")
+	srv.symlink("loop1", "/root/loop2")
+}
+
+// relPaths returns the paths of the files of infos without the prefix of the file system.
+func relPaths(f *fileSystem, infos []*fs.FileInfo) []string {
+	paths := make([]string, len(infos))
+	for i, info := range infos {
+		paths[i] = strings.TrimPrefix(string(info.File), f.Prefix())
+	}
+	return paths
+}
+
+// TestSymbolicLinks checks the symbolic links that a server without MLST
+// support lists with LIST like "ls -l": Stat follows a link and describes
+// its target with IsSymlink set, ListDir and ListDirRecursive describe the
+// link itself with neither IsDir nor IsRegular and never follow it, and
+// Remove, RemoveAll and Move act on the link itself. ListDir used to report
+// a link with IsRegular set and Stat didn't follow links, so a link to
+// a directory looked like a file.
+func TestSymbolicLinks(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	srv.configure(func(s *testFTPServer) { s.noMLST = true })
+	seedLinks(srv)
+	ftpFS := dialInProcess(t, srv)
+	require.NoError(t, fs.Register(ftpFS))
+	file := ftpFS.JoinCleanFile
+
+	t.Run("Stat follows links", func(t *testing.T) {
+		for _, link := range []string{"/root/filelink", "/root/abslink", "/root/chain", "/root/dir/uplink", "/root/dirlink/uplink"} {
+			info, err := ftpFS.Stat(link)
+			require.NoError(t, err, "Stat(%q)", link)
+			assert.Equal(t, file(link), info.File, "Stat(%q).File is the link", link)
+			assert.Equal(t, path.Base(link), info.Name, "Stat(%q).Name is the link", link)
+			assert.True(t, info.IsSymlink, "Stat(%q).IsSymlink", link)
+			assert.True(t, info.IsRegular, "Stat(%q).IsRegular of a link to a file", link)
+			assert.False(t, info.IsDir, "Stat(%q).IsDir of a link to a file", link)
+			assert.Equal(t, int64(len("data")), info.Size, "Stat(%q).Size is the size of the target", link)
+		}
+		info, err := ftpFS.Stat("/root/dirlink")
+		require.NoError(t, err)
+		assert.True(t, info.IsSymlink, "Stat of a link to a directory has IsSymlink set")
+		assert.True(t, info.IsDir, "Stat of a link to a directory describes the directory")
+		assert.False(t, info.IsRegular)
+		assert.Equal(t, DefaultDirPermissions, info.Permissions)
+
+		info, err = ftpFS.Stat("/root/file.txt")
+		require.NoError(t, err)
+		assert.False(t, info.IsSymlink, "Stat of a file")
+
+		_, err = ftpFS.Stat("/root/dangling")
+		require.ErrorIs(t, err, os.ErrNotExist, "Stat of a dangling link")
+		assert.ErrorContains(t, err, string(file("/root/dangling")), "the error names the link")
+		_, err = ftpFS.Stat("/root/loop1")
+		require.ErrorContains(t, err, "too many levels of symbolic links")
+		assert.NotErrorIs(t, err, os.ErrNotExist)
+
+		// Without fs.SymbolicLinkFileSystem File.Lstat returns the Stat
+		assert.True(t, file("/root/filelink").IsSymbolicLink())
+		assert.False(t, file("/root/file.txt").IsSymbolicLink())
+		assert.True(t, file("/root/dirlink").IsDir())
+		assert.True(t, file("/root/chain").IsRegular())
+	})
+
+	t.Run("ListDir describes links", func(t *testing.T) {
+		infos := map[string]*fs.FileInfo{}
+		err := ftpFS.ListDir(ctx, "/root", nil, func(info *fs.FileInfo) error {
+			infos[info.Name] = info
+			return nil
+		})
+		require.NoError(t, err)
+		links := []string{"abslink", "chain", "dangling", "dirlink", "filelink", "loop1", "loop2"}
+		assert.ElementsMatch(t, append([]string{"dir", "file.txt"}, links...), slices.Collect(maps.Keys(infos)))
+		for _, name := range links {
+			info := infos[name]
+			if !assert.NotNil(t, info, "ListDir must list %s", name) {
+				continue
+			}
+			assert.Equal(t, file("/root", name), info.File)
+			assert.True(t, info.IsSymlink, "%s.IsSymlink", name)
+			assert.False(t, info.IsDir, "%s.IsDir: the listing doesn't tell what a link points to", name)
+			assert.False(t, info.IsRegular, "%s.IsRegular: the listing doesn't tell what a link points to", name)
+		}
+		assert.True(t, infos["file.txt"].IsRegular)
+		assert.False(t, infos["file.txt"].IsSymlink)
+		assert.True(t, infos["dir"].IsDir)
+		assert.False(t, infos["dir"].IsSymlink)
+
+		// The server lists the directory that a link at the listed path points to
+		var listed []*fs.FileInfo
+		err = ftpFS.ListDir(ctx, "/root/dirlink", nil, func(info *fs.FileInfo) error {
+			listed = append(listed, info)
+			return nil
+		})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"/root/dirlink/file.txt", "/root/dirlink/uplink"}, relPaths(ftpFS, listed))
+
+		err = ftpFS.ListDir(ctx, "/root/filelink", nil, func(*fs.FileInfo) error { return nil })
+		assert.ErrorIs(t, err, fs.ErrIsNotDirectory{}, "ListDir of a link to a file")
+		err = ftpFS.ListDir(ctx, "/root/dangling", nil, func(*fs.FileInfo) error { return nil })
+		assert.ErrorIs(t, err, os.ErrNotExist, "ListDir of a dangling link")
+	})
+
+	t.Run("ListDirRecursive doesn't follow links", func(t *testing.T) {
+		var listed []*fs.FileInfo
+		err := ftpFS.ListDirRecursive(ctx, "/root", nil, func(info *fs.FileInfo) error {
+			assert.False(t, info.IsDir, "ListDirRecursive must not pass a directory, got %s", info.File)
+			listed = append(listed, info)
+			return nil
+		})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{
+			"/root/abslink", "/root/chain", "/root/dangling", "/root/dir/file.txt", "/root/dir/uplink",
+			"/root/dirlink", "/root/file.txt", "/root/filelink", "/root/loop1", "/root/loop2",
+		}, relPaths(ftpFS, listed), "the files of the directory of a link are not listed below the link")
+
+		// A link at the listed path is followed
+		listed = nil
+		err = ftpFS.ListDirRecursive(ctx, "/root/dirlink", nil, func(info *fs.FileInfo) error {
+			listed = append(listed, info)
+			return nil
+		})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"/root/dirlink/file.txt", "/root/dirlink/uplink"}, relPaths(ftpFS, listed))
+		err = ftpFS.ListDirRecursive(ctx, "/root/filelink", nil, func(*fs.FileInfo) error { return nil })
+		assert.ErrorIs(t, err, fs.ErrIsNotDirectory{}, "ListDirRecursive of a link to a file")
+	})
+
+	t.Run("ReadAll follows links", func(t *testing.T) {
+		data, err := ftpFS.ReadAll(ctx, "/root/chain")
+		require.NoError(t, err)
+		assert.Equal(t, "data", string(data))
+		_, err = ftpFS.ReadAll(ctx, "/root/dirlink")
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "ReadAll of a link to a directory")
+		_, err = ftpFS.ReadAll(ctx, "/root/dangling")
+		assert.ErrorIs(t, err, os.ErrNotExist, "ReadAll of a dangling link")
+	})
+}
+
+// TestSymbolicLinks_RemoveAndMove checks that Remove, RemoveAll and Move
+// act on a symbolic link itself and never on the files it points to,
+// also now that Stat follows links.
+func TestSymbolicLinks_RemoveAndMove(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	srv.configure(func(s *testFTPServer) { s.noMLST = true })
+	seedLinks(srv)
+	ftpFS := dialInProcess(t, srv)
+
+	require.NoError(t, ftpFS.RemoveAll(ctx, "/root/dirlink"))
+	assert.False(t, srv.exists("/root/dirlink"), "RemoveAll removes the link")
+	assert.Equal(t, "content", string(srv.fileContent("/root/dir/file.txt")), "RemoveAll must keep the files that a link points to")
+
+	srv.symlink("dir", "/root/dirlink")
+	require.NoError(t, ftpFS.Remove("/root/dirlink"), "Remove of a link to a non-empty directory")
+	assert.False(t, srv.exists("/root/dirlink"), "Remove removes the link")
+	assert.True(t, srv.exists("/root/dir/file.txt"))
+
+	require.NoError(t, ftpFS.Remove("/root/dangling"), "Remove of a dangling link")
+	assert.False(t, srv.exists("/root/dangling"))
+
+	require.NoError(t, ftpFS.Move(ctx, "/root/abslink", "/root/dir/moved"))
+	assert.False(t, srv.exists("/root/abslink"))
+	info, err := ftpFS.Stat("/root/dir/moved")
+	require.NoError(t, err)
+	assert.True(t, info.IsSymlink, "Move renames the link itself")
+	assert.Equal(t, "data", string(srv.fileContent("/root/file.txt")))
+
+	// A directory with links: the links are removed, not their targets
+	srv.symlink("/root/file.txt", "/root/dir/sub/abs")
+	require.NoError(t, ftpFS.RemoveAll(ctx, "/root/dir"))
+	assert.False(t, srv.exists("/root/dir"))
+	assert.Equal(t, "data", string(srv.fileContent("/root/file.txt")))
+}
+
+// TestSymbolicLinks_MLSD checks a server with MLST support that describes
+// a symbolic link with the facts of its target like ProFTPD by default:
+// ftpfs can't tell its links from files and directories.
+func TestSymbolicLinks_MLSD(t *testing.T) {
+	srv := newTestFTPServer(t)
+	srv.writeFile("/root/file.txt", "data")
+	srv.writeFile("/root/dir/file.txt", "content")
+	srv.symlink("file.txt", "/root/filelink")
+	srv.symlink("dir", "/root/dirlink")
+	ftpFS := dialInProcess(t, srv)
+
+	infos := map[string]*fs.FileInfo{}
+	err := ftpFS.ListDir(t.Context(), "/root", nil, func(info *fs.FileInfo) error {
+		infos[info.Name] = info
+		return nil
+	})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"dir", "dirlink", "file.txt", "filelink"}, slices.Collect(maps.Keys(infos)))
+	assert.True(t, infos["filelink"].IsRegular)
+	assert.Equal(t, int64(len("data")), infos["filelink"].Size)
+	assert.True(t, infos["dirlink"].IsDir)
+
+	info, err := ftpFS.Stat("/root/dirlink")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir)
+	assert.Positive(t, srv.count("MLSD"))
+	assert.Zero(t, srv.count("LIST"), "the server supports MLSD")
+}
+
+// TestCopyRecursive_SymbolicLinks checks fs.CopyRecursive from a server
+// that lists symbolic links: a link to a file is copied as a file with the
+// content of its target, and a link to a directory fails the copy with an
+// error wrapping errors.ErrUnsupported before anything is written, to
+// another file system and within the FTP file system, which can't create
+// links. The copy used to treat a link to a directory like a file.
+func TestCopyRecursive_SymbolicLinks(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	srv.configure(func(s *testFTPServer) { s.noMLST = true })
+	seedLinks(srv)
+	srv.writeFile("/files/file.txt", "data")
+	srv.symlink("file.txt", "/files/link.txt")
+	srv.symlink("/files/file.txt", "/files/sub/abs.txt")
+	srv.symlink("../link.txt", "/files/sub/chain.txt")
+	ftpFS := dialInProcess(t, srv)
+	require.NoError(t, fs.Register(ftpFS))
+	memFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(memFS))
+	t.Cleanup(func() { _ = memFS.Close() })
+
+	dest := memFS.RootDir().Join("copy")
+	err = fs.CopyRecursive(ctx, ftpFS.JoinCleanFile("/root"), dest)
+	require.ErrorIs(t, err, errors.ErrUnsupported, "CopyRecursive of a link to a directory to another file system")
+	assert.ErrorContains(t, err, string(ftpFS.JoinCleanFile("/root/dirlink")), "the error names the link")
+	assert.False(t, dest.Exists(), "nothing must be written")
+
+	before := srv.paths()
+	err = fs.CopyRecursive(ctx, ftpFS.JoinCleanFile("/root"), ftpFS.JoinCleanFile("/copy"))
+	require.ErrorIs(t, err, errors.ErrUnsupported, "CopyRecursive of a link to a directory within the FTP file system")
+	assert.Equal(t, before, srv.paths(), "nothing must be written")
+
+	require.NoError(t, fs.CopyRecursive(ctx, ftpFS.JoinCleanFile("/files"), dest))
+	for _, name := range [][]string{{"file.txt"}, {"link.txt"}, {"sub", "abs.txt"}, {"sub", "chain.txt"}} {
+		copied := dest.Join(name...)
+		info, err := copied.Lstat()
+		if !assert.NoError(t, err, "Lstat(%s)", copied) {
+			continue
+		}
+		assert.True(t, info.IsRegular, "%s is copied as a file", copied)
+		assert.False(t, info.IsSymlink, "%s is copied as a file", copied)
+		content, err := copied.ReadAllString(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "data", content, "%s has the content of the target", copied)
+	}
+}
+
+// TestBackslashInNames checks that paths with a backslash are rejected
+// unless Options.AllowBackslashInNames is set, because an FTP server
+// on Windows takes `..\x` for a name in the parent directory.
+func TestBackslashInNames(t *testing.T) {
+	srv := newTestFTPServer(t)
+	ctx := t.Context()
+	srv.mkdirAll("/dir")
+	srv.writeFile("/victim.txt", "keep me")
+	before := srv.paths()
+
+	ftpFS := dialInProcess(t, srv)
+	noCallback := func(*fs.FileInfo) error { return nil }
+	for _, name := range []string{`/dir/..\victim.txt`, `/dir\x`} {
+		for op, call := range map[string]func() error{
+			"Stat":             func() error { _, err := ftpFS.Stat(name); return err },
+			"ListDir":          func() error { return ftpFS.ListDir(ctx, name, nil, noCallback) },
+			"ListDirRecursive": func() error { return ftpFS.ListDirRecursive(ctx, name, nil, noCallback) },
+			"OpenReader":       func() error { _, err := ftpFS.OpenReader(name); return err },
+			"ReadAll":          func() error { _, err := ftpFS.ReadAll(ctx, name); return err },
+			"WriteAll":         func() error { return ftpFS.WriteAll(ctx, name, []byte("x"), 0) },
+			"Append":           func() error { return ftpFS.Append(ctx, name, []byte("x"), 0) },
+			"OpenWriter":       func() error { _, err := ftpFS.OpenWriter(name, 0); return err },
+			"OpenAppendWriter": func() error { _, err := ftpFS.OpenAppendWriter(name, 0); return err },
+			"OpenReadWriter":   func() error { _, err := ftpFS.OpenReadWriter(name, 0); return err },
+			"Touch":            func() error { return ftpFS.Touch(name, 0) },
+			"MakeDir":          func() error { return ftpFS.MakeDir(name, 0) },
+			"Remove":           func() error { return ftpFS.Remove(name) },
+			"RemoveAll":        func() error { return ftpFS.RemoveAll(ctx, name) },
+			"Move from":        func() error { return ftpFS.Move(ctx, name, "/moved.txt") },
+			"Move to":          func() error { return ftpFS.Move(ctx, "/victim.txt", name) },
+		} {
+			assert.ErrorIs(t, call(), os.ErrInvalid, "%s(%q)", op, name)
+		}
+	}
+	assert.Equal(t, before, srv.paths(), "no request may reach the server")
+	assert.Equal(t, "keep me", string(srv.fileContent("/victim.txt")))
+
+	// Servers on Unix store a backslash as part of a name
+	allowFS := dialInProcessWith(t, srv, &Options{Password: testPassword, AllowBackslashInNames: true})
+	require.NoError(t, allowFS.WriteAll(ctx, `/dir/a\b.txt`, []byte("unix name"), 0))
+	assert.Equal(t, "unix name", string(srv.fileContent(`/dir/a\b.txt`)))
+	data, err := allowFS.ReadAll(ctx, `/dir/a\b.txt`)
+	require.NoError(t, err)
+	assert.Equal(t, "unix name", string(data))
 }
