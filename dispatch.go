@@ -611,9 +611,10 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // [MoveFileSystem.Move]: an existing file is replaced
 // ([ErrIsNotDirectory] if the source is a directory),
 // an existing directory is an [ErrAlreadyExists] and neither merged nor deleted.
-// An existing file that is no regular file, like a device, a named pipe or
-// a socket, is the error of errNotRegular for a moved file, because the copy
-// would write into it instead of replacing it.
+// An existing file that the copy of a moved file would write into instead of
+// replacing it, like a device, a named pipe or a socket, see isSpecialFile,
+// is the error of errNotRegular. A local file that Windows describes as
+// irregular, like the placeholder of a OneDrive file, is replaced.
 // A directory moved into itself within one file system must have been
 // rejected by the caller, see fsMove. Local paths are also compared as
 // files, because two paths can be the same file, like through bind mounts,
@@ -625,17 +626,18 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // of it, and a case-only rename through an OverlayFileSystem, which supports
 // only one case of a name, are errors wrapping [os.ErrInvalid].
 //
-// A directory is copied to destPath, which didn't exist, so every entry of
-// the copy is new: an existing entry where the copy is to write one was
-// written by the copy for another name of the source that the destination
-// doesn't tell apart, like "A.txt" and "a.txt" of a case-sensitive source on
-// a case-insensitive destination, see destDir. Then the move fails with an
-// error wrapping [os.ErrExist] instead of replacing the entry and removing
-// the source of the replaced one. A name that is not valid for destFS, see
+// A directory is copied to destPath, which didn't exist, so the copy creates
+// every directory of it, which is new then, see treeCopier.newDestDir:
+// an existing entry where the copy is to write one was written by the copy
+// for another name of the source that the destination doesn't tell apart,
+// like "A.txt" and "a.txt" of a case-sensitive source on a case-insensitive
+// destination, see destDir. Then the move fails with an error wrapping
+// [os.ErrExist] instead of replacing the entry and removing the source of
+// the replaced one. A name that is not valid for destFS, see
 // treeCopier.validName, is an error wrapping [os.ErrInvalid], below
-// a directory before anything is copied, see treeCopier.checkSource.
-// So is a name of destPath that the local file system would not write
-// to an entry of that name, see isValidLocalName.
+// a directory, also of an empty directory, before anything is copied, see
+// treeCopier.checkSource. So is a name of destPath that the local file
+// system would not write to an entry of that name, see isValidLocalName.
 //
 // Within a file system that implements [SymbolicLinkFileSystem],
 // symbolic links are copied as links with their target stored verbatim,
@@ -668,9 +670,6 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return err
 	}
 	c := newTreeCopier(ctx, srcFS, destFS, nil)
-	// A directory is only copied to a destination that didn't exist,
-	// so every existing entry below it is an error, see destDir
-	c.move = true
 	if srcFS == destFS {
 		// Within one file system every link is moved as link
 		c.links = c.dirLinks
@@ -742,7 +741,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return NewErrIsNotDirectory(dest)
 	case srcIsLink && !destInfo.IsSymlink && isLinkOntoTarget(srcFS, srcPath, destFS, destPath):
 		return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
-	case !moveLink && !destInfo.IsSymlink && !destInfo.IsRegular:
+	case !moveLink && !destInfo.IsSymlink && isSpecialFile(dest, destInfo):
 		// A link replaces it like os.Rename, a copy would write into it
 		return errNotRegular(src, dest)
 	}

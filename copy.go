@@ -265,9 +265,12 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // and merged with if it does: a file of src replaces a file at the same path
 // in dest, a file of src over a directory of dest is an [ErrIsDirectory]
 // and a directory of src over a file of dest an [ErrIsNotDirectory].
-// A file of dest that is no regular file, like a device, a named pipe or
-// a socket, is an error wrapping [os.ErrExist] ([ErrAlreadyExists]), because
-// the copy would write into it instead of replacing it.
+// A file of dest that the copy would write into instead of replacing it,
+// a device, a named pipe or a socket, is an error wrapping [os.ErrExist]
+// ([ErrAlreadyExists]). The local file system tells them by their file mode,
+// so a file that Windows describes as irregular, like the placeholder of
+// a OneDrive file, is replaced like a regular file. On other file systems
+// that is every file that its FileInfo doesn't describe as regular.
 // dest itself may be a symbolic link to a directory, the copy is written into
 // the directory it points to. Below dest a symbolic link is never written
 // through, which would write outside of dest: a file or directory of src over
@@ -289,8 +292,10 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // that names it. In a directory that existed before, only the local file
 // system, also through a [SubFileSystem], can tell an entry that the copy wrote
 // from one that was there before, by comparing the files: other file systems
-// replace the entry that the copy wrote. Copy into a new directory to have
-// every such collision detected.
+// replace the entry that the copy wrote. Two hard links of one file in such
+// a local directory are two entries, which the directory lists with both
+// names, so both are written. Copy into a new directory to have every such
+// collision detected.
 //
 // Copying a directory onto itself is a no-op,
 // copying it into one of its sub-directories is an error wrapping [os.ErrInvalid],
@@ -326,10 +331,10 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // Windows takes for an alternate data stream of another file, or a reserved
 // device name like "NUL" or "COM1", which writes to the device. On Windows
 // a name that ends with a dot or a space is not valid either, Windows removes
-// them and writes to another entry. The names of the files to copy and of
-// their directories are checked while src is listed for the links to
-// directories, which happens for every copy to another file system,
-// so the copy fails before it writes anything.
+// them and writes to another entry. The names of all entries below src, also
+// of empty directories and of files that don't match the patterns, are checked
+// while src is listed for the links to directories, which happens for every
+// copy to another file system, so the copy fails before it writes anything.
 // The files are copied with permissions like by [CopyFile],
 // the directories with the default permissions of dest.
 // One copy buffer is used for all files.
@@ -374,7 +379,6 @@ type treeCopier struct {
 	dirLinks  SymbolicLinkFileSystem // the destination if it can create the copies of links to directories
 	sameFS    bool                   // the source and the destination are the same file system
 	localDest bool                   // the destination writes to the local file system, see writesToLocal
-	move      bool                   // the copy of a move, whose destination didn't exist, see destDir
 	buf       []byte                 // copy buffer for all files, allocated on first use
 }
 
@@ -480,10 +484,11 @@ func (c *treeCopier) errDirLink(link, dest File) error {
 
 // checkSource returns an error for the first entry below the directory src
 // that can't be copied to dest, so that the copy fails before it writes
-// anything: the error of errInvalidName for a file or link whose name or the
-// name of one of its directories below src is not valid for dest, see
-// treeCopier.validName, and the error of errDirLink for a symbolic link
-// to a directory, which can't be copied to dest.
+// anything: the error of errInvalidName for an entry whose name is not valid
+// for dest, see treeCopier.validName, and the error of errDirLink for
+// a symbolic link to a directory that matches the patterns, which can't be
+// copied to dest. Like copyDir, it checks the name of every entry, also of
+// an empty directory and of a file that doesn't match the patterns.
 // The tree is only listed if links to directories can't be copied, which
 // includes every copy to another file system. Within one file system that
 // copies them the names come from the destination itself, and copyDir
@@ -493,23 +498,31 @@ func (c *treeCopier) checkSource(src, dest File) error {
 		return nil
 	}
 	srcFS, srcPath := src.ParseRawURI()
+	return c.checkSourceDir(srcFS, srcPath, dest)
+}
+
+// checkSourceDir checks the entries of the directory dirPath of srcFS and
+// of its sub-directories for checkSource, listed like by copyDir: a symbolic
+// link is never followed, only a link at the root of the copy, which ListDir
+// follows. A sub-directory that was removed after it was listed is skipped,
+// copyDir doesn't find it either. dest is the root of the copy.
+func (c *treeCopier) checkSourceDir(srcFS FileSystem, dirPath string, dest File) error {
+	if err := c.ctx.Err(); err != nil {
+		return err
+	}
 	destFS, _ := dest.ParseRawURI()
-	srcElems := fsSplitPath(srcFS, srcPath)
-	return fsListDirRecursive(c.ctx, srcFS, srcPath, c.patterns, func(info *FileInfo) error {
+	return fsListDir(c.ctx, srcFS, dirPath, nil, func(info *FileInfo) error {
 		if !c.validName(destFS, info.Name) {
 			return errInvalidName(info.File, info.Name, dest)
 		}
-		// The directories are not listed, only their files
-		elems := fsSplitPath(srcFS, info.File.Path())
-		if len(elems) > len(srcElems) && slices.Equal(elems[:len(srcElems)], srcElems) {
-			for _, name := range elems[len(srcElems) : len(elems)-1] {
-				if !c.validName(destFS, name) {
-					return errInvalidName(info.File, name, dest)
-				}
-			}
+		if info.IsDir && !info.IsSymlink {
+			// The errors of the checks never wrap os.ErrNotExist
+			return RemoveErrDoesNotExist(c.checkSourceDir(srcFS, info.File.Path(), dest))
 		}
-		if !info.IsSymlink {
-			return nil
+		// Also for a file, so that a malformed pattern fails before the copy
+		match, err := fsimpl.MatchAnyPattern(info.Name, c.patterns)
+		if err != nil || !match || !info.IsSymlink {
+			return err
 		}
 		// A link that can't be followed is an error of copyDir
 		target, err := fsStat(srcFS, info.File.Path())
@@ -601,12 +614,12 @@ func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 // checkFileDest returns an error if the file src can't be copied to dest
 // in the directory dir below the root of a copy: an existing directory is
 // an ErrIsDirectory, a symbolic link the error of errDestLink, so the file it
-// points to is never written, and a file that is no regular file, like
-// a device, a named pipe or a socket, the error of errNotRegular. An existing
-// file that the copy wrote for another name of the source is the error of
-// errCopiedOver, see destDir. A missing dest or an error of Lstat, like on
-// write-only file systems, is left to the writer. The one Lstat replaces
-// the check of copyFileTo if dest is a directory.
+// points to is never written, and a file that the copy would write into,
+// like a device, a named pipe or a socket, see isSpecialFile, the error of
+// errNotRegular. An existing file that the copy wrote for another name of the
+// source is the error of errCopiedOver, see destDir. A missing dest or an
+// error of Lstat, like on write-only file systems, is left to the writer.
+// The one Lstat replaces the check of copyFileTo if dest is a directory.
 func checkFileDest(src, dest File, dir *destDir) error {
 	destFS, destPath := dest.ParseRawURI()
 	info, err := fsLstat(destFS, destPath)
@@ -617,16 +630,42 @@ func checkFileDest(src, dest File, dir *destDir) error {
 		return errDestLink(src, dest)
 	case info.IsDir:
 		return NewErrIsDirectory(dest)
-	case !info.IsRegular:
+	case isSpecialFile(dest, info):
 		return errNotRegular(src, dest)
 	}
 	return dir.checkExisting(src, dest)
 }
 
+// isSpecialFile reports if the existing entry dest, described by info, which
+// is no directory and no symbolic link, is a file that a copy would write into
+// instead of replacing it, like a device, a named pipe or a socket.
+// For a local destination the file mode of the local path that the write goes
+// to tells, see localWritePath and isLocalSpecialFile: Windows describes other
+// reparse points than symbolic links, like the placeholders of OneDrive files,
+// as irregular files, which are written like regular files. A path that the
+// write would create in the upper layer of an OverlayFileSystem is no special
+// file either. Other file systems only tell if info describes a regular file.
+func isSpecialFile(dest File, info *FileInfo) bool {
+	if localPath, ok := localWritePath(dest.ParseRawURI()); ok {
+		localInfo, err := os.Lstat(localPath)
+		return err == nil && isLocalSpecialFile(localInfo)
+	}
+	return !info.IsRegular
+}
+
+// isLocalSpecialFile reports if the local file described by info is
+// a device, a named pipe or a socket, see isSpecialFile. A file with
+// os.ModeIrregular, which Windows sets for the reparse points that are no
+// symbolic links, like OneDrive placeholders, AppExecLinks and ProjFS files,
+// is written like a regular file.
+func isLocalSpecialFile(info os.FileInfo) bool {
+	return info.Mode()&(os.ModeNamedPipe|os.ModeSocket|os.ModeDevice|os.ModeCharDevice) != 0
+}
+
 // errNotRegular returns the error wrapping os.ErrExist for the existing file
-// dest that is no regular file, like a device, a named pipe or a socket,
-// where the file src is to be copied: the copy would write into it,
-// a device would even discard the data, instead of replacing it.
+// dest that the copy of the file src would write into instead of replacing it,
+// like a device, which would even discard the data, a named pipe or a socket,
+// see isSpecialFile.
 func errNotRegular(src, dest File) error {
 	return fmt.Errorf("can't copy %s over a file that is no regular file: %w", errSubject(src), NewErrAlreadyExists(dest))
 }
@@ -639,9 +678,10 @@ func errNotRegular(src, dest File) error {
 // Unicode normalizations of a name on macOS. Writing the second entry would
 // replace the first, and a move would then remove the source of the first.
 type destDir struct {
-	// isNew tells that the copy wrote every existing entry of the directory:
-	// the copy created it, or it is a directory of a move, whose destination
-	// didn't exist. An entry that is created concurrently counts as well.
+	// isNew tells that the copy wrote every existing entry of the directory,
+	// because the copy created it, like every directory of a move, whose
+	// destination didn't exist. An entry that is created concurrently
+	// counts as well.
 	isNew bool
 
 	// written has the entries that the copy wrote into a local directory
@@ -650,7 +690,13 @@ type destDir struct {
 	// compared with os.SameFile to the entries with the same. It is nil for
 	// a new directory and for other file systems, which have no identity of
 	// a file that tells an entry that the copy wrote from one that was there.
+	// The os.FileInfo of an entry has the name that the copy wrote it with.
 	written map[localEntryKey][]os.FileInfo
+
+	// listed has the names that the local directory listed when the copy
+	// first found an entry that it wrote under another name, see wroteEntry,
+	// nil until then. It is empty if the directory can't be listed.
+	listed map[string]bool
 }
 
 // localEntryKey is the size and the modification time of a local entry,
@@ -669,7 +715,7 @@ func newLocalEntryKey(info os.FileInfo) localEntryKey {
 // exists now. statErr is the error of the Stat or Lstat of dest before the
 // copy wrote it, the directory is new if it didn't exist.
 func (c *treeCopier) newDestDir(dest File, statErr error) *destDir {
-	if c.move || errors.Is(statErr, os.ErrNotExist) {
+	if errors.Is(statErr, os.ErrNotExist) {
 		return &destDir{isNew: true}
 	}
 	if c.localDest {
@@ -688,19 +734,52 @@ func (d *destDir) checkExisting(src, dest File) error {
 	return nil
 }
 
-// wroteEntry reports if the copy wrote the existing local entry dest,
-// under any name, see recordWrite.
+// wroteEntry reports if the copy wrote the existing local entry dest
+// under another name, see recordWrite: the copy wrote the same file under
+// a name that is not another hard link of it. Two hard links of a file are
+// two entries, which the directory lists with both names, and the copy
+// writes them one after the other. A name that the destination matches to
+// an entry of another name, like another case, is not listed, the directory
+// lists the entry with its name, see isListed.
 func (d *destDir) wroteEntry(dest File) bool {
 	if len(d.written) == 0 {
 		return false
 	}
-	info, ok := localLstat(dest)
+	localPath, ok := localWritePath(dest.ParseRawURI())
 	if !ok {
 		return false
 	}
+	info, err := os.Lstat(localPath)
+	if err != nil {
+		return false
+	}
 	return slices.ContainsFunc(d.written[newLocalEntryKey(info)], func(written os.FileInfo) bool {
-		return os.SameFile(written, info)
+		if !os.SameFile(written, info) {
+			return false
+		}
+		dir := filepath.Dir(localPath)
+		hardLinks := d.isListed(dir, written.Name()) && d.isListed(dir, info.Name())
+		return !hardLinks
 	})
+}
+
+// isListed reports if the local directory dirPath of d lists an entry with
+// exactly name. The directory is listed once, the first time a name is
+// looked up, which happens after the copy wrote the entries to compare.
+// An entry that the copy creates after the listing is not listed, it is
+// a new file, whose only other name can be one that the destination matches
+// to its entry, like another case, which is never listed. If the directory
+// can't be listed, no name is listed, so every match of wroteEntry counts.
+func (d *destDir) isListed(dirPath, name string) bool {
+	if d.listed == nil {
+		d.listed = make(map[string]bool)
+		if entries, err := os.ReadDir(dirPath); err == nil {
+			for _, entry := range entries {
+				d.listed[entry.Name()] = true
+			}
+		}
+	}
+	return d.listed[name]
 }
 
 // recordWrite records the entry dest that the copy wrote into a local
@@ -764,8 +843,7 @@ func (c *treeCopier) copyLink(src, dest File) error {
 // and an existing directory at dest is an ErrIsDirectory.
 func (c *treeCopier) copyDirLink(src, dest File, dir *destDir) error {
 	if !c.canCopyDirLinks() {
-		// checkSource missed the link, because it was created after
-		// the check or a native ListDirRecursive followed it
+		// checkSource missed the link, because it was created after the check
 		return c.errDirLink(src, dest)
 	}
 	destInfo, err := fsLstat(c.dirLinks, dest.Path())

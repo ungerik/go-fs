@@ -79,6 +79,12 @@ func JoinCleanFilePath(uriParts ...string) File {
 // wrapping [os.ErrExist] instead of merging two source names that the
 // destination doesn't tell apart, like "A.txt" and "a.txt" on a
 // case-insensitive file system, and keeps the source, see [CopyRecursive].
+// Before it copies anything, it fails with an error wrapping [os.ErrExist]
+// for a destination file that the copy would write into instead of replacing
+// it, a device, a named pipe or a socket, and with an error wrapping
+// [os.ErrInvalid] for a name that is not valid for the destination file
+// system, of destination or of an entry below a moved directory, also of
+// an empty one, see [CopyRecursive].
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath

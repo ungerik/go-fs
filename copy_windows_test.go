@@ -45,3 +45,15 @@ func TestCopyRecursive_WindowsInvalidNames(t *testing.T) {
 		})
 	}
 }
+
+// TestCopyRecursive_WindowsInvalidEmptyDirNames is the Windows part of
+// TestCopyRecursive_InvalidLocalNamesWithoutFiles: an empty directory with
+// a name that Windows writes to another entry must fail the copy and the move
+// before they write anything, and the move must keep its source.
+func TestCopyRecursive_WindowsInvalidEmptyDirNames(t *testing.T) {
+	for _, name := range []string{"NUL", "COM1", "a:b", "dot.", "space "} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			requireInvalidLocalDirName(t, name)
+		})
+	}
+}
