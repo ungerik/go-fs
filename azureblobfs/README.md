@@ -143,12 +143,16 @@ messages of the errors it returns, so they don't leak into logs.
   nothing is committed (Azure deletes uncommitted blocks after a week).
 - **Copy, move and touch.** `CopyFile` is a server-side copy. `Move` copies
   the blobs server-side and deletes the source after every copy succeeded,
-  Azure has no rename. `Touch` updates
-  the modification time by setting the metadata of the blob again, which
-  keeps the metadata (with the case of their names), the content headers
-  and the content. `Touch` of a missing path creates an empty blob with a
-  conditional request, so a blob that another client created in the
-  meantime is not overwritten.
+  Azure has no rename. Every copy and delete of `Move` is pinned to the ETag
+  that the source blob had when `Move` found it, so a blob that another
+  client replaces during the move is never deleted: `Move` keeps it and
+  returns an error telling that the blob changed while it was being moved
+  (after its copy, the destination holds the copy of the old version).
+  `Touch` updates the modification time by setting the metadata of the blob
+  again, which keeps the metadata (with the case of their names), the
+  content headers and the content. `Touch` of a missing path creates an
+  empty blob with a conditional request, so a blob that another client
+  created in the meantime is not overwritten.
 - **Permissions.** Access is governed by Azure roles and SAS tokens, the
   reported permissions are the constants `azureblobfs.DefaultPermissions` /
   `azureblobfs.DefaultDirPermissions`. There are no symbolic links and no

@@ -375,26 +375,32 @@ func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
 	if filePath == "" {
 		return nil, fs.ErrEmptyPath
 	}
+	info, _, err := f.stat(context.Background(), filePath)
+	return info, err
+}
+
+// stat returns the FileInfo of filePath like Stat, for a blob together
+// with the ETag of the GetProperties answer that the FileInfo describes.
+func (f *fileSystem) stat(ctx context.Context, filePath string) (info *fs.FileInfo, etag *azcore.ETag, err error) {
 	name := blobName(filePath)
 	if name == "" {
-		return f.dirInfo("", time.Time{}), nil
+		return f.dirInfo("", time.Time{}), nil, nil
 	}
-	ctx := context.Background()
 	props, err := f.client.NewBlobClient(name).GetProperties(ctx, nil)
 	if err == nil {
-		return f.fileInfo(name, deref(props.ContentLength), deref(props.LastModified)), nil
+		return f.fileInfo(name, deref(props.ContentLength), deref(props.LastModified)), props.ETag, nil
 	}
 	if !isNotFound(err) {
-		return nil, redactErr(err)
+		return nil, nil, redactErr(err)
 	}
 	isDir, modified, err := f.dirExists(ctx, name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !isDir {
-		return nil, fs.NewErrDoesNotExist(f.file(filePath))
+		return nil, nil, fs.NewErrDoesNotExist(f.file(filePath))
 	}
-	return f.dirInfo(name, modified), nil
+	return f.dirInfo(name, modified), nil, nil
 }
 
 // ListDir lists the blobs and directories directly below dirPath
@@ -576,7 +582,7 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 				AccessConditions: access,
 			})
 			if bloberror.HasCode(err, bloberror.ConditionNotMet) {
-				return nil, f.changedError(name, redactErr(err))
+				return nil, f.changedError(name, "read", redactErr(err))
 			}
 			if err != nil {
 				return nil, redactErr(err)
@@ -586,7 +592,7 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 			}
 			if etag != nil && response.ETag != nil && !response.ETag.Equals(*etag) {
 				// A server or proxy that ignored If-Match sent another version
-				return nil, errors.Join(f.changedError(name, nil), response.Body.Close())
+				return nil, errors.Join(f.changedError(name, "read", nil), response.Body.Close())
 			}
 			if offset > 0 && response.ContentRange == nil {
 				// The server ignored the range and sends the blob from its start
@@ -677,15 +683,16 @@ func (f *fileSystem) notModifiedError(name string) error {
 	return fmt.Errorf("azureblobfs: download of %s returned no body (304 Not Modified)", f.file(name))
 }
 
-// changedError is returned by the range requests of a reader of OpenReader
-// for a blob that no longer has the ETag it had when the reader was opened.
+// changedError is returned for a blob that no longer has the ETag it had
+// when the action started: by the range requests of a reader of OpenReader
+// ("read") and by the copies and deletes of Move ("moved").
 // err is the 412 Condition Not Met answer, or nil for an answer with
 // another ETag from a server that ignored the condition.
-func (f *fileSystem) changedError(name string, err error) error {
+func (f *fileSystem) changedError(name, action string, err error) error {
 	if err == nil {
-		return fmt.Errorf("azureblobfs: %s changed while it was being read", f.file(name))
+		return fmt.Errorf("azureblobfs: %s changed while it was being %s", f.file(name), action)
 	}
-	return fmt.Errorf("azureblobfs: %s changed while it was being read: %w", f.file(name), err)
+	return fmt.Errorf("azureblobfs: %s changed while it was being %s: %w", f.file(name), action, err)
 }
 
 // OpenWriter returns a writer that streams the written data to an upload
@@ -830,11 +837,18 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 // deleteBlob deletes the blob name, together with its snapshots if
 // Options.DeleteSnapshots is set. Azure refuses to delete a blob with
 // snapshots otherwise, that is an error wrapping ErrSnapshotsPresent.
+// A non-nil etag pins the delete to that version of the blob (If-Match),
+// Azure keeps a blob that changed since and answers 412 Condition Not Met.
 // Other errors, like a missing blob, are returned redacted.
-func (f *fileSystem) deleteBlob(ctx context.Context, name string) error {
-	var opts *blob.DeleteOptions
+func (f *fileSystem) deleteBlob(ctx context.Context, name string, etag *azcore.ETag) error {
+	opts := &blob.DeleteOptions{}
 	if f.deleteSnapshots {
-		opts = &blob.DeleteOptions{DeleteSnapshots: new(blob.DeleteSnapshotsOptionTypeInclude)}
+		opts.DeleteSnapshots = new(blob.DeleteSnapshotsOptionTypeInclude)
+	}
+	if etag != nil {
+		opts.AccessConditions = &blob.AccessConditions{
+			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: etag},
+		}
 	}
 	_, err := f.client.NewBlobClient(name).Delete(ctx, opts)
 	if bloberror.HasCode(err, bloberror.SnapshotsPresent) {
@@ -854,18 +868,27 @@ func (f *fileSystem) snapshotsError(name string) error {
 // the most that one listing page of Azure returns.
 const maxRemoveAllNames = 5000
 
+// listedBlob is the name of a listed blob and the ETag
+// of the version that the listing returned.
+type listedBlob struct {
+	name string
+	etag *azcore.ETag
+}
+
 // scanSnapshots returns the name of the first blob with a snapshot that a
 // flat listing of the blobs and snapshots with prefix returns, or the empty
-// string if none has one. The listing ends at the first blob whose name
-// isn't within, if within is not nil, blobs are listed in the order of their
-// names, each one together with its snapshots. Without a snapshot it also
-// returns the names of the listed blobs with complete set, if there are up
-// to maxNames or maxNames is negative, else nil.
-func (f *fileSystem) scanSnapshots(ctx context.Context, prefix string, maxResults *int32, within func(name string) bool, maxNames int) (snapshotted string, names []string, complete bool, err error) {
+// string if none has one. With Options.DeleteSnapshots the deletes remove
+// the snapshots, so the listing doesn't include them and finds none.
+// The listing ends at the first blob whose name isn't within, if within is
+// not nil, blobs are listed in the order of their names, each one together
+// with its snapshots. Without a snapshot it also returns the listed blobs
+// with complete set, if there are up to maxBlobs or maxBlobs is negative,
+// else nil.
+func (f *fileSystem) scanSnapshots(ctx context.Context, prefix string, maxResults *int32, within func(name string) bool, maxBlobs int) (snapshotted string, blobs []listedBlob, complete bool, err error) {
 	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
 		Prefix:     new(prefix),
 		MaxResults: maxResults,
-		Include:    container.ListBlobsInclude{Snapshots: true},
+		Include:    container.ListBlobsInclude{Snapshots: !f.deleteSnapshots},
 	})
 	complete = true
 	for pager.More() {
@@ -879,21 +902,25 @@ func (f *fileSystem) scanSnapshots(ctx context.Context, prefix string, maxResult
 		for _, item := range page.Segment.BlobItems {
 			name := deref(item.Name)
 			if within != nil && !within(name) {
-				return "", names, complete, nil
+				return "", blobs, complete, nil
 			}
 			// The base blob has no or an empty Snapshot element
 			if deref(item.Snapshot) != "" {
 				return name, nil, false, nil
 			}
-			if complete && len(names) == maxNames {
-				names, complete = nil, false
+			if complete && len(blobs) == maxBlobs {
+				blobs, complete = nil, false
 			}
 			if complete {
-				names = append(names, name)
+				var etag *azcore.ETag
+				if item.Properties != nil {
+					etag = item.Properties.ETag
+				}
+				blobs = append(blobs, listedBlob{name: name, etag: etag})
 			}
 		}
 	}
-	return "", names, complete, nil
+	return "", blobs, complete, nil
 }
 
 // Remove deletes a blob or an empty directory marker.
@@ -917,7 +944,7 @@ func (f *fileSystem) Remove(filePath string) error {
 	ctx := context.Background()
 	name := blobName(filePath)
 	if !info.IsDir {
-		return f.deleteBlob(ctx, name)
+		return f.deleteBlob(ctx, name, nil)
 	}
 	if name == "" {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
@@ -942,7 +969,7 @@ func (f *fileSystem) Remove(filePath string) error {
 			}
 		}
 	}
-	err = f.deleteBlob(ctx, marker)
+	err = f.deleteBlob(ctx, marker, nil)
 	if err != nil && isNotFound(err) {
 		return nil // implicit directory without marker and without content
 	}
@@ -974,19 +1001,19 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if name == "" {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
 	}
-	var below []string
+	var below []listedBlob
 	listed := false
 	if !f.deleteSnapshots {
-		snapshotted, names, complete, err := f.scanSnapshots(ctx, name+Separator, nil, nil, maxRemoveAllNames)
+		snapshotted, blobs, complete, err := f.scanSnapshots(ctx, name+Separator, nil, nil, maxRemoveAllNames)
 		if err != nil {
 			return err
 		}
 		if snapshotted != "" {
 			return f.snapshotsError(snapshotted)
 		}
-		below, listed = names, complete
+		below, listed = blobs, complete
 	}
-	err := f.deleteBlob(ctx, name)
+	err := f.deleteBlob(ctx, name, nil)
 	if err != nil && !isNotFound(err) {
 		return err
 	}
@@ -1003,7 +1030,7 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 			return errListingWithoutBlobs
 		}
 		for _, item := range page.Segment.BlobItems {
-			err := f.deleteBlob(ctx, deref(item.Name))
+			err := f.deleteBlob(ctx, deref(item.Name), nil)
 			if err != nil && !isNotFound(err) {
 				return err
 			}
@@ -1012,34 +1039,16 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	return nil
 }
 
-// deleteBlobs deletes the blobs with names, a missing one is no error.
-func (f *fileSystem) deleteBlobs(ctx context.Context, names []string) error {
-	for _, name := range names {
-		err := f.deleteBlob(ctx, name)
+// deleteBlobs deletes the listed blobs, whatever version they have now,
+// a missing one is no error.
+func (f *fileSystem) deleteBlobs(ctx context.Context, blobs []listedBlob) error {
+	for _, b := range blobs {
+		err := f.deleteBlob(ctx, b.name, nil)
 		if err != nil && !isNotFound(err) {
 			return err
 		}
 	}
 	return nil
-}
-
-// blobNames returns the names of the blobs with prefix.
-func (f *fileSystem) blobNames(ctx context.Context, prefix string) ([]string, error) {
-	var names []string
-	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(prefix)})
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, redactErr(err)
-		}
-		if page.Segment == nil {
-			return nil, errListingWithoutBlobs
-		}
-		for _, item := range page.Segment.BlobItems {
-			names = append(names, deref(item.Name))
-		}
-	}
-	return names, nil
 }
 
 // Move moves the blob or directory at filePath to destPath with the
@@ -1049,6 +1058,15 @@ func (f *fileSystem) blobNames(ctx context.Context, prefix string) ([]string, er
 // that a flat listing of it returns, also those with names that no path
 // can address, like "dir//x", and its marker. The copy of a failed
 // directory move is left at destPath.
+//
+// Every copy and every delete is pinned to the ETag that the source blob
+// had when Move looked it up or listed it (x-ms-source-if-match, If-Match),
+// so a source blob that another client replaces during the move is never
+// deleted. If it changed before its copy, Move stops without copying it and
+// deletes no source blob. If it changed after its copy, Move keeps it and
+// the source blobs that it has not deleted yet, and destPath holds the copy
+// of the version that Move found. Both are errors telling that the blob
+// changed while it was being moved, which wrap the 412 answer of Azure.
 //
 // Without Options.DeleteSnapshots a blob with snapshots at or below
 // filePath is an error wrapping ErrSnapshotsPresent before anything is
@@ -1071,11 +1089,13 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 	if src == "" || strings.HasPrefix(dest, src+Separator) {
 		return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, f.file(filePath), f.file(destPath))
 	}
-	srcInfo, err := f.Stat(filePath)
+	// For a source blob stat returns the ETag that pins its copy and its
+	// delete, from the GetProperties request that Stat sends anyway
+	srcInfo, srcETag, err := f.stat(ctx, filePath)
 	if err != nil {
 		return err
 	}
-	destInfo, err := f.Stat(destPath)
+	destInfo, _, err := f.stat(ctx, destPath)
 	switch {
 	case err == nil && destInfo.IsDir:
 		return fs.NewErrAlreadyExists(destInfo.File)
@@ -1108,35 +1128,48 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 				return err
 			}
 		}
-		if err = f.copyBlob(ctx, src, dest); err != nil {
-			return err
-		}
-		err = f.deleteBlob(ctx, src)
-		if isNotFound(err) {
-			return nil
-		}
-		return err
+		return f.moveBlobs(ctx, []listedBlob{{name: src, etag: srcETag}}, src, dest)
 	}
-	// No blob is below destPath, which is no directory
-	var names []string
-	if f.deleteSnapshots {
-		names, err = f.blobNames(ctx, src+Separator)
-	} else {
-		var snapshotted string
-		snapshotted, names, _, err = f.scanSnapshots(ctx, src+Separator, nil, nil, -1)
-		if err == nil && snapshotted != "" {
-			err = f.snapshotsError(snapshotted)
-		}
-	}
+	// No blob is below destPath, which is no directory. The listing returns
+	// the ETags of the blobs, and their snapshots without DeleteSnapshots.
+	snapshotted, blobs, _, err := f.scanSnapshots(ctx, src+Separator, nil, nil, -1)
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		if err = f.copyBlob(ctx, name, dest+strings.TrimPrefix(name, src)); err != nil {
+	if snapshotted != "" {
+		return f.snapshotsError(snapshotted)
+	}
+	return f.moveBlobs(ctx, blobs, src, dest)
+}
+
+// moveBlobs copies every blob to its name with the prefix src replaced
+// by dest and then deletes the blobs, each copy and delete pinned to the
+// ETag of the blob. A blob that changed since is an error telling that it
+// changed while it was being moved: before its copy Move copies and deletes
+// nothing more, after its copy it keeps the blob and those not deleted yet.
+// A blob that was deleted after its copy is no error.
+func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, dest string) error {
+	for _, b := range blobs {
+		err := f.copyBlob(ctx, b.name, b.etag, dest+strings.TrimPrefix(b.name, src))
+		// Azure answers a failed source condition with SourceConditionNotMet,
+		// Azurite with ConditionNotMet
+		if b.etag != nil && bloberror.HasCode(err, bloberror.SourceConditionNotMet, bloberror.ConditionNotMet) {
+			return f.changedError(b.name, "moved", err)
+		}
+		if err != nil {
 			return err
 		}
 	}
-	return f.deleteBlobs(ctx, names)
+	for _, b := range blobs {
+		err := f.deleteBlob(ctx, b.name, b.etag)
+		switch {
+		case b.etag != nil && bloberror.HasCode(err, bloberror.ConditionNotMet):
+			return f.changedError(b.name, "moved", err)
+		case err != nil && !isNotFound(err):
+			return err
+		}
+	}
+	return nil
 }
 
 // CopyFile copies a blob server-side within the container.
@@ -1169,14 +1202,22 @@ func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 	if err := f.checkNotDir(ctx, dest); err != nil {
 		return err
 	}
-	return f.copyBlob(ctx, src, dest)
+	return f.copyBlob(ctx, src, nil, dest)
 }
 
 // copyBlob copies the blob src server-side to the blob dest
-// and waits until the copy completed.
-func (f *fileSystem) copyBlob(ctx context.Context, src, dest string) error {
+// and waits until the copy completed. A non-nil srcETag pins the copy
+// to that version of src (x-ms-source-if-match), Azure copies nothing
+// if src changed since and answers 412 with SourceConditionNotMet.
+func (f *fileSystem) copyBlob(ctx context.Context, src string, srcETag *azcore.ETag, dest string) error {
 	destBlob := f.client.NewBlobClient(dest)
-	response, err := destBlob.StartCopyFromURL(ctx, f.client.NewBlobClient(src).URL(), nil)
+	var opts *blob.StartCopyFromURLOptions
+	if srcETag != nil {
+		opts = &blob.StartCopyFromURLOptions{
+			SourceModifiedAccessConditions: &blob.SourceModifiedAccessConditions{SourceIfMatch: srcETag},
+		}
+	}
+	response, err := destBlob.StartCopyFromURL(ctx, f.client.NewBlobClient(src).URL(), opts)
 	if err != nil {
 		if isNotFound(err) {
 			return f.notExistError(src)
