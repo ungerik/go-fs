@@ -159,6 +159,12 @@ messages of the errors it returns, so they don't leak into logs.
   and deletes no source blob. A source blob that another client deletes
   before its copy stops `Move` the same way with an error wrapping
   `os.ErrNotExist`; the copies made before stay at the destination.
+  When the SDK retries a copy whose answer was lost (like after a 500 answer
+  or a broken connection) and the retry fails the destination condition against
+  the copy that Azure already made, `Move` takes a destination blob that is
+  the completed copy of the source blob it found (same copy source, size and
+  `Content-MD5`, completed after the source was last modified) as its copy
+  and goes on.
   `Touch` updates the modification time by setting the metadata of the blob
   again, which keeps the metadata (with the case of their names), the
   content headers and the content. `Touch` of a missing path creates an

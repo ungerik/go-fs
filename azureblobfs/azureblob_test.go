@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/md5" //#nosec G501 -- Azure's Content-MD5 of the test blobs
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -423,12 +425,29 @@ func (p requestPolicy) Do(req *policy.Request) (*http.Response, error) { return 
 // whose client sends every request through the policy p.
 func newPolicyFileSystem(t *testing.T, p requestPolicy) *fileSystem {
 	t.Helper()
+	return newOptionsFileSystem(t, &container.ClientOptions{
+		ClientOptions: azcore.ClientOptions{PerCallPolicies: []policy.Policy{p}},
+	})
+}
+
+// newRetryPolicyFileSystem returns a file system for the test container
+// whose client sends every try of a request through the policy p and
+// retries a failed try without waiting.
+func newRetryPolicyFileSystem(t *testing.T, p requestPolicy) *fileSystem {
+	t.Helper()
+	return newOptionsFileSystem(t, &container.ClientOptions{
+		ClientOptions: azcore.ClientOptions{PerRetryPolicies: []policy.Policy{p}, Retry: fastRetries.Retry},
+	})
+}
+
+// newOptionsFileSystem returns a file system for the test container
+// whose client has the options opts.
+func newOptionsFileSystem(t *testing.T, opts *container.ClientOptions) *fileSystem {
+	t.Helper()
 	if !dockerAzuriteAvailable {
 		t.Skip("Docker Azurite server not available")
 	}
-	client, err := container.NewClientFromConnectionString(testConnectionString, testContainer, &container.ClientOptions{
-		ClientOptions: azcore.ClientOptions{PerCallPolicies: []policy.Policy{p}},
-	})
+	client, err := container.NewClientFromConnectionString(testConnectionString, testContainer, opts)
 	require.NoError(t, err)
 	f, err := New(t.Context(), client, &Options{SkipContainerCheck: true})
 	require.NoError(t, err)
@@ -580,11 +599,25 @@ func TestRemoveRoot(t *testing.T) {
 
 // newHTTPTestFileSystem returns a file system for a container of a test
 // server with handler that stands in for Azure, so that a test runs offline.
+// Its client fails on the first error.
 func newHTTPTestFileSystem(t *testing.T, handler http.HandlerFunc) *fileSystem {
+	t.Helper()
+	return newHTTPTestFileSystemWithOptions(t, handler, noRetries)
+}
+
+// fastRetries makes a client retry like by default, but without waiting
+// between the tries, for the offline tests of retried requests.
+var fastRetries = &container.ClientOptions{
+	ClientOptions: azcore.ClientOptions{Retry: policy.RetryOptions{RetryDelay: time.Millisecond, MaxRetryDelay: time.Millisecond}},
+}
+
+// newHTTPTestFileSystemWithOptions returns a file system like
+// newHTTPTestFileSystem with a client with the options opts.
+func newHTTPTestFileSystemWithOptions(t *testing.T, handler http.HandlerFunc, opts *container.ClientOptions) *fileSystem {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	client, err := container.NewClientWithNoCredential(server.URL+"/account/container", noRetries)
+	client, err := container.NewClientWithNoCredential(server.URL+"/account/container", opts)
 	require.NoError(t, err)
 	f, err := New(t.Context(), client, &Options{SkipContainerCheck: true})
 	require.NoError(t, err)
@@ -1275,8 +1308,10 @@ func TestMoveBlobChanged(t *testing.T) {
 // BlobAlreadyExists), replacing an existing one (412 ConditionNotMet, like
 // a failed source condition) or created below the destination of a
 // directory. The error wraps os.ErrExist, the blob of the other client and
-// the source are kept. Move used to overwrite that blob. The policy of the
-// client writes the destination right before the copy to it.
+// the source are kept. Move used to overwrite that blob. An existing
+// destination that the other client deletes fails the copy as well (412
+// ConditionNotMet), Move doesn't create it again. The policy of the client
+// writes or deletes the destination right before the copy to it.
 func TestMoveDestinationChanged(t *testing.T) {
 	blobFS := newTestFileSystem(t, nil)
 	other := testClient(t)
@@ -1287,9 +1322,11 @@ func TestMoveDestinationChanged(t *testing.T) {
 		src, dest string   // names below the directory of the case
 		existing  bool     // dest is a blob before the move
 		written   string   // destination blob that the other client writes
+		deleted   bool     // the other client deletes the written blob instead
 	}{
 		{name: "missing destination", sources: []string{"src.txt"}, src: "src.txt", dest: "dest.txt", written: "dest.txt"},
 		{name: "existing destination", sources: []string{"src.txt"}, src: "src.txt", dest: "dest.txt", existing: true, written: "dest.txt"},
+		{name: "existing destination deleted", sources: []string{"src.txt"}, src: "src.txt", dest: "dest.txt", existing: true, written: "dest.txt", deleted: true},
 		{name: "directory", sources: []string{"dir/a.txt", "dir/b.txt"}, src: "dir", dest: "moved", written: "moved/b.txt"},
 	}
 	for i, tt := range tests {
@@ -1308,7 +1345,13 @@ func TestMoveDestinationChanged(t *testing.T) {
 				raw := req.Raw()
 				copyRequest := raw.Method == http.MethodPut && strings.HasSuffix(raw.URL.Path, "/"+prefix+tt.written)
 				if copyRequest && written.CompareAndSwap(false, true) {
-					if _, err := other.NewBlockBlobClient(prefix+tt.written).UploadBuffer(raw.Context(), []byte("other"), nil); err != nil {
+					var err error
+					if tt.deleted {
+						_, err = other.NewBlobClient(prefix+tt.written).Delete(raw.Context(), nil)
+					} else {
+						_, err = other.NewBlockBlobClient(prefix+tt.written).UploadBuffer(raw.Context(), []byte("other"), nil)
+					}
+					if err != nil {
 						return nil, err
 					}
 				}
@@ -1320,8 +1363,12 @@ func TestMoveDestinationChanged(t *testing.T) {
 			require.ErrorIs(t, err, os.ErrExist)
 			assert.ErrorContains(t, err, string(blobFS.file(prefix+tt.written)), "the error names the destination blob")
 			data, err := blobFS.ReadAll(ctx, "/"+prefix+tt.written)
-			require.NoError(t, err)
-			assert.Equal(t, "other", string(data), "Move must not overwrite the blob of the other client")
+			if tt.deleted {
+				assert.ErrorIs(t, err, os.ErrNotExist, "Move must not copy to the deleted destination")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, "other", string(data), "Move must not overwrite the blob of the other client")
+			}
 			for _, name := range tt.sources {
 				_, err := blobFS.Stat("/" + prefix + name)
 				assert.NoError(t, err, "Move must keep the source %s", name)
@@ -1330,36 +1377,149 @@ func TestMoveDestinationChanged(t *testing.T) {
 	}
 }
 
+// TestMoveRetriedCopyAzurite checks on Azurite that Move goes on when the
+// SDK retried a copy whose answer was lost. The policy of the client lets
+// Azurite copy the blob for the first copy request and then answers it
+// with 500 Internal Server Error or fails it like a broken connection, so
+// the SDK retries the copy, which fails the destination condition against
+// the copy that Azurite made (409 BlobAlreadyExists for a missing
+// destination, 412 ConditionNotMet for an existing one). Move returned the
+// error wrapping os.ErrExist for its own copy and kept the source. It also
+// checks that Azurite returns the copy properties that Move compares:
+// x-ms-copy-status, x-ms-copy-source with the URL of the source,
+// x-ms-copy-completion-time and the Content-MD5 of the source.
+func TestMoveRetriedCopyAzurite(t *testing.T) {
+	blobFS := newTestFileSystem(t, nil)
+	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/move-retried") })
+	tests := []struct {
+		name      string
+		sources   []string // blobs below the directory of the case
+		src, dest string   // names below the directory of the case
+		existing  bool     // dest is a blob before the move
+	}{
+		{name: "missing destination", sources: []string{"src.txt"}, src: "src.txt", dest: "dest.txt"},
+		{name: "existing destination", sources: []string{"src.txt"}, src: "src.txt", dest: "dest.txt", existing: true},
+		{name: "directory", sources: []string{"dir/a.txt", "dir/b.txt"}, src: "dir", dest: "moved"},
+	}
+	for i, lost := range []string{"500", "drop"} {
+		for j, tt := range tests {
+			t.Run(lost+"/"+tt.name, func(t *testing.T) {
+				ctx := t.Context()
+				prefix := fmt.Sprintf("move-retried/%d-%d/", i, j)
+				sourceMD5 := map[string][]byte{} // Content-MD5 of the sources, which their copies get
+				for _, name := range tt.sources {
+					require.NoError(t, blobFS.WriteAll(ctx, "/"+prefix+name, []byte(name), 0))
+					props, err := blobFS.client.NewBlobClient(prefix+name).GetProperties(ctx, nil)
+					require.NoError(t, err)
+					sourceMD5[name] = props.ContentMD5
+				}
+				if tt.existing {
+					require.NoError(t, blobFS.WriteAll(ctx, "/"+prefix+tt.dest, []byte("old"), 0))
+				}
+				var lostAnswer atomic.Bool
+				retrying := newRetryPolicyFileSystem(t, func(req *policy.Request) (*http.Response, error) {
+					raw := req.Raw()
+					response, err := req.Next()
+					// The only PUT requests of Move are the copies
+					copyRequest := raw.Method == http.MethodPut
+					if err != nil || !copyRequest || !lostAnswer.CompareAndSwap(false, true) {
+						return response, err
+					}
+					// Azurite copied the blob, the answer gets lost
+					_ = response.Body.Close()
+					if lost == "drop" {
+						return nil, fmt.Errorf("connection closed: %w", io.ErrUnexpectedEOF)
+					}
+					return &http.Response{
+						Status:     "500 Internal Server Error",
+						StatusCode: http.StatusInternalServerError,
+						Header:     http.Header{},
+						Body:       http.NoBody,
+						Request:    raw,
+					}, nil
+				})
+
+				require.NoError(t, retrying.Move(ctx, "/"+prefix+tt.src, "/"+prefix+tt.dest))
+				require.True(t, lostAnswer.Load(), "the policy must have lost the answer to the first copy")
+				for _, name := range tt.sources {
+					_, err := blobFS.Stat("/" + prefix + name)
+					assert.ErrorIs(t, err, os.ErrNotExist, "Move must delete the source %s", name)
+					target := prefix + tt.dest + strings.TrimPrefix(name, tt.src)
+					data, err := blobFS.ReadAll(ctx, "/"+target)
+					require.NoError(t, err)
+					assert.Equal(t, name, string(data), "the copy of %s", name)
+					props, err := blobFS.client.NewBlobClient(target).GetProperties(ctx, nil)
+					require.NoError(t, err)
+					assert.Equal(t, blob.CopyStatusTypeSuccess, deref(props.CopyStatus), "x-ms-copy-status of %s", target)
+					sourceURL := blobFS.client.NewBlobClient(prefix + name).URL()
+					assert.True(t, sameBlobURL(deref(props.CopySource), sourceURL), "x-ms-copy-source of %s: %s, want %s", target, deref(props.CopySource), sourceURL)
+					assert.NotNil(t, props.CopyCompletionTime, "x-ms-copy-completion-time of %s", target)
+					assert.NotEmpty(t, props.ContentMD5, "Content-MD5 of %s", target)
+					assert.Equal(t, sourceMD5[name], props.ContentMD5, "Content-MD5 of %s", target)
+				}
+			})
+		}
+	}
+}
+
 // moveTestServer stands in for Azure in the offline tests of Move, with
-// blobs in memory that are only an ETag. Listings return the blobs with
-// a prefix and their ETags, GetProperties the ETag of a blob, a copy and a
-// delete honor x-ms-source-if-match and If-Match, a copy also If-None-Match
-// and If-Match for its destination. Like Azurite, a copy checks that the
-// source exists, then the source condition, then the destination condition,
-// and answers If-None-Match: * for an existing destination with 409
-// BlobAlreadyExists and a failed If-Match with 412 ConditionNotMet.
+// blobs in memory that are only an ETag and some headers. Listings return
+// the blobs with a prefix and their ETags, GetProperties the ETag of a
+// blob, a copy and a delete honor x-ms-source-if-match and If-Match, a copy
+// also If-None-Match and If-Match for its destination. Like Azurite, a copy
+// checks that the source exists, then the source condition, then the
+// destination condition, and answers If-None-Match: * for an existing
+// destination with 409 BlobAlreadyExists and a failed If-Match with 412
+// ConditionNotMet. A copy sets the copy properties of its destination.
 // replaceBeforeCopy and replaceAfterCopy replace the blob with that name,
 // which gets the ETag "new", right before the server checks the conditions
 // of its copy or right after it copied the blob. Copy number failCopy,
 // counted from 1, fails with 403 Forbidden. Read the fields with mu locked.
 type moveTestServer struct {
-	mu                sync.Mutex
-	etags             map[string]string // the ETags of the blobs by name
-	copies            []string          // "src>dest x-ms-source-if-match" and the destination conditions of every copy request
-	deletes           []string          // "name If-Match" of every delete request
+	mu    sync.Mutex
+	etags map[string]string // the ETags of the blobs by name
+	// headers are more headers of the GetProperties answers by blob name:
+	// Content-Length (1 if missing), Content-MD5 and Last-Modified, which
+	// the listings return too, and the copy properties, which a copy sets
+	headers           map[string]http.Header
+	copies            []string // "src>dest x-ms-source-if-match" and the destination conditions of every copy request
+	deletes           []string // "name If-Match" of every delete request
 	replaceBeforeCopy string
 	replaceAfterCopy  string
 	deleteBeforeCopy  string // another client deletes this blob right before its copy
 	deleteAfterCopy   string // another client deletes this blob right after its copy
 	// writeBeforeCopy is a destination blob that another client creates or
-	// replaces, with the ETag "other", right before the copy to it
+	// replaces, with the ETag "other" and writeHeaders, right before the
+	// copy to it. Without writeHeaders it is an upload without copy properties.
 	writeBeforeCopy string
+	writeHeaders    http.Header
+	// deleteDestBeforeCopy is a destination blob that another client
+	// deletes right before the copy to it
+	deleteDestBeforeCopy string
 	// sourceConditionNotMet is the code of the answer to a failed source
 	// condition: SourceConditionNotMet like Azure if empty, Azurite
 	// answers ConditionNotMet like for a failed destination condition
 	sourceConditionNotMet bloberror.Code
-	failCopy              int
+	// destConditionNotMet is the code of a 412 answer to every failed
+	// destination condition, like TargetConditionNotMet that Azure documents.
+	// If empty the server answers like Azurite.
+	destConditionNotMet bloberror.Code
+	// loseCopyAnswer makes the server copy the blob for the first copy
+	// request and then answer it with 500 Internal Server Error ("500") or
+	// close the connection without an answer ("drop"), so the SDK retries it
+	loseCopyAnswer string
+	lostCopyAnswer bool
+	// failPropertiesAfterCopy is a blob whose GetProperties fails with 403
+	// Forbidden after the first copy request
+	failPropertiesAfterCopy string
+	// noETag is a blob whose GetProperties answer has no ETag
+	noETag   string
+	failCopy int
 }
+
+// moveTestTime is the Last-Modified time of the source blobs
+// in the offline tests of Move that need one.
+var moveTestTime = time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 
 // ServeHTTP answers a request of the azblob client like Azure.
 func (s *moveTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1373,14 +1533,29 @@ func (s *moveTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var blobs strings.Builder
 		for _, n := range slices.Sorted(maps.Keys(s.etags)) {
 			if strings.HasPrefix(n, query.Get("prefix")) {
-				fmt.Fprintf(&blobs, `<Blob><Name>%s</Name><Properties><Etag>%s</Etag><Content-Length>1</Content-Length></Properties></Blob>`, n, s.etags[n])
+				header := s.headers[n]
+				fmt.Fprintf(&blobs, `<Blob><Name>%s</Name><Properties><Etag>%s</Etag><Content-Length>%s</Content-Length>`, n, s.etags[n], cmp.Or(header.Get("Content-Length"), "1"))
+				if contentMD5 := header.Get("Content-MD5"); contentMD5 != "" {
+					fmt.Fprintf(&blobs, `<Content-MD5>%s</Content-MD5>`, contentMD5)
+				}
+				if modified := header.Get("Last-Modified"); modified != "" {
+					fmt.Fprintf(&blobs, `<Last-Modified>%s</Last-Modified>`, modified)
+				}
+				blobs.WriteString(`</Properties></Blob>`)
 			}
 		}
 		w.Header().Set("Content-Type", "application/xml")
 		_, _ = io.WriteString(w, `<?xml version="1.0" encoding="utf-8"?><EnumerationResults ContainerName="container"><Blobs>`+blobs.String()+`</Blobs></EnumerationResults>`)
+	case r.Method == http.MethodHead && name == s.failPropertiesAfterCopy && len(s.copies) > 0:
+		w.WriteHeader(http.StatusForbidden)
 	case r.Method == http.MethodHead && s.etags[name] != "":
-		w.Header().Set("ETag", s.etags[name])
+		if name != s.noETag {
+			w.Header().Set("ETag", s.etags[name])
+		}
 		w.Header().Set("Content-Length", "1")
+		for key, values := range s.headers[name] {
+			w.Header()[key] = values
+		}
 	case r.Method == http.MethodPut && r.Header.Get("x-ms-copy-source") != "":
 		copySource, err := url.Parse(r.Header.Get("x-ms-copy-source"))
 		if err != nil {
@@ -1410,8 +1585,20 @@ func (s *moveTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if name == s.writeBeforeCopy {
 			s.etags[name] = `"other"`
+			s.setHeaders(name, s.writeHeaders)
+		}
+		if name == s.deleteDestBeforeCopy {
+			delete(s.etags, name)
+			s.setHeaders(name, nil)
 		}
 		sourceConditionNotMet := cmp.Or(s.sourceConditionNotMet, bloberror.SourceConditionNotMet)
+		destFailed := func(status int, code bloberror.Code) {
+			if s.destConditionNotMet != "" {
+				status, code = http.StatusPreconditionFailed, s.destConditionNotMet
+			}
+			w.Header().Set("x-ms-error-code", string(code))
+			w.WriteHeader(status)
+		}
 		switch {
 		case s.etags[src] == "":
 			w.Header().Set("x-ms-error-code", string(bloberror.BlobNotFound))
@@ -1422,21 +1609,40 @@ func (s *moveTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusPreconditionFailed)
 			return
 		case destIfNoneMatch == "*" && s.etags[name] != "":
-			w.Header().Set("x-ms-error-code", string(bloberror.BlobAlreadyExists))
-			w.WriteHeader(http.StatusConflict)
+			destFailed(http.StatusConflict, bloberror.BlobAlreadyExists)
 			return
 		case destIfMatch != "" && destIfMatch != s.etags[name]:
-			w.Header().Set("x-ms-error-code", string(bloberror.ConditionNotMet))
-			w.WriteHeader(http.StatusPreconditionFailed)
+			destFailed(http.StatusPreconditionFailed, bloberror.ConditionNotMet)
 			return
 		}
 		// The copy gets the ETag of its source, so it shows the copied version
 		s.etags[name] = s.etags[src]
+		copied := http.Header{}
+		copied.Set("Content-Length", cmp.Or(s.headers[src].Get("Content-Length"), "1"))
+		if contentMD5 := s.headers[src].Get("Content-MD5"); contentMD5 != "" {
+			copied.Set("Content-MD5", contentMD5)
+		}
+		copied.Set("x-ms-copy-status", string(blob.CopyStatusTypeSuccess))
+		copied.Set("x-ms-copy-source", r.Header.Get("x-ms-copy-source"))
+		copied.Set("x-ms-copy-completion-time", time.Now().UTC().Format(http.TimeFormat))
+		s.setHeaders(name, copied)
 		if src == s.replaceAfterCopy {
 			s.etags[src] = `"new"`
 		}
 		if src == s.deleteAfterCopy {
 			delete(s.etags, src)
+		}
+		if s.loseCopyAnswer != "" && !s.lostCopyAnswer {
+			s.lostCopyAnswer = true
+			if s.loseCopyAnswer == "drop" {
+				conn, _, err := http.NewResponseController(w).Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 		w.Header().Set("x-ms-copy-status", string(blob.CopyStatusTypeSuccess))
 		w.WriteHeader(http.StatusAccepted)
@@ -1452,12 +1658,26 @@ func (s *moveTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusPreconditionFailed)
 		default:
 			delete(s.etags, name)
+			s.setHeaders(name, nil)
 			w.WriteHeader(http.StatusAccepted)
 		}
 	default:
 		w.Header().Set("x-ms-error-code", string(bloberror.BlobNotFound))
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// setHeaders sets the headers of the blob name to a copy of header,
+// nil removes them. Call it with mu locked.
+func (s *moveTestServer) setHeaders(name string, header http.Header) {
+	if header == nil {
+		delete(s.headers, name)
+		return
+	}
+	if s.headers == nil {
+		s.headers = map[string]http.Header{}
+	}
+	s.headers[name] = header.Clone()
 }
 
 // TestMovePinsETag checks on a test server that Move pins the copy and the
@@ -1686,22 +1906,32 @@ func TestMoveBlobDeletedBeforeCopy(t *testing.T) {
 // unconditionally, so it overwrote a blob that another client wrote to the
 // destination after Move checked it. Now the copy fails and Move returns an
 // error wrapping fs.ErrAlreadyExists for that destination blob, copies
-// nothing more and deletes no source blob. A failed source condition that
-// is answered with ConditionNotMet, like by Azurite, is still the error
-// telling that the source changed.
+// nothing more and deletes no source blob. The blob that another client
+// writes is an upload, which has no copy properties, so Move doesn't take
+// it as its own copy from a retried copy request. The answer to the failed
+// destination condition is that of Azurite or 412 TargetConditionNotMet,
+// which Azure documents. A failed source condition that is answered with
+// ConditionNotMet, like by Azurite, is still the error telling that the
+// source changed, also when the properties of the source can't be requested
+// to tell which condition failed, and when the destination blob had no ETag,
+// so that its copy had no destination condition.
 func TestMovePinsDestination(t *testing.T) {
 	tests := []struct {
-		name          string
-		etags         map[string]string // the blobs before the move
-		src, dest     string
-		writeBefore   string // destination blob that another client writes right before the copy to it
-		replaceBefore string // source blob replaced right before its copy
-		sourceCode    bloberror.Code
-		wantCopies    []string
-		wantDeletes   []string
-		wantBlobs     map[string]string
-		wantExists    string // destination blob of the error wrapping os.ErrExist
-		wantChanged   string // source blob of the error telling that it changed
+		name             string
+		etags            map[string]string // the blobs before the move
+		src, dest        string
+		writeBefore      string // destination blob that another client writes right before the copy to it
+		deleteDestBefore string // destination blob that another client deletes right before the copy to it
+		replaceBefore    string // source blob replaced right before its copy
+		sourceCode       bloberror.Code
+		destCode         bloberror.Code
+		failProperties   string // blob whose GetProperties fails after the first copy request
+		noETag           string // blob whose GetProperties answer has no ETag
+		wantCopies       []string
+		wantDeletes      []string
+		wantBlobs        map[string]string
+		wantExists       string // destination blob of the error wrapping os.ErrExist
+		wantChanged      string // source blob of the error telling that it changed
 	}{
 		{
 			name:  "missing destination",
@@ -1747,6 +1977,45 @@ func TestMovePinsDestination(t *testing.T) {
 			wantExists:  "moved/b.txt",
 		},
 		{
+			name:  "missing destination created before the copy, answered with TargetConditionNotMet",
+			etags: map[string]string{"dir/a.txt": `"a1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			writeBefore: "moved.txt",
+			destCode:    bloberror.TargetConditionNotMet,
+			wantCopies:  []string{`dir/a.txt>moved.txt "a1" If-None-Match:*`},
+			wantBlobs:   map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"other"`},
+			wantExists:  "moved.txt",
+		},
+		{
+			name:  "existing destination replaced before the copy, answered with TargetConditionNotMet",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			writeBefore: "moved.txt",
+			destCode:    bloberror.TargetConditionNotMet,
+			wantCopies:  []string{`dir/a.txt>moved.txt "a1" If-Match:"m1"`},
+			wantBlobs:   map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"other"`},
+			wantExists:  "moved.txt",
+		},
+		{
+			name:  "existing destination deleted before the copy",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			deleteDestBefore: "moved.txt",
+			wantCopies:       []string{`dir/a.txt>moved.txt "a1" If-Match:"m1"`},
+			wantBlobs:        map[string]string{"dir/a.txt": `"a1"`},
+			wantExists:       "moved.txt",
+		},
+		{
+			name:  "existing destination deleted before the copy, answered with TargetConditionNotMet",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			deleteDestBefore: "moved.txt",
+			destCode:         bloberror.TargetConditionNotMet,
+			wantCopies:       []string{`dir/a.txt>moved.txt "a1" If-Match:"m1"`},
+			wantBlobs:        map[string]string{"dir/a.txt": `"a1"`},
+			wantExists:       "moved.txt",
+		},
+		{
 			name:  "source replaced before the copy onto an existing destination, answered like by Azurite",
 			etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`},
 			src:   "/dir/a.txt", dest: "/moved.txt",
@@ -1756,14 +2025,42 @@ func TestMovePinsDestination(t *testing.T) {
 			wantBlobs:     map[string]string{"dir/a.txt": `"new"`, "moved.txt": `"m1"`},
 			wantChanged:   "dir/a.txt",
 		},
+		{
+			// Without the properties of the source Move can't tell
+			// that the destination condition failed
+			name:  "existing destination replaced before the copy, answered like by Azurite, properties of the source failing",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			writeBefore:    "moved.txt",
+			failProperties: "dir/a.txt",
+			wantCopies:     []string{`dir/a.txt>moved.txt "a1" If-Match:"m1"`},
+			wantBlobs:      map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"other"`},
+			wantChanged:    "dir/a.txt",
+		},
+		{
+			// Only the source condition can fail
+			name:  "source replaced before the copy onto an existing destination without ETag, answered like by Azurite",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			noETag:        "moved.txt",
+			replaceBefore: "dir/a.txt",
+			sourceCode:    bloberror.ConditionNotMet,
+			wantCopies:    []string{`dir/a.txt>moved.txt "a1"`},
+			wantBlobs:     map[string]string{"dir/a.txt": `"new"`, "moved.txt": `"m1"`},
+			wantChanged:   "dir/a.txt",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := &moveTestServer{
-				etags:                 tt.etags,
-				writeBeforeCopy:       tt.writeBefore,
-				replaceBeforeCopy:     tt.replaceBefore,
-				sourceConditionNotMet: tt.sourceCode,
+				etags:                   tt.etags,
+				writeBeforeCopy:         tt.writeBefore,
+				deleteDestBeforeCopy:    tt.deleteDestBefore,
+				replaceBeforeCopy:       tt.replaceBefore,
+				sourceConditionNotMet:   tt.sourceCode,
+				destConditionNotMet:     tt.destCode,
+				failPropertiesAfterCopy: tt.failProperties,
+				noETag:                  tt.noETag,
 			}
 			blobFS := newHTTPTestFileSystem(t, server.ServeHTTP)
 
@@ -1775,9 +2072,14 @@ func TestMovePinsDestination(t *testing.T) {
 				require.True(t, ok, "the error wraps an fs.ErrAlreadyExists: %v", err)
 				file, _ := exists.File()
 				assert.Equal(t, blobFS.file(tt.wantExists), file, "the error names the destination blob")
-				assert.True(t, bloberror.HasCode(err, bloberror.BlobAlreadyExists, bloberror.ConditionNotMet), "the error wraps the answer: %v", err)
+				wantCodes := []bloberror.Code{bloberror.BlobAlreadyExists, bloberror.ConditionNotMet}
+				if tt.destCode != "" {
+					wantCodes = []bloberror.Code{tt.destCode}
+				}
+				assert.True(t, bloberror.HasCode(err, wantCodes...), "the error wraps the answer: %v", err)
 			case tt.wantChanged != "":
 				require.ErrorContains(t, err, string(blobFS.file(tt.wantChanged))+" changed while it was being moved")
+				assert.True(t, bloberror.HasCode(err, bloberror.ConditionNotMet), "the error wraps the 412 answer: %v", err)
 				assert.NotErrorIs(t, err, os.ErrExist, "the destination didn't change")
 			default:
 				require.NoError(t, err)
@@ -1788,6 +2090,257 @@ func TestMovePinsDestination(t *testing.T) {
 			assert.Equal(t, tt.wantDeletes, server.deletes, "delete requests")
 			assert.Equal(t, tt.wantBlobs, server.etags, "blobs left")
 		})
+	}
+}
+
+// moveTestSourceHeaders returns the headers of the source blobs with the
+// Content-MD5 of their content, the name, and the Last-Modified moveTestTime.
+func moveTestSourceHeaders(names ...string) map[string]http.Header {
+	headers := map[string]http.Header{}
+	for _, name := range names {
+		sum := md5.Sum([]byte(name))
+		header := http.Header{}
+		header.Set("Content-MD5", base64.StdEncoding.EncodeToString(sum[:]))
+		header.Set("Last-Modified", moveTestTime.Format(http.TimeFormat))
+		headers[name] = header
+	}
+	return headers
+}
+
+// TestMoveRetriedCopy checks on a test server that Move goes on when the
+// SDK retried a copy whose answer was lost and the retry failed the
+// destination condition against the copy that the first try made: the
+// server copies the blob for the first copy request and then answers it
+// with 500 Internal Server Error or closes the connection. Move returned
+// the error wrapping os.ErrExist for the destination and kept the source
+// next to its copy, and Move again failed the same way. Now Move takes the
+// completed copy of the source blob as its own and deletes the source.
+// The failed destination condition is answered like by Azurite (409
+// BlobAlreadyExists, 412 ConditionNotMet) or with TargetConditionNotMet.
+func TestMoveRetriedCopy(t *testing.T) {
+	tests := []struct {
+		name        string
+		etags       map[string]string // the blobs before the move
+		src, dest   string
+		destCode    bloberror.Code
+		wantCopies  []string
+		wantDeletes []string
+		wantBlobs   map[string]string
+	}{
+		{
+			name:  "missing destination",
+			etags: map[string]string{"dir/a.txt": `"a1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			wantCopies:  []string{`dir/a.txt>moved.txt "a1" If-None-Match:*`, `dir/a.txt>moved.txt "a1" If-None-Match:*`},
+			wantDeletes: []string{`dir/a.txt "a1"`},
+			wantBlobs:   map[string]string{"moved.txt": `"a1"`},
+		},
+		{
+			name:  "missing destination, answered with TargetConditionNotMet",
+			etags: map[string]string{"dir/a.txt": `"a1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			destCode:    bloberror.TargetConditionNotMet,
+			wantCopies:  []string{`dir/a.txt>moved.txt "a1" If-None-Match:*`, `dir/a.txt>moved.txt "a1" If-None-Match:*`},
+			wantDeletes: []string{`dir/a.txt "a1"`},
+			wantBlobs:   map[string]string{"moved.txt": `"a1"`},
+		},
+		{
+			name:  "existing destination",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			wantCopies:  []string{`dir/a.txt>moved.txt "a1" If-Match:"m1"`, `dir/a.txt>moved.txt "a1" If-Match:"m1"`},
+			wantDeletes: []string{`dir/a.txt "a1"`},
+			wantBlobs:   map[string]string{"moved.txt": `"a1"`},
+		},
+		{
+			name:  "existing destination, answered with TargetConditionNotMet",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`},
+			src:   "/dir/a.txt", dest: "/moved.txt",
+			destCode:    bloberror.TargetConditionNotMet,
+			wantCopies:  []string{`dir/a.txt>moved.txt "a1" If-Match:"m1"`, `dir/a.txt>moved.txt "a1" If-Match:"m1"`},
+			wantDeletes: []string{`dir/a.txt "a1"`},
+			wantBlobs:   map[string]string{"moved.txt": `"a1"`},
+		},
+		{
+			name:  "directory",
+			etags: map[string]string{"dir/a.txt": `"a1"`, "dir/b.txt": `"b1"`},
+			src:   "/dir", dest: "/moved",
+			wantCopies: []string{
+				`dir/a.txt>moved/a.txt "a1" If-None-Match:*`,
+				`dir/a.txt>moved/a.txt "a1" If-None-Match:*`,
+				`dir/b.txt>moved/b.txt "b1" If-None-Match:*`,
+			},
+			wantDeletes: []string{`dir/a.txt "a1"`, `dir/b.txt "b1"`},
+			wantBlobs:   map[string]string{"moved/a.txt": `"a1"`, "moved/b.txt": `"b1"`},
+		},
+	}
+	for _, lost := range []string{"500", "drop"} {
+		for _, tt := range tests {
+			t.Run(lost+"/"+tt.name, func(t *testing.T) {
+				server := &moveTestServer{
+					etags:               maps.Clone(tt.etags),
+					headers:             moveTestSourceHeaders("dir/a.txt", "dir/b.txt"),
+					loseCopyAnswer:      lost,
+					destConditionNotMet: tt.destCode,
+				}
+				blobFS := newHTTPTestFileSystemWithOptions(t, server.ServeHTTP, fastRetries)
+
+				require.NoError(t, blobFS.Move(t.Context(), tt.src, tt.dest))
+				server.mu.Lock()
+				defer server.mu.Unlock()
+				assert.True(t, server.lostCopyAnswer, "the server must have lost the answer to the first copy")
+				assert.Equal(t, tt.wantCopies, server.copies, "copy requests, the first one retried")
+				assert.Equal(t, tt.wantDeletes, server.deletes, "delete requests")
+				assert.Equal(t, tt.wantBlobs, server.etags, "blobs left")
+			})
+		}
+	}
+}
+
+// TestMoveDestinationCopyCheck checks on a test server which destination
+// blob Move takes as its own copy after the copy to it failed the
+// destination condition, which is what a retried copy whose answer was lost
+// finds: another client writes the destination right before the copy, with
+// the properties of the completed copy of the source blob changed by the
+// case. Only the completed copy of the version of the source blob that Move
+// found counts, then Move deletes the source. Else Move returns the error
+// wrapping os.ErrExist for the destination and deletes nothing. Every case
+// runs for a blob onto a missing destination (answered with 409
+// BlobAlreadyExists), onto an existing one (answered with 412
+// ConditionNotMet) and for a directory, whose listing returns the
+// properties of the source blob.
+func TestMoveDestinationCopyCheck(t *testing.T) {
+	tests := []struct {
+		name      string
+		change    func(header http.Header) // changes the properties of the completed copy of the source blob
+		wantMoved bool
+	}{
+		{
+			name:      "completed copy of the source",
+			change:    func(http.Header) {},
+			wantMoved: true,
+		},
+		{
+			name: "copy from the URL of the source with a SAS",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-source", header.Get("x-ms-copy-source")+"?sv=2025-01-01&sig=SECRET")
+			},
+			wantMoved: true,
+		},
+		{
+			name: "copy from the unescaped URL of the source",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-source", strings.ReplaceAll(header.Get("x-ms-copy-source"), "%2F", "/"))
+			},
+			wantMoved: true,
+		},
+		{
+			name:      "copy without Content-MD5",
+			change:    func(header http.Header) { header.Del("Content-MD5") },
+			wantMoved: true,
+		},
+		{
+			name: "upload without copy properties",
+			change: func(header http.Header) {
+				for _, key := range []string{"x-ms-copy-status", "x-ms-copy-source", "x-ms-copy-completion-time"} {
+					header.Del(key)
+				}
+			},
+		},
+		{
+			name:   "pending copy of the source",
+			change: func(header http.Header) { header.Set("x-ms-copy-status", string(blob.CopyStatusTypePending)) },
+		},
+		{
+			name:   "failed copy of the source",
+			change: func(header http.Header) { header.Set("x-ms-copy-status", string(blob.CopyStatusTypeFailed)) },
+		},
+		{
+			name: "copy of another blob",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-source", strings.Replace(header.Get("x-ms-copy-source"), "a.txt", "c.txt", 1))
+			},
+		},
+		{
+			name: "copy of the blob with the name of the source in another account",
+			change: func(header http.Header) {
+				source, err := url.Parse(header.Get("x-ms-copy-source"))
+				if err == nil {
+					source.Host = "other.blob.core.windows.net"
+					header.Set("x-ms-copy-source", source.String())
+				}
+			},
+		},
+		{
+			name:   "copy with another size",
+			change: func(header http.Header) { header.Set("Content-Length", "2") },
+		},
+		{
+			name: "copy with another Content-MD5",
+			change: func(header http.Header) {
+				header.Set("Content-MD5", base64.StdEncoding.EncodeToString(make([]byte, md5.Size)))
+			},
+		},
+		{
+			name:   "copy without completion time",
+			change: func(header http.Header) { header.Del("x-ms-copy-completion-time") },
+		},
+		{
+			// Like a copy made before the source was last modified,
+			// whose metadata another client changes during the move
+			name: "copy completed before the source was last modified",
+			change: func(header http.Header) {
+				header.Set("x-ms-copy-completion-time", moveTestTime.Add(-time.Second).Format(http.TimeFormat))
+			},
+		},
+	}
+	variants := []struct {
+		name      string
+		etags     map[string]string // the blobs before the move
+		src, dest string
+		target    string // the destination blob of dir/a.txt
+	}{
+		{name: "missing destination", etags: map[string]string{"dir/a.txt": `"a1"`}, src: "/dir/a.txt", dest: "/moved.txt", target: "moved.txt"},
+		{name: "existing destination", etags: map[string]string{"dir/a.txt": `"a1"`, "moved.txt": `"m1"`}, src: "/dir/a.txt", dest: "/moved.txt", target: "moved.txt"},
+		{name: "directory", etags: map[string]string{"dir/a.txt": `"a1"`}, src: "/dir", dest: "/moved", target: "moved/a.txt"},
+	}
+	for _, v := range variants {
+		for _, tt := range tests {
+			t.Run(v.name+"/"+tt.name, func(t *testing.T) {
+				server := &moveTestServer{
+					etags:           maps.Clone(v.etags),
+					headers:         moveTestSourceHeaders("dir/a.txt"),
+					writeBeforeCopy: v.target,
+				}
+				blobFS := newHTTPTestFileSystem(t, server.ServeHTTP)
+				// The properties of the completed copy of dir/a.txt, made
+				// when dir/a.txt was last modified
+				copied := http.Header{}
+				copied.Set("Content-Length", "1")
+				copied.Set("Content-MD5", server.headers["dir/a.txt"].Get("Content-MD5"))
+				copied.Set("x-ms-copy-status", string(blob.CopyStatusTypeSuccess))
+				copied.Set("x-ms-copy-source", blobFS.client.NewBlobClient("dir/a.txt").URL())
+				copied.Set("x-ms-copy-completion-time", moveTestTime.Format(http.TimeFormat))
+				tt.change(copied)
+				server.mu.Lock()
+				server.writeHeaders = copied
+				server.mu.Unlock()
+
+				err := blobFS.Move(t.Context(), v.src, v.dest)
+				server.mu.Lock()
+				defer server.mu.Unlock()
+				if tt.wantMoved {
+					require.NoError(t, err)
+					assert.Equal(t, []string{`dir/a.txt "a1"`}, server.deletes, "delete requests")
+					assert.Equal(t, map[string]string{v.target: `"other"`}, server.etags, "blobs left")
+					return
+				}
+				require.ErrorIs(t, err, os.ErrExist)
+				assert.ErrorContains(t, err, string(blobFS.file(v.target)), "the error names the destination blob")
+				assert.Empty(t, server.deletes, "delete requests")
+				assert.Equal(t, map[string]string{"dir/a.txt": `"a1"`, v.target: `"other"`}, server.etags, "blobs left")
+			})
+		}
 	}
 }
 
