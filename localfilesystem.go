@@ -392,23 +392,11 @@ func isDriveLetterPath(filePath string) bool {
 	return len(filePath) == 2 || filePath[2] == '/' || filePath[2] == '\\'
 }
 
-// isRemoteFileURI reports if uri is a file URI with an authority
-// that names another host on this platform, see fileURILocalPath.
-// The path of uri is percent-encoded like in a File.
-func isRemoteFileURI(uri string) bool {
-	rest, ok := strings.CutPrefix(uri, LocalPrefix)
-	if !ok {
-		return false
-	}
-	_, isLocal := fileURILocalPath(fsimpl.UnescapeURIPath(rest), filepath.Separator == '\\')
-	return !isLocal
-}
-
 // cleanFileURI returns the clean local path of uri, a URI with the
 // [LocalPrefix] whose path is percent-encoded like in a File, like
 // [LocalFileSystem.CleanPath] of the decoded uri, and reports if it names
 // a local file, see fileURILocalPath. It decodes and converts uri once
-// for ParseRawURI, which would do both twice with isRemoteFileURI.
+// for ParseRawURI.
 func cleanFileURI(uri string) (cleanPath string, isLocal bool) {
 	filePath, isLocal := fileURILocalPath(fsimpl.UnescapeURIPath(strings.TrimPrefix(uri, LocalPrefix)), filepath.Separator == '\\')
 	if !isLocal {
@@ -429,9 +417,13 @@ func cleanFileURI(uri string) (cleanPath string, isLocal bool) {
 // is `C:\x` and "file://server/share/x" is the UNC path `\\server\share\x`.
 // A tilde in place of the host is the home directory like in a path,
 // "file://~/x" is "~/x" expanded, every other tilde of a file URI is
-// a name, "file:///~/x" is "/~/x". On platforms other than Windows a URI with another host than localhost
-// has no local path, [ParseRawURI] returns the [InvalidFileSystem] for it,
-// and CleanPath returns the host as first element of an absolute path.
+// a name, "file:///~/x" is "/~/x". A URI that names no local file, with
+// another host than localhost on platforms other than Windows or with the
+// host ".", ".." or "?" on every platform, has no local path: [ParseRawURI]
+// returns the [InvalidFileSystem] for it. CleanPath can't report that and
+// returns the host as first element of an absolute path, which cleaning
+// removes for "." and "..": "file://./x" becomes "/x", a path of another
+// file, so resolve URIs with ParseRawURI or [File], not with CleanPath.
 //
 // Only the tilde at the start of the first element is expanded,
 // so a "~" after a relative directory, like in CleanPath(".", "~", "x"),

@@ -406,7 +406,15 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	// above via the registered Local file system), so any other scheme is
 	// reported as the invalid file system instead, like a file URI
 	// with a host that has no local path.
-	if strings.Contains(uri, PrefixSeparator) && (!strings.HasPrefix(uri, LocalPrefix) || isRemoteFileURI(uri)) {
+	if strings.HasPrefix(uri, LocalPrefix) {
+		// A file URI while Local is not registered is converted
+		// like with Local registered, decoding its path once
+		if cleanPath, isLocal := cleanFileURI(uri); isLocal {
+			return Local, cleanPath
+		}
+		return Invalid, uri
+	}
+	if strings.Contains(uri, PrefixSeparator) {
 		return Invalid, uri
 	}
 

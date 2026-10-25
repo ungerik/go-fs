@@ -559,7 +559,7 @@ func checkFormFile(t *testing.T, formFS *MultipartFileSystem, file fs.File, u up
 
 func TestFormFiles_fileNames(t *testing.T) {
 	// Every name mime/multipart can yield has to address exactly its upload,
-	// especially names that look percent-encoded , which must not be decoded.
+	// especially names that look percent-encoded, which must not be decoded.
 	names := []string{
 		"report 1.pdf",
 		"50% off.pdf",

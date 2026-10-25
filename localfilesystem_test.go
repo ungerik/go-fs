@@ -813,7 +813,7 @@ func TestLocalFileSystem_CleanPathTilde(t *testing.T) {
 	assert.Equal(t, []File{File(subFS.Prefix() + "/~/private.txt")}, subListed)
 }
 
-func TestLocalFileSystem_URL(t *testing.T) {
+func TestLocalFileSystem_URI(t *testing.T) {
 	// ParseRawURI decodes the percent-encoded characters of a file:// URI,
 	// but never those of a local path without the prefix.
 	localPath := filepath.Join(t.TempDir(), "100%25 a%20b.txt")
@@ -822,9 +822,9 @@ func TestLocalFileSystem_URL(t *testing.T) {
 	assert.Equal(t, "100%25 a%20b.txt", file.Name())
 
 	uri := file.URI()
-	assert.True(t, strings.HasPrefix(uri, LocalPrefix), "URL %q has the local prefix", uri)
+	assert.True(t, strings.HasPrefix(uri, LocalPrefix), "URI %q has the local prefix", uri)
 	assert.True(t, strings.HasSuffix(uri, "/100%2525 a%2520b.txt"),
-		"URL %q escapes every %%", uri)
+		"URI %q escapes every %%", uri)
 	assert.Equal(t, localPath, File(uri).Path(), "the URL resolves to the path")
 	assert.Equal(t, "100%25 a%20b.txt", File(uri).Name())
 }

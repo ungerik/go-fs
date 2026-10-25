@@ -164,7 +164,7 @@ func TestMatchAnyPattern(t *testing.T) {
 
 func TestEscapeURIPath(t *testing.T) {
 	// Every path has to survive the round trip through a URI,
-	// especially paths that already look percent-encoded .
+	// especially paths that already look percent-encoded.
 	for _, filePath := range []string{
 		"",
 		"/",

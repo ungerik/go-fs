@@ -117,7 +117,7 @@ func TestNotExistsIndexAndAllExist(t *testing.T) {
 	assert.False(t, fs.AllExist(withMissing))
 }
 
-func TestFileURLsPathsNames(t *testing.T) {
+func TestFileURIsPathsNames(t *testing.T) {
 	dir, files := sliceTestFiles(t)
 	files = files[:3]
 

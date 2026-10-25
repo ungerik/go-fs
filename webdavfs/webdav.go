@@ -114,14 +114,14 @@ type Options struct {
 type fileSystem struct {
 	fsimpl.PathHelper
 
-	client    *http.Client
-	baseURL   url.URL // scheme, host and base path without trailing slash
-	username  string
-	password  string
-	basicAuth bool // send username and password, false if header has an Authorization
-	header    http.Header
-	backslash bool // Options.AllowBackslashInNames
-	closed    atomic.Bool
+	client         *http.Client
+	baseURL        url.URL // scheme, host and base path without trailing slash
+	username       string
+	password       string
+	basicAuth      bool // send username and password, false if header has an Authorization
+	header         http.Header
+	allowBackslash bool // Options.AllowBackslashInNames
+	closed         atomic.Bool
 }
 
 // New returns a file system for the WebDAV server at baseURL
@@ -204,7 +204,7 @@ func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, err
 		}
 		client = opts.Client
 		f.header = opts.Header
-		f.backslash = opts.AllowBackslashInNames
+		f.allowBackslash = opts.AllowBackslashInNames
 	}
 	f.client = f.newClient(client)
 	f.basicAuth = (f.username != "" || f.password != "") && !hasAuthorization(f.header)
@@ -386,7 +386,7 @@ func (f *fileSystem) checkPath(paths ...string) error {
 // check their paths with checkPath, do checks the path of every request
 // and send its destination, so no such path reaches the server.
 func (f *fileSystem) checkBackslash(filePath string) error {
-	if f.backslash {
+	if f.allowBackslash {
 		return nil
 	}
 	return fsimpl.CheckNoBackslash("webdavfs", filePath, "which WebDAV servers on Windows take for a separator, see Options.AllowBackslashInNames")

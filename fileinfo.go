@@ -21,8 +21,9 @@ import (
 // ListDirRecursive describes its entries like ListDir, but it never
 // follows a link and IsDir is false also for a link to a directory.
 type FileInfo struct {
-	// File is the described file with the prefix of its file system.
-	// The fs package joins it from the directory and Name
+	// File is the described file: a URI with the prefix of its file
+	// system, or a plain path for the local file system, whose Files
+	// have no prefix. The fs package joins it from the directory and Name
 	// when a FileSystem implementation leaves it empty.
 	File File
 

@@ -39,7 +39,10 @@
 // a link to a directory as a directory and ListDirRecursive lists the
 // files below it. RemoveAll deletes such a link itself, because on these
 // servers it tries DELE for a directory before it deletes its content,
-// which deletes a link and fails for a directory. FTP has no command
+// which deletes a link and fails for a directory, one extra command per
+// directory. Writes into a link to a directory on these servers write into
+// the directory that it points to: fs.CopyRecursive and the generic Move
+// can't tell that a destination directory is a link. FTP has no command
 // to create a link, so the file system doesn't implement
 // fs.SymbolicLinkFileSystem: fs.CopyRecursive copies a link to a file as
 // a file and fails with an error wrapping errors.ErrUnsupported for a link
@@ -455,7 +458,9 @@ func (f *fileSystem) rootInfo() *fs.FileInfo {
 // lstat returns the FileInfo of the clean filePath without following
 // a symbolic link, and the target of a link as the server listed it.
 // It uses the MLST command and falls back to listing the parent directory
-// for servers without MLST support, which list links as such.
+// for servers without MLST support, which list links as such. Servers with
+// MLST support describe a link with the facts of its target, see the
+// package documentation.
 func (f *fileSystem) lstat(c *conn, filePath string) (info *fs.FileInfo, linkTarget string, err error) {
 	if filePath == Separator {
 		return f.rootInfo(), "", nil
@@ -946,7 +951,10 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 }
 
 // Move renames filePath to destPath via the RNFR and RNTO commands.
-// A symbolic link at either path is renamed or replaced itself, like by os.Rename.
+// A symbolic link at either path is renamed or replaced itself, like by
+// os.Rename, on servers that list links as such: servers with MLST support
+// describe a link to a directory as the directory, see the package
+// documentation.
 //
 // FTP servers differ in what a rename onto an existing path does,
 // so Move checks the destination first: an existing directory is an
@@ -1036,7 +1044,9 @@ func isRoot(filePath string) bool {
 }
 
 // Remove deletes a file or a symbolic link with the DELE command
-// or an empty directory with the RMD command.
+// or an empty directory with the RMD command. Servers with MLST support
+// describe a link to a directory as the directory, see the package
+// documentation.
 // A non-empty directory is an fs.ErrDirectoryNotEmpty.
 func (f *fileSystem) Remove(filePath string) error {
 	return f.do(context.Background(), func(c *conn) error {

@@ -102,7 +102,8 @@ type Options struct {
 	DisableEPSV bool
 
 	// AllowBackslashInNames lets paths contain backslashes, which are
-	// an error wrapping os.ErrInvalid by default. For the separator "/"
+	// an error wrapping os.ErrInvalid by default, also in the target of
+	// a listed symbolic link that Stat follows. For the separator "/"
 	// of FTP a backslash is part of a name, but an FTP server on Windows
 	// takes it for a separator: a name like `..\x` would reach a file
 	// outside of the directory that it is meant to be in, also for

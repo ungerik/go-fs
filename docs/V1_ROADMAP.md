@@ -133,8 +133,9 @@ These hold for v1.0.0. Where an earlier design differs, the decision here wins.
   `Options.AllowBackslashInNames` allows it for servers on Unix that store
   backslashes in names. Only the paths passed to a file system and the link
   targets that ftpfs follows are checked, names a server lists are passed
-  through. The check is `fsimpl.CheckNoBackslash` at one place per backend:
-  ftpfs `do`, sftpfs `run`, webdavfs `do`.
+  through. Every backend checks with `fsimpl.CheckNoBackslash`: ftpfs in
+  `begin` and for the link targets it follows, sftpfs in `run` and `Move`,
+  webdavfs in the methods that take a path and in `do` and `send`.
 - **Azure snapshots** (2026-10-25). Azure deletes a blob with snapshots only
   if the request says what to do with them. `azureblobfs` refuses by default
   (`ErrSnapshotsPresent`; `RemoveAll` checks the whole tree before it deletes
@@ -204,6 +205,10 @@ These hold for v1.0.0. Where an earlier design differs, the decision here wins.
 
 Additive or internal, so they can land in v1.x releases:
 
+- A pre-flight check of the names a destination file system rejects, like
+  the backslash rule of sftpfs, ftpfs and webdavfs, so that a copy or move
+  between file systems fails before its first write (an optional interface
+  like `ValidName(name) error`).
 - Performance: `sftp.UseConcurrentWrites` in sftpfs (uploads are capped at
   32 KiB per round trip); the Azure blob batch API for `RemoveAll` (one
   DELETE per blob today); `fsimpl.RangeReader` reopens the body on every

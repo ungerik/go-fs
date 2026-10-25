@@ -293,11 +293,13 @@ func (f *fileSystem) dirInfo(name string, modified time.Time) *fs.FileInfo {
 }
 
 // notExistError returns an error wrapping os.ErrNotExist for a file path,
-// or fs.ErrIsDirectory if the path is a directory.
+// or fs.ErrIsDirectory if the path is a directory. The callers already
+// got a 404 for the blob of filePath, so only the directory is checked
+// and the blob is not requested again like by Stat.
 func (f *fileSystem) notExistError(filePath string) error {
-	info, err := f.Stat(filePath)
-	if err == nil && info.IsDir {
-		return fs.NewErrIsDirectory(info.File)
+	name := blobName(filePath)
+	if isDir, _, err := f.dirExists(context.Background(), name); err == nil && isDir {
+		return fs.NewErrIsDirectory(f.dirInfo(name, time.Time{}).File)
 	}
 	return fs.NewErrDoesNotExist(f.file(filePath))
 }
@@ -534,7 +536,9 @@ func (f *fileSystem) ListDirRecursive(ctx context.Context, dirPath string, patte
 // (If-Match), so the reader never mixes the bytes of two versions: after the
 // blob was replaced, the next range request fails with an error telling that
 // the blob changed while it was being read. A body that is already streaming
-// keeps delivering the bytes of the version it started with.
+// keeps delivering the bytes of the version it started with. Setting the
+// metadata or the properties of a blob changes its ETag as well, so it also
+// ends the open readers of the blob, although their bytes are the same.
 func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	if err := f.checkClosed(); err != nil {
 		return nil, err
@@ -1080,6 +1084,7 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return err
 	}
+	destExists := err == nil
 	if err = ctx.Err(); err != nil {
 		return err
 	}
@@ -1095,7 +1100,15 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 				return f.snapshotsError(snapshotted)
 			}
 		}
-		if err = f.CopyFile(ctx, filePath, destPath); err != nil {
+		// Stat checked the source blob and, for a missing destination,
+		// that no blob is below it. A destination blob can still have
+		// blobs below its name, then it is a directory as well.
+		if destExists {
+			if err = f.checkNotDir(ctx, dest); err != nil {
+				return err
+			}
+		}
+		if err = f.copyBlob(ctx, src, dest); err != nil {
 			return err
 		}
 		err = f.deleteBlob(ctx, src)

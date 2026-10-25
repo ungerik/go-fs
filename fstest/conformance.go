@@ -60,7 +60,7 @@ func FlatSeed() Seed {
 	}
 }
 
-// escapedSeedName is a file name that looks percent-encoded .
+// escapedSeedName is a file name that looks percent-encoded.
 // It must keep its name, a file named "100% a b.txt" is another file.
 const escapedSeedName = "100%25 a%20b.txt"
 
@@ -375,13 +375,13 @@ func (c *conformance) fileOf(cleanPath string) fs.File {
 	if c.isLocalFS() {
 		return fs.File(cleanPath) // Local files have no prefix
 	}
-	return fs.File(c.url(cleanPath))
+	return fs.File(c.uri(cleanPath))
 }
 
-// url returns the URI of a file system path as documented by
+// uri returns the URI of a file system path as documented by
 // fs.FileSystem: the prefix followed by the path with "%" escaped
 // as "%25", or the result of URIFromPath for a fs.URIFileSystem.
-func (c *conformance) url(cleanPath string) string {
+func (c *conformance) uri(cleanPath string) string {
 	if c.isLocalFS() {
 		return fs.File(cleanPath).URI()
 	}
@@ -594,7 +594,7 @@ func (c *conformance) testPaths(t *testing.T) {
 
 	// The prefix must be stripped from a URI and the path must survive the round trip
 	testPath := c.fs.CleanPath(c.cfg.TestDir, "x", "y.txt")
-	uri := c.url(testPath)
+	uri := c.uri(testPath)
 	checkTrue(t, strings.HasPrefix(uri, c.fs.Prefix()), "URI %q must have prefix %q", uri, c.fs.Prefix())
 	c.checkURI(t, fs.File(uri), testPath, "the URI of a path")
 	checkEqual(t, testPath, c.fs.CleanPath(uri), "CleanPath(uri) must return the path")
@@ -616,7 +616,7 @@ func (c *conformance) testPaths(t *testing.T) {
 	// Names that look percent-encoded must not be decoded on the way
 	// from a path to a File and back, the URI escapes every "%".
 	escPath := c.fs.CleanPath(c.cfg.TestDir, "50% a%20b", "100%25.txt")
-	escURI := c.url(escPath)
+	escURI := c.uri(escPath)
 	c.checkURI(t, fs.File(escURI), escPath, "the URI of a path with escaped names")
 	checkEqual(t, escPath, fs.File(escURI).Path(), "File(uri).Path() must not decode the names of the path")
 	checkEqual(t, escURI, fs.File(escURI).URI(), "File(uri).URI() must return the URI with escaped names")

@@ -357,7 +357,9 @@ signatures. Changes compared to v0.1:
 - `sftpfs`, `ftpfs` and `webdavfs` reject paths with a backslash
   (`os.ErrInvalid`), because a server on Windows takes it for a separator.
   For a server on Unix that has files with backslashes in their names, set
-  `Options.AllowBackslashInNames`.
+  `Options.AllowBackslashInNames`. A copy or move from another file system
+  with such names fails at the first of them and leaves the files copied
+  until then at the destination; the source of a move is kept.
 - `WriteJSON`, `WriteXML`, `MemFile.WriteJSON`/`WriteXML` and
   `NewMemFileWriteJSON`/`NewMemFileWriteXML` don't take an indent any more,
   the `…Indent` variants do. `WriteXMLIndent` with an empty indent puts every

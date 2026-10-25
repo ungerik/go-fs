@@ -61,7 +61,7 @@ func TestPathHelper_CleanPath(t *testing.T) {
 	}
 }
 
-func TestPathHelper_URL(t *testing.T) {
+func TestPathHelper_URI(t *testing.T) {
 	rooted := PathHelper{URIPrefix: "s3://bucket", Rooted: true}
 	assert.Equal(t, "s3://bucket/a/b", rooted.URI("/a/b"))
 	assert.Equal(t, "s3://bucket/a/b", rooted.JoinCleanURI("a", "b"))
