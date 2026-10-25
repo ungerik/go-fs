@@ -97,6 +97,31 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   files it points to, outside of the removed tree, on servers with MLST
   support, which describe such a link like the directory: it tries `DELE`
   before it deletes the content of a directory.
+- A move between file systems lost files when two source names are one entry
+  at the destination, like `A.txt` and `a.txt` of a case-sensitive source
+  (MemFileSystem, s3fs, azureblobfs, sftpfs on Unix) on the local file system
+  of macOS or Windows, smbfs or WebDAV on IIS, or two Unicode normalizations
+  of a name on macOS. The second file replaced the first, `Sub` and `sub` were
+  merged, the move returned nil and removed the source. Now the move fails
+  with an error wrapping `os.ErrExist` that names the entry, and keeps the
+  source.
+- `fs.CopyRecursive` silently replaced an entry it had just written for
+  another source name. It now fails with `os.ErrExist`: in directories it
+  creates on every file system, and in existing directories on the local
+  file system (also through a `SubFileSystem`).
+- A copy or move to the local file system wrote source names to other
+  entries. On Windows `NUL`, `CON`, `AUX` or `COM1` (also with an extension)
+  went to the device, `NUL` discarding the data; `a:b` went to an alternate
+  data stream; a trailing dot or space was stripped. A move then removed the
+  source. Names that `filepath.Localize` rejects, and on Windows names ending
+  in a dot or space, are now errors wrapping `os.ErrInvalid`. Between file
+  systems this happens before anything is written; it also applies to the
+  final name of a moved file.
+- `CopyRecursive` and moves wrote into an existing named pipe, device or
+  socket at the destination (blocking on a pipe until it had a reader)
+  instead of replacing it. This is now an error wrapping `os.ErrExist`.
+- The `os.ErrInvalid` error of `CopyRecursive` for invalid names printed URI
+  passwords; it redacts them now.
 - `ftpfs` `RemoveAll` on servers with MLST support could delete the files that
   a symbolic link to a directory points to, outside of the removed tree, when
   the server refused to delete the link, for example in a directory without

@@ -75,7 +75,10 @@ func JoinCleanFilePath(uriParts ...string) File {
 // never writes through it and never writes through a link below a moved
 // directory, see [CopyRecursive]. It checks the destination by path before
 // it writes, so these guarantees about links at the destination assume that
-// destination is not changed concurrently by others.
+// destination is not changed concurrently by others. It fails with an error
+// wrapping [os.ErrExist] instead of merging two source names that the
+// destination doesn't tell apart, like "A.txt" and "a.txt" on a
+// case-insensitive file system, and keeps the source, see [CopyRecursive].
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath

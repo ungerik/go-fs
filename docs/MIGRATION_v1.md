@@ -356,6 +356,13 @@ signatures. Changes compared to v0.1:
   absolute file URIs, before upgrading. `file://` and `file://localhost`
   without a path are the root `/`, not the working directory. Windows long
   paths keep their URI `file:////?/C:/x`; `file:///??/…` names no file.
+- Moves and `CopyRecursive` fail with `os.ErrExist` where two source names
+  collide at the destination (case or Unicode normalization) instead of
+  silently keeping one. Moves always detect it; `CopyRecursive` does in new
+  directories and in existing local ones. They also fail on an existing named
+  pipe, device or socket at the destination. To the local file system, they
+  fail with `os.ErrInvalid` on names like `NUL`, `COM1`, `a:b`, `name.`
+  (Windows) or names with a NUL byte, before writing anything.
 - `sftpfs`, `ftpfs` and `webdavfs` reject paths with a backslash
   (`os.ErrInvalid`), because a server on Windows takes it for a separator.
   For a server on Unix that has files with backslashes in their names, set

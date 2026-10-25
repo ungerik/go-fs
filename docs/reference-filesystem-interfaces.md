@@ -149,6 +149,17 @@ wrapping `os.ErrInvalid`; the package checks it before it calls a native
 resolve a destination that is an existing directory to "into the directory"
 before these rules apply.
 
+Below the root of a directory copy, an entry that the copy already wrote for
+another source name is never replaced. This happens when the destination
+doesn't tell two names apart, like another case or Unicode normalization. In
+a move, and in any directory that `CopyRecursive` creates, every existing
+entry is an error wrapping `os.ErrExist`. In an existing directory, only local
+destinations detect it, by file identity. A destination that is no regular
+file (named pipe, device, socket) is an error wrapping `os.ErrExist`, not
+written into. For local destinations, names that `filepath.Localize` rejects,
+and on Windows names ending in a dot or space, are errors wrapping
+`os.ErrInvalid`.
+
 ### Capabilities with no fallback
 
 These return an error wrapping `errors.ErrUnsupported` when the backend does
