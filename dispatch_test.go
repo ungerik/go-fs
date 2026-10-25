@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1102,4 +1103,105 @@ func localFile(t *testing.T, name, content string) fs.File {
 	file := fs.File(filepath.Join(t.TempDir(), name))
 	require.NoError(t, file.WriteAllString(t.Context(), content))
 	return file
+}
+
+// caseFoldingFS is a minimalFileSystem that doesn't tell apart names that
+// only differ in case, like a case-insensitive SMB share, but without the
+// identity of local files: it stores every path in lower case.
+type caseFoldingFS struct {
+	*minimalFileSystem
+}
+
+// newCaseFoldingFS returns a registered caseFoldingFS
+// that keeps its files in a MemFileSystem.
+func newCaseFoldingFS(t *testing.T) *caseFoldingFS {
+	t.Helper()
+	c := &caseFoldingFS{newMinimalFileSystem(fsimpl.RandomString(), newMemBacking(t))}
+	register(t, c)
+	return c
+}
+
+func (c *caseFoldingFS) Stat(filePath string) (*fs.FileInfo, error) {
+	return c.minimalFileSystem.Stat(strings.ToLower(filePath))
+}
+
+func (c *caseFoldingFS) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	return c.minimalFileSystem.ListDir(ctx, strings.ToLower(dirPath), patterns, callback)
+}
+
+func (c *caseFoldingFS) OpenReader(filePath string) (io.ReadCloser, error) {
+	return c.minimalFileSystem.OpenReader(strings.ToLower(filePath))
+}
+
+func (c *caseFoldingFS) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+	return c.minimalFileSystem.OpenWriter(strings.ToLower(filePath), perm)
+}
+
+func (c *caseFoldingFS) MakeDir(dirPath string, perm fs.Permissions) error {
+	return c.minimalFileSystem.MakeDir(strings.ToLower(dirPath), perm)
+}
+
+func (c *caseFoldingFS) Remove(filePath string) error {
+	return c.minimalFileSystem.Remove(strings.ToLower(filePath))
+}
+
+// TestMoveEmulation_NameCollisions is a regression test: a move between
+// file systems copied two names of a case-sensitive source that the
+// destination doesn't tell apart, like "A.txt" and "a.txt" on
+// a case-insensitive local file system, to the same entry, the second
+// replacing the first, and then removed the source, which lost the first
+// file. The move must fail with an error wrapping os.ErrExist and keep
+// the source.
+func TestMoveEmulation_NameCollisions(t *testing.T) {
+	caseFolding := func(t *testing.T) fs.File { return newCaseFoldingFS(t).RootDir() }
+	tests := []struct {
+		name    string
+		destDir func(t *testing.T) fs.File
+		files   map[string]string
+	}{
+		{"names that only differ in case", caseInsensitiveTempDir, map[string]string{"A.txt": "upper", "a.txt": "lower"}},
+		{"directories that only differ in case", caseInsensitiveTempDir, map[string]string{"Sub/x.txt": "x", "sub/y.txt": "y"}},
+		{"in a sub-directory", caseInsensitiveTempDir, map[string]string{"sub/A.txt": "upper", "sub/a.txt": "lower"}},
+		{"Unicode normalizations", normalizationInsensitiveTempDir, map[string]string{nfcName: "nfc", nfdName: "nfd"}},
+		{"names on a file system that is not local", caseFolding, map[string]string{"A.txt": "upper", "a.txt": "lower"}},
+		{"directories on a file system that is not local", caseFolding, map[string]string{"Sub/x.txt": "x", "sub/y.txt": "y"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dest := tt.destDir(t)
+			src := newLinkMemFS(t).RootDir().Join("dir")
+			writeFiles(t, src, tt.files)
+
+			err := fs.Move(t.Context(), src, dest)
+			require.ErrorIs(t, err, os.ErrExist)
+			for name, content := range tt.files {
+				requireContent(t, src.Join(name), content)
+			}
+		})
+	}
+	t.Run("case-sensitive destination", func(t *testing.T) {
+		dest := newLinkMemFS(t).RootDir()
+		src := newLinkMemFS(t).RootDir().Join("dir")
+		writeFiles(t, src, map[string]string{"A.txt": "upper", "a.txt": "lower"})
+
+		require.NoError(t, fs.Move(t.Context(), src, dest))
+		requireContent(t, dest.Join("dir", "A.txt"), "upper")
+		requireContent(t, dest.Join("dir", "a.txt"), "lower")
+		require.False(t, src.Exists(), "the source must be removed")
+	})
+}
+
+// TestMoveEmulation_InvalidLocalName checks that a move of a file to a name
+// of the local file system that filepath.Localize rejects fails with an error
+// wrapping os.ErrInvalid and keeps the source. filepath.Localize rejects
+// a name with a NUL byte on every platform, dispatch_windows_test.go has
+// the Windows names, like "NUL", which would write to the device.
+func TestMoveEmulation_InvalidLocalName(t *testing.T) {
+	src := newLinkMemFS(t, fs.NewMemFile("/z\x00.txt", []byte("data"))).RootDir().Join("z\x00.txt")
+	dir := fs.File(t.TempDir())
+
+	err := fs.Move(t.Context(), src, dir)
+	require.ErrorIs(t, err, os.ErrInvalid)
+	requireNames(t, dir)
+	requireContent(t, src, "data")
 }

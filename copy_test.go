@@ -835,3 +835,162 @@ func TestCopyRecursive_UsesOneBuffer(t *testing.T) {
 	require.Less(t, allocated, uint64(3*bufferSize), "CopyRecursive must reuse one copy buffer")
 	requireContent(t, dest.RootDir().Join("dst", "file0.txt"), strings.Repeat("x", 100))
 }
+
+// nfcName and nfdName are the composed and the decomposed
+// Unicode normalization of the name "é.txt".
+const (
+	nfcName = "\u00e9.txt"
+	nfdName = "e\u0301.txt"
+)
+
+// normalizationInsensitiveTempDir returns a new temp directory and skips the
+// test if it is not on macOS or its file system tells apart nfcName and
+// nfdName, which APFS and HFS+ don't.
+func normalizationInsensitiveTempDir(t *testing.T) fs.File {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("only the file systems of macOS match names by Unicode normalization")
+	}
+	dir := t.TempDir()
+	probe := filepath.Join(dir, nfcName)
+	require.NoError(t, os.WriteFile(probe, nil, 0o600))
+	if _, err := os.Stat(filepath.Join(dir, nfdName)); err != nil {
+		t.Skip("the file system of the temp directory tells apart Unicode normalizations")
+	}
+	require.NoError(t, os.Remove(probe))
+	return fs.File(dir)
+}
+
+// requireOneOf requires the directory dir to have exactly one entry, with
+// one of the names of contents and the content for that name, because the
+// destination doesn't tell the names apart: the entry that the copy wrote
+// first must not have been replaced by the second.
+func requireOneOf(t *testing.T, dir fs.File, contents map[string]string) {
+	t.Helper()
+	var names []string
+	require.NoError(t, dir.ListDirInfo(t.Context(), func(info *fs.FileInfo) error {
+		names = append(names, info.Name)
+		return nil
+	}))
+	require.Len(t, names, 1, "entries of %s", dir)
+	content, ok := contents[names[0]]
+	require.True(t, ok, "unexpected entry %q in %s", names[0], dir)
+	requireContent(t, dir.Join(names[0]), content)
+}
+
+// TestCopyRecursive_NameCollisions is a regression test: two names of
+// a case-sensitive source that the destination doesn't tell apart, like
+// "A.txt" and "a.txt" on a case-insensitive local file system, were copied
+// to the same entry, the second replacing the first without an error.
+// The copy must fail with an error wrapping os.ErrExist instead, in a new
+// destination directory and in one that existed before.
+func TestCopyRecursive_NameCollisions(t *testing.T) {
+	caseContents := map[string]string{"A.txt": "upper", "a.txt": "lower"}
+	newCaseSource := func(t *testing.T) fs.File {
+		mem := newLinkMemFS(t, fs.NewMemFile("/src/A.txt", []byte("upper")), fs.NewMemFile("/src/a.txt", []byte("lower")))
+		return mem.RootDir().Join("src")
+	}
+
+	t.Run("into a new directory", func(t *testing.T) {
+		dest := caseInsensitiveTempDir(t).Join("dest")
+
+		err := fs.CopyRecursive(t.Context(), newCaseSource(t), dest)
+		require.ErrorIs(t, err, os.ErrExist)
+		requireOneOf(t, dest, caseContents)
+	})
+	t.Run("into an existing directory", func(t *testing.T) {
+		dest := caseInsensitiveTempDir(t)
+
+		err := fs.CopyRecursive(t.Context(), newCaseSource(t), dest)
+		require.ErrorIs(t, err, os.ErrExist)
+		requireOneOf(t, dest, caseContents)
+	})
+	t.Run("over an existing file", func(t *testing.T) {
+		// The first name replaces the existing file like every merge,
+		// the second must not replace what the first wrote.
+		// MemFileSystem lists sorted, so A.txt is copied first.
+		dest := caseInsensitiveTempDir(t)
+		writeFiles(t, dest, map[string]string{"a.txt": "old"})
+
+		err := fs.CopyRecursive(t.Context(), newCaseSource(t), dest)
+		require.ErrorIs(t, err, os.ErrExist)
+		requireContent(t, dest.Join("a.txt"), "upper")
+	})
+	t.Run("directories", func(t *testing.T) {
+		dest := caseInsensitiveTempDir(t)
+		mem := newLinkMemFS(t, fs.NewMemFile("/src/Sub/x.txt", []byte("x")), fs.NewMemFile("/src/sub/y.txt", []byte("y")))
+
+		err := fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), dest)
+		require.ErrorIs(t, err, os.ErrExist)
+		requireFiles(t, dest, "Sub/x.txt")
+
+		dest = dest.Join("new")
+		err = fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), dest)
+		require.ErrorIs(t, err, os.ErrExist)
+		requireFiles(t, dest, "Sub/x.txt")
+	})
+	t.Run("Unicode normalizations", func(t *testing.T) {
+		dest := normalizationInsensitiveTempDir(t)
+		mem := newLinkMemFS(t, fs.NewMemFile("/src/"+nfcName, []byte("nfc")), fs.NewMemFile("/src/"+nfdName, []byte("nfd")))
+
+		err := fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), dest)
+		require.ErrorIs(t, err, os.ErrExist)
+		requireOneOf(t, dest, map[string]string{nfcName: "nfc", nfdName: "nfd"})
+	})
+	t.Run("into a new directory of a file system that is not local", func(t *testing.T) {
+		// MemFileSystem lists sorted, so A.txt is copied first
+		dest := newCaseFoldingFS(t).RootDir().Join("dest")
+
+		err := fs.CopyRecursive(t.Context(), newCaseSource(t), dest)
+		require.ErrorIs(t, err, os.ErrExist)
+		requireContent(t, dest.Join("a.txt"), "upper")
+	})
+	t.Run("case-sensitive destination", func(t *testing.T) {
+		dest := newLinkMemFS(t).RootDir()
+
+		require.NoError(t, fs.CopyRecursive(t.Context(), newCaseSource(t), dest))
+		requireContent(t, dest.Join("A.txt"), "upper")
+		requireContent(t, dest.Join("a.txt"), "lower")
+	})
+	t.Run("merge into an existing local directory", func(t *testing.T) {
+		// Every file of a second copy replaces the file of the first,
+		// none of them is a file that the second copy wrote
+		dest := fs.File(t.TempDir())
+		mem := newLinkMemFS(t, fs.NewMemFile("/src/a.txt", []byte("a")), fs.NewMemFile("/src/sub/b.txt", []byte("b")))
+		require.NoError(t, fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), dest))
+		require.NoError(t, fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), dest))
+		requireFiles(t, dest, "a.txt", "sub/b.txt")
+	})
+}
+
+// TestCopyRecursive_InvalidLocalNames is a regression test: a tree copy to
+// the local file system only checked the names of the source for separators,
+// "." and "..", so it wrote a name that filepath.Localize rejects to another
+// entry than the one with that name, like on Windows the name "NUL" to the
+// device, which discards the data. The copy and the move must fail with
+// an error wrapping os.ErrInvalid before they write anything, and the move
+// must keep its source. filepath.Localize rejects a name with a NUL byte on
+// every platform, copy_windows_test.go has the Windows names.
+func TestCopyRecursive_InvalidLocalNames(t *testing.T) {
+	for _, badPath := range []string{"z\x00.txt", "z\x00dir/f.txt", "sub/z\x00.txt"} {
+		t.Run(fmt.Sprintf("%q", badPath), func(t *testing.T) {
+			// MemFileSystem lists sorted, so the valid file is copied first
+			mem := newLinkMemFS(t, fs.NewMemFile("/src/a.txt", []byte("a")), fs.NewMemFile("/src/"+badPath, []byte("bad")))
+			src := mem.RootDir().Join("src")
+			dir := fs.File(t.TempDir())
+			sub, err := fs.NewSubFileSystem(fs.Local, dir.LocalPath(), "")
+			require.NoError(t, err)
+			register(t, sub)
+
+			err = fs.CopyRecursive(t.Context(), src, dir.Join("copy"))
+			require.ErrorIs(t, err, os.ErrInvalid)
+			err = fs.CopyRecursive(t.Context(), src, sub.RootDir().Join("sub-copy"))
+			require.ErrorIs(t, err, os.ErrInvalid, "through a SubFileSystem")
+			err = fs.Move(t.Context(), src, dir)
+			require.ErrorIs(t, err, os.ErrInvalid)
+			requireNames(t, dir)
+			requireContent(t, src.Join("a.txt"), "a")
+			requireContent(t, src.Join(badPath), "bad")
+		})
+	}
+}
