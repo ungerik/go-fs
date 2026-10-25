@@ -283,7 +283,22 @@ func (local *LocalFileSystem) URI(cleanPath string) string {
 // becomes "server/share/x"), and a Unix path is used as is.
 // A relative path gets the authority "." of no host ("data/x" becomes
 // "./data/x"), see fileURILocalPath. windows selects the rules of Windows.
+//
+// On Windows the long path prefix `\\?\` is removed from a path with
+// a drive letter or a UNC path, `\\?\C:\x` gets the URI of `C:\x` and
+// `\\?\UNC\server\share` that of `\\server\share`: the os package adds
+// the prefix back where it is needed. Other paths of the file and device
+// namespaces, like `\\?\Volume{…}\x` and `\\.\COM1`, keep a URI with the
+// authority "?" or "." that names no file.
 func fileURIPathOf(slashPath string, windows bool) string {
+	if long, ok := strings.CutPrefix(slashPath, "//?/"); ok && windows {
+		switch {
+		case isDriveLetterPath(long):
+			return "/" + long
+		case len(long) > 4 && strings.EqualFold(long[:4], "UNC/"):
+			return long[4:]
+		}
+	}
 	switch {
 	case strings.HasPrefix(slashPath, "//"):
 		return slashPath[2:]

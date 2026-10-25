@@ -917,6 +917,39 @@ func TestSymbolicLinks_ListedItself(t *testing.T) {
 	}
 }
 
+// TestSymbolicLinks_ListedTarget is a regression test for a server whose
+// LIST follows a link to a file and lists the file under the name of the
+// link, like "ls -lL": ListDir of a link to a file listed that line as an
+// entry below the link, like /root/filelink/filelink, instead of
+// returning an fs.ErrIsNotDirectory.
+func TestSymbolicLinks_ListedTarget(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	srv.configure(func(s *testFTPServer) {
+		s.noMLST = true
+		s.statArgs = true
+	})
+	seedLinks(srv)
+	ftpFS := dialInProcess(t, srv)
+	noCallback := func(*fs.FileInfo) error { return nil }
+
+	for name, list := range map[string]func(context.Context, string, []string, func(*fs.FileInfo) error) error{
+		"ListDir":          ftpFS.ListDir,
+		"ListDirRecursive": ftpFS.ListDirRecursive,
+	} {
+		for _, p := range []string{"/root/filelink", "/root/abslink", "/root/chain", "/root/file.txt"} {
+			assert.ErrorIs(t, list(ctx, p, nil, noCallback), fs.ErrIsNotDirectory{}, "%s(%s)", name, p)
+		}
+		var listed []*fs.FileInfo
+		err := list(ctx, "/root/dirlink", nil, func(info *fs.FileInfo) error {
+			listed = append(listed, info)
+			return nil
+		})
+		require.NoError(t, err, "%s of a link to a directory", name)
+		assert.ElementsMatch(t, []string{"/root/dirlink/file.txt", "/root/dirlink/uplink"}, relPaths(ftpFS, listed), "%s of a link to a directory", name)
+	}
+}
+
 // TestSymbolicLinks_MLSDRemoveAll checks that RemoveAll on a server with
 // MLST support, which describes a link to a directory like the directory,
 // deletes a link itself, at the removed path and below it, and keeps the

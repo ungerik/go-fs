@@ -990,7 +990,45 @@ func TestMoveSnapshotsOffline(t *testing.T) {
 	require.ErrorIs(t, err, ErrSnapshotsPresent, "Move of a blob with a snapshot")
 	assert.ErrorContains(t, err, string(blobFS.file("dir/a.txt")), "the error names the blob")
 	require.ErrorIs(t, blobFS.Move(ctx, "/dir", "/moved"), ErrSnapshotsPresent, "Move of a directory with a blob with a snapshot")
+	// A missing source is no success that copies or deletes nothing
+	require.ErrorIs(t, blobFS.Move(ctx, "/missing.txt", "/moved.txt"), os.ErrNotExist, "Move of a missing blob")
 	assert.Zero(t, writes.Load(), "Move must not copy or delete anything")
+}
+
+// TestMoveSnapshotOfPrefixSibling checks that the snapshot check of Move
+// of a blob ends at the first listed blob with another name: a snapshot
+// of dir/a.txt.bak, which has the name of the source as prefix, must not
+// refuse the move of dir/a.txt, which has none.
+func TestMoveSnapshotOfPrefixSibling(t *testing.T) {
+	var writes atomic.Int32
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		switch {
+		case query.Get("comp") == "list":
+			var blobs string
+			if strings.HasPrefix("dir/a.txt", query.Get("prefix")) || strings.HasPrefix(query.Get("prefix"), "dir/a.txt") {
+				blobs = `<Blob><Name>dir/a.txt</Name><Properties><Content-Length>1</Content-Length></Properties></Blob>`
+				if strings.Contains(query.Get("include"), "snapshots") {
+					blobs += `<Blob><Name>dir/a.txt.bak</Name><Snapshot>2026-10-25T00:00:00.0000000Z</Snapshot><Properties><Content-Length>1</Content-Length></Properties></Blob>`
+				}
+				blobs += `<Blob><Name>dir/a.txt.bak</Name><Properties><Content-Length>1</Content-Length></Properties></Blob>`
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="utf-8"?><EnumerationResults ContainerName="container"><Blobs>`+blobs+`</Blobs></EnumerationResults>`)
+		case r.Method == http.MethodPut || r.Method == http.MethodDelete:
+			writes.Add(1)
+			w.WriteHeader(http.StatusForbidden)
+		case r.URL.Path == "/account/container/dir/a.txt" && r.Method == http.MethodHead:
+			w.Header().Set("Content-Length", "1")
+		default:
+			w.Header().Set("x-ms-error-code", string(bloberror.BlobNotFound))
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	err := blobFS.Move(t.Context(), "/dir/a.txt", "/moved.txt")
+	assert.NotErrorIs(t, err, ErrSnapshotsPresent, "the snapshot of dir/a.txt.bak belongs to another blob")
+	assert.NotZero(t, writes.Load(), "Move must get past the snapshot check to the copy, which the server refuses")
 }
 
 // TestRemoveAllScanError checks that RemoveAll deletes nothing
@@ -1326,6 +1364,8 @@ func TestEmptyPath(t *testing.T) {
 	assert.ErrorIs(t, f.Remove(""), fs.ErrEmptyPath)
 	assert.ErrorIs(t, f.RemoveAll(ctx, ""), fs.ErrEmptyPath)
 	assert.ErrorIs(t, f.CopyFile(ctx, "", "/b.txt"), fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.Move(ctx, "", "/b.txt"), fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.Move(ctx, "/a.txt", ""), fs.ErrEmptyPath)
 
 	// The root is a directory without any request
 	info, err := f.Stat("/")

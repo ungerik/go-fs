@@ -35,7 +35,10 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   file system, also on Windows, where it would be the device path `\\.\x`.
   `File.URI()` of a relative path that can't be made absolute, because the
   working directory can't be determined, is `file://./…`, which names no
-  file.
+  file. A Windows long path like `\\?\C:\x` or `\\?\UNC\server\share` gets
+  the URI of the path without the prefix, `file:///C:/x` or
+  `file://server/share`; other paths of the device and file namespaces,
+  like `\\.\COM1`, get a URI that names no file.
 - `sftpfs`, `ftpfs` and `webdavfs` reject a path with a backslash with an
   error wrapping `os.ErrInvalid`, in `sftpfs` also a symbolic link target
   and in `ftpfs` a listed link target that `Stat` follows.

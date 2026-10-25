@@ -918,6 +918,29 @@ func TestFileURIPathOf(t *testing.T) {
 		_, isLocal := fileURILocalPath(rest, tc.windows)
 		assert.False(t, isLocal, "the URI of the relative path %q names no file", tc.slashPath)
 	}
+
+	// Regression test: a Windows long path like `\\?\C:\x` got the URI
+	// "file://?/C:/x", which names no file since "?" is no host, while
+	// go-fs before v1.0.0 round-tripped it. Its URI is that of the same
+	// path without the prefix, which the os package adds back if needed.
+	// Device paths like `\\.\COM1` still get a URI that names no file.
+	for slashPath, wantPath := range map[string]string{
+		"//?/C:/dir/file":           "C:/dir/file",
+		"//?/c:/":                   "c:/",
+		"//?/UNC/server/share/x":    "//server/share/x",
+		"//?/unc/server/share/x":    "//server/share/x",
+		"//?/Volume{1234}/dir/file": "",
+		"//./COM1":                  "",
+	} {
+		rest := fileURIPathOf(slashPath, true)
+		gotPath, isLocal := fileURILocalPath(rest, true)
+		if wantPath == "" {
+			assert.False(t, isLocal, "the URI %q of the device or volume path %q names no file", rest, slashPath)
+			continue
+		}
+		assert.True(t, isLocal, "the URI %q of the long path %q is local", rest, slashPath)
+		assert.Equal(t, wantPath, gotPath, "the Windows path of the URI %q of %q", rest, slashPath)
+	}
 }
 
 // TestLocalFileSystem_SplitPath checks that SplitPath converts a file URI

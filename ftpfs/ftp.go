@@ -662,7 +662,15 @@ func (f *fileSystem) listedItself(c *conn, dirPath string, entries []*ftp.Entry)
 	case !info.IsSymlink:
 		return nil, fs.NewErrIsNotDirectory(info.File)
 	case entries[0].Type != ftp.EntryTypeLink || entries[0].Target != linkTarget:
-		// The server listed the directory that the link points to
+		// The server listed what the link points to: the directory, or the
+		// file under the name of the link like "ls -lL", which is no listing
+		resolved, _, err := f.resolve(c, dirPath)
+		if err != nil {
+			return nil, err
+		}
+		if !resolved.IsDir {
+			return nil, fs.NewErrIsNotDirectory(resolved.File)
+		}
 		return entries, nil
 	}
 	info, target, err := f.resolve(c, dirPath)

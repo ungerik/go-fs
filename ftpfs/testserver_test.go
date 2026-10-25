@@ -69,6 +69,7 @@ type testFTPServer struct {
 	deleteOnRNFR     string         // RNFR of this path deletes it first, like another client right before
 	dotEntries       bool           // LIST and MLSD list the entries "." and ".." first like most servers
 	lsArgs           bool           // LIST of a file or a symbolic link lists it itself like "ls -l" instead of failing or following the link
+	statArgs         bool           // LIST of a file or a link to a file lists the file under the name of the argument, following links like "ls -lL"
 	maxListings      int            // LIST and MLSD fail with 550 after this many listings if not 0
 	requireTLSReuse  bool           // TLS data connections must resume the TLS session of the control connection
 }
@@ -509,7 +510,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		noMLST, noEPSV, pasvHost := s.noMLST, s.noEPSV, s.pasvHost
 		failList := s.failListContains
 		rntoNoReplace := s.rntoNoReplace
-		dotEntries, lsArgs := s.dotEntries, s.lsArgs
+		dotEntries, lsArgs, statArgs := s.dotEntries, s.lsArgs, s.statArgs
 		tooManyListings := (verb == "LIST" || verb == "MLSD") && s.maxListings > 0 && s.commands["LIST"]+s.commands["MLSD"] > s.maxListings
 		s.mu.Unlock()
 
@@ -711,6 +712,14 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			s.mu.Lock()
 			if verb == "LIST" && lsArgs {
 				if node, ok := s.nodes[s.followDir(p)]; ok && !node.isDir {
+					line := listLine(node, path.Base(p))
+					s.mu.Unlock()
+					sendData(fmt.Appendf(nil, "%s\r\n", line))
+					continue
+				}
+			}
+			if verb == "LIST" && statArgs {
+				if node, ok := s.nodes[s.follow(p)]; ok && !node.isDir {
 					line := listLine(node, path.Base(p))
 					s.mu.Unlock()
 					sendData(fmt.Appendf(nil, "%s\r\n", line))
