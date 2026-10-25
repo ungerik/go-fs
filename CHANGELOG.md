@@ -120,18 +120,25 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 - `fs.CopyRecursive` silently replaced an entry it had just written for
   another source name. It now fails with `os.ErrExist`: in directories it
   creates on every file system, and in existing directories on the local
-  file system (also through a `SubFileSystem`).
+  file system (also through a `SubFileSystem`). Two hard links of one file in
+  an existing local directory are two entries, both are written.
 - A copy or move to the local file system wrote source names to other
   entries. On Windows `NUL`, `CON`, `AUX` or `COM1` (also with an extension)
   went to the device, `NUL` discarding the data; `a:b` went to an alternate
   data stream; a trailing dot or space was stripped. A move then removed the
   source. Names that `filepath.Localize` rejects, and on Windows names ending
   in a dot or space, are now errors wrapping `os.ErrInvalid`. Between file
-  systems this happens before anything is written; it also applies to the
-  final name of a moved file.
+  systems this happens before anything is written, also for the names of
+  empty directories and of entries the patterns don't select; it also
+  applies to the final name of a moved file.
 - `CopyRecursive` and moves wrote into an existing named pipe, device or
   socket at the destination (blocking on a pipe until it had a reader)
   instead of replacing it. This is now an error wrapping `os.ErrExist`.
+  Local files are told by their file mode, so a file that Windows reports as
+  irregular (OneDrive placeholders, AppExecLinks and other reparse points
+  that are no symbolic links) is replaced like a regular file, and so is
+  a special file in the base layer of an `OverlayFileSystem`, which the write
+  to the upper layer hides.
 - The `os.ErrInvalid` error of `CopyRecursive` for invalid names printed URI
   passwords; it redacts them now.
 - `ftpfs` `RemoveAll` on servers with MLST support could delete the files that

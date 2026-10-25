@@ -147,6 +147,25 @@ volume and file index on Windows, behind a build-tagged helper), and pass the
 **Priority:** P3
 **Depends on:** None
 
+### List the source of a copy to another file system only once
+
+**What:** Before a copy to another file system, `checkSource` walks the
+source with `ListDir` per directory to check every name, also of empty
+directories, and `copyDir` lists every directory again while it copies.
+
+**Why:** On object stores (s3fs, azureblobfs) and over FTP or SFTP that is
+twice the listing requests of the copy, where the check used one native
+`ListDirRecursive` before, which lists no directories and so missed the
+names of empty ones.
+
+**Context:** Keep the listings of `checkSource` for `copyDir`, bounded in
+memory, or check the names of directories with a native recursive listing
+that also reports directories where a backend has one.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** None
+
 ### Write local copies without following a swapped-in link
 
 **What:** Copies check the destination with `Lstat` and then open it by path.
