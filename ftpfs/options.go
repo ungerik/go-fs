@@ -67,8 +67,10 @@ type Options struct {
 	// instead of using Username, Password and the user info of the address.
 	// It is called by every Dial, DialAndRegister and EnsureRegistered call,
 	// because the username is part of the URI prefix, for every reconnect
-	// after a connection loss, and for the dedicated connection of every
-	// OpenReader, so it should be cheap or cache its result.
+	// after a connection loss, for the dedicated connection of every
+	// OpenReader and for the connection that RemoveAll dials for LIST on
+	// servers with MLST support, so it should be cheap or cache its result,
+	// and return the same user every time.
 	Credentials CredentialsCallback
 
 	// TLSConfig is used for FTPS connections. If nil, a configuration

@@ -415,6 +415,30 @@ func writesToLocal(fileSystem FileSystem) bool {
 	}
 }
 
+// localWritePath returns the local path that a write to filePath of
+// fileSystem goes to and true, directly or through SubFileSystems and
+// the upper layer of OverlayFileSystems, where every write goes, without
+// a request to a layer. A path that the copy wrote is there, so the
+// entries of a read-only base layer are never statted for the checks.
+func localWritePath(fileSystem FileSystem, filePath string) (string, bool) {
+	for {
+		switch f := fileSystem.(type) {
+		case *LocalFileSystem:
+			return filePath, true
+		case *SubFileSystem:
+			parentPath, err := f.parentPath(filePath)
+			if err != nil {
+				return "", false
+			}
+			fileSystem, filePath = f.parent, parentPath
+		case *OverlayFileSystem:
+			fileSystem, filePath = f.upper, f.upperPath(filePath)
+		default:
+			return "", false
+		}
+	}
+}
+
 // isValidLocalName reports if the local file system writes a new entry
 // with name to the entry of that name in the directory and not to another
 // one: filepath.Localize must accept the name, which rejects the names that
@@ -648,7 +672,7 @@ func (c *treeCopier) newDestDir(dest File, statErr error) *destDir {
 	if c.move || errors.Is(statErr, os.ErrNotExist) {
 		return &destDir{isNew: true}
 	}
-	if _, _, local := fsLocalPath(dest.ParseRawURI()); local {
+	if c.localDest {
 		return &destDir{written: make(map[localEntryKey][]os.FileInfo)}
 	}
 	return &destDir{}
@@ -693,10 +717,11 @@ func (d *destDir) recordWrite(dest File, err error) error {
 	return nil
 }
 
-// localLstat returns the os.Lstat result of the local path of file, see
-// fsLocalPath, and false if file has no local path or os.Lstat fails.
+// localLstat returns the os.Lstat result of the local path that a write
+// to file goes to, see localWritePath, and false if file has no such local
+// path or os.Lstat fails.
 func localLstat(file File) (os.FileInfo, bool) {
-	localPath, _, ok := fsLocalPath(file.ParseRawURI())
+	localPath, ok := localWritePath(file.ParseRawURI())
 	if !ok {
 		return nil, false
 	}

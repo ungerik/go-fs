@@ -59,6 +59,9 @@ const (
 	// a single DeleteObjects request accepts.
 	deleteBatchSize = 1000
 
+	// maxListKeys is the most keys one ListObjectsV2 page returns.
+	maxListKeys = 1000
+
 	// Defaults of the Options fields
 	defaultMultipartUploadThreshold   = 16 << 20
 	defaultMultipartDownloadThreshold = 16 << 20
@@ -480,7 +483,7 @@ func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix s
 		}
 		tokens[token] = true
 		input.ContinuationToken = &token
-		input.MaxKeys = aws.Int32(1000)
+		input.MaxKeys = aws.Int32(maxListKeys)
 	}
 }
 

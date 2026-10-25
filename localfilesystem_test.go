@@ -825,7 +825,7 @@ func TestLocalFileSystem_URI(t *testing.T) {
 	assert.True(t, strings.HasPrefix(uri, LocalPrefix), "URI %q has the local prefix", uri)
 	assert.True(t, strings.HasSuffix(uri, "/100%2525 a%2520b.txt"),
 		"URI %q escapes every %%", uri)
-	assert.Equal(t, localPath, File(uri).Path(), "the URL resolves to the path")
+	assert.Equal(t, localPath, File(uri).Path(), "the URI resolves to the path")
 	assert.Equal(t, "100%25 a%20b.txt", File(uri).Name())
 }
 
@@ -929,8 +929,8 @@ func TestFileURIPathOf(t *testing.T) {
 	}
 
 	// Regression test: a Windows long path like `\\?\C:\x` got the URI
-	// "file://?/C:/x", which names no file since "?" is no host, while
-	// go-fs before v1.0.0 round-tripped it as "file:////?/C:/x". The URI
+	// "file://?/C:/x" in a commit before v1.0.0, which the betas didn't
+	// accept, while they round-tripped it as "file:////?/C:/x". The URI
 	// keeps the long path, whose prefix turns off the normalization of
 	// names like "name." and "aux". Device paths like `\\.\COM1` and
 	// other paths of the file namespace get a URI that names no file.

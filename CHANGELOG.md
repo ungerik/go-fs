@@ -66,7 +66,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   and delete is pinned to the ETag the source blob had when `Move` found it
   (`x-ms-source-if-match`, `If-Match`), so a blob that another client
   replaces during the move is kept, and `Move` returns an error saying that
-  it changed while it was being moved. The generic move copied first and
+  it changed while it was being moved. Only a move within one file system
+  is pinned; `fs.Move` to another container or file system copies and calls
+  `RemoveAll`, which isn't. The generic move copied first and
   then failed to delete a source with snapshots, after it had replaced the
   destination.
 - `fsimpl.CheckNoBackslash` returns the error of the backslash rule of the
@@ -145,7 +147,7 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   with content. A truncated page without a new continuation token, also
   with the token of an earlier page, is now an error instead of a listing
   that never ends, and so is a listing that has no decision after 1000
-  pages; the pages after an empty truncated one ask for 1000 keys.
+  pages; the pages after a truncated one without a match ask for 1000 keys.
 
 ## [1.0.0-beta.3] - 2026-10-24
 

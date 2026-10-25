@@ -150,7 +150,9 @@ resolve a destination that is an existing directory to "into the directory"
 before these rules apply.
 
 Below the root of a directory copy, an entry that the copy already wrote for
-another source name is never replaced. This happens when the destination
+another source name is not replaced in a move, in a directory that
+`CopyRecursive` creates and in an existing local directory; other file
+systems replace it in an existing directory. This happens when the destination
 doesn't tell two names apart, like another case or Unicode normalization. In
 a move, and in any directory that `CopyRecursive` creates, every existing
 entry is an error wrapping `os.ErrExist`. In an existing directory, only local

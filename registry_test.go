@@ -480,7 +480,7 @@ func TestParseRawURI_LocalUnregistered(t *testing.T) {
 	dir := t.TempDir()
 	withLocal := map[string]string{}
 	uris := []string{
-		Local.URI(filepath.Join(dir, "a b")),
+		Local.URI(filepath.Join(dir, "a%b")), // "…/a%25b", decoded "…/a%b"
 		LocalPrefix + "localhost" + strings.TrimPrefix(Local.URI(dir), LocalPrefix),
 		LocalPrefix + "server/share/x",
 		LocalPrefix + "./x",
@@ -498,5 +498,5 @@ func TestParseRawURI_LocalUnregistered(t *testing.T) {
 	}
 	fileSystem, fsPath := ParseRawURI(uris[0])
 	assert.Equal(t, Local, fileSystem)
-	assert.Equal(t, filepath.Join(dir, "a b"), fsPath, "the path is decoded")
+	assert.Equal(t, filepath.Join(dir, "a%b"), fsPath, "the path is decoded")
 }

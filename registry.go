@@ -405,10 +405,10 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	// not match any registered file system must not be treated as a local
 	// path: silently resolving e.g. "s3://bucket/key" or "http://host/file"
 	// against the local file system would read or write a bogus local path.
-	// The only scheme that maps to the local file system is file:// (matched
-	// above via the registered Local file system), so any other scheme is
-	// reported as the invalid file system instead, like a file URI
-	// with a host that has no local path.
+	// The only scheme that maps to the local file system is file://, which
+	// is converted like above also while Local is not registered, so any
+	// other scheme is reported as the invalid file system instead, like
+	// a file URI that names no local file, see fileURILocalPath.
 	if strings.HasPrefix(uri, LocalPrefix) {
 		// A file URI while Local is not registered is converted
 		// like with Local registered, decoding its path once

@@ -1043,7 +1043,9 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 // source was renamed onto its path, or renamed back if that failed.
 func (f *fileSystem) replaceFile(c *conn, srcPath, dest string, renameErr error) error {
 	if _, _, err := f.lstat(c, srcPath); err != nil {
-		// The source vanished since it was checked
+		// The source vanished since it was checked, or it is a source that
+		// MLST can't see, like a dangling link, which can't replace a file
+		// on a server that doesn't rename onto one
 		return err
 	}
 	tmp := path.Join(path.Dir(dest), ".gofs-replaced-"+rand.Text())

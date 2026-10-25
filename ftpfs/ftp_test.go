@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net"
+	"net/textproto"
 	"os"
 	"path"
 	"slices"
@@ -1048,6 +1049,11 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 			err := ftpFS.RemoveAll(t.Context(), tc.removed)
 			require.Error(t, err, "RemoveAll must fail for a link that the server doesn't delete")
 			assert.ErrorContains(t, err, "permission denied", "the error of the refused DELE")
+			// The LIST error is only quoted, so the reply in the chain is the DELE reply
+			var reply *textproto.Error
+			if assert.ErrorAs(t, err, &reply, "the DELE reply is wrapped") {
+				assert.Equal(t, 550, reply.Code, "the 550 reply to DELE")
+			}
 			assert.ErrorContains(t, err, string(ftpFS.JoinCleanFile(tc.link)), "the error names the link")
 			assert.Equal(t, "keep", string(srv.fileContent("/outside/keep.txt")), "RemoveAll must keep the files that the link points to")
 			assert.Equal(t, "keep", string(srv.fileContent("/outside/sub/keep.txt")), "RemoveAll must keep the files that the link points to")

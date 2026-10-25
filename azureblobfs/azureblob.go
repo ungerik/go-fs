@@ -1067,6 +1067,9 @@ func (f *fileSystem) deleteBlobs(ctx context.Context, blobs []listedBlob) error 
 // the source blobs that it has not deleted yet, and destPath holds the copy
 // of the version that Move found. Both are errors telling that the blob
 // changed while it was being moved, which wrap the 412 answer of Azure.
+// Only a move within one file system is pinned: fs.Move to another
+// container or file system copies with the generic implementation and
+// deletes the source with RemoveAll, which doesn't check the ETags.
 //
 // Without Options.DeleteSnapshots a blob with snapshots at or below
 // filePath is an error wrapping ErrSnapshotsPresent before anything is

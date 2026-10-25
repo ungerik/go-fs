@@ -452,9 +452,11 @@ func cleanFileURI(uri string) (cleanPath string, isLocal bool) {
 // A tilde in place of the host is the home directory like in a path,
 // "file://~/x" is "~/x" expanded, every other tilde of a file URI is
 // a name, "file:///~/x" is "/~/x". A URI that names no local file, with
-// another host than localhost on platforms other than Windows or with the
-// host ".", ".." or "?" on every platform, has no local path: [ParseRawURI]
-// returns the [InvalidFileSystem] for it. CleanPath can't report that and
+// another host than localhost on platforms other than Windows, with the
+// host ".", ".." or "?" on every platform (except "file://?/C:/x", the
+// Windows long path of a drive), or on Windows of the device namespace
+// like "file:///??/x", has no local path: [ParseRawURI] returns the
+// [InvalidFileSystem] for it. CleanPath can't report that and
 // returns the host as first element of an absolute path, which cleaning
 // removes for "." and "..": "file://./x" becomes "/x", a path of another
 // file, so resolve URIs with ParseRawURI or [File], not with CleanPath.
