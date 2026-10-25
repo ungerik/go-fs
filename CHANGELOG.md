@@ -155,9 +155,15 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   changes to the parent directory with `CWD` and sends `LIST -a` without a
   path argument, which servers like ProFTPD with `UseGlobbing` and Pure-FTPd
   would expand as a glob pattern, and it is dialed again once for a listing
-  if the server closed it while it was idle. FTP servers on Windows and
-  ProFTPD with `ShowSymlinks off` list a link to a directory as a directory
-  with `LIST` too, so `RemoveAll` still deletes through such links there.
+  if the server closed it while it was idle. A symbolic link whose name
+  contains ` -> `, which the client library cuts at the first ` -> `, is
+  still recognized, so a forged directory line can't confirm it. The listing
+  of a directory with an entry named `-a` is not used: servers that don't
+  parse the options of `LIST` (like ftpserverlib with `DisableLISTArgs`) list
+  that entry for `LIST -a`, so `RemoveAll` fails for the directories in such
+  a directory. FTP servers on Windows and ProFTPD with `ShowSymlinks off`
+  list a link to a directory as a directory with `LIST` too, so `RemoveAll`
+  still deletes through such links there.
 - `ftpfs` `RemoveAll` kept a dangling symbolic link or a cycle of links on
   servers with MLST support, and `Remove` and `Move` of it failed with
   `os.ErrNotExist`, because MLST follows links and reports such a link as
