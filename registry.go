@@ -369,7 +369,11 @@ func fsPrefixMatchLen(fileSystem FileSystem, uri string) int {
 // on other platforms it returns the [InvalidFileSystem]. So on Windows
 // a file operation on a File from an untrusted file URI can connect to
 // any host over SMB, with the automatic NTLM login of Windows, like one
-// on an untrusted UNC path: check the host of such URIs before use.
+// on an untrusted UNC path. That includes URIs without a host for
+// url.Parse, like "file:////server/share/x" and
+// "file:////?/UNC/server/share/x", so check the resolved path, not the
+// host of the URI: a local path whose volume, see [filepath.VolumeName],
+// begins with `\\` and is no `\\?\` path of a drive is on another host.
 func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	if uri == "" {
 		return Invalid, ""

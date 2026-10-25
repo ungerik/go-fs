@@ -42,8 +42,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   a trailing dot. Other paths of the device and file namespaces, like
   `\\.\COM1`, `\\?\Volume{…}\x` and `\??\PhysicalDrive0`, get a URI that
   names no file. On Windows a file URI with a host is a UNC path, so opening
-  a `File` from an untrusted file URI can connect to that host over SMB, see
-  `ParseRawURI`.
+  a `File` from an untrusted file URI can connect to that host over SMB, also
+  for forms without a host like `file:////server/share/x`; check the resolved
+  path, see `ParseRawURI`.
 - `sftpfs`, `ftpfs` and `webdavfs` reject a path with a backslash with an
   error wrapping `os.ErrInvalid`, in `sftpfs` also a symbolic link target
   and in `ftpfs` a listed link target that `Stat` follows.

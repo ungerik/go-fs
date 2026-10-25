@@ -130,6 +130,23 @@ breaking. The partial copy is documented in `docs/MIGRATION_v1.md`.
 **Priority:** P3
 **Depends on:** None
 
+### Bound the memory of the collision check of copies
+
+**What:** When `CopyRecursive` copies into an existing local directory, it
+`Lstat`s every entry it writes and keeps its whole `os.FileInfo` until the
+directory is done.
+
+**Why:** A flat directory of a million files holds about 300 MB of
+`FileInfo`, and an overwrite costs up to three `Lstat`s of one path.
+
+**Context:** Keep a compact identity instead (device and inode on Unix,
+volume and file index on Windows, behind a build-tagged helper), and pass the
+`FileInfo` of the destination check on instead of `Lstat`ing again.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ### Write local copies without following a swapped-in link
 
 **What:** Copies check the destination with `Lstat` and then open it by path.
@@ -244,6 +261,44 @@ from its own `lstat` result, and list the resolved target directly in
 **Priority:** P3
 **Depends on:** None
 
+### Tell links from directories on Windows FTP servers
+
+**What:** On Windows FTP servers (IIS with DOS-format listings, FileZilla
+Server or IIS in Unix style, where junctions and directory symlinks appear as
+directories) and on ProFTPD with `ShowSymlinks off`, LIST shows a link to a
+directory as a directory.
+
+**Why:** `RemoveAll` confirms a directory with LIST before it deletes the
+content, so on these servers it deletes through such links, as before v1.0.
+DELE of a junction always fails, so every junction reaches the confirmation.
+
+**Context:** Documented in the package doc. Trust the confirmation only for
+listings in a format that can show links (`SYST` or the ls-style lines) and
+fail closed otherwise, or find another way to detect reparse points.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
+### Separate TLS sessions for the extra FTPS connections
+
+**What:** The LIST connection of `RemoveAll` and the dedicated connection of
+`OpenReader` share the TLS config, and with it one session cache slot per
+server name, with the main connection.
+
+**Why:** After their handshake the main connection's next data connection can
+resume their session instead of its own, and servers that bind data
+connections to the session of their control connection (FileZilla Server,
+ProFTPD) may reject it with 425/522.
+
+**Context:** Give each control connection a copy of the TLS config with its
+own session cache, and add a test-server mode that requires a data connection
+to resume the session of its own control connection.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
 ### Stream ListDirRecursive per directory
 
 **What:** `ListDirRecursive` collects the whole tree on the control
@@ -267,13 +322,17 @@ call.
 **Why:** It is how a link that MLST describes as a directory gets deleted
 itself, and how a real directory is confirmed, but it costs a failing
 command per directory, a LIST per parent directory and an extra login per
-`RemoveAll`.
+`RemoveAll`. For the removed path itself the LIST lists its parent, which can
+be large: removing the N children of a directory one by one lists it N times.
+A directory with subdirectories is listed twice, with MLSD to enumerate it
+and with LIST to confirm its subdirectories.
 
 **Context:** The trade-off is documented in the package doc. Options: keep
 the LIST connection open across calls, skip the confirmation when the DELE
-reply says "Is a directory", or enumerate with the LIST listing of the second
-connection, which tells links from directories. Skipping DELE below the top
-level would also skip the link check for nested links.
+reply says "Is a directory" (unlink of a link never fails with EISDIR), or
+enumerate with the LIST listing of the second connection, which tells links
+from directories and needs no MLSD. Skipping DELE below the top level would
+also skip the link check for nested links.
 
 **Effort:** M
 **Priority:** P3

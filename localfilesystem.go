@@ -363,6 +363,11 @@ func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool)
 		// RFC 8089 requires an absolute path, "file://localhost" is the root
 		filePath = "/"
 	}
+	if windows && len(filePath) == 6 && isLongPath(filePath+"/") {
+		// `\\?\C:` is the volume device of the drive, like "file:///C:"
+		// is the root of the drive, not its current directory
+		filePath += "/"
+	}
 	if windows && isLongPath(filePath) {
 		return filePath, true
 	}
@@ -399,7 +404,8 @@ func isLongPath(p string) bool {
 		return false
 	}
 	rest := p[4:]
-	return isDriveLetterPath(rest) || len(rest) > 4 && strings.EqualFold(rest[:3], "UNC") && isSlash(rest[3])
+	// A drive needs the separator: `\\?\C:` is the volume device of the drive
+	return len(rest) > 2 && isDriveLetterPath(rest) || len(rest) > 4 && strings.EqualFold(rest[:3], "UNC") && isSlash(rest[3])
 }
 
 // isNTNamespacePath reports if the Windows path p with forward or

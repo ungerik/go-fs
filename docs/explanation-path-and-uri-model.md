@@ -197,7 +197,11 @@ paths of the device and file namespaces, `\\.\COM1`, `\\?\Volume{…}\x` and
 Because a file URI with a host is a UNC path on Windows, a file operation on
 a `File` from an untrusted file URI can connect to any host over SMB, with
 the automatic NTLM login of Windows, just like one on an untrusted UNC path.
-Check the host of such URIs before you use them.
+Some forms reach a server without a host that `url.Parse` would report:
+`file:////server/share/x` and `file:////?/UNC/server/share/x`. So check the
+resolved path, not the host of the URI: a local path whose volume
+(`filepath.VolumeName(File(uri).LocalPath())`) begins with `\\` and is no
+`\\?\` path of a drive is on another host.
 
 ## Registration
 

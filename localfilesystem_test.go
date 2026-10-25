@@ -846,7 +846,9 @@ func TestFileURILocalPath(t *testing.T) {
 		{"localhost", false, "/", true}, // it used to be the working directory
 		{"", true, "/", true},
 		{"localhost", true, "/", true},
-		{"//?/C:/x", true, "//?/C:/x", true},                             // long path, written by beta.3 too
+		{"//?/C:/x", true, "//?/C:/x", true}, // long path, written by beta.3 too
+		{"//?/C:", true, "//?/C:/", true},    // the root, not the volume device
+		{"?/C:", true, "//?/C:/", true},
 		{"//?/UNC/server/share/x", true, "//?/UNC/server/share/x", true}, // long UNC path
 		{"/??/PhysicalDrive0", true, "/??/PhysicalDrive0", false},        // NT object namespace
 		{`/??\C:\x`, true, `/??\C:\x`, false},

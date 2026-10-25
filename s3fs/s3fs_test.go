@@ -628,10 +628,11 @@ type shortPageStore struct {
 	brokenToken string
 	brokenFrom  int
 
-	mtx     sync.Mutex
-	lists   int
-	deleted []string
-	writes  int
+	mtx      sync.Mutex
+	lists    int
+	listKeys []string // "max-keys" of every listing, prefixed with "+" for a follow-up page
+	deleted  []string
+	writes   int
 }
 
 // maxListRequests limits the ListObjectsV2 requests of a shortPageStore,
@@ -674,6 +675,11 @@ func (st *shortPageStore) handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	token := query.Get("continuation-token")
+	if token != "" {
+		st.listKeys = append(st.listKeys, "+"+query.Get("max-keys"))
+	} else {
+		st.listKeys = append(st.listKeys, query.Get("max-keys"))
+	}
 	n := 0
 	if token != "" {
 		var err error
@@ -788,6 +794,17 @@ func TestShortTruncatedListingPages(t *testing.T) {
 		st.mtx.Lock()
 		assert.Equal(t, []string{"empty/"}, st.deleted)
 		st.mtx.Unlock()
+	})
+
+	// The first page asks for the keys the check needs, the pages after a
+	// truncated page without a match for the most keys a page returns
+	t.Run("FollowUpPagesAskForMaxKeys", func(t *testing.T) {
+		st, f := newStore(t, "", 0)
+		_, err := f.Stat("/dir")
+		require.NoError(t, err)
+		st.mtx.Lock()
+		defer st.mtx.Unlock()
+		require.Equal(t, []string{"1", "+1000"}, st.listKeys, "max-keys of the listings of Stat")
 	})
 
 	// Empty truncated pages with new tokens without end
