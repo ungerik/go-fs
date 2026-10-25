@@ -163,10 +163,15 @@ and open readers, and afterwards every method returns
   dangling link wraps `os.ErrNotExist`. `ListDir` and `ListDirRecursive`
   describe a link itself, with `IsSymlink` set and neither `IsDir` nor
   `IsRegular`, `ListDirRecursive` follows only a link at the listed path,
-  and `Remove`, `RemoveAll` and `Move` act on the link itself. Servers with
-  MLST support describe a link with the facts of its target or with a type
-  that the FTP client library reads as a file, so their links look like
-  files and directories. FTP has no command to create a link, so `ftpfs`
+  and `Remove`, `RemoveAll` and `Move` act on the link itself. A server
+  whose LIST lists a link itself like `ls -l` instead of the directory it
+  points to is supported: `ListDir` and `ListDirRecursive` of a link to a
+  directory list the directory. Servers with MLST support describe a link
+  with the facts of its target or with a type that the FTP client library
+  reads as a file, so their links look like files and directories:
+  `ListDirRecursive` lists the files below a link to a directory.
+  `RemoveAll` still deletes such a link itself, because it tries `DELE`
+  for a directory before it deletes its content. FTP has no command to create a link, so `ftpfs`
   doesn't implement `fs.SymbolicLinkFileSystem`: `fs.CopyRecursive` copies
   a link to a file as a file and fails with an error wrapping
   `errors.ErrUnsupported` for a link to a directory before it writes

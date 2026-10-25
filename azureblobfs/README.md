@@ -75,7 +75,7 @@ err = azureblobfs.NewAndRegister(ctx, client, nil)
 &azureblobfs.Options{
     ReadOnly:           true, // writes return fs.ErrReadOnlyFileSystem
     SkipContainerCheck: true, // New sends no request
-    DeleteSnapshots:    true, // Remove and RemoveAll delete blob snapshots too
+    DeleteSnapshots:    true, // Remove, RemoveAll and Move delete blob snapshots too
 }
 ```
 
@@ -91,11 +91,14 @@ with it. By default the file system keeps such a blob: `Remove` returns an
 error wrapping `azureblobfs.ErrSnapshotsPresent`, and `RemoveAll` first lists
 the tree with its snapshots and returns that error before it deletes
 anything (a snapshot that another client creates after that listing still
-stops `RemoveAll` with the same error, after it deleted some blobs). The
-generic `Move` and `Rename`, which copy the blob without its snapshots and
-remove the source, fail the same way and keep the source. Set
-`DeleteSnapshots` to delete the snapshots together with the blobs; deleted
-snapshots are gone unless soft delete is enabled for the storage account.
+stops `RemoveAll` with the same error, after it deleted some blobs). `Move`
+and `Rename` within the container copy the blobs server-side, without their
+snapshots, and delete the source: they check for snapshots before they copy
+anything, fail the same way and leave the source and the destination
+untouched. A move to another file system copies first and fails when it
+deletes the source. Set `DeleteSnapshots` to delete the snapshots together
+with the blobs; deleted snapshots are gone unless soft delete is enabled for
+the storage account.
 
 File URIs have the form `azblob://<host>/<container>/<blob name>`, for
 example `azblob://myaccount.blob.core.windows.net/assets/images/logo.png`.
@@ -122,13 +125,13 @@ messages of the errors it returns, so they don't leak into logs.
   the container. Writing or copying onto a directory returns `fs.ErrIsDirectory`
   instead of creating a blob that would turn the directory into a file.
 - **Native operations.** `ReadAll`, `WriteAll`, `OpenReadWriter`, `Touch`,
-  `RemoveAll`, `ListDirRecursive` and `CopyFile` are native, and readers
+  `RemoveAll`, `ListDirRecursive`, `CopyFile` and `Move` are native, and readers
   seek with range requests that are pinned to the ETag of the blob when the
   reader was opened (`If-Match`): after the blob was replaced, the next range
   request fails with an error telling that the blob changed while it was
   being read, instead of returning bytes of the new blob after those of the
   old one. Everything else uses the generic emulation of
-  the `fs` package, `Move` and `Rename` copy and delete. `ReadAll` allocates
+  the `fs` package. `ReadAll` allocates
   its buffer once for the `Content-Length` of the download, up to 16 MiB,
   so a huge blob grows the buffer while it is read instead of allocating
   all of it before the first byte arrived.
@@ -138,7 +141,9 @@ messages of the errors it returns, so they don't leak into logs.
   stays bounded and the blob only appears or changes when `Close` completes.
   The writers implement `fs.WriteAborter`: `Abort` cancels the upload,
   nothing is committed (Azure deletes uncommitted blocks after a week).
-- **Copy and touch.** `CopyFile` is a server-side copy. `Touch` updates
+- **Copy, move and touch.** `CopyFile` is a server-side copy. `Move` copies
+  the blobs server-side and deletes the source after every copy succeeded,
+  Azure has no rename. `Touch` updates
   the modification time by setting the metadata of the blob again, which
   keeps the metadata (with the case of their names), the content headers
   and the content. `Touch` of a missing path creates an empty blob with a

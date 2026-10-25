@@ -863,6 +863,20 @@ func TestFileURILocalPath(t *testing.T) {
 		{"//server/share/x", true, "//server/share/x", true},
 		{"/x", true, "/x", true},
 		{"/CD:/x", true, "/CD:/x", true},
+
+		// No hosts: go-fs before v1.0.0 resolved "file://./x" relative to the
+		// working directory, on Windows they would be device namespace paths
+		{"./x", false, "/./x", false},
+		{"../x", false, "/../x", false},
+		{"?/x", false, "/?/x", false},
+		{"./PhysicalDrive0", true, "/./PhysicalDrive0", false},
+		{`.\x`, true, `/.\x`, false},
+		{"../x", true, "/../x", false},
+		{"?/C:/x", true, "/?/C:/x", false},
+		{"//./PhysicalDrive0", true, "/./PhysicalDrive0", false},
+		{`\\?\C:\x`, true, `/?\C:\x`, false},
+		{"//./x", false, "//./x", true}, // only a path on other platforms
+		{"//.x/share", true, "//.x/share", true},
 	} {
 		gotPath, gotIsLocal := fileURILocalPath(tc.rest, tc.windows)
 		assert.Equal(t, tc.wantPath, gotPath, "fileURILocalPath(%q, windows=%t) path", tc.rest, tc.windows)
@@ -878,12 +892,65 @@ func TestFileURIPathOf(t *testing.T) {
 		"C:/":              "/C:/",
 		"//server/share/x": "server/share/x",
 	} {
-		assert.Equal(t, want, fileURIPathOf(slashPath), "fileURIPathOf(%q)", slashPath)
-		rest := fileURIPathOf(slashPath)
+		assert.Equal(t, want, fileURIPathOf(slashPath, true), "fileURIPathOf(%q)", slashPath)
+		rest := fileURIPathOf(slashPath, true)
 		gotPath, isLocal := fileURILocalPath(rest, true)
 		assert.True(t, isLocal, "the URI of %q is local on Windows", slashPath)
 		assert.Equal(t, slashPath, gotPath, "the Windows path of the URI of %q", slashPath)
 	}
+
+	// A relative path, which AbsPath returns if the working directory can't
+	// be determined, gets the authority "." that names no file. It used to
+	// get a leading slash, the URI of another file below the root.
+	for _, tc := range []struct {
+		slashPath string
+		windows   bool
+		want      string
+	}{
+		{"data/x", false, "./data/x"},
+		{"data/x", true, "./data/x"},
+		{"../x", false, "./../x"},
+		{"C:/x", false, "./C:/x"}, // a directory named "C:" on other platforms
+		{"C:x", true, "./C:x"},    // relative to the working directory of drive C:
+	} {
+		rest := fileURIPathOf(tc.slashPath, tc.windows)
+		assert.Equal(t, tc.want, rest, "fileURIPathOf(%q, windows=%t)", tc.slashPath, tc.windows)
+		_, isLocal := fileURILocalPath(rest, tc.windows)
+		assert.False(t, isLocal, "the URI of the relative path %q names no file", tc.slashPath)
+	}
+}
+
+// TestLocalFileSystem_SplitPath checks that SplitPath converts a file URI
+// like CleanPath before it splits the path into its elements.
+func TestLocalFileSystem_SplitPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a b", "c")
+	want := strings.Split(strings.Trim(dir, Separator), Separator)
+	assert.Equal(t, want, Local.SplitPath(dir), "SplitPath of a path")
+	assert.Equal(t, want, Local.SplitPath(Local.URI(dir)), "SplitPath of the file URI of the path")
+	assert.Nil(t, Local.SplitPath(Separator), "SplitPath of the root")
+	assert.Nil(t, Local.SplitPath(""), "SplitPath of an empty path")
+}
+
+// TestLocalFileSystem_URIWithoutWorkingDirectory checks the URI of a relative
+// path while the working directory is deleted, so the path can't be made
+// absolute: the URI has the authority "." and names no file. It used to be
+// the URI of the absolute path with the same elements below the root.
+func TestLocalFileSystem_URIWithoutWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the working directory can't be deleted on Windows")
+	}
+	cwd := filepath.Join(t.TempDir(), "cwd")
+	require.NoError(t, os.Mkdir(cwd, 0o700))
+	t.Chdir(cwd)
+	require.NoError(t, os.Remove(cwd))
+	if _, err := os.Getwd(); err == nil {
+		t.Skip("os.Getwd works without the working directory on this platform")
+	}
+
+	uri := File(filepath.Join("data", "x")).URI()
+	assert.Equal(t, LocalPrefix+"./data/x", uri)
+	fileSystem, _ := ParseRawURI(uri)
+	assert.Equal(t, Invalid, fileSystem, "the URI of a relative path names no file")
 }
 
 func TestLocalFileSystem_FileURI(t *testing.T) {

@@ -421,9 +421,10 @@ func (s *fileSystem) dirInfo(k string, modified time.Time) *fs.FileInfo {
 }
 
 // errTruncatedWithoutToken is returned for a truncated ListObjectsV2 page
-// without a new continuation token. S3 always sends one, the request for
-// the next page without it would list the same page again, and ending the
-// listing would decide from an incomplete one.
+// without a new continuation token, also with a token of an earlier page.
+// S3 always sends a new one, the request for the next page without it
+// would list a page again, endlessly for a cycle of tokens, and ending
+// the listing would decide from an incomplete one.
 var errTruncatedWithoutToken = errors.New("s3fs: truncated listing page without a new continuation token")
 
 // findObject returns the first object with the key prefix for which
@@ -431,14 +432,16 @@ var errTruncatedWithoutToken = errors.New("s3fs: truncated listing page without 
 // maxKeys keys. A page can have fewer keys than MaxKeys and still be
 // truncated, even no key at all, which S3-compatible stores do, so it
 // reads pages until one has a matching object or the listing ends.
-// A truncated page without a new continuation token is an error
-// wrapping errTruncatedWithoutToken.
+// A truncated page without a new continuation token, one that no earlier
+// page returned, is an error wrapping errTruncatedWithoutToken. Stat and
+// Remove call it without a context that could end a cycle of tokens.
 func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix string, maxKeys int32, match func(key string) bool) (*types.Object, error) {
 	input := &s3.ListObjectsV2Input{
 		Bucket:  &s.bucketName,
 		Prefix:  &prefix,
 		MaxKeys: &maxKeys,
 	}
+	var tokens map[string]bool // the continuation tokens of the listed pages
 	for {
 		page, err := client.ListObjectsV2(ctx, input)
 		if err != nil {
@@ -453,9 +456,13 @@ func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix s
 			return nil, nil
 		}
 		token := aws.ToString(page.NextContinuationToken)
-		if token == "" || token == aws.ToString(input.ContinuationToken) {
+		if token == "" || tokens[token] {
 			return nil, fmt.Errorf("listing %s: %w", s.file(prefix), errTruncatedWithoutToken)
 		}
+		if tokens == nil {
+			tokens = make(map[string]bool)
+		}
+		tokens[token] = true
 		input.ContinuationToken = &token
 	}
 }

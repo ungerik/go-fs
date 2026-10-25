@@ -267,8 +267,13 @@ func (local *LocalFileSystem) RelPath(basePath, targPath string) (string, error)
 // "file:///dir/file" on Unix, "file:///C:/dir/file" for the Windows path
 // `C:\dir\file` and "file://server/share/file" for the UNC path
 // `\\server\share\file`. Every "%" of the path is escaped as "%25".
+//
+// A relative path that can't be made absolute, because the working
+// directory can't be determined, gets the authority ".", like
+// "file://./data/x", which names no file: [ParseRawURI] returns the
+// [InvalidFileSystem] for it, so the URI never names another file.
 func (local *LocalFileSystem) URI(cleanPath string) string {
-	return LocalPrefix + fsimpl.EscapeURIPath(fileURIPathOf(filepath.ToSlash(local.AbsPath(cleanPath))))
+	return LocalPrefix + fsimpl.EscapeURIPath(fileURIPathOf(filepath.ToSlash(local.AbsPath(cleanPath)), filepath.Separator == '\\'))
 }
 
 // fileURIPathOf returns the part of the file URI after the [LocalPrefix]
@@ -276,14 +281,18 @@ func (local *LocalFileSystem) URI(cleanPath string) string {
 // gets the leading slash of the empty authority ("C:/x" becomes "/C:/x"),
 // the server of a UNC path becomes the authority ("//server/share/x"
 // becomes "server/share/x"), and a Unix path is used as is.
-func fileURIPathOf(slashPath string) string {
+// A relative path gets the authority "." of no host ("data/x" becomes
+// "./data/x"), see fileURILocalPath. windows selects the rules of Windows.
+func fileURIPathOf(slashPath string, windows bool) string {
 	switch {
 	case strings.HasPrefix(slashPath, "//"):
 		return slashPath[2:]
-	case !strings.HasPrefix(slashPath, "/"):
+	case strings.HasPrefix(slashPath, "/"):
+		return slashPath
+	case windows && isDriveLetterPath(slashPath):
 		return "/" + slashPath
 	}
-	return slashPath
+	return "./" + slashPath
 }
 
 // fileURILocalPath returns the local path for rest, the part of a file
@@ -301,7 +310,12 @@ func fileURIPathOf(slashPath string) string {
 // of an absolute path, "/server/share/x".
 //
 // The authority "~" is no host but the home directory: "file://~/x"
-// is returned as "~/x" for expandTilde.
+// is returned as "~/x" for expandTilde. The authorities ".", ".." and "?"
+// name no host, isLocal is false for them on every platform: go-fs before
+// v1.0.0 resolved "file://./x" relative to the working directory, and on
+// Windows `\\.\` and `\\?\` begin the device and file namespaces,
+// `\\.\PhysicalDrive0` is a disk, so on Windows the form "file:////./x"
+// of such a UNC path is not local either.
 func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool) {
 	separators := "/"
 	if windows {
@@ -327,11 +341,28 @@ func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool)
 	default:
 		return "/" + authority + filePath, false
 	}
+	if windows && isNoServerUNCPath(filePath) {
+		return "/" + strings.TrimLeft(filePath, `/\`), false
+	}
 	if windows && len(filePath) == 2 && filePath[1] == ':' {
 		// "file:///C:" is the root of the drive, not its current directory
 		filePath += "/"
 	}
 	return filePath, true
+}
+
+// isNoServerUNCPath reports if the Windows path p with forward or
+// backward slashes has the form of a UNC path with the server ".",
+// ".." or "?", which are no servers, see fileURILocalPath.
+func isNoServerUNCPath(p string) bool {
+	if len(p) < 3 || !strings.ContainsRune(`/\`, rune(p[0])) || !strings.ContainsRune(`/\`, rune(p[1])) {
+		return false
+	}
+	server := p[2:]
+	if i := strings.IndexAny(server, `/\`); i >= 0 {
+		server = server[:i]
+	}
+	return server == "." || server == ".." || server == "?"
 }
 
 // isDriveLetterPath reports if filePath begins with a Windows drive letter
@@ -356,6 +387,19 @@ func isRemoteFileURI(uri string) bool {
 	}
 	_, isLocal := fileURILocalPath(fsimpl.UnescapeURIPath(rest), filepath.Separator == '\\')
 	return !isLocal
+}
+
+// cleanFileURI returns the clean local path of uri, a URI with the
+// [LocalPrefix] whose path is percent-encoded like in a File, like
+// [LocalFileSystem.CleanPath] of the decoded uri, and reports if it names
+// a local file, see fileURILocalPath. It decodes and converts uri once
+// for ParseRawURI, which would do both twice with isRemoteFileURI.
+func cleanFileURI(uri string) (cleanPath string, isLocal bool) {
+	filePath, isLocal := fileURILocalPath(fsimpl.UnescapeURIPath(strings.TrimPrefix(uri, LocalPrefix)), filepath.Separator == '\\')
+	if !isLocal {
+		return "", false
+	}
+	return cleanLocalPath(filePath, nil), true
 }
 
 // CleanPath converts a first element that begins with the [LocalPrefix]
@@ -386,13 +430,18 @@ func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 	if len(uriParts) == 0 {
 		return "."
 	}
-	// Don't modify the passed slice
 	first := uriParts[0]
 	if rest, ok := strings.CutPrefix(first, LocalPrefix); ok {
 		first, _ = fileURILocalPath(rest, filepath.Separator == '\\')
 	}
-	first = expandTilde(first)
-	return literalTilde(filepath.Clean(filepath.Join(append([]string{first}, uriParts[1:]...)...)))
+	return cleanLocalPath(first, uriParts[1:])
+}
+
+// cleanLocalPath expands the tilde of the local path first and joins it
+// with more like [LocalFileSystem.CleanPath], which cleans the result.
+func cleanLocalPath(first string, more []string) string {
+	// Don't modify the passed slice
+	return literalTilde(filepath.Clean(filepath.Join(append([]string{expandTilde(first)}, more...)...)))
 }
 
 // SplitPath converts a file URI like [LocalPrefix] and splits on [Separator].

@@ -3,7 +3,6 @@ package azureblobfs
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"sync"
@@ -12,9 +11,6 @@ import (
 )
 
 var _ fs.WriteAborter = new(uploadWriter)
-
-// errAborted is the error that the upload of an aborted writer reads.
-var errAborted = errors.New("azureblobfs: upload aborted")
 
 // uploadWriter streams the written data through a pipe into an upload
 // that the first Write starts, so the writer doesn't buffer the

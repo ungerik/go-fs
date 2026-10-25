@@ -346,7 +346,14 @@ signatures. Changes compared to v0.1:
   `file://server/share/file`; the old Windows form is still parsed, and so is
   `file://localhost/…`. A file URI with another host than `localhost`
   resolves to the `Invalid` file system on platforms other than Windows
-  instead of a path relative to the working directory.
+  instead of a path relative to the working directory. That includes
+  relative URIs that v0 wrote or accepted for relative paths:
+  `file://data/uploads` names the host `data`, on Windows the UNC path
+  `\\data\uploads` (which connects to that host), and `file://./x`,
+  `file://../x` and `file://?/x` name no host and resolve to the `Invalid`
+  file system on every platform (on Windows they would be the device paths
+  `\\.\x` and `\\?\x`). Convert stored relative file URIs to paths, or to
+  absolute file URIs, before upgrading.
 - `sftpfs`, `ftpfs` and `webdavfs` reject paths with a backslash
   (`os.ErrInvalid`), because a server on Windows takes it for a separator.
   For a server on Unix that has files with backslashes in their names, set

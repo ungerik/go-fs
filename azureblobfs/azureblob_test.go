@@ -324,25 +324,6 @@ func TestSASNotInErrors(t *testing.T) {
 	assert.True(t, errors.As(err, &opErr), "the redacted error must unwrap to the transport error")
 }
 
-// TestRedactErr checks the redaction of URL queries and SAS signatures.
-func TestRedactErr(t *testing.T) {
-	assert.NoError(t, redactErr(nil))
-	plain := errors.New("no URL here")
-	assert.Same(t, plain, redactErr(plain), "errors without secrets are returned unchanged")
-
-	for msg, want := range map[string]string{
-		`Get "https://a.blob.core.windows.net/c/x.txt?sv=1&sig=abc%2F": dial tcp: refused`: `Get "https://a.blob.core.windows.net/c/x.txt": dial tcp: refused`,
-		`PUT http://127.0.0.1:1/acc/c?comp=list&sig=abc and more`:                          `PUT http://127.0.0.1:1/acc/c and more`,
-		`signature sig=abc&se=2026 rejected`:                                               `signature sig=REDACTED&se=2026 rejected`,
-		`two https://h/a?x=1 and https://h/b?sig=2#frag`:                                   `two https://h/a and https://h/b#frag`,
-	} {
-		err := redactErr(fmt.Errorf("wrapped: %w", errors.New(msg)))
-		assert.Equal(t, "wrapped: "+want, err.Error(), "redactErr(%q)", msg)
-	}
-	err := redactErr(fmt.Errorf("x?sig=1: %w", context.Canceled))
-	assert.ErrorIs(t, err, context.Canceled, "redacted errors unwrap")
-}
-
 // TestContainerSAS checks a file system with a container SAS: New used to
 // get the container properties, which a container SAS doesn't allow,
 // it now lists one blob. A SAS without the list permission needs
@@ -877,12 +858,33 @@ func TestRemoveSnapshots(t *testing.T) {
 	_, err = blobFS.Stat("/snapshots/file")
 	assert.ErrorIs(t, err, os.ErrNotExist, "RemoveAll must delete the blob without snapshots")
 
-	// The generic Move copies the blob without its snapshots and keeps the source
+	// Move checks the snapshots before it copies anything, a copy has no
+	// snapshots and the source couldn't be deleted. It used to replace an
+	// existing destination before it failed to delete the source.
+	require.NoError(t, blobFS.WriteAll(ctx, "/snapshots/existing.txt", []byte("keep"), 0))
+	before = listedWithSnapshots(t, client, "snapshots/")
 	src := blobFS.RootDir().Join("snapshots", "dir", "b.txt")
-	err = src.MoveTo(ctx, blobFS.RootDir().Join("snapshots", "moved.txt"))
+	err = src.MoveTo(ctx, blobFS.RootDir().Join("snapshots", "existing.txt"))
 	assert.ErrorIs(t, err, ErrSnapshotsPresent, "Move of a blob with snapshots")
-	assert.True(t, src.Exists(), "Move must keep the source with snapshots")
+	err = blobFS.RootDir().Join("snapshots", "dir").MoveTo(ctx, blobFS.RootDir().Join("snapshots", "moved"))
+	assert.ErrorIs(t, err, ErrSnapshotsPresent, "Move of a directory with a blob with snapshots")
+	assert.Equal(t, before, listedWithSnapshots(t, client, "snapshots/"), "Move must neither copy nor delete anything")
+	data, err := blobFS.ReadAll(ctx, "/snapshots/existing.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "keep", string(data), "Move must keep the destination")
 
+	// With DeleteSnapshots Move deletes the source with its snapshots
+	require.NoError(t, deleting.Move(ctx, "/snapshots/dir", "/snapshots/moved"), "Move with DeleteSnapshots")
+	assert.Empty(t, listedWithSnapshots(t, client, "snapshots/dir/"), "Move must delete the source and its snapshots")
+	for _, name := range []string{"a.txt", "b.txt", "sub/c.txt"} {
+		data, err := blobFS.ReadAll(ctx, "/snapshots/moved/"+name)
+		require.NoError(t, err, "moved %s", name)
+		assert.Equal(t, "snapshots/dir/"+name, string(data), "moved %s", name)
+	}
+	require.NoError(t, deleting.Move(ctx, "/snapshots/moved/b.txt", "/snapshots/dir/b.txt"), "Move back")
+
+	_, err = client.NewBlobClient("snapshots/dir/b.txt").CreateSnapshot(ctx, nil)
+	require.NoError(t, err)
 	require.NoError(t, deleting.Remove("/snapshots/dir/b.txt"), "Remove with DeleteSnapshots")
 	assert.Empty(t, listedWithSnapshots(t, client, "snapshots/dir/b.txt"), "Remove must delete the blob and its snapshots")
 	require.NoError(t, deleting.Remove("/snapshots/marker"), "Remove of a directory marker with DeleteSnapshots")
@@ -898,11 +900,12 @@ func TestRemoveSnapshots(t *testing.T) {
 // wrapping ErrSnapshotsPresent. With Options.DeleteSnapshots every delete
 // sends "x-ms-delete-snapshots: include" and RemoveAll lists no snapshots.
 func TestRemoveSnapshotsOffline(t *testing.T) {
-	var deletes, deletesWithSnapshots, snapshotListings atomic.Int32
+	var deletes, deletesWithSnapshots, snapshotListings, listings atomic.Int32
 	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		switch {
 		case query.Get("comp") == "list":
+			listings.Add(1)
 			if strings.Contains(query.Get("include"), "snapshots") {
 				snapshotListings.Add(1)
 			}
@@ -935,8 +938,14 @@ func TestRemoveSnapshotsOffline(t *testing.T) {
 	err = blobFS.RemoveAll(ctx, "/dir")
 	require.ErrorIs(t, err, ErrSnapshotsPresent, "RemoveAll of a blob that got a snapshot after the listing")
 	assert.ErrorContains(t, err, string(blobFS.file("dir/a.txt")), "the error names the blob")
-	assert.Equal(t, int32(2), snapshotListings.Load(), "RemoveAll lists the blob and the tree below it with snapshots")
+	assert.Equal(t, int32(1), snapshotListings.Load(), "RemoveAll lists the tree below the blob with snapshots, Azure checks the blob itself")
 	assert.Equal(t, int32(2), deletes.Load())
+	assert.Equal(t, int32(1), listings.Load(), "RemoveAll deletes the blobs of the snapshot listing without listing them again")
+
+	// A single blob costs a listing and a delete
+	listings.Store(0)
+	require.NoError(t, blobFS.RemoveAll(ctx, "/file.txt"), "RemoveAll of a missing blob")
+	assert.Equal(t, int32(1), listings.Load(), "RemoveAll of a blob without a tree lists once")
 
 	blobFS.deleteSnapshots = true
 	snapshotListings.Store(0)
@@ -944,6 +953,71 @@ func TestRemoveSnapshotsOffline(t *testing.T) {
 	require.NoError(t, blobFS.RemoveAll(ctx, "/dir"), "RemoveAll with DeleteSnapshots")
 	assert.Equal(t, int32(2), deletesWithSnapshots.Load(), "every delete must send x-ms-delete-snapshots: include")
 	assert.Zero(t, snapshotListings.Load(), "RemoveAll with DeleteSnapshots must not list snapshots")
+}
+
+// TestMoveSnapshotsOffline checks on a test server that Move of a blob
+// with a snapshot, and of a directory with such a blob, is an error
+// wrapping ErrSnapshotsPresent before it sends a copy or a delete request.
+func TestMoveSnapshotsOffline(t *testing.T) {
+	var writes atomic.Int32
+	baseBlob := `<Blob><Name>dir/a.txt</Name><Properties><Content-Length>1</Content-Length></Properties></Blob>`
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		switch {
+		case query.Get("comp") == "list":
+			var blobs string
+			if strings.HasPrefix("dir/a.txt", query.Get("prefix")) {
+				if strings.Contains(query.Get("include"), "snapshots") {
+					blobs = `<Blob><Name>dir/a.txt</Name><Snapshot>2026-10-25T00:00:00.0000000Z</Snapshot><Properties><Content-Length>1</Content-Length></Properties></Blob>`
+				}
+				blobs += baseBlob
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="utf-8"?><EnumerationResults ContainerName="container"><Blobs>`+blobs+`</Blobs></EnumerationResults>`)
+		case r.Method == http.MethodPut || r.Method == http.MethodDelete:
+			writes.Add(1)
+			w.WriteHeader(http.StatusForbidden)
+		case r.URL.Path == "/account/container/dir/a.txt" && r.Method == http.MethodHead:
+			w.Header().Set("Content-Length", "1")
+		default:
+			w.Header().Set("x-ms-error-code", string(bloberror.BlobNotFound))
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	ctx := t.Context()
+
+	err := blobFS.Move(ctx, "/dir/a.txt", "/moved.txt")
+	require.ErrorIs(t, err, ErrSnapshotsPresent, "Move of a blob with a snapshot")
+	assert.ErrorContains(t, err, string(blobFS.file("dir/a.txt")), "the error names the blob")
+	require.ErrorIs(t, blobFS.Move(ctx, "/dir", "/moved"), ErrSnapshotsPresent, "Move of a directory with a blob with a snapshot")
+	assert.Zero(t, writes.Load(), "Move must not copy or delete anything")
+}
+
+// TestRemoveAllScanError checks that RemoveAll deletes nothing
+// if the listing of the snapshots fails.
+func TestRemoveAllScanError(t *testing.T) {
+	var deletes atomic.Int32
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletes.Add(1)
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	assert.Error(t, blobFS.RemoveAll(t.Context(), "/dir"))
+	assert.Zero(t, deletes.Load(), "RemoveAll must not delete anything after a failed listing")
+}
+
+// TestOpenReaderRoot checks that OpenReader of the root directory
+// is an fs.ErrIsDirectory without a request.
+func TestOpenReaderRoot(t *testing.T) {
+	var requests atomic.Int32
+	blobFS := newHTTPTestFileSystem(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	})
+	_, err := blobFS.OpenReader("/")
+	assert.ErrorIs(t, err, fs.ErrIsDirectory{})
+	assert.Zero(t, requests.Load(), "OpenReader of the root must not send a request")
 }
 
 // transportFunc is the transport of a test client,

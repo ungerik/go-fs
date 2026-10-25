@@ -181,7 +181,11 @@ the form `file://C:/dir/file.txt` written before v1.0.0. A URI with another
 host, like `file://server/share/x.txt`, is a UNC path on Windows; on other
 platforms there is no local path for it, so it resolves to the `Invalid` file
 system instead of a path relative to the working directory. `file://~/x` is
-the go-fs shorthand for `~/x` in the home directory.
+the go-fs shorthand for `~/x` in the home directory. The hosts `.`, `..` and
+`?` name no host on any platform, `file://./x` resolves to the `Invalid` file
+system, also on Windows, where it would be the device path `\\.\x`. A relative
+path that can't be made absolute, because the working directory can't be
+determined, has such a URI: `file://./data/x` names no file.
 
 ## Registration
 

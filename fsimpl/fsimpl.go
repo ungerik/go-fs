@@ -5,7 +5,9 @@ package fsimpl
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 )
@@ -154,4 +156,21 @@ func SplitPath(filePath, separator string) []string {
 		return nil
 	}
 	return strings.Split(filePath, separator)
+}
+
+// CheckNoBackslash returns an error wrapping [os.ErrInvalid] if filePath
+// contains a backslash. It is the path check of remote file systems with
+// the separator "/" whose servers can take a backslash for a separator,
+// like servers on Windows: a name like `..\x` is a single name for the
+// separator "/", also for fs.SubFileSystem and fs.CopyRecursive, but such
+// a server would split it and resolve "..", so the name would reach a file
+// outside of the directory that it is meant to be in. The error message
+// names the file system with fsName and ends with reason, which tells
+// which servers split at a backslash and how to allow backslashes for
+// the servers that store them in names, if the file system can.
+func CheckNoBackslash(fsName, filePath, reason string) error {
+	if !strings.Contains(filePath, `\`) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s path %q contains a backslash, %s", os.ErrInvalid, fsName, filePath, reason)
 }

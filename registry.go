@@ -384,10 +384,14 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 		}
 	}
 	if bestFS != nil {
-		if _, ok := bestFS.(*LocalFileSystem); ok && isRemoteFileURI(uri) {
-			// A file URI with a host like "file://server/share/x"
-			// has no local path on platforms without UNC paths
-			return Invalid, uri
+		if _, ok := bestFS.(*LocalFileSystem); ok && strings.HasPrefix(uri, LocalPrefix) {
+			cleanPath, isLocal := cleanFileURI(uri)
+			if !isLocal {
+				// A file URI with a host like "file://server/share/x"
+				// has no local path on platforms without UNC paths
+				return Invalid, uri
+			}
+			return bestFS, cleanPath
 		}
 		return bestFS, uriPath(bestFS, uri)
 	}

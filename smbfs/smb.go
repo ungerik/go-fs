@@ -210,10 +210,7 @@ func checkPath(filePath string) error {
 	if filePath == "" {
 		return fs.ErrEmptyPath
 	}
-	if strings.Contains(filePath, `\`) {
-		return fmt.Errorf("%w: smbfs path %q contains a backslash, which SMB servers take for a separator", os.ErrInvalid, filePath)
-	}
-	return nil
+	return fsimpl.CheckNoBackslash("smbfs", filePath, "which SMB servers take for a separator")
 }
 
 // checkLinkTarget checks the target of a symbolic link with checkPath and

@@ -48,7 +48,7 @@ Methods it provides:
 | `CleanPath(uriParts ...string) string`             | The joined, cleaned, prefix-stripped path      |
 | `TrimPrefix(uri string) string`                    | `uri` without the longest matching `URIPrefix` or `AltPrefixes` |
 | `URI(cleanPath string) string`                     | `URIPrefix` + `EscapeURIPath(cleanPath)`       |
-| `JoinCleanURI(uriParts ...string) string`          | `URL(CleanPath(uriParts...))`                  |
+| `JoinCleanURI(uriParts ...string) string`          | `URI(CleanPath(uriParts...))`                  |
 | `SplitDirAndName(filePath string) (dir, name string)` | Parent dir and name, prefix and volume aware |
 | `SplitPath(filePath string) []string`              | Path elements without prefix and volume        |
 
@@ -238,6 +238,7 @@ Standalone helpers, useful when embedding `PathHelper` does not fit.
 | `UnescapeURIPath(uriPath string) string`           | Decodes the percent-encoded characters of a URI path, the inverse of `EscapeURIPath`. An invalid escape like `50% off` returns the input unchanged. |
 | `MatchAnyPattern(name string, patterns []string) (bool, error)` | `true` if `name` matches any pattern via `path.Match`, and `true` when `patterns` is empty. |
 | `RandomString() string`                            | 120 random bits as a 20 character URL-safe base64 string, never starting with `-` or `_` so it can't be mistaken for a command line option. |
+| `CheckNoBackslash(fsName, filePath, reason string) error` | An error wrapping `os.ErrInvalid` if `filePath` contains a backslash, `nil` otherwise. The path check of remote file systems with the separator `/` whose servers can split names at a backslash, like servers on Windows, so that a name like `..\x` can't leave its directory. The message starts with `fsName` and ends with `reason`. `ftpfs`, `sftpfs`, `webdavfs` and `smbfs` use it. |
 
 `Ext` is worth a second look because the empty-separator case is the surprise:
 

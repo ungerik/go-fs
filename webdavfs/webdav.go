@@ -368,17 +368,28 @@ func (f *fileSystem) checkClosed() error {
 
 // checkPath returns fs.ErrEmptyPath for an empty path and an error
 // wrapping os.ErrInvalid for a path with a backslash
-// unless Options.AllowBackslashInNames is set.
+// unless Options.AllowBackslashInNames is set, see checkBackslash.
 func (f *fileSystem) checkPath(paths ...string) error {
 	for _, filePath := range paths {
 		if filePath == "" {
 			return fs.ErrEmptyPath
 		}
-		if !f.backslash && strings.Contains(filePath, `\`) {
-			return fmt.Errorf("%w: webdavfs path %q contains a backslash, which WebDAV servers on Windows take for a separator, see Options.AllowBackslashInNames", os.ErrInvalid, filePath)
+		if err := f.checkBackslash(filePath); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// checkBackslash returns an error wrapping os.ErrInvalid for a path with
+// a backslash unless Options.AllowBackslashInNames is set. The methods
+// check their paths with checkPath, do checks the path of every request
+// and send its destination, so no such path reaches the server.
+func (f *fileSystem) checkBackslash(filePath string) error {
+	if f.backslash {
+		return nil
+	}
+	return fsimpl.CheckNoBackslash("webdavfs", filePath, "which WebDAV servers on Windows take for a separator, see Options.AllowBackslashInNames")
 }
 
 // check returns the first error of the closed check and the context.
@@ -422,6 +433,9 @@ func (f *fileSystem) urlOf(filePath string, dir bool) string {
 // *StatusError returned, see fsError for its mapping to the fs errors.
 func (f *fileSystem) do(ctx context.Context, method, filePath string, dir bool, body []byte, header map[string]string) (*http.Response, error) {
 	if err := f.check(ctx); err != nil {
+		return nil, err
+	}
+	if err := f.checkBackslash(filePath); err != nil {
 		return nil, err
 	}
 	var bodyReader io.Reader
@@ -1077,6 +1091,9 @@ func (f *fileSystem) relocate(ctx context.Context, method string, srcInfo *fs.Fi
 // send sends a MOVE or COPY request for src to dest with the Overwrite
 // header T or F, for a collection with both URLs as collection URLs.
 func (f *fileSystem) send(ctx context.Context, method, src, dest string, dir, overwrite bool) error {
+	if err := f.checkBackslash(dest); err != nil {
+		return err
+	}
 	header := map[string]string{
 		// nginx wants both URLs of a collection with trailing slash
 		"Destination": f.urlOf(dest, dir),

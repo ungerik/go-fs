@@ -131,6 +131,23 @@ func TestReadHeader(t *testing.T) {
 	header, err = ReadHeader(&failContext{errAfter: 3, err: errCanceled}, file, 5)
 	require.ErrorIs(t, err, errCanceled)
 	require.Equal(t, "%P", string(header), "the bytes read before the cancellation")
+
+	// A read error that is no io.EOF returns the bytes read before it
+	errRead := errors.New("read failed")
+	header, err = ReadHeader(ctx, failingFileReader{NewMemFile("x.pdf", []byte("%P")), errRead}, 5)
+	require.ErrorIs(t, err, errRead)
+	require.Equal(t, "%P", string(header), "the bytes read before the error")
+}
+
+// failingFileReader is a FileReader whose reader returns
+// the data and then err instead of io.EOF.
+type failingFileReader struct {
+	MemFile
+	err error
+}
+
+func (f failingFileReader) OpenReader() (ReadCloser, error) {
+	return oneByteReadCloser{io.MultiReader(bytes.NewReader(f.FileData), iotest.ErrReader(f.err))}, nil
 }
 
 func TestExecutableFile(t *testing.T) {

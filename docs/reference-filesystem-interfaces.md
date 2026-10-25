@@ -188,7 +188,7 @@ specialized), `r/o` read-only backend so the write operation does not apply.
 | Capability             |  s3 | azblob | sftp | ftp | smb | dropbox | webdav | http |
 | ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
 | CopyFile (server-side) |  ✓  |   ✓    |  –   |  –  |  –  |    ✓    |   ✓    |  –   |
-| Move                   |  –  |   –    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |
+| Move                   |  –  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |
 | Exists                 |  –  |   –    |  –   |  –  |  –  |    –    |   –    |  ✓   |
 | ReadAll                |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    –    |   ✓    |  ✓   |
 | WriteAll               |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |

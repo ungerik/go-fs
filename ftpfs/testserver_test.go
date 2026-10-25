@@ -34,7 +34,8 @@ import (
 // Symbolic links, seeded with symlink, are followed like the kernel
 // follows them for vsftpd: in every element of the path of CWD, RETR,
 // SIZE, MDTM, MFMT, STOR, APPE, MLST and of the directory that LIST and
-// MLSD list, while DELE, RMD, MKD and RNFR/RNTO act on a link itself.
+// MLSD list, while DELE, RMD, MKD and RNFR/RNTO follow the links of the
+// parent directories and act on a link itself in the last element.
 // LIST lists a link like "ls -l" with its target. MLSD and MLST describe
 // a link with the facts of its target like ProFTPD by default, MLSD
 // a dangling link with the RFC 3659 type "OS.unix=slink:<target>".
@@ -67,6 +68,7 @@ type testFTPServer struct {
 	refuse           map[string]int // the next RNFR, RNTO or RMD commands like "RNFR /path" are refused with 550
 	deleteOnRNFR     string         // RNFR of this path deletes it first, like another client right before
 	dotEntries       bool           // LIST and MLSD list the entries "." and ".." first like most servers
+	lsArgs           bool           // LIST of a file or a symbolic link lists it itself like "ls -l" instead of failing or following the link
 	maxListings      int            // LIST and MLSD fail with 550 after this many listings if not 0
 	requireTLSReuse  bool           // TLS data connections must resume the TLS session of the control connection
 }
@@ -257,6 +259,17 @@ func (s *testFTPServer) follow(p string) string {
 		rest = append(strings.Split(node.link, "/"), rest...)
 	}
 	return resolved
+}
+
+// followDir returns the clean absolute path p with the symbolic links of
+// its parent directories followed like by follow, the last element is
+// not followed, like the kernel resolves the path for unlink and rmdir.
+// The caller must hold s.mu.
+func (s *testFTPServer) followDir(p string) string {
+	if p == "/" {
+		return p
+	}
+	return path.Join(s.follow(path.Dir(p)), path.Base(p))
 }
 
 func (s *testFTPServer) acceptLoop() {
@@ -496,7 +509,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		noMLST, noEPSV, pasvHost := s.noMLST, s.noEPSV, s.pasvHost
 		failList := s.failListContains
 		rntoNoReplace := s.rntoNoReplace
-		dotEntries := s.dotEntries
+		dotEntries, lsArgs := s.dotEntries, s.lsArgs
 		tooManyListings := (verb == "LIST" || verb == "MLSD") && s.maxListings > 0 && s.commands["LIST"]+s.commands["MLSD"] > s.maxListings
 		s.mu.Unlock()
 
@@ -696,6 +709,14 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				continue
 			}
 			s.mu.Lock()
+			if verb == "LIST" && lsArgs {
+				if node, ok := s.nodes[s.followDir(p)]; ok && !node.isDir {
+					line := listLine(node, path.Base(p))
+					s.mu.Unlock()
+					sendData(fmt.Appendf(nil, "%s\r\n", line))
+					continue
+				}
+			}
 			p = s.follow(p)
 			node, ok := s.nodes[p]
 			var lines []string
@@ -728,8 +749,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			}
 			sendData(data)
 		case "MKD":
-			p := abs(arg)
 			s.mu.Lock()
+			p := s.followDir(abs(arg))
 			parent, parentOK := s.nodes[path.Dir(p)]
 			_, exists := s.nodes[p]
 			if parentOK && parent.isDir && !exists {
@@ -740,7 +761,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				reply("550 cannot create directory")
 				continue
 			}
-			reply(`257 "%s" created`, p)
+			reply(`257 "%s" created`, abs(arg))
 		case "RMD":
 			p := abs(arg)
 			if s.refused(verb, p) {
@@ -748,6 +769,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				continue
 			}
 			s.mu.Lock()
+			p = s.followDir(p)
 			node, ok := s.nodes[p]
 			empty := ok && node.isDir && len(s.children(p)) == 0
 			if empty {
@@ -760,8 +782,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			}
 			reply("250 removed")
 		case "DELE":
-			p := abs(arg)
 			s.mu.Lock()
+			p := s.followDir(abs(arg))
 			node, ok := s.nodes[p]
 			if ok && !node.isDir {
 				delete(s.nodes, p)
@@ -783,6 +805,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			if s.deleteOnRNFR == renameFrom {
 				delete(s.nodes, renameFrom)
 			}
+			renameFrom = s.followDir(renameFrom)
 			_, ok := s.nodes[renameFrom]
 			s.mu.Unlock()
 			if !ok {
@@ -803,6 +826,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				continue
 			}
 			s.mu.Lock()
+			to = s.followDir(to)
 			_, destExists := s.nodes[to]
 			if !destExists || !rntoNoReplace {
 				// Like rename(2) on Unix: replaces a file and merges into

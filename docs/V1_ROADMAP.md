@@ -131,13 +131,16 @@ These hold for v1.0.0. Where an earlier design differs, the decision here wins.
   smbfs: their separator is `/`, but a server on Windows takes `\` for a
   separator, so `..\x` would leave the directory it is meant to be in.
   `Options.AllowBackslashInNames` allows it for servers on Unix that store
-  backslashes in names. Only the paths passed to a file system are checked,
-  names a server lists are passed through.
+  backslashes in names. Only the paths passed to a file system and the link
+  targets that ftpfs follows are checked, names a server lists are passed
+  through. The check is `fsimpl.CheckNoBackslash` at one place per backend:
+  ftpfs `do`, sftpfs `run`, webdavfs `do`.
 - **Azure snapshots** (2026-10-25). Azure deletes a blob with snapshots only
   if the request says what to do with them. `azureblobfs` refuses by default
   (`ErrSnapshotsPresent`; `RemoveAll` checks the whole tree before it deletes
-  anything) and deletes the snapshots with the blob only with
-  `Options.DeleteSnapshots`, like rclone's `delete_snapshots`.
+  anything, the native `Move` before it copies anything) and deletes the
+  snapshots with the blob only with `Options.DeleteSnapshots`, like rclone's
+  `delete_snapshots`.
 
 ### Project rules
 
@@ -188,7 +191,7 @@ These hold for v1.0.0. Where an earlier design differs, the decision here wins.
       (Azurite 3.37 rejects it without `--skipApiVersionCheck`), snapshots and
       ETag-pinned reads included.
 - [ ] dropboxfs with a real `DROPBOX_ACCESS_TOKEN`.
-- [ ] Everything in [Verification](#verification) below.
+- [ ] Everything in the [verification checklist](#verification-checklist) below.
 
 ### Release
 
@@ -215,7 +218,10 @@ Additive or internal, so they can land in v1.x releases:
 - ftpfs detects links only on servers without MLST: with MLSD/MLST,
   `jlaffaye/ftp` reads `type=OS.unix=slink:…` as a file and drops the target,
   and servers like ProFTPD report the facts of the target. Fixing it needs
-  raw MLSD access, which the client library doesn't offer.
+  raw MLSD access, which the client library doesn't offer. `RemoveAll` is
+  safe there, it tries `DELE` before it deletes the content of a directory,
+  but `ListDirRecursive` walks a link to a directory, and a link to an
+  ancestor until the server fails to resolve the path.
 - smbfs link behaviour is not covered by the conformance link check (the test
   Samba server rejects links); uuiddir walks a link to a directory like a
   directory.
@@ -226,7 +232,7 @@ Additive or internal, so they can land in v1.x releases:
   raw `@` in the path.
 - azureblobfs: pin the listing `ResponseFormat` to XML.
 
-## Verification
+## Verification checklist
 
 - `./test-workspace.sh` (with `-race`) green locally; GitHub Actions green on
   ubuntu, macos and windows for every module.

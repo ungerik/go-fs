@@ -987,7 +987,22 @@ func TestBackslashInNames(t *testing.T) {
 			assert.ErrorIs(t, call(), os.ErrInvalid, "%s(%q)", op, name)
 		}
 	}
+	// Every request is checked, also of a method that doesn't check its paths
+	_, err := f.do(ctx, "PROPFIND", `/dir/..\victim.txt`, false, nil, nil)
+	assert.ErrorIs(t, err, os.ErrInvalid, "do checks the path of a request")
+	err = f.send(ctx, "MOVE", "/victim.txt", `/dir/..\moved.txt`, false, false)
+	assert.ErrorIs(t, err, os.ErrInvalid, "send checks the destination")
 	assert.Len(t, srv.requests(), requestsBefore, "no request may reach the server")
+
+	// An empty path is an fs.ErrEmptyPath, also for the second path
+	for op, err := range map[string]error{
+		"Stat":          func() error { _, err := f.Stat(""); return err }(),
+		"WriteAll":      f.WriteAll(ctx, "", []byte("x"), 0),
+		"Move to":       f.Move(ctx, "/victim.txt", ""),
+		"CopyFile from": f.CopyFile(ctx, "", "/copied.txt"),
+	} {
+		assert.ErrorIs(t, err, fs.ErrEmptyPath, op)
+	}
 
 	// Servers on Unix store a backslash as part of a name
 	allowFS, err := New(ctx, srv.URL, &Options{Username: "alice", Password: "secret", AllowBackslashInNames: true})

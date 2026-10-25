@@ -19,11 +19,9 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/http"
 	"net/url"
 	"os"
 	"path"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -71,6 +69,7 @@ var (
 	_ fs.TouchFileSystem            = new(fileSystem)
 	_ fs.CopyFileSystem             = new(fileSystem)
 	_ fs.RemoveAllFileSystem        = new(fileSystem)
+	_ fs.MoveFileSystem             = new(fileSystem)
 	_ fs.ListDirRecursiveFileSystem = new(fileSystem)
 )
 
@@ -86,22 +85,17 @@ type Options struct {
 	SkipContainerCheck bool
 
 	// DeleteSnapshots makes Remove and RemoveAll delete the snapshots of
-	// a blob together with the blob, also when the generic Move and Rename
-	// remove the source after copying it, which doesn't copy its snapshots.
+	// a blob together with the blob, also when Move deletes the source
+	// after copying it, which doesn't copy its snapshots.
 	// Deleted snapshots are gone, unless soft delete is enabled for the
 	// blobs of the storage account.
 	//
 	// Azure refuses to delete a blob with snapshots without deleting them,
 	// so without DeleteSnapshots removing such a blob is an error wrapping
-	// ErrSnapshotsPresent, and RemoveAll checks the whole tree for
-	// snapshots before it deletes anything.
+	// ErrSnapshotsPresent, RemoveAll checks the whole tree for snapshots
+	// before it deletes anything and Move before it copies anything.
 	DeleteSnapshots bool
 }
-
-// ErrSnapshotsPresent is wrapped by the error of Remove and RemoveAll,
-// and so of the generic Move and Rename, for a blob with snapshots
-// unless Options.DeleteSnapshots is set. The blob is not deleted.
-const ErrSnapshotsPresent fs.SentinelError = "azureblobfs: blob has snapshots"
 
 type fileSystem struct {
 	fsimpl.PathHelper
@@ -254,52 +248,6 @@ func isPathName(relName string) bool {
 		!strings.Contains(relName, Separator+Separator)
 }
 
-func isNotFound(err error) bool {
-	return bloberror.HasCode(err, bloberror.BlobNotFound, bloberror.ContainerNotFound, bloberror.ResourceNotFound)
-}
-
-// isPermissionDenied reports whether err is a 403 Forbidden response.
-func isPermissionDenied(err error) bool {
-	if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok {
-		return respErr.StatusCode == http.StatusForbidden
-	}
-	return false
-}
-
-var (
-	// urlQuery matches URLs with a query in error messages,
-	// the query can carry the signature of a SAS token.
-	urlQuery = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'?#]*)\?[^\s"'#]*`)
-
-	// sasSignature matches a SAS signature parameter outside of a URL.
-	sasSignature = regexp.MustCompile(`(?i)\bsig=[^&\s"']*`)
-)
-
-// redactedError has the message of err without SAS signatures.
-type redactedError struct {
-	msg string
-	err error
-}
-
-func (e *redactedError) Error() string { return e.msg }
-func (e *redactedError) Unwrap() error { return e.err }
-
-// redactErr returns err with the queries of URLs and SAS signatures
-// removed from its message, so that a SAS token of the container URL
-// doesn't leak into logs. Transport errors of net/http, for example,
-// contain the full request URL. errors.Is and errors.As still see err.
-func redactErr(err error) error {
-	if err == nil {
-		return nil
-	}
-	msg := err.Error()
-	redacted := sasSignature.ReplaceAllString(urlQuery.ReplaceAllString(msg, "$1"), "sig=REDACTED")
-	if redacted == msg {
-		return err
-	}
-	return &redactedError{msg: redacted, err: err}
-}
-
 func deref[T any](p *T) T {
 	if p == nil {
 		var zero T
@@ -375,12 +323,6 @@ func (f *fileSystem) dirExists(ctx context.Context, name string) (exists bool, m
 	}
 	return true, modified, nil
 }
-
-// errListingWithoutBlobs is returned for a listing answer without a Blobs
-// element, which azcore decodes without error into a nil Segment.
-// Azure always sends the element, so the answer came from something else,
-// like a misconfigured proxy.
-var errListingWithoutBlobs = errors.New("azureblobfs: listing answer without Blobs element")
 
 // firstBlob returns the first blob that pager lists, or nil.
 // Azure can return an empty page with a continuation marker,
@@ -613,10 +555,12 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 		}
 		return nil, redactErr(err)
 	}
+	// The closure keeps only the ETag of the answer, not its metadata
+	etag := props.ETag
 	var access *blob.AccessConditions
-	if props.ETag != nil {
+	if etag != nil {
 		access = &blob.AccessConditions{
-			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: props.ETag},
+			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: etag},
 		}
 	}
 	return &fsimpl.RangeReader{
@@ -636,7 +580,7 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 			if response.Body == nil {
 				return nil, f.notModifiedError(name)
 			}
-			if props.ETag != nil && response.ETag != nil && !response.ETag.Equals(*props.ETag) {
+			if etag != nil && response.ETag != nil && !response.ETag.Equals(*etag) {
 				// A server or proxy that ignored If-Match sent another version
 				return nil, errors.Join(f.changedError(name, nil), response.Body.Close())
 			}
@@ -901,37 +845,51 @@ func (f *fileSystem) snapshotsError(name string) error {
 	return fmt.Errorf("%w: %s, set Options.DeleteSnapshots to delete them with the blob", ErrSnapshotsPresent, f.file(name))
 }
 
-// findSnapshot returns the name of the first blob with a snapshot that a
+// maxRemoveAllNames is the number of blob names that RemoveAll keeps from
+// its snapshot listing to delete the blobs without listing them again,
+// the most that one listing page of Azure returns.
+const maxRemoveAllNames = 5000
+
+// scanSnapshots returns the name of the first blob with a snapshot that a
 // flat listing of the blobs and snapshots with prefix returns, or the empty
 // string if none has one. The listing ends at the first blob whose name
-// isn't within, blobs are listed in the order of their names, each one
-// together with its snapshots.
-func (f *fileSystem) findSnapshot(ctx context.Context, prefix string, maxResults *int32, within func(name string) bool) (string, error) {
+// isn't within, if within is not nil, blobs are listed in the order of their
+// names, each one together with its snapshots. Without a snapshot it also
+// returns the names of the listed blobs with complete set, if there are up
+// to maxNames or maxNames is negative, else nil.
+func (f *fileSystem) scanSnapshots(ctx context.Context, prefix string, maxResults *int32, within func(name string) bool, maxNames int) (snapshotted string, names []string, complete bool, err error) {
 	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
 		Prefix:     new(prefix),
 		MaxResults: maxResults,
 		Include:    container.ListBlobsInclude{Snapshots: true},
 	})
+	complete = true
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			return "", redactErr(err)
+			return "", nil, false, redactErr(err)
 		}
 		if page.Segment == nil {
-			return "", errListingWithoutBlobs
+			return "", nil, false, errListingWithoutBlobs
 		}
 		for _, item := range page.Segment.BlobItems {
 			name := deref(item.Name)
-			if !within(name) {
-				return "", nil
+			if within != nil && !within(name) {
+				return "", names, complete, nil
 			}
 			// The base blob has no or an empty Snapshot element
 			if deref(item.Snapshot) != "" {
-				return name, nil
+				return name, nil, false, nil
+			}
+			if complete && len(names) == maxNames {
+				names, complete = nil, false
+			}
+			if complete {
+				names = append(names, name)
 			}
 		}
 	}
-	return "", nil
+	return "", names, complete, nil
 }
 
 // Remove deletes a blob or an empty directory marker.
@@ -993,11 +951,13 @@ func (f *fileSystem) Remove(filePath string) error {
 // wrapping os.ErrInvalid.
 //
 // With Options.DeleteSnapshots the snapshots of the blobs are deleted
-// with them. Without it, RemoveAll first lists the blobs together with
-// their snapshots and, if one of them has snapshots, returns an error
-// wrapping ErrSnapshotsPresent before it deletes anything. That costs a
-// second listing of the tree. A snapshot that another client creates
-// after that listing still stops RemoveAll with the same error,
+// with them. Without it, RemoveAll first lists the blobs below filePath
+// together with their snapshots and, if one of them has snapshots, returns
+// an error wrapping ErrSnapshotsPresent before it deletes anything. Then it
+// deletes the blob at filePath, which Azure refuses with the same error if
+// it has snapshots, and the listed blobs. A tree of more than 5000 blobs is
+// listed a second time to delete it. A snapshot that another client creates
+// after the first listing still stops RemoveAll with the same error,
 // after it deleted the blobs before that one.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if err := f.checkWritable(); err != nil {
@@ -1010,25 +970,24 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if name == "" {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, f)
 	}
+	var below []string
+	listed := false
 	if !f.deleteSnapshots {
-		// The blob at filePath is listed with its snapshots before the other
-		// names that start with its name, so its scan ends at the first other
-		// name, usually on the first page of two results. The second scan
-		// lists the tree below it.
-		snapshotted, err := f.findSnapshot(ctx, name, new(int32(2)), func(n string) bool { return n == name })
-		if err == nil && snapshotted == "" {
-			snapshotted, err = f.findSnapshot(ctx, name+Separator, nil, func(string) bool { return true })
-		}
+		snapshotted, names, complete, err := f.scanSnapshots(ctx, name+Separator, nil, nil, maxRemoveAllNames)
 		if err != nil {
 			return err
 		}
 		if snapshotted != "" {
 			return f.snapshotsError(snapshotted)
 		}
+		below, listed = names, complete
 	}
 	err := f.deleteBlob(ctx, name)
 	if err != nil && !isNotFound(err) {
 		return err
+	}
+	if listed {
+		return f.deleteBlobs(ctx, below)
 	}
 	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(name + Separator)})
 	for pager.More() {
@@ -1047,6 +1006,124 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		}
 	}
 	return nil
+}
+
+// deleteBlobs deletes the blobs with names, a missing one is no error.
+func (f *fileSystem) deleteBlobs(ctx context.Context, names []string) error {
+	for _, name := range names {
+		err := f.deleteBlob(ctx, name)
+		if err != nil && !isNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// blobNames returns the names of the blobs with prefix.
+func (f *fileSystem) blobNames(ctx context.Context, prefix string) ([]string, error) {
+	var names []string
+	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(prefix)})
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, redactErr(err)
+		}
+		if page.Segment == nil {
+			return nil, errListingWithoutBlobs
+		}
+		for _, item := range page.Segment.BlobItems {
+			names = append(names, deref(item.Name))
+		}
+	}
+	return names, nil
+}
+
+// Move moves the blob or directory at filePath to destPath with the
+// semantics of fs.MoveFileSystem. Azure can't rename blobs, so Move copies
+// them server-side and deletes the source after every copy succeeded:
+// a blob without the blobs below its name, a directory with all blobs
+// that a flat listing of it returns, also those with names that no path
+// can address, like "dir//x", and its marker. The copy of a failed
+// directory move is left at destPath.
+//
+// Without Options.DeleteSnapshots a blob with snapshots at or below
+// filePath is an error wrapping ErrSnapshotsPresent before anything is
+// copied, because the copy has no snapshots and the source could not be
+// deleted. A snapshot that another client creates after that check fails
+// the deletion after the copy. Moving to another file system copies with
+// the generic implementation and then calls RemoveAll, which checks the
+// snapshots only after the copy.
+func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
+	if err := f.checkWritable(); err != nil {
+		return err
+	}
+	if filePath == "" || destPath == "" {
+		return fs.ErrEmptyPath
+	}
+	src, dest := blobName(filePath), blobName(destPath)
+	if src == dest {
+		return nil
+	}
+	if src == "" || strings.HasPrefix(dest, src+Separator) {
+		return fmt.Errorf("%w: can't move %s into itself at %s", os.ErrInvalid, f.file(filePath), f.file(destPath))
+	}
+	srcInfo, err := f.Stat(filePath)
+	if err != nil {
+		return err
+	}
+	destInfo, err := f.Stat(destPath)
+	switch {
+	case err == nil && destInfo.IsDir:
+		return fs.NewErrAlreadyExists(destInfo.File)
+	case err == nil && srcInfo.IsDir:
+		return fs.NewErrIsNotDirectory(destInfo.File)
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if !srcInfo.IsDir {
+		if !f.deleteSnapshots {
+			// The blob is listed with its snapshots before the other names
+			// that start with its name, usually on the first page of two
+			snapshotted, _, _, err := f.scanSnapshots(ctx, src, new(int32(2)), func(n string) bool { return n == src }, 0)
+			if err != nil {
+				return err
+			}
+			if snapshotted != "" {
+				return f.snapshotsError(snapshotted)
+			}
+		}
+		if err = f.CopyFile(ctx, filePath, destPath); err != nil {
+			return err
+		}
+		err = f.deleteBlob(ctx, src)
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	// No blob is below destPath, which is no directory
+	var names []string
+	if f.deleteSnapshots {
+		names, err = f.blobNames(ctx, src+Separator)
+	} else {
+		var snapshotted string
+		snapshotted, names, _, err = f.scanSnapshots(ctx, src+Separator, nil, nil, -1)
+		if err == nil && snapshotted != "" {
+			err = f.snapshotsError(snapshotted)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err = f.copyBlob(ctx, name, dest+strings.TrimPrefix(name, src)); err != nil {
+			return err
+		}
+	}
+	return f.deleteBlobs(ctx, names)
 }
 
 // CopyFile copies a blob server-side within the container.
@@ -1079,11 +1156,17 @@ func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 	if err := f.checkNotDir(ctx, dest); err != nil {
 		return err
 	}
+	return f.copyBlob(ctx, src, dest)
+}
+
+// copyBlob copies the blob src server-side to the blob dest
+// and waits until the copy completed.
+func (f *fileSystem) copyBlob(ctx context.Context, src, dest string) error {
 	destBlob := f.client.NewBlobClient(dest)
-	response, err := destBlob.StartCopyFromURL(ctx, srcBlob.URL(), nil)
+	response, err := destBlob.StartCopyFromURL(ctx, f.client.NewBlobClient(src).URL(), nil)
 	if err != nil {
 		if isNotFound(err) {
-			return f.notExistError(srcFile)
+			return f.notExistError(src)
 		}
 		return redactErr(err)
 	}
@@ -1101,7 +1184,7 @@ func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 		status = deref(props.CopyStatus)
 	}
 	if status != blob.CopyStatusTypeSuccess {
-		return fmt.Errorf("azureblobfs: copying %s to %s: %s", f.file(srcFile), f.file(destFile), status)
+		return fmt.Errorf("azureblobfs: copying %s to %s: %s", f.file(src), f.file(dest), status)
 	}
 	return nil
 }

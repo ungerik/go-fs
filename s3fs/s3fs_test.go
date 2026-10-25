@@ -617,8 +617,10 @@ type listedObject struct {
 // With brokenToken the pages from number brokenFrom on are truncated
 // without a usable continuation token: "missing" omits it, "repeated"
 // sends the number of the page itself, so the next request gets the
-// same page again. HeadObject finds no object, DeleteObject records
-// the key, other requests fail.
+// same page again, and "cycled" alternates between the empty pages
+// brokenFrom and brokenFrom+2, which must be even, so the listing never
+// ends. HeadObject finds no object, DeleteObject records the key, other
+// requests fail.
 type shortPageStore struct {
 	keys        []string // sorted
 	modified    time.Time
@@ -691,6 +693,13 @@ func (st *shortPageStore) handler(w http.ResponseWriter, r *http.Request) {
 		result.KeyCount = 1
 	}
 	switch {
+	case st.brokenToken == "cycled" && n >= st.brokenFrom:
+		result.IsTruncated = true
+		next := st.brokenFrom + 2
+		if n == next {
+			next = st.brokenFrom
+		}
+		result.NextContinuationToken = strconv.Itoa(next)
 	case st.brokenToken != "" && n >= st.brokenFrom:
 		result.IsTruncated = true
 		if st.brokenToken == "repeated" {
@@ -710,7 +719,8 @@ func (st *shortPageStore) handler(w http.ResponseWriter, r *http.Request) {
 // the first page reported directories as missing, so writes created
 // objects onto them, and let Remove delete the marker of a directory
 // with content. A truncated page without a new continuation token is an
-// error instead of an endless or incomplete listing.
+// error instead of an endless or incomplete listing, also a token of an
+// earlier page, which used to repeat the listing until the store failed.
 func TestShortTruncatedListingPages(t *testing.T) {
 	modified := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	newStore := func(t *testing.T, brokenToken string, brokenFrom int) (*shortPageStore, *fileSystem) {
@@ -774,7 +784,7 @@ func TestShortTruncatedListingPages(t *testing.T) {
 		st.mtx.Unlock()
 	})
 
-	for _, brokenToken := range []string{"missing", "repeated"} {
+	for _, brokenToken := range []string{"missing", "repeated", "cycled"} {
 		// The first page is broken, so the directory checks can't decide
 		t.Run("BrokenToken/"+brokenToken+"/FirstPage", func(t *testing.T) {
 			st, f := newStore(t, brokenToken, 0)

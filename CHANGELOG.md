@@ -13,7 +13,8 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   and `fsimpl.PathHelper.URL` and `LocalFileSystem.URL` to `URI`. The value
   is a go-fs URI, which percent-encodes only `%`: names keep their spaces,
   `?` and `#`, so it is no RFC 3986 URL to pass to `net/url`, an HTTP client
-  or a browser. The value itself is unchanged.
+  or a browser. The value is unchanged, except for the file URIs of
+  Windows and UNC paths, which follow RFC 8089 now, see below.
 - `fs.ReadHeader` and `fs.ReadHeaderString` take a `ctx` as first argument
   like the other functions that read content. It is checked before the file
   is opened and between the reads.
@@ -27,9 +28,17 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   Windows also the old `file://C:/…` form, and maps `file://server/share/…`
   to the UNC path `\\server\share\…`. On other platforms a file URI with a
   host other than `localhost` resolves to the `Invalid` file system instead
-  of a path relative to the working directory.
+  of a path relative to the working directory. So does a relative URI that
+  v0 wrote or accepted, like `file://data/uploads`, which names the host
+  `data` (on Windows the UNC path `\\data\uploads`). The hosts `.`, `..` and
+  `?` name no host on any platform: `file://./x` resolves to the `Invalid`
+  file system, also on Windows, where it would be the device path `\\.\x`.
+  `File.URI()` of a relative path that can't be made absolute, because the
+  working directory can't be determined, is `file://./…`, which names no
+  file.
 - `sftpfs`, `ftpfs` and `webdavfs` reject a path with a backslash with an
-  error wrapping `os.ErrInvalid`, in `sftpfs` also a symbolic link target.
+  error wrapping `os.ErrInvalid`, in `sftpfs` also a symbolic link target
+  and in `ftpfs` a listed link target that `Stat` follows.
   For their separator `/` the backslash is part of a name, but a server on
   Windows takes it for a separator and resolves `..`, so a name like `..\x`
   from a `SubFileSystem`, an archive or `CopyRecursive` reached a file outside
@@ -40,10 +49,17 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 ### Added
 
 - `azureblobfs.Options.DeleteSnapshots` deletes the snapshots of a blob
-  together with it in `Remove` and `RemoveAll`, and so in the generic `Move`
-  and `Rename`. Without it, removing a blob with snapshots keeps the blob and
-  returns an error wrapping the new `azureblobfs.ErrSnapshotsPresent`, and
-  `RemoveAll` checks the whole tree for snapshots before it deletes anything.
+  together with it in `Remove`, `RemoveAll` and `Move`. Without it, removing
+  a blob with snapshots keeps the blob and returns an error wrapping the new
+  `azureblobfs.ErrSnapshotsPresent`, `RemoveAll` checks the whole tree for
+  snapshots before it deletes anything, and `Move` before it copies anything.
+- `azureblobfs` implements `fs.MoveFileSystem`: `Move` copies the blobs
+  server-side and deletes the source after every copy succeeded. The generic
+  move copied first and then failed to delete a source with snapshots, after
+  it had replaced the destination.
+- `fsimpl.CheckNoBackslash` returns the error of the backslash rule of the
+  remote file systems with the separator `/`, which `ftpfs`, `sftpfs`,
+  `webdavfs` and `smbfs` share.
 
 ### Fixed
 
@@ -63,14 +79,21 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   with an error wrapping `errors.ErrUnsupported` before it writes anything
   for a link to a directory, instead of copying that link like a file.
   `Remove`, `RemoveAll` and `Move` still act on the link itself.
+  `ListDir` and `ListDirRecursive` of a link to a directory list the
+  directory also on servers whose LIST lists a link itself like `ls -l`.
+- `ftpfs` `RemoveAll` deletes a symbolic link to a directory instead of the
+  files it points to, outside of the removed tree, on servers with MLST
+  support, which describe such a link like the directory: it tries `DELE`
+  before it deletes the content of a directory.
 - `s3fs` `Stat`, the directory check of the writes and `Touch`, and the
   not-empty check of `Remove` read further `ListObjectsV2` pages while a page
   is truncated and has fewer keys than requested, even none, instead of
   deciding from the first page. S3-compatible stores that answer with such
   pages made `Stat` report a directory as missing, let writes create an
   object onto a directory, and let `Remove` delete the marker of a directory
-  with content. A truncated page without a new continuation token is now an
-  error.
+  with content. A truncated page without a new continuation token, also
+  with the token of an earlier page, is now an error instead of a listing
+  that never ends.
 
 ## [1.0.0-beta.3] - 2026-10-24
 

@@ -1,6 +1,7 @@
 package ftpfs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -868,6 +869,81 @@ func TestSymbolicLinks_RemoveAndMove(t *testing.T) {
 	require.NoError(t, ftpFS.RemoveAll(ctx, "/root/dir"))
 	assert.False(t, srv.exists("/root/dir"))
 	assert.Equal(t, "data", string(srv.fileContent("/root/file.txt")))
+
+	// Move and MakeDir check a link itself, not the file it points to
+	srv.writeFile("/root/new.txt", "new")
+	srv.mkdirAll("/root/target")
+	srv.symlink("target", "/root/dirlink")
+	srv.symlink("missing.txt", "/root/dangling")
+	require.NoError(t, ftpFS.Move(ctx, "/root/dangling", "/root/moved"), "Move of a dangling link")
+	assert.True(t, srv.exists("/root/moved"))
+	require.NoError(t, ftpFS.Move(ctx, "/root/new.txt", "/root/dirlink"), "Move onto a link to a directory replaces the link")
+	assert.Equal(t, "new", string(srv.fileContent("/root/dirlink")))
+	assert.True(t, srv.exists("/root/target"), "the directory that the replaced link pointed to is kept")
+	assert.ErrorIs(t, ftpFS.MakeDir("/root/moved", 0), fs.ErrAlreadyExists{}, "MakeDir of a dangling link")
+}
+
+// TestSymbolicLinks_ListedItself checks a server whose LIST lists a file
+// or a symbolic link itself like "ls -l", instead of the directory that
+// a link points to: ListDir and ListDirRecursive of a link to a directory
+// list the directory, and of a file or a link to a file are an
+// fs.ErrIsNotDirectory. They used to list a link to a directory as
+// its own entry, like /root/dirlink/dirlink.
+func TestSymbolicLinks_ListedItself(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	srv.configure(func(s *testFTPServer) {
+		s.noMLST = true
+		s.lsArgs = true
+	})
+	seedLinks(srv)
+	ftpFS := dialInProcess(t, srv)
+	noCallback := func(*fs.FileInfo) error { return nil }
+
+	for name, list := range map[string]func(context.Context, string, []string, func(*fs.FileInfo) error) error{
+		"ListDir":          ftpFS.ListDir,
+		"ListDirRecursive": ftpFS.ListDirRecursive,
+	} {
+		var listed []*fs.FileInfo
+		err := list(ctx, "/root/dirlink", nil, func(info *fs.FileInfo) error {
+			listed = append(listed, info)
+			return nil
+		})
+		require.NoError(t, err, "%s of a link to a directory", name)
+		assert.ElementsMatch(t, []string{"/root/dirlink/file.txt", "/root/dirlink/uplink"}, relPaths(ftpFS, listed), "%s of a link to a directory", name)
+		assert.ErrorIs(t, list(ctx, "/root/filelink", nil, noCallback), fs.ErrIsNotDirectory{}, "%s of a link to a file", name)
+		assert.ErrorIs(t, list(ctx, "/root/file.txt", nil, noCallback), fs.ErrIsNotDirectory{}, "%s of a file", name)
+		assert.ErrorIs(t, list(ctx, "/root/dangling", nil, noCallback), os.ErrNotExist, "%s of a dangling link", name)
+	}
+}
+
+// TestSymbolicLinks_MLSDRemoveAll checks that RemoveAll on a server with
+// MLST support, which describes a link to a directory like the directory,
+// deletes a link itself, at the removed path and below it, and keeps the
+// files that the link points to. The test server resolves the links in
+// the path of DELE like the kernel. RemoveAll used to delete the files
+// outside of the removed tree through the link.
+func TestSymbolicLinks_MLSDRemoveAll(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	srv.writeFile("/outside/keep.txt", "keep")
+	srv.writeFile("/tree/file.txt", "data")
+	srv.writeFile("/tree/sub/file.txt", "data")
+	srv.symlink("/outside", "/tree/link")
+	srv.symlink("../../outside", "/tree/sub/uplink")
+	srv.symlink("outside", "/toplink")
+	ftpFS := dialInProcess(t, srv)
+
+	info, err := ftpFS.Stat("/tree/link")
+	require.NoError(t, err)
+	require.True(t, info.IsDir, "the server describes the link like the directory")
+
+	require.NoError(t, ftpFS.RemoveAll(ctx, "/toplink"))
+	assert.False(t, srv.exists("/toplink"), "RemoveAll removes the link at the path")
+	require.NoError(t, ftpFS.RemoveAll(ctx, "/tree"))
+	assert.Equal(t, []string{"/outside", "/outside/keep.txt"}, srv.paths(), "RemoveAll must keep the files that a link points to")
+	assert.Equal(t, "keep", string(srv.fileContent("/outside/keep.txt")))
+	assert.Positive(t, srv.count("MLSD"))
 }
 
 // TestSymbolicLinks_MLSD checks a server with MLST support that describes
@@ -991,4 +1067,12 @@ func TestBackslashInNames(t *testing.T) {
 	data, err := allowFS.ReadAll(ctx, `/dir/a\b.txt`)
 	require.NoError(t, err)
 	assert.Equal(t, "unix name", string(data))
+
+	// The target of a symbolic link that the server lists is checked like a path
+	linkSrv := newTestFTPServer(t)
+	linkSrv.configure(func(s *testFTPServer) { s.noMLST = true })
+	linkSrv.symlink(`..\victim.txt`, "/dir/link")
+	linkFS := dialInProcess(t, linkSrv)
+	_, err = linkFS.Stat("/dir/link")
+	assert.ErrorIs(t, err, os.ErrInvalid, "Stat of a link with a backslash in its target")
 }
