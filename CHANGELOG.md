@@ -141,10 +141,29 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   went to the device, `NUL` discarding the data; `a:b` went to an alternate
   data stream; a trailing dot or space was stripped. A move then removed the
   source. Names that `filepath.Localize` rejects, and on Windows names ending
-  in a dot or space, are now errors wrapping `os.ErrInvalid`. Between file
+  in a dot or space or containing `< > " | ? *` or a control character, like
+  the S3 key `report?.pdf`, are now errors wrapping `os.ErrInvalid`. Between file
   systems this happens before anything is written, also for the names of
   empty directories and of entries the patterns don't select; it also
   applies to the final name of a moved file.
+- `fs.Move` through a `SubFileSystem` onto the same file of a file system
+  that is not local, also through two SubFileSystems of one parent, copied
+  the file onto itself and removed it, returning nil; a writer that truncates
+  like the one of sftpfs emptied it first, also for `fs.CopyFile`. The
+  same-file checks of `CopyFile` and of the copy then delete fallback of
+  `Move` now also compare by path the entry that the source shows (through
+  SubFileSystems to the parent, through an `OverlayFileSystem` to the layer
+  that holds it) with the path that the destination writes to, on every file
+  system: onto itself is a no-op. Moving an entry of the base layer of an
+  overlay to its path in the upper layer, which removing the source would
+  remove again, is an error wrapping `os.ErrInvalid`.
+- `fs.CopyRecursive` and the copy then delete fallback of `Move` of
+  a directory into one of its sub-directories through a `SubFileSystem` of
+  a file system that is not local copied the copy into itself until the
+  context was done. This is now an error wrapping `os.ErrInvalid` before
+  anything is written, also into a sub-directory of either layer of an
+  `OverlayFileSystem` directory. Copying a directory onto itself through
+  a SubFileSystem is a no-op.
 - `CopyRecursive` and moves wrote into an existing named pipe, device or
   socket at the destination (blocking on a pipe until it had a reader)
   instead of replacing it. This is now an error wrapping `os.ErrExist`.

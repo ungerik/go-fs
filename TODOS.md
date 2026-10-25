@@ -26,7 +26,10 @@ destination conditions of Copy Blob (`If-None-Match: *` on an existing blob:
 409 `BlobAlreadyExists` on Azurite; `If-Match`: `TargetConditionNotMet` or
 `ConditionNotMet`), which `moveBlobs` tells apart with `blobChanged`, the copy
 properties that `Move` reads to recognize its own copy after a retried
-request, and the deletes of blobs with snapshots.
+request (and that `x-ms-copy-source` keeps a `snapshot` or `versionid`
+query), the answer to a delete pinned with `If-Match` of a missing blob (412
+`ConditionNotMet` on Azurite, which `Move` checks with `GetProperties`), and
+the deletes of blobs with snapshots.
 
 **Effort:** S
 **Priority:** P0
@@ -176,6 +179,28 @@ that also reports directories where a backend has one.
 
 **Effort:** M
 **Priority:** P3
+**Depends on:** None
+
+### Compare files, not only paths, through SubFileSystems of remote file systems
+
+**What:** The same-file and into-itself checks of copies and moves through a
+`SubFileSystem` or `OverlayFileSystem` of a file system that is not local
+compare paths. A symbolic link between a `SubFileSystem` and its parent, or
+another name that a case-insensitive server matches to the same entry, is a
+different path to the same file.
+
+**Why:** A move between a `SubFileSystem` and its parent of sftpfs through
+such a link copies the target onto itself: the writer of sftpfs truncates it
+before it is read, and removing the source removes the link. Only local files
+are also compared as files (`isLocalSameFile`).
+
+**Context:** Resolve symbolic links with `Lstat`/`ReadSymbolicLink` before
+comparing, or compare an identity where a backend has one (sftpfs reports no
+inode). Writing to a temporary file and renaming it would also avoid the
+truncation.
+
+**Effort:** M
+**Priority:** P2
 **Depends on:** None
 
 ### Don't write a moved file into the other hard links of the destination

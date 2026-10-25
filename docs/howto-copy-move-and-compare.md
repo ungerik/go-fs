@@ -41,9 +41,10 @@ The rules for the destination:
 When source and destination are on the same file system and it implements
 `CopyFileSystem`, the copy is server-side — S3, Azure, Dropbox and WebDAV never
 move the bytes through your process. Copying a file onto itself is a no-op,
-for a local file also through another path to it, like a symbolic link, a hard
-link, a `SubFileSystem` or the local layer of an `OverlayFileSystem`, which
-would otherwise truncate the file while it is read. Like the other checks of
+on every file system also through a `SubFileSystem` or the layer of an
+`OverlayFileSystem` that holds the file, compared by path, and for a local
+file also through another path to it, like a symbolic link or a hard link,
+which would otherwise truncate the file while it is read. Like the other checks of
 the destination it is done by path before the destination is opened, so it
 assumes that nobody else changes the destination during the copy.
 
@@ -187,8 +188,11 @@ More behaviours to rely on:
 
 - **Moving a file onto itself is a no-op** returning nil. This matters: it is
   what stops the copy-then-delete fallback from destroying a file when source
-  and destination resolve to the same place. The fallback also compares local
-  paths as files, so two paths of the same file through bind mounts (like
+  and destination resolve to the same place, on every file system also
+  through `SubFileSystem`s of one parent, compared by path. Moving an entry of
+  an overlay's base layer to its path in the upper layer is an error wrapping
+  `os.ErrInvalid`, because removing the source would remove the copy. The
+  fallback also compares local paths as files, so two paths of the same file through bind mounts (like
   `docker run -v /data:/a -v /data:/b`), a symbolic link to a parent
   directory, a `SubFileSystem` or the local layer of an `OverlayFileSystem`
   are a no-op too, unless the name in the same directory only differs in
@@ -213,8 +217,10 @@ More behaviours to rely on:
   is always refused, and so it is over SFTP and SMB, which report no link
   count either.
 - **Moving a directory into itself** or one of its sub-directories is an error
-  wrapping `os.ErrInvalid`, like `os.Rename`, for a local directory also
-  through such another path to it.
+  wrapping `os.ErrInvalid`, like `os.Rename`, on every file system also
+  through a `SubFileSystem` or into either layer of an `OverlayFileSystem`
+  directory, and for a local directory also through such another path to it.
+  The same holds for `CopyRecursive`.
 - **Symbolic links are moved, not what they point to.** Within one file system
   that implements `fs.SymbolicLinkFileSystem` a link stays a link and replaces
   an existing file or link at the destination; an `OverlayFileSystem`, which

@@ -145,7 +145,14 @@ fallbacks, and the conformance suite checks them:
 A destination equal to the source is a no-op returning nil, like `os.Rename`.
 Moving a directory into itself or one of its sub-directories is an error
 wrapping `os.ErrInvalid`; the package checks it before it calls a native
-`Move`. The package functions `fs.Move`, `File.MoveTo` and `fs.CopyFile`
+`Move`. The package functions also compare source and destination through
+`SubFileSystem`s to their parent and through an `OverlayFileSystem` to its
+layers, on every file system by path and on the local file system also by
+file identity: a copy or move onto the same file is a no-op, and copying or
+moving a directory into one of its sub-directories that way, also into
+a sub-directory of either layer of an overlay directory, is an error wrapping
+`os.ErrInvalid`. So is moving an entry of an overlay's base layer to its path
+in the upper layer. The package functions `fs.Move`, `File.MoveTo` and `fs.CopyFile`
 resolve a destination that is an existing directory to "into the directory"
 before these rules apply.
 
@@ -169,9 +176,10 @@ files, which Windows reports as irregular, are replaced like regular files;
 writing over other reparse points, like AppExecLinks, fails with the error of
 the write. Other file systems refuse every entry that `FileInfo.IsRegular`
 doesn't describe as regular. An `OverlayFileSystem` destination is checked
-at its upper layer, so a special file of the base layer is no error. For local destinations, names that
-`filepath.Localize` rejects, and on Windows names ending in a dot or space,
-are errors wrapping `os.ErrInvalid`. Between file systems these names are
+at its upper layer, so a special file of the base layer is no error. For
+local destinations, names that `filepath.Localize` rejects, and on Windows
+names ending in a dot or space or containing `< > " | ? *` or a control
+character, are errors wrapping `os.ErrInvalid`. Between file systems these names are
 checked for every entry of the source, also empty directories and entries
 the patterns don't select, before anything is written. A malformed pattern
 fails before anything is written too.

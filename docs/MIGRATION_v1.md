@@ -363,10 +363,15 @@ signatures. Changes compared to v0.1:
   pipe, device or socket at the destination (OneDrive placeholders, which
   Windows reports as irregular files, are replaced). To the local file
   system, they fail with `os.ErrInvalid` on names like `NUL`, `COM1`, `a:b`,
-  `name.` (Windows) or names with a NUL byte, before writing anything, also
-  for empty directories. `CopyRecursive` returns an error wrapping
+  `name.`, `report?.pdf` (Windows) or names with a NUL byte, before writing
+  anything, also for empty directories. `CopyRecursive` returns an error wrapping
   `path.ErrBadPattern` for a malformed pattern before writing anything, also
   for a file source.
+- Copies and moves through a `SubFileSystem` or the layers of an
+  `OverlayFileSystem` are checked for the same file and for a directory moved
+  into itself on every file system, by path: onto itself is a no-op, into
+  itself an error wrapping `os.ErrInvalid`, and so is moving an entry of an
+  overlay's base layer to its path in the upper layer.
 - `sftpfs`, `ftpfs` and `webdavfs` reject paths with a backslash
   (`os.ErrInvalid`), because a server on Windows takes it for a separator.
   For a server on Unix that has files with backslashes in their names, set
