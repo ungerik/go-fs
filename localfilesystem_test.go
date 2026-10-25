@@ -955,6 +955,15 @@ func TestFileURIPathOf(t *testing.T) {
 		assert.True(t, isLocal, "the URI %q of the long path %q is local", rest, slashPath)
 		assert.Equal(t, wantPath, gotPath, "the Windows path of the URI %q of %q", rest, slashPath)
 	}
+
+	// `\\?\C:` without a separator is no long path but the volume device
+	// of drive C:, its URI has the authority "?", which names no host,
+	// and resolves to the root of the drive like "file:///C:"
+	rest := fileURIPathOf("//?/C:", true)
+	assert.Equal(t, "?/C:", rest, `fileURIPathOf("//?/C:")`)
+	gotPath, isLocal := fileURILocalPath(rest, true)
+	assert.True(t, isLocal, "the URI %q is local", rest)
+	assert.Equal(t, "//?/C:/", gotPath, "the Windows path of the URI %q", rest)
 }
 
 // TestLocalFileSystem_SplitPath checks that SplitPath converts a file URI

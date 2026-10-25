@@ -21,8 +21,12 @@ ETag-pinned native `Move` were only tested against Azurite.
 **Context:** Azurite 3.37 rejects the API version without the flag. Check
 the snapshot listing order and paging (Azurite drops a blob's snapshots at a
 page boundary), the 412 codes of failed source conditions (`ConditionNotMet`
-on Azurite, `SourceConditionNotMet` documented for Azure) and the deletes of
-blobs with snapshots.
+on Azurite, `SourceConditionNotMet` documented for Azure), the codes of failed
+destination conditions of Copy Blob (`If-None-Match: *` on an existing blob:
+409 `BlobAlreadyExists` on Azurite; `If-Match`: `TargetConditionNotMet` or
+`ConditionNotMet`), which `moveBlobs` tells apart with `blobChanged`, the copy
+properties that `Move` reads to recognize its own copy after a retried
+request, and the deletes of blobs with snapshots.
 
 **Effort:** S
 **Priority:** P0
@@ -120,8 +124,9 @@ name, after the files before it were copied.
 **Why:** Moving from S3 or mem into sftpfs, ftpfs or webdavfs with a name
 containing a backslash leaves a partial copy that a retry trips over.
 
-**Context:** `treeCopier.checkSource` already checks every file of the
-source before the first write, with `treeCopier.validName` for separators
+**Context:** `treeCopier.checkSource` already checks the name of every entry
+of the source, also of empty directories and of files the patterns don't
+select, before the first write, with `treeCopier.validName` for separators
 and the local name rules. An optional backend interface like
 `ValidName(name string) error` would plug into `validName`; adding it is not
 breaking. The partial copy is documented in `docs/MIGRATION_v1.md`.
@@ -137,11 +142,14 @@ breaking. The partial copy is documented in `docs/MIGRATION_v1.md`.
 directory is done.
 
 **Why:** A flat directory of a million files holds about 300 MB of
-`FileInfo`, and an overwrite costs up to three `Lstat`s of one path.
+`FileInfo`, and an overwrite costs up to three `Lstat`s of one path
+(`checkFileDest`, `wroteEntry`, `recordWrite`), and one `ReadDir` of the
+directory for a match of two hard links.
 
 **Context:** Keep a compact identity instead (device and inode on Unix,
-volume and file index on Windows, behind a build-tagged helper), and pass the
-`FileInfo` of the destination check on instead of `Lstat`ing again.
+volume and file index on Windows, behind a build-tagged helper), and let one
+local `Lstat` per entry serve the destination check, `wroteEntry` and
+`recordWrite`.
 
 **Effort:** S
 **Priority:** P3
@@ -153,14 +161,70 @@ volume and file index on Windows, behind a build-tagged helper), and pass the
 source with `ListDir` per directory to check every name, also of empty
 directories, and `copyDir` lists every directory again while it copies.
 
-**Why:** On object stores (s3fs, azureblobfs) and over FTP or SFTP that is
-twice the listing requests of the copy, where the check used one native
-`ListDirRecursive` before, which lists no directories and so missed the
-names of empty ones.
+**Why:** On object stores (s3fs, azureblobfs, dropboxfs) and over FTP or
+SFTP that is twice the listing requests of the copy. The check used the
+native `ListDirRecursive` before, a flat listing of about N/1000 requests
+for N files on S3, N/5000 on Azure and N/2000 on Dropbox, which lists no
+directories and so missed the names of empty ones. Now it sends one listing
+per directory before the first byte is written: S3 lists cost more than
+gets, and Dropbox rate limits (429) can fail copies of trees with many small
+directories.
 
 **Context:** Keep the listings of `checkSource` for `copyDir`, bounded in
 memory, or check the names of directories with a native recursive listing
 that also reports directories where a backend has one.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** None
+
+### Don't write a moved file into the other hard links of the destination
+
+**What:** `fs.Move` between file systems onto an existing local file with
+other hard links writes into the file, so the other names get the moved
+data, while `LocalFileSystem.Move` renames and leaves them.
+
+**Why:** The two moves of the same files end differently, and the other
+names of the destination change. This predates v1.0.
+
+**Context:** Write a moved file to a temporary file in the destination
+directory and rename it over the destination, which also replaces the
+destination atomically, or document it. `CopyRecursive` keeps writing into
+existing files like `cp`.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### Check names created through `\\?\` before a copy within one file system
+
+**What:** On Windows a copy within one file system that copies links to
+directories skips `checkSource`, so names that only `\\?\` paths can create,
+like `NUL` or `dot.`, fail in `copyDir` after the entries before them were
+written.
+
+**Why:** `CopyRecursive` leaves a partial copy; `Move` keeps the source.
+
+**Context:** Only Windows CI can exercise it. Check the names in a listing
+before the copy also within one file system, or only on Windows.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### Cover the remaining cells of the copy, move and remove state matrices
+
+**What:** The cycle-3 review of the v1.0 branch left about 100 untested
+cells of low confidence in the state matrices of ftpfs `Remove`/`RemoveAll`,
+azureblobfs `Move` and the tree copies.
+
+**Why:** They are variants of tested outcomes, but nothing pins them.
+
+**Context:** Redials for outcomes that are tested without one, `Close` and
+cancelled contexts for paths that MLST reports as missing, copies within one
+file system over local regular files, pipes and sockets, two concurrent
+changes of one Azure blob during a move, and hard links within one file
+system.
 
 **Effort:** M
 **Priority:** P3
@@ -253,10 +317,12 @@ target, so ftpfs can't tell links from files and directories there.
 **Why:** `ListDirRecursive` walks a link to a directory, and a link to an
 ancestor until the server fails to resolve the path.
 
-**Context:** `RemoveAll` is safe: it tries `DELE` before it deletes the
+**Context:** `RemoveAll` deletes no files through a link on servers whose
+`LIST` shows links like `ls -l`: it tries `DELE` before it deletes the
 content of a directory and confirms a directory with `LIST` of the parent
-over a second connection. A real fix needs raw MLSD access, which the client
-library doesn't offer.
+over a second connection. See "Tell links from directories on Windows FTP
+servers" for the servers where it can't. A real fix needs raw MLSD access,
+which the client library doesn't offer.
 
 **Effort:** M
 **Priority:** P2
@@ -301,8 +367,8 @@ fail closed otherwise, or find another way to detect reparse points.
 
 ### Separate TLS sessions for the extra FTPS connections
 
-**What:** The LIST connection of `RemoveAll` and the dedicated connection of
-`OpenReader` share the TLS config, and with it one session cache slot per
+**What:** The LIST connection of `Remove` and `RemoveAll` and the dedicated
+connection of `OpenReader` share the TLS config, and with it one session cache slot per
 server name, with the main connection.
 
 **Why:** After their handshake the main connection's next data connection can
@@ -340,11 +406,17 @@ call.
 
 **Why:** It is how a link that MLST describes as a directory gets deleted
 itself, and how a real directory is confirmed, but it costs a failing
-command per directory, a LIST per parent directory and an extra login per
-`RemoveAll`. For the removed path itself the LIST lists its parent, which can
-be large: removing the N children of a directory one by one lists it N times.
-A directory with subdirectories is listed twice, with MLSD to enumerate it
-and with LIST to confirm its subdirectories.
+command per directory, a CWD and a LIST per parent directory and an extra
+login per `RemoveAll`, plus a PWD for relative paths and a redial after a
+broken listing connection. For the removed path itself the LIST lists its
+parent, which can be large: removing the N children of a directory one by
+one lists it N times. A directory with subdirectories is listed twice, with
+MLSD to enumerate it and with LIST to confirm its subdirectories. `Remove`
+and `RemoveAll` of a path that MLST reports as missing dial the connection
+too after the failed `DELE`, so a `Remove` or a cleanup `RemoveAll` of
+a path that doesn't exist costs a login and a full listing of its parent,
+also for an `OverlayFileSystem` with an ftpfs upper layer, which removes the
+upper path of a file that is only in the base layer.
 
 **Context:** The trade-off is documented in the package doc. Options: keep
 the LIST connection open across calls, skip the confirmation when the DELE
