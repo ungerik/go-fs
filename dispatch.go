@@ -613,8 +613,10 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // an existing directory is an [ErrAlreadyExists] and neither merged nor deleted.
 // An existing file that the copy of a moved file would write into instead of
 // replacing it, like a device, a named pipe or a socket, see isSpecialFile,
-// is the error of errNotRegular. A local file that Windows describes as
-// irregular, like the placeholder of a OneDrive file, is replaced.
+// is the error of errSpecialFile. A local file that Windows describes as
+// irregular is written like a regular file, see isLocalSpecialFile: the
+// placeholder of a OneDrive file is replaced, over other reparse points, like
+// AppExecLinks or WSL links, the move fails with the error of the write.
 // A directory moved into itself within one file system must have been
 // rejected by the caller, see fsMove. Local paths are also compared as
 // files, because two paths can be the same file, like through bind mounts,
@@ -626,12 +628,14 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // of it, and a case-only rename through an OverlayFileSystem, which supports
 // only one case of a name, are errors wrapping [os.ErrInvalid].
 //
-// A directory is copied to destPath, which didn't exist, so the copy creates
-// every directory of it, which is new then, see treeCopier.newDestDir:
-// an existing entry where the copy is to write one was written by the copy
-// for another name of the source that the destination doesn't tell apart,
-// like "A.txt" and "a.txt" of a case-sensitive source on a case-insensitive
-// destination, see destDir. Then the move fails with an error wrapping
+// A directory is copied to destPath, which didn't exist, so every entry of
+// the copy is new, see treeCopier.newDestDir: an existing entry where the
+// copy is to write one was written by the copy for another name of the
+// source that the destination doesn't tell apart, like "A.txt" and "a.txt"
+// of a case-sensitive source on a case-insensitive destination, see destDir,
+// or by another process that created destPath after it was checked here,
+// maybe long before the copy, because the source is listed first, see
+// treeCopier.checkSource. Then the move fails with an error wrapping
 // [os.ErrExist] instead of replacing the entry and removing the source of
 // the replaced one. A name that is not valid for destFS, see
 // treeCopier.validName, is an error wrapping [os.ErrInvalid], below
@@ -670,6 +674,10 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return err
 	}
 	c := newTreeCopier(ctx, srcFS, destFS, nil)
+	// A directory is only copied to a destination that didn't exist, so every
+	// existing entry below it is an error, see destDir, also one of another
+	// process that creates the destination after the check below
+	c.move = true
 	if srcFS == destFS {
 		// Within one file system every link is moved as link
 		c.links = c.dirLinks
@@ -743,7 +751,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
 	case !moveLink && !destInfo.IsSymlink && isSpecialFile(dest, destInfo):
 		// A link replaces it like os.Rename, a copy would write into it
-		return errNotRegular(src, dest)
+		return errSpecialFile(src, dest)
 	}
 
 	switch {

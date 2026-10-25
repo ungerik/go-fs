@@ -42,54 +42,62 @@ func TestCopyRecursive_NamedPipeDestination(t *testing.T) {
 
 	err := fs.CopyRecursive(t.Context(), src, dest)
 	require.ErrorIs(t, err, os.ErrExist)
+	require.ErrorContains(t, err, "a named pipe", "the error must name what is refused")
 	requireNamedPipe(t, pipe)
 }
 
 // TestCopyRecursiveAndMove_OverlayBaseNamedPipe checks that a copy and a move
-// into an OverlayFileSystem with local layers replace a named pipe of the
-// base layer: the write goes to a new file of the upper layer, which hides
-// the pipe, so the copy never writes into it. Only a special file at the
-// local path that the write goes to is an error, see isSpecialFile.
+// into an OverlayFileSystem with a local base layer replace a named pipe of
+// the base layer: the write goes to a new file of the upper layer, which
+// hides the pipe, so the copy never writes into it. Only a special file at
+// the path that the write goes to is an error, see isSpecialFile. With an
+// upper layer that is not local, the copy and the move were refused with an
+// error wrapping os.ErrExist, because the FileInfo of the overlay, which
+// describes the pipe, told for every upper layer that is not local.
 func TestCopyRecursiveAndMove_OverlayBaseNamedPipe(t *testing.T) {
-	baseDir, upperDir := fs.File(t.TempDir()), fs.File(t.TempDir())
-	mkfifo(t, baseDir.Join("f.txt"))
-	mkfifo(t, baseDir.Join("g.txt"))
-	base, err := fs.NewSubFileSystem(fs.Local, baseDir.LocalPath(), "")
-	require.NoError(t, err)
-	upper, err := fs.NewSubFileSystem(fs.Local, upperDir.LocalPath(), "")
-	require.NoError(t, err)
-	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
-	require.NoError(t, err)
-	register(t, overlay)
-	mem := newLinkMemFS(t, fs.NewMemFile("/src/f.txt", []byte("copied")), fs.NewMemFile("/g.txt", []byte("moved")))
-
-	require.NoError(t, fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), overlay.RootDir()))
-	require.NoError(t, fs.Move(t.Context(), mem.RootDir().Join("g.txt"), overlay.RootDir()))
-	requireContent(t, overlay.RootDir().Join("f.txt"), "copied")
-	requireContent(t, overlay.RootDir().Join("g.txt"), "moved")
-	requireNames(t, upperDir, "f.txt", "g.txt")
-	requireNamedPipe(t, baseDir.Join("f.txt"))
-	requireNamedPipe(t, baseDir.Join("g.txt"))
-	requireMissing(t, mem.RootDir().Join("g.txt"))
-}
-
-// TestCopyRecursive_HardLinks is a regression test: in a local directory that
-// existed before, two hard links of one file were taken for a name collision.
-// The copy wrote the first name, which also changed the file of the second,
-// and then found the second name to be a file that it wrote for another name
-// of the source, like another case, and failed with an error wrapping
-// os.ErrExist. Two hard links are two entries of the directory, the copy must
-// write both. They stay links of one file, which has the data written last.
-func TestCopyRecursive_HardLinks(t *testing.T) {
-	dest := fs.File(t.TempDir())
-	writeFiles(t, dest, map[string]string{"x.txt": "old"})
-	if err := os.Link(dest.Join("x.txt").LocalPath(), dest.Join("y.txt").LocalPath()); err != nil {
-		t.Skipf("can't create a hard link: %v", err)
+	uppers := []struct {
+		name string
+		// upper returns the upper layer and its root directory
+		upper func(t *testing.T) (fs.WriteFileSystem, fs.File)
+	}{
+		{
+			name: "local upper layer",
+			upper: func(t *testing.T) (fs.WriteFileSystem, fs.File) {
+				upperDir := fs.File(t.TempDir())
+				upper, err := fs.NewSubFileSystem(fs.Local, upperDir.LocalPath(), "")
+				require.NoError(t, err)
+				return upper, upperDir
+			},
+		},
+		{
+			name: "upper layer that is not local",
+			upper: func(t *testing.T) (fs.WriteFileSystem, fs.File) {
+				upper := newLinkMemFS(t)
+				return upper, upper.RootDir()
+			},
+		},
 	}
-	mem := newLinkMemFS(t, fs.NewMemFile("/src/x.txt", []byte("new")), fs.NewMemFile("/src/y.txt", []byte("new")))
+	for _, tt := range uppers {
+		t.Run(tt.name, func(t *testing.T) {
+			baseDir := fs.File(t.TempDir())
+			mkfifo(t, baseDir.Join("f.txt"))
+			mkfifo(t, baseDir.Join("g.txt"))
+			base, err := fs.NewSubFileSystem(fs.Local, baseDir.LocalPath(), "")
+			require.NoError(t, err)
+			upper, upperDir := tt.upper(t)
+			overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+			require.NoError(t, err)
+			register(t, overlay)
+			mem := newLinkMemFS(t, fs.NewMemFile("/src/f.txt", []byte("copied")), fs.NewMemFile("/g.txt", []byte("moved")))
 
-	require.NoError(t, fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), dest))
-	requireNames(t, dest, "x.txt", "y.txt")
-	requireContent(t, dest.Join("x.txt"), "new")
-	requireContent(t, dest.Join("y.txt"), "new")
+			require.NoError(t, fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), overlay.RootDir()))
+			require.NoError(t, fs.Move(t.Context(), mem.RootDir().Join("g.txt"), overlay.RootDir()))
+			requireContent(t, overlay.RootDir().Join("f.txt"), "copied")
+			requireContent(t, overlay.RootDir().Join("g.txt"), "moved")
+			requireNames(t, upperDir, "f.txt", "g.txt")
+			requireNamedPipe(t, baseDir.Join("f.txt"))
+			requireNamedPipe(t, baseDir.Join("g.txt"))
+			requireMissing(t, mem.RootDir().Join("g.txt"))
+		})
+	}
 }

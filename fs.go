@@ -84,7 +84,13 @@ func JoinCleanFilePath(uriParts ...string) File {
 // it, a device, a named pipe or a socket, and with an error wrapping
 // [os.ErrInvalid] for a name that is not valid for the destination file
 // system, the name of destination or of an entry below a moved directory,
-// also of an empty one, see [CopyRecursive].
+// also of an empty one, see [CopyRecursive]. A local file that Windows
+// describes as irregular is written like a regular file, which fails with
+// the error of the write over reparse points like AppExecLinks or WSL links,
+// see [CopyRecursive]. A directory that another process creates at
+// destination while the fallback lists the source keeps its entries:
+// the fallback fails with an error wrapping [os.ErrExist] at the first
+// entry of it that the copy would replace, and keeps the source.
 func Move(ctx context.Context, source, destination File) error {
 	if source == "" || destination == "" {
 		return ErrEmptyPath

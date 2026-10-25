@@ -60,3 +60,54 @@ func TestIsSpecialFile(t *testing.T) {
 	require.True(t, isSpecialFile(file, &FileInfo{IsRegular: false}), "no regular file of another file system")
 	require.False(t, isSpecialFile(file, &FileInfo{IsRegular: true}), "a regular file of another file system")
 }
+
+// TestIsSpecialFile_OverlayUpperNotLocal is a regression test: for an
+// OverlayFileSystem whose upper layer is not local, isSpecialFile took the
+// FileInfo of the overlay, which describes the entry of the base layer if the
+// upper layer has none, so a copy refused a special file of the base layer,
+// although the write creates a new file in the upper layer. The entry of the
+// upper layer must tell, a missing one is no special file.
+func TestIsSpecialFile_OverlayUpperNotLocal(t *testing.T) {
+	upper, err := NewMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = upper.Close() })
+	overlay, err := NewOverlayFileSystem(Local, upper, "")
+	require.NoError(t, err)
+	require.NoError(t, Register(overlay))
+	t.Cleanup(func() { Unregister(overlay) })
+	dest := overlay.RootDir().Join("file.txt")
+	// The FileInfo of a special file of the base layer
+	special := &FileInfo{IsRegular: false}
+
+	require.False(t, isSpecialFile(dest, special), "a file missing in the upper layer")
+	require.NoError(t, upper.WriteAll(t.Context(), "/file.txt", []byte("data"), 0o600))
+	require.False(t, isSpecialFile(dest, special), "a regular file of the upper layer")
+}
+
+// TestNewDestDir is a regression test: a move between file systems checks
+// that its destination is missing, then lists the whole source, see
+// treeCopier.checkSource, and only then copies into the destination. Without
+// the move flag, a destination directory that another process created in
+// between was taken for an existing directory, whose entries the copy
+// replaced before the move removed the source. Every directory of a move must
+// be new, so that every existing entry is an error, see destDir.
+func TestNewDestDir(t *testing.T) {
+	statErrs := []error{nil, os.ErrNotExist, os.ErrPermission}
+	for _, statErr := range statErrs {
+		for _, localDest := range []bool{false, true} {
+			move := &treeCopier{localDest: localDest, move: true}
+			require.True(t, move.newDestDir(statErr).isNew, "a directory of a move, Stat error %v, local %t", statErr, localDest)
+		}
+	}
+
+	copyLocal := &treeCopier{localDest: true}
+	require.True(t, copyLocal.newDestDir(os.ErrNotExist).isNew, "a directory that the copy created")
+	existing := copyLocal.newDestDir(nil)
+	require.False(t, existing.isNew, "an existing local directory")
+	require.NotNil(t, existing.written, "the writes into an existing local directory are recorded")
+
+	copyRemote := &treeCopier{}
+	existing = copyRemote.newDestDir(nil)
+	require.False(t, existing.isNew, "an existing directory of another file system")
+	require.Nil(t, existing.written, "other file systems have no identity of a file to record")
+}

@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	stdfstest "testing/fstest"
@@ -963,6 +964,33 @@ func TestCopyRecursive_NameCollisions(t *testing.T) {
 	})
 }
 
+// TestCopyRecursive_HardLinks is a regression test: in a local directory that
+// existed before, two hard links of one file were taken for a name collision.
+// The copy wrote the first name, which also changed the file of the second,
+// and then found the second name to be a file that it wrote for another name
+// of the source, like another case, and failed with an error wrapping
+// os.ErrExist. Two hard links are two entries of the directory, the copy must
+// write both into the one file, which keeps the data written last, like cp.
+func TestCopyRecursive_HardLinks(t *testing.T) {
+	dest := fs.File(t.TempDir())
+	writeFiles(t, dest, map[string]string{"x.txt": "old"})
+	if err := os.Link(dest.Join("x.txt").LocalPath(), dest.Join("y.txt").LocalPath()); err != nil {
+		t.Skipf("can't create a hard link: %v", err)
+	}
+	// MemFileSystem lists sorted, so y.txt is written last
+	mem := newLinkMemFS(t, fs.NewMemFile("/src/x.txt", []byte("from x")), fs.NewMemFile("/src/y.txt", []byte("from y")))
+
+	require.NoError(t, fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), dest))
+	requireNames(t, dest, "x.txt", "y.txt")
+	requireContent(t, dest.Join("x.txt"), "from y")
+	requireContent(t, dest.Join("y.txt"), "from y")
+	xInfo, err := os.Lstat(dest.Join("x.txt").LocalPath())
+	require.NoError(t, err)
+	yInfo, err := os.Lstat(dest.Join("y.txt").LocalPath())
+	require.NoError(t, err)
+	require.True(t, os.SameFile(xInfo, yInfo), "x.txt and y.txt must stay hard links of one file")
+}
+
 // TestCopyRecursive_InvalidLocalNames is a regression test: a tree copy to
 // the local file system only checked the names of the source for separators,
 // "." and "..", so it wrote a name that filepath.Localize rejects to another
@@ -1333,5 +1361,258 @@ func TestCopyRecursiveAndMove_Cells(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// listHookFS is a minimalFileSystem whose ListDir calls onListDir
+// with the path of the directory before it lists it.
+type listHookFS struct {
+	*minimalFileSystem
+
+	onListDir func(dirPath string)
+}
+
+// newListHookFS returns a registered listHookFS
+// that keeps its files with the initialFiles in a MemFileSystem.
+func newListHookFS(t *testing.T, onListDir func(dirPath string), initialFiles ...fs.MemFile) *listHookFS {
+	t.Helper()
+	l := &listHookFS{newMinimalFileSystem(fsimpl.RandomString(), newMemBacking(t, initialFiles...)), onListDir}
+	register(t, l)
+	return l
+}
+
+func (l *listHookFS) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+	l.onListDir(dirPath)
+	return l.minimalFileSystem.ListDir(ctx, dirPath, patterns, callback)
+}
+
+// TestMove_DestinationCreatedDuringCheck is a regression test: a move between
+// file systems checks that its destination is missing, then lists the whole
+// source, which takes long for a remote source, see treeCopier.checkSource,
+// and only then copies into the destination. A destination directory that
+// another process created in between was taken for an existing directory:
+// the copy replaced the entries of the other process and the move then removed
+// the source. Every directory of a move must be new, so the move must fail
+// with an error wrapping os.ErrExist, keep the entries of the other process
+// and keep its source.
+func TestMove_DestinationCreatedDuringCheck(t *testing.T) {
+	dest := fs.File(t.TempDir()).Join("dest")
+	src := newListHookFS(t, func(string) {
+		if !dest.Exists() {
+			// Another process creates the destination while the source is listed
+			writeFiles(t, dest, map[string]string{"a.txt": "other", "keep.txt": "keep"})
+		}
+	}, fs.NewMemFile("/src/a.txt", []byte("moved")))
+
+	err := fs.Move(t.Context(), src.RootDir().Join("src"), dest)
+	require.ErrorIs(t, err, os.ErrExist)
+	requireNames(t, dest, "a.txt", "keep.txt")
+	requireContent(t, dest.Join("a.txt"), "other")
+	requireContent(t, src.RootDir().Join("src", "a.txt"), "moved")
+}
+
+// TestCopyRecursive_SubDirectoryListingError is a regression test: the check
+// of the source before a copy to another file system skipped a sub-directory
+// whose listing failed with an error wrapping os.ErrNotExist, which ftpfs
+// returns for every reply 550, also for a directory that can't be read.
+// The copy then failed at that directory after it had written the entries
+// before it. CopyRecursive and Move must fail before they write anything,
+// and the move must keep its source.
+func TestCopyRecursive_SubDirectoryListingError(t *testing.T) {
+	m := newMinimalMemFS(t, fs.NewMemFile("/src/a.txt", []byte("a")))
+	// Listed as directory after a.txt, but listing it fails
+	m.ghostDir = "/src/unreadable"
+	src := m.RootDir().Join("src")
+	dir := fs.File(t.TempDir())
+
+	err := fs.CopyRecursive(t.Context(), src, dir.Join("copy"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	err = fs.Move(t.Context(), src, dir.Join("moved"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	requireNames(t, dir)
+	requireContent(t, src.Join("a.txt"), "a")
+}
+
+// TestCopyRecursive_ListedDirLinkLoop is a regression test: an FTP server
+// whose listing reports a symbolic link to a directory as directory lets
+// ftpfs list the same directory through every path of such links, until the
+// server refuses a path with too many links, like with ELOOP, with a reply
+// 550, which ftpfs reports as error wrapping os.ErrNotExist. The check of
+// the source before a copy to another file system skipped a directory whose
+// listing failed so, so with two links to "." it listed every path of up to
+// that many links, exponentially many, and the copy then failed after it had
+// written a part. The copy must fail at the first such error with a number
+// of listings that grows linearly with the number of links that the server
+// allows, before it writes anything.
+func TestCopyRecursive_ListedDirLinkLoop(t *testing.T) {
+	const maxLinks = 8 // the server refuses a path with more links
+	listings := 0
+	prefix := "link-loop-" + fsimpl.RandomString() + "://"
+	src := &fstest.MockFileSystem{
+		MockPrefix: prefix,
+		MockStat: func(filePath string) (*fs.FileInfo, error) {
+			if path.Base(filePath) == "a.txt" {
+				return &fs.FileInfo{Name: "a.txt", Exists: true, IsRegular: true, Size: 1}, nil
+			}
+			return &fs.FileInfo{Name: path.Base(filePath), Exists: true, IsDir: true}, nil
+		},
+		MockListDir: func(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+			listings++
+			if strings.Count(dirPath, "/loop") > maxLinks {
+				return fs.NewErrDoesNotExist(fs.File(prefix + dirPath))
+			}
+			// The links loop1 and loop2 to "." are listed as directories
+			for _, info := range []*fs.FileInfo{
+				{Name: "a.txt", Exists: true, IsRegular: true, Size: 1},
+				{Name: "loop1", Exists: true, IsDir: true},
+				{Name: "loop2", Exists: true, IsDir: true},
+			} {
+				if err := callback(info); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		MockOpenReader: func(string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("a")), nil
+		},
+	}
+	register(t, src)
+	dir := fs.File(t.TempDir())
+
+	err := fs.CopyRecursive(t.Context(), src.RootDir().Join("src"), dir.Join("copy"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	// The source and every path through loop1 up to the refused one
+	require.LessOrEqual(t, listings, maxLinks+2, "the number of listings")
+	requireNames(t, dir)
+}
+
+// irregularFS is a minimalFileSystem whose Stat describes the files at the
+// irregular paths as no regular files, like the special files of a remote
+// file system.
+type irregularFS struct {
+	*minimalFileSystem
+
+	irregular []string
+}
+
+// newIrregularFS returns a registered irregularFS with the irregular paths
+// that keeps its files in a MemFileSystem.
+func newIrregularFS(t *testing.T, irregular ...string) *irregularFS {
+	t.Helper()
+	i := &irregularFS{newMinimalFileSystem(fsimpl.RandomString(), newMemBacking(t)), irregular}
+	register(t, i)
+	return i
+}
+
+func (i *irregularFS) Stat(filePath string) (*fs.FileInfo, error) {
+	info, err := i.minimalFileSystem.Stat(filePath)
+	if err == nil && slices.Contains(i.irregular, filePath) {
+		info.IsRegular = false
+	}
+	return info, err
+}
+
+// TestCopyRecursiveAndMove_OverlaySpecialFiles checks the special files of an
+// OverlayFileSystem with layers that are not local, see isSpecialFile: a copy
+// and a move write a new file of the upper layer over a special file of the
+// base layer, which the new file hides, and refuse a special file of the
+// upper layer, which they would write into, with an error wrapping
+// os.ErrExist, the move keeping its source. A copy and a move over a special
+// file of the base layer were refused like over one of the upper layer.
+func TestCopyRecursiveAndMove_OverlaySpecialFiles(t *testing.T) {
+	newSource := func(t *testing.T) *fs.MemFileSystem {
+		return newLinkMemFS(t, fs.NewMemFile("/src/f.txt", []byte("copied")), fs.NewMemFile("/g.txt", []byte("moved")))
+	}
+	newOverlay := func(t *testing.T, base fs.FileSystem, upper fs.WriteFileSystem) *fs.OverlayFileSystem {
+		overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+		require.NoError(t, err)
+		register(t, overlay)
+		return overlay
+	}
+	special := map[string]string{"f.txt": "special", "g.txt": "special"}
+
+	t.Run("of the base layer", func(t *testing.T) {
+		base := newIrregularFS(t, "/f.txt", "/g.txt")
+		writeFiles(t, base.RootDir(), special)
+		upper := newMinimalMemFS(t)
+		overlay := newOverlay(t, base, upper)
+		mem := newSource(t)
+
+		require.NoError(t, fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), overlay.RootDir()))
+		require.NoError(t, fs.Move(t.Context(), mem.RootDir().Join("g.txt"), overlay.RootDir()))
+		requireContent(t, upper.RootDir().Join("f.txt"), "copied")
+		requireContent(t, upper.RootDir().Join("g.txt"), "moved")
+		requireContent(t, base.RootDir().Join("f.txt"), "special")
+		requireContent(t, base.RootDir().Join("g.txt"), "special")
+		requireMissing(t, mem.RootDir().Join("g.txt"))
+	})
+	t.Run("of the upper layer", func(t *testing.T) {
+		upper := newIrregularFS(t, "/f.txt", "/g.txt")
+		writeFiles(t, upper.RootDir(), special)
+		overlay := newOverlay(t, newMinimalMemFS(t), upper)
+		mem := newSource(t)
+
+		err := fs.CopyRecursive(t.Context(), mem.RootDir().Join("src"), overlay.RootDir())
+		require.ErrorIs(t, err, os.ErrExist)
+		require.ErrorContains(t, err, "special file")
+		err = fs.Move(t.Context(), mem.RootDir().Join("g.txt"), overlay.RootDir())
+		require.ErrorIs(t, err, os.ErrExist)
+		requireContent(t, upper.RootDir().Join("f.txt"), "special")
+		requireContent(t, upper.RootDir().Join("g.txt"), "special")
+		requireContent(t, mem.RootDir().Join("g.txt"), "moved")
+	})
+}
+
+// TestCopyRecursive_MalformedPatternWritesNothing is a regression test:
+// a malformed pattern was only an error when the copy matched it with
+// a name. Within one file system that copies links to directories, which
+// doesn't list the source before the copy, the copy had created the
+// destination directory then, and a source without files was copied without
+// an error. CopyRecursive must fail with an error wrapping path.ErrBadPattern
+// before it writes anything.
+func TestCopyRecursive_MalformedPatternWritesNothing(t *testing.T) {
+	tests := []struct {
+		name string
+		src  func(t *testing.T) fs.File
+	}{
+		{
+			name: "from another file system",
+			src: func(t *testing.T) fs.File {
+				return newLinkMemFS(t, fs.NewMemFile("/src/a.txt", []byte("a"))).RootDir().Join("src")
+			},
+		},
+		{
+			name: "from another file system without files",
+			src: func(t *testing.T) fs.File {
+				mem := newLinkMemFS(t)
+				require.NoError(t, mem.MakeAllDirs("/src/sub", 0))
+				return mem.RootDir().Join("src")
+			},
+		},
+		{
+			name: "within the local file system",
+			src: func(t *testing.T) fs.File {
+				src := fs.File(t.TempDir())
+				writeFiles(t, src, map[string]string{"a.txt": "a"})
+				return src
+			},
+		},
+		{
+			name: "a file",
+			src: func(t *testing.T) fs.File {
+				return localFile(t, "a.txt", "a")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := fs.File(t.TempDir())
+
+			err := fs.CopyRecursive(t.Context(), tt.src(t), dir.Join("copy"), "*.txt", "[")
+			require.ErrorIs(t, err, path.ErrBadPattern)
+			require.ErrorContains(t, err, `"["`, "the error must name the pattern")
+			requireNames(t, dir)
+		})
 	}
 }
