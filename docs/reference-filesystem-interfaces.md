@@ -168,7 +168,8 @@ destinations are told by their file mode, so the placeholders of OneDrive
 files, which Windows reports as irregular, are replaced like regular files;
 writing over other reparse points, like AppExecLinks, fails with the error of
 the write. Other file systems refuse every entry that `FileInfo.IsRegular`
-doesn't describe as regular. For local destinations, names that
+doesn't describe as regular. An `OverlayFileSystem` destination is checked
+at its upper layer, so a special file of the base layer is no error. For local destinations, names that
 `filepath.Localize` rejects, and on Windows names ending in a dot or space,
 are errors wrapping `os.ErrInvalid`. Between file systems these names are
 checked for every entry of the source, also empty directories and entries

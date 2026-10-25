@@ -116,7 +116,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   of a name on macOS. The second file replaced the first, `Sub` and `sub` were
   merged, the move returned nil and removed the source. Now the move fails
   with an error wrapping `os.ErrExist` that names the entry, and keeps the
-  source.
+  source. So does a move whose destination directory another process
+  creates while the move lists the source, instead of replacing that
+  process's entries.
 - `fs.CopyRecursive` silently replaced an entry it had just written for
   another source name. It now fails with `os.ErrExist`: in directories it
   creates on every file system, and in existing directories on the local
@@ -141,6 +143,10 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   writing over other reparse points, like AppExecLinks, fails with the error
   of the write. A special file in the base layer of an `OverlayFileSystem` is
   no error, the write to the upper layer hides it.
+- `CopyRecursive` rejects a malformed pattern with an error wrapping
+  `path.ErrBadPattern` before it writes anything, also for a file source,
+  whose copy ignores the patterns. A copy within one file system created
+  the destination first, and a copy of a source without files didn't fail.
 - The `os.ErrInvalid` error of `CopyRecursive` for invalid names printed URI
   passwords; it redacts them now.
 - `ftpfs` `RemoveAll` on servers with MLST support could delete the files that

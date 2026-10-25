@@ -364,7 +364,9 @@ signatures. Changes compared to v0.1:
   Windows reports as irregular files, are replaced). To the local file
   system, they fail with `os.ErrInvalid` on names like `NUL`, `COM1`, `a:b`,
   `name.` (Windows) or names with a NUL byte, before writing anything, also
-  for empty directories.
+  for empty directories. `CopyRecursive` returns an error wrapping
+  `path.ErrBadPattern` for a malformed pattern before writing anything, also
+  for a file source.
 - `sftpfs`, `ftpfs` and `webdavfs` reject paths with a backslash
   (`os.ErrInvalid`), because a server on Windows takes it for a separator.
   For a server on Unix that has files with backslashes in their names, set

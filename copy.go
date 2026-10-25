@@ -889,9 +889,10 @@ func localLstat(file File) (localPath string, info os.FileInfo, ok bool) {
 // errCopiedOver returns the error wrapping os.ErrExist for the existing
 // entry dest where the entry src of the source is to be copied, which the
 // copy wrote for another name of the source that the destination doesn't
-// tell apart from the name of src, see destDir.
+// tell apart from the name of src, see destDir, or which another process
+// created in a directory that the copy created or a move found missing.
 func errCopiedOver(src, dest File) error {
-	return fmt.Errorf("can't copy %s over an entry that the copy wrote for another name, which the destination doesn't tell apart, like another case: %w", errSubject(src), NewErrAlreadyExists(dest))
+	return fmt.Errorf("can't copy %s over an entry that didn't exist before the copy, which the copy wrote for another name that the destination doesn't tell apart, like another case, or another process created: %w", errSubject(src), NewErrAlreadyExists(dest))
 }
 
 // errDestLink returns the error wrapping os.ErrExist for the symbolic link
