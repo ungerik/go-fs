@@ -59,27 +59,30 @@ type testFTPServer struct {
 	lastPass string
 
 	// Hooks, guarded by mu
-	failListContains string         // LIST and MLSD of a path containing it fail with 550
-	listOmits        string         // LIST, not MLSD, of the parent directory leaves out the entry at this path
-	listForged       map[string]int // LIST, not MLSD, of the parent directory adds this many lines that list the entry at the path as a directory, like a file whose name contains a line feed followed by such a line
-	globArgs         bool           // LIST expands glob characters in its path argument like ProFTPD with UseGlobbing and lists the first directory that matches
-	dropBefore       map[string]int // the next commands with the verb close the connection without executing them
-	dropAt           map[string]int // the command with the verb that the server receives as the nth one, counted in commands, closes the connection without executing it
-	dropReplyOf      map[string]int // the next commands with the verb are executed, then the connection closes instead of the final reply
-	hang             string         // commands with this verb are never answered
-	silent           bool           // new connections get no greeting
-	home             string         // the working directory after the login if not empty, else "/"
-	noMLST           bool           // MLST and MLSD are not supported, listings use LIST
-	noEPSV           bool           // EPSV is not implemented
-	pasvHost         string         // host part of PASV replies like "10,1,2,3" instead of the real address
-	rntoNoReplace    bool           // RNTO onto an existing path fails like on servers that don't replace files
-	refuse           map[string]int // the next RNFR, RNTO, RMD or DELE commands like "RNFR /path" are refused with 550
-	deleteOnRNFR     string         // RNFR of this path deletes it first, like another client right before
-	dotEntries       bool           // LIST and MLSD list the entries "." and ".." first like most servers
-	lsArgs           bool           // LIST of a file or a symbolic link lists it itself like "ls -l" instead of failing or following the link
-	statArgs         bool           // LIST of a file or a link to a file lists the file under the name of the argument, following links like "ls -lL"
-	maxListings      int            // LIST and MLSD fail with 550 after this many listings if not 0
-	requireTLSReuse  bool           // TLS data connections must resume the TLS session of the control connection
+	failListContains string            // LIST and MLSD of a path containing it fail with 550
+	listOmits        string            // LIST, not MLSD, of the parent directory leaves out the entry at this path
+	listForged       map[string]int    // LIST, not MLSD, of the parent directory adds this many lines that list the entry at the path as a directory, like a file whose name contains a line feed followed by such a line
+	globArgs         bool              // LIST expands glob characters in its path argument like ProFTPD with UseGlobbing and lists the first directory that matches
+	listArgPaths     bool              // LIST takes its argument for a path without parsing options like "-a", like ftpserverlib with DisableLISTArgs
+	pwdReply         string            // PWD is answered with this reply if not empty, like a 550 or a 257 with a relative path
+	mlstReplies      map[string]string // MLST of the clean absolute path is answered with this failure reply
+	dropBefore       map[string]int    // the next commands with the verb close the connection without executing them
+	dropAt           map[string]int    // the command with the verb that the server receives as the nth one, counted in commands, closes the connection without executing it
+	dropReplyOf      map[string]int    // the next commands with the verb are executed, then the connection closes instead of the final reply
+	hang             string            // commands with this verb are never answered
+	silent           bool              // new connections get no greeting
+	home             string            // the working directory after the login if not empty, else "/"
+	noMLST           bool              // MLST and MLSD are not supported, listings use LIST
+	noEPSV           bool              // EPSV is not implemented
+	pasvHost         string            // host part of PASV replies like "10,1,2,3" instead of the real address
+	rntoNoReplace    bool              // RNTO onto an existing path fails like on servers that don't replace files
+	refuse           map[string]int    // the next RNFR, RNTO, RMD or DELE commands like "RNFR /path" are refused with 550
+	deleteOnRNFR     string            // RNFR of this path deletes it first, like another client right before
+	dotEntries       bool              // LIST and MLSD list the entries "." and ".." first like most servers
+	lsArgs           bool              // LIST of a file or a symbolic link lists it itself like "ls -l" instead of failing or following the link
+	statArgs         bool              // LIST of a file or a link to a file lists the file under the name of the argument, following links like "ls -lL"
+	maxListings      int               // LIST and MLSD fail with 550 after this many listings if not 0
+	requireTLSReuse  bool              // TLS data connections must resume the TLS session of the control connection
 }
 
 type testFTPNode struct {
@@ -116,6 +119,7 @@ func newTestFTPServerOn(t *testing.T, address string) *testFTPServer {
 		dropAt:      make(map[string]int),
 		dropReplyOf: make(map[string]int),
 		refuse:      make(map[string]int),
+		mlstReplies: make(map[string]string),
 	}
 	go srv.acceptLoop()
 	t.Cleanup(func() { ln.Close() })
@@ -548,7 +552,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		failList := s.failListContains
 		rntoNoReplace := s.rntoNoReplace
 		dotEntries, lsArgs, statArgs := s.dotEntries, s.lsArgs, s.statArgs
-		listOmits, globArgs := s.listOmits, s.globArgs
+		listOmits, globArgs, listArgPaths := s.listOmits, s.globArgs, s.listArgPaths
+		pwdReply := s.pwdReply
 		tooManyListings := (verb == "LIST" || verb == "MLSD") && s.maxListings > 0 && s.commands["LIST"]+s.commands["MLSD"] > s.maxListings
 		s.mu.Unlock()
 
@@ -598,6 +603,10 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		case "SYST":
 			reply("215 UNIX Type: L8")
 		case "PWD":
+			if pwdReply != "" {
+				reply("%s", pwdReply)
+				continue
+			}
 			reply(`257 "%s"`, cwd)
 		case "CDUP":
 			cwd = path.Dir(cwd)
@@ -720,9 +729,14 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			if ok {
 				fact = mlstFact(node)
 			}
+			failure := s.mlstReplies[p]
 			s.mu.Unlock()
 			if noMLST {
 				reply("500 unknown command")
+				continue
+			}
+			if failure != "" {
+				reply("%s", failure)
 				continue
 			}
 			if !ok {
@@ -733,6 +747,9 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		case "MLSD", "LIST":
 			p := abs(strings.TrimPrefix(arg, "-a "))
 			pathArg := arg != "" && arg != "-a"
+			if verb == "LIST" && listArgPaths {
+				p, pathArg = abs(arg), arg != ""
+			}
 			if !pathArg {
 				p = cwd
 			}

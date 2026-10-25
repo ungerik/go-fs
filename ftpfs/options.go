@@ -70,7 +70,9 @@ type Options struct {
 	// after a connection loss, for the dedicated connection of every
 	// OpenReader and for the connections that Remove and RemoveAll dial for
 	// LIST on servers with MLST support, so it should be cheap or cache its
-	// result, and return the same user every time.
+	// result, and return the same user every time: the connections for LIST
+	// resolve relative paths against the login directory of their user and
+	// must see the same files as the connection of the operation.
 	Credentials CredentialsCallback
 
 	// TLSConfig is used for FTPS connections. If nil, a configuration

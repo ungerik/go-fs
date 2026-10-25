@@ -1036,7 +1036,10 @@ func TestSymbolicLinks_MLSD(t *testing.T) {
 // LIST of the parent directory lists the path once and as a directory.
 // A file whose name contains a line feed followed by a line that lists a
 // directory with the name of the link added that line to the listing,
-// and the check accepted the link because of it.
+// and the check accepted the link because of it. The FTP client library
+// cuts the LIST line of a link at the first " -> ", so it listed a link
+// named "a -> b" with the name "a", and one such added line was the only
+// entry named "a -> b".
 func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -1056,6 +1059,9 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 		{name: "forged directory line for the link", removed: "/tree", link: "/tree/link", forged: 1},
 		{name: "forged directory line for the link at the removed path", removed: "/tree/link", link: "/tree/link", forged: 1},
 		{name: "two directory lines for the link", removed: "/tree", link: "/tree/link", listOmits: "/tree/link", forged: 2},
+		{name: "link name with an arrow", removed: "/tree", link: "/tree/a -> b"},
+		{name: "forged directory line for a link name with an arrow", removed: "/tree", link: "/tree/a -> b", forged: 1},
+		{name: "forged directory line for a link name with an arrow at the removed path", removed: "/tree/a -> b", link: "/tree/a -> b", forged: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newTestFTPServer(t)
@@ -1141,6 +1147,120 @@ func TestSymbolicLinks_MLSDRemoveAllGlobParent(t *testing.T) {
 		assert.Equal(t, "-a", arg, "LIST is sent without a path argument")
 	}
 	assert.Equal(t, []string{"/", "/p[q]", "/", "/r[s]", "/r[s]/dir"}, srv.argsOf("CWD"), "CWD to every parent directory of a removed directory once")
+}
+
+// TestSymbolicLinks_ArrowInName checks names that contain " -> " on a server
+// with MLST support, which the FTP client library takes for the end of the
+// name of a symbolic link in a LIST line: RemoveAll removes a directory with
+// such a name, whose DELE fails, and Remove and RemoveAll of a dangling link
+// with such a name that the server refuses to delete return the error of
+// DELE instead of reporting the link as missing, because LIST lists it. See
+// TestSymbolicLinks_MLSDRemoveAllRefusedDelete for a link to a directory.
+func TestSymbolicLinks_ArrowInName(t *testing.T) {
+	ctx := t.Context()
+	srv := newTestFTPServer(t)
+	srv.writeFile("/tree/a -> b/sub/file.txt", "data")
+	srv.writeFile("/root/file.txt", "data")
+	srv.symlink("missing.txt", "/root/a -> b")
+	srv.configure(func(s *testFTPServer) { s.refuse["DELE /root/a -> b"] = 100 })
+	ftpFS := dialInProcess(t, srv)
+
+	require.NoError(t, ftpFS.RemoveAll(ctx, "/tree"), "RemoveAll of a directory with an arrow in its name")
+	assert.False(t, srv.exists("/tree"))
+
+	for name, remove := range map[string]func(string) error{
+		"Remove":    ftpFS.Remove,
+		"RemoveAll": func(p string) error { return ftpFS.RemoveAll(ctx, p) },
+	} {
+		err := remove("/root/a -> b")
+		require.Error(t, err, "%s of a dangling link that the server doesn't delete", name)
+		assert.NotErrorIs(t, err, os.ErrNotExist, "%s: the link exists", name)
+		var reply *textproto.Error
+		if assert.ErrorAs(t, err, &reply, "%s: the DELE reply is wrapped", name) {
+			assert.Equal(t, 550, reply.Code, "%s: the 550 reply to DELE", name)
+		}
+		assert.True(t, srv.exists("/root/a -> b"), "%s: the link is kept", name)
+	}
+}
+
+// TestSymbolicLinks_MLSDRemoveAllOptionEntry is the regression test for the
+// "LIST -a" that RemoveAll sends on a server with MLST support to tell
+// a directory from a symbolic link: servers that don't parse the options of
+// LIST, like ftpserverlib with DisableLISTArgs, take "-a" for a path and
+// list the entry -a of the directory, so a client that can write into the
+// directory of a link to a directory that the server refuses to delete could
+// add a directory -a with a directory named like the link, which confirmed
+// the link, and RemoveAll deleted the files that the link points to.
+// RemoveAll must not use the listing of a directory with an entry named -a,
+// also if MLST can't tell whether it has one, and Remove and RemoveAll of
+// a path that MLST reports as missing report it as missing then, like for
+// a directory that can't be listed, even if the entry -a lists the name.
+func TestSymbolicLinks_MLSDRemoveAllOptionEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		home         string // the working directory after the login, "/" if empty
+		removed      string // the path of RemoveAll
+		link         string // the absolute path of the link to /outside whose DELE is refused
+		listArgPaths bool   // the server takes the argument of LIST for a path
+		mlstReply    string // the reply to MLST of the entry -a next to the link if not empty
+		fileDashA    bool   // the entry -a is a file instead of a directory with a directory named like the link
+		wantErr      string
+	}{
+		{name: "server that takes -a for a path", removed: "/tree/link", link: "/tree/link", listArgPaths: true, wantErr: "entry named -a"},
+		{name: "relative path", home: "/home/testuser", removed: "tree/link", link: "/home/testuser/tree/link", listArgPaths: true, wantErr: "entry named -a"},
+		{name: "MLST fails", removed: "/tree/link", link: "/tree/link", listArgPaths: true, mlstReply: "501 not allowed", wantErr: "not allowed"},
+		// RemoveAll can't tell whether the server parses the options
+		{name: "server that parses options", removed: "/tree/link", link: "/tree/link", wantErr: "entry named -a"},
+		{name: "file -a", removed: "/tree/link", link: "/tree/link", fileDashA: true, wantErr: "entry named -a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestFTPServer(t)
+			srv.writeFile("/outside/keep.txt", "keep")
+			// Also the tree at the relative path below /, which has no entry -a
+			srv.writeFile("/tree/file.txt", "data")
+			srv.symlink("/outside", tc.link)
+			dashA := path.Join(path.Dir(tc.link), "-a")
+			if tc.fileDashA {
+				srv.writeFile(dashA, "data")
+			} else {
+				srv.mkdirAll(path.Join(dashA, path.Base(tc.link)))
+			}
+			srv.configure(func(s *testFTPServer) {
+				s.home = tc.home
+				s.listArgPaths = tc.listArgPaths
+				s.refuse["DELE "+tc.link] = 100
+				if tc.mlstReply != "" {
+					s.mlstReplies[dashA] = tc.mlstReply
+				}
+			})
+			ftpFS := dialInProcess(t, srv)
+			before := srv.paths()
+
+			err := ftpFS.RemoveAll(t.Context(), tc.removed)
+			require.Error(t, err, "RemoveAll must fail for a link that the server doesn't delete")
+			assert.ErrorContains(t, err, tc.wantErr)
+			assert.ErrorContains(t, err, string(ftpFS.JoinCleanFile(tc.removed)), "the error names the link")
+			var reply *textproto.Error
+			if assert.ErrorAs(t, err, &reply, "the DELE reply is wrapped") {
+				assert.Equal(t, "permission denied", reply.Msg, "the reply to DELE")
+			}
+			assert.Equal(t, before, srv.paths(), "nothing must be deleted")
+			assert.Contains(t, srv.argsOf("MLST"), dashA, "MLST checks the entry -a")
+		})
+	}
+
+	t.Run("path that MLST reports as missing", func(t *testing.T) {
+		ctx := t.Context()
+		srv := newTestFTPServer(t)
+		srv.writeFile("/tree/-a/gone", "data")
+		srv.configure(func(s *testFTPServer) { s.listArgPaths = true })
+		ftpFS := dialInProcess(t, srv)
+
+		assert.ErrorIs(t, ftpFS.Remove("/tree/gone"), os.ErrNotExist)
+		assert.NoError(t, ftpFS.RemoveAll(ctx, "/tree/gone"))
+		assert.Equal(t, 2, srv.count("LIST"), "the parent directory is listed")
+		assert.True(t, srv.exists("/tree/-a/gone"))
+	})
 }
 
 // TestSymbolicLinks_MLSTRemoveAndMove checks Remove, RemoveAll and Move of
@@ -1398,7 +1518,8 @@ func TestSymbolicLinks_MLSTRemoveRefusedDangling(t *testing.T) {
 
 // TestRemoveAll_ListingCache checks that RemoveAll on a server with MLST
 // support lists the parent directory of every removed directory only once
-// with LIST, also for several directories in it.
+// with LIST and checks the listing for an entry named -a only once, also
+// for several directories in it.
 func TestRemoveAll_ListingCache(t *testing.T) {
 	srv := newTestFTPServer(t)
 	for _, dir := range []string{"a", "b", "c"} {
@@ -1410,6 +1531,7 @@ func TestRemoveAll_ListingCache(t *testing.T) {
 	assert.Empty(t, srv.paths())
 	assert.Equal(t, 2, srv.count("LIST"), "LIST of / for /tree and of /tree for /tree/a, /tree/b and /tree/c")
 	assert.Equal(t, []string{"/", "/tree"}, srv.argsOf("CWD"))
+	assert.Equal(t, []string{"/tree", "/-a", "/tree/-a"}, srv.argsOf("MLST"), "MLST of /tree and one check of each listing for an entry -a")
 }
 
 // TestRemoveAll_RelativePath checks RemoveAll of a relative path on a
@@ -1427,6 +1549,119 @@ func TestRemoveAll_RelativePath(t *testing.T) {
 	require.NoError(t, ftpFS.RemoveAll(t.Context(), "tree"))
 	assert.Equal(t, []string{"/home", "/home/testuser", "/home/testuser/keep.txt"}, srv.paths())
 	assert.Equal(t, []string{"/home/testuser", "/home/testuser/tree", "/home/testuser/tree/a"}, srv.argsOf("CWD"))
+}
+
+// TestRemoveAll_RelativePathRefusedDelete checks relative paths on a server
+// with MLST support that refuses to delete a symbolic link: RemoveAll of
+// a directory with a link to a directory and Remove and RemoveAll of
+// a dangling link. The connection for LIST must list the parent directories
+// resolved against the working directory after the login: below / the same
+// relative paths have a directory at the path of the link to a directory
+// and no dangling link, which a listing of / would confirm or not list.
+func TestRemoveAll_RelativePathRefusedDelete(t *testing.T) {
+	const home = "/home/testuser"
+	for _, tc := range []struct {
+		name      string
+		removed   string // the relative path of RemoveAll
+		listOmits bool   // LIST doesn't list the link
+		forged    int    // LIST adds this many lines that list the link as a directory
+	}{
+		{name: "LIST doesn't list the link", removed: "tree", listOmits: true},
+		{name: "LIST lists the link", removed: "tree"},
+		{name: "LIST lists the link at the removed path", removed: "tree/link"},
+		{name: "LIST lists the link twice", removed: "tree", forged: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestFTPServer(t)
+			srv.writeFile("/outside/keep.txt", "keep")
+			srv.writeFile(home+"/tree/file.txt", "data")
+			srv.symlink("/outside", home+"/tree/link")
+			srv.writeFile("/tree/link/file.txt", "data")
+			srv.configure(func(s *testFTPServer) {
+				s.home = home
+				s.refuse["DELE "+home+"/tree/link"] = 100
+				if tc.listOmits {
+					s.listOmits = home + "/tree/link"
+				}
+				s.listForged[home+"/tree/link"] = tc.forged
+			})
+			ftpFS := dialInProcess(t, srv)
+
+			err := ftpFS.RemoveAll(t.Context(), tc.removed)
+			require.Error(t, err, "RemoveAll must fail for a link that the server doesn't delete")
+			assert.ErrorContains(t, err, string(ftpFS.JoinCleanFile("tree/link")), "the error names the link")
+			var reply *textproto.Error
+			if assert.ErrorAs(t, err, &reply, "the DELE reply is wrapped") {
+				assert.Equal(t, "permission denied", reply.Msg, "the reply to DELE")
+			}
+			assert.Equal(t, "keep", string(srv.fileContent("/outside/keep.txt")), "RemoveAll must keep the files that the link points to")
+			assert.True(t, srv.exists(home+"/tree/link"), "the link is kept")
+			assert.True(t, srv.exists("/tree/link/file.txt"), "the tree below / is kept")
+		})
+	}
+
+	t.Run("dangling link", func(t *testing.T) {
+		ctx := t.Context()
+		srv := newTestFTPServer(t)
+		srv.symlink("missing.txt", home+"/root/dangling")
+		srv.writeFile("/root/file.txt", "data")
+		srv.configure(func(s *testFTPServer) {
+			s.home = home
+			s.refuse["DELE "+home+"/root/dangling"] = 100
+		})
+		ftpFS := dialInProcess(t, srv)
+
+		for name, remove := range map[string]func(string) error{
+			"Remove":    ftpFS.Remove,
+			"RemoveAll": func(p string) error { return ftpFS.RemoveAll(ctx, p) },
+		} {
+			err := remove("root/dangling")
+			require.Error(t, err, "%s of a link that the server doesn't delete", name)
+			assert.NotErrorIs(t, err, os.ErrNotExist, "%s: the link exists", name)
+			var reply *textproto.Error
+			if assert.ErrorAs(t, err, &reply, "%s: the DELE reply is wrapped", name) {
+				assert.Equal(t, "permission denied", reply.Msg, "%s: the reply to DELE", name)
+			}
+			assert.True(t, srv.exists(home+"/root/dangling"), "%s: the link is kept", name)
+		}
+	})
+}
+
+// TestRemoveAll_ListingPWDFails checks RemoveAll of a relative path on
+// a server with MLST support when the connection for LIST can't read the
+// working directory after the login, against which it resolves relative
+// paths, with PWD: PWD fails or replies a path that is not absolute.
+// RemoveAll fails with an error wrapping the failure of DELE and deletes
+// nothing. The login directory has a directory home with a directory tree,
+// which the relative PWD reply would refer to.
+func TestRemoveAll_ListingPWDFails(t *testing.T) {
+	for _, tc := range []struct{ name, pwdReply, wantErr string }{
+		{name: "PWD fails", pwdReply: "550 PWD not allowed", wantErr: "PWD not allowed"},
+		{name: "relative PWD reply", pwdReply: `257 "home"`, wantErr: `PWD replied "home"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestFTPServer(t)
+			srv.writeFile("/home/testuser/tree/file.txt", "data")
+			srv.writeFile("/home/testuser/tree/sub/file.txt", "data")
+			srv.mkdirAll("/home/testuser/home/tree")
+			srv.configure(func(s *testFTPServer) {
+				s.home = "/home/testuser"
+				s.pwdReply = tc.pwdReply
+			})
+			ftpFS := dialInProcess(t, srv)
+			before := srv.paths()
+
+			err := ftpFS.RemoveAll(t.Context(), "tree")
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.wantErr, "the error tells why there is no listing")
+			var reply *textproto.Error
+			if assert.ErrorAs(t, err, &reply, "the DELE reply is wrapped") {
+				assert.Equal(t, "file not found", reply.Msg, "the reply to DELE, not to PWD")
+			}
+			assert.Equal(t, before, srv.paths(), "nothing must be deleted")
+			assert.Equal(t, 1, srv.count("PWD"))
+		})
+	}
 }
 
 // TestRemoveAll_ListingConnectionBreaks is the regression test for the
@@ -1464,11 +1699,23 @@ func TestRemoveAll_ListingConnectionBreaks(t *testing.T) {
 func TestRemoveAll_ListingConnectionFails(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
+		opts      *Options
 		configure func(s *testFTPServer)
 		logins    int64 // of the connection of the operation and the connections for LIST
 	}{
-		{name: "LIST fails twice", configure: func(s *testFTPServer) { s.dropBefore["LIST"] = 2 }, logins: 3},
-		{name: "dial fails", configure: func(s *testFTPServer) { s.silent = true }, logins: 1},
+		{
+			name:      "LIST fails twice",
+			opts:      &Options{Password: testPassword},
+			configure: func(s *testFTPServer) { s.dropBefore["LIST"] = 2 },
+			logins:    3,
+		},
+		{
+			name: "dial fails",
+			// The dial waits for the greeting of the silent server until the timeout
+			opts:      &Options{Password: testPassword, Timeout: 500 * time.Millisecond},
+			configure: func(s *testFTPServer) { s.silent = true },
+			logins:    1,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newTestFTPServer(t)
@@ -1476,7 +1723,7 @@ func TestRemoveAll_ListingConnectionFails(t *testing.T) {
 			srv.writeFile("/tree/sub/file.txt", "data")
 			srv.symlink("/outside", "/tree/link")
 			srv.configure(func(s *testFTPServer) { s.refuse["DELE /tree/link"] = 100 })
-			ftpFS := dialInProcessWith(t, srv, &Options{Password: testPassword, Timeout: 500 * time.Millisecond})
+			ftpFS := dialInProcessWith(t, srv, tc.opts)
 			before := srv.paths()
 			srv.configure(tc.configure)
 
@@ -1498,6 +1745,63 @@ func TestRemoveAll_ListingConnectionFails(t *testing.T) {
 			_, err = ftpFS.Stat("/tree")
 			require.NoError(t, err)
 			assert.Equal(t, tc.logins, srv.logins.Load(), "the connection of the operation is kept")
+		})
+	}
+}
+
+// TestRemoveAll_ListingCheckConnectionBreaks checks Remove and RemoveAll on
+// a server with MLST support when the connection of the operation breaks
+// during the MLST that checks a LIST listing for an entry named -a: that is
+// no failure of the listing but of the connection of the operation. RemoveAll,
+// which removes nothing that should be kept when repeated, is retried on
+// a new connection, and Remove, which sent DELE before, returns the
+// connection error instead of reporting a refused dangling link as missing.
+func TestRemoveAll_ListingCheckConnectionBreaks(t *testing.T) {
+	t.Run("directory", func(t *testing.T) {
+		srv := newTestFTPServer(t)
+		srv.writeFile("/tree/sub/file.txt", "data")
+		// The first MLST is the one of /tree, the second the check of the listing of /
+		srv.configure(func(s *testFTPServer) { s.dropAt["MLST"] = 2 })
+		ftpFS := dialInProcess(t, srv)
+
+		require.NoError(t, ftpFS.RemoveAll(t.Context(), "/tree"))
+		assert.Empty(t, srv.paths())
+		assert.Equal(t, int64(4), srv.logins.Load(), "two connections of the operation and two for LIST")
+		require.Eventually(t, func() bool { return srv.open.Load() == 1 }, 5*time.Second, time.Millisecond,
+			"%d connections are open", srv.open.Load())
+	})
+
+	for _, tc := range []struct {
+		name    string
+		remove  func(ctx context.Context, f *fileSystem) error
+		wantErr string
+	}{
+		{
+			name:    "Remove of a dangling link",
+			remove:  func(_ context.Context, f *fileSystem) error { return f.Remove("/root/dangling") },
+			wantErr: "broke after a command was sent",
+		},
+		{
+			name:    "RemoveAll of a dangling link",
+			remove:  func(ctx context.Context, f *fileSystem) error { return f.RemoveAll(ctx, "/root/dangling") },
+			wantErr: "permission denied", // of DELE after the retry
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestFTPServer(t)
+			srv.symlink("missing.txt", "/root/dangling")
+			// The first MLST is the one of the link, the second the check of the listing of /root
+			srv.configure(func(s *testFTPServer) {
+				s.refuse["DELE /root/dangling"] = 100
+				s.dropAt["MLST"] = 2
+			})
+			ftpFS := dialInProcess(t, srv)
+
+			err := tc.remove(t.Context(), ftpFS)
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, os.ErrNotExist, "the link exists")
+			assert.ErrorContains(t, err, tc.wantErr)
+			assert.True(t, srv.exists("/root/dangling"), "the link is kept")
 		})
 	}
 }

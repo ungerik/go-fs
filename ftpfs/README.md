@@ -69,12 +69,16 @@ an unencoded `/`.
 `Options.Username` and `Options.Password` override the user info of the
 address. `Options.Credentials` is a `CredentialsCallback` that is called
 instead by every `Dial`, `DialAndRegister` and `EnsureRegistered` call, for
-every reconnect and for the dedicated connection of every `OpenReader`, so it
-should be cheap or cache its result; `ftpfs.Password` and
-`ftpfs.UsernameAndPassword` are simple callbacks. Without a username the login
-is anonymous as defined for `ftp://` URLs by RFC 1738: the user `anonymous`
-with `Options.Password` (customarily an e-mail address) or `anonymous`, and
-the URI prefix has no user (`ftp://example.com`).
+every reconnect, for the dedicated connection of every `OpenReader` and for
+the connections that `Remove` and `RemoveAll` dial for `LIST`, so it should
+be cheap or cache its result, and return the same user every time: the
+connections for `LIST` resolve relative paths against the login directory of
+their user and must see the same files as the connection of the operation.
+`ftpfs.Password` and `ftpfs.UsernameAndPassword` are simple callbacks.
+Without a username the login is anonymous as defined for `ftp://` URLs by
+RFC 1738: the user `anonymous` with `Options.Password` (customarily an e-mail
+address) or `anonymous`, and the URI prefix has no user
+(`ftp://example.com`).
 
 Paths and credentials with CR, LF or NUL characters are rejected with an
 error wrapping `os.ErrInvalid`, because they would inject FTP commands.
@@ -184,24 +188,30 @@ and open readers, and afterwards every method returns
   `RemoveAll` of a directory dials a second connection for `LIST`. It
   changes to the parent directory with `CWD` and sends `LIST` without a
   path argument, because servers like ProFTPD with `UseGlobbing` and
-  Pure-FTPd expand glob characters like `[` in that argument. FTP servers
-  on Windows (IIS with listings in the DOS format, and FileZilla Server or
-  IIS with listings in the Unix format, which list junctions and links to
-  directories as directories) and ProFTPD with `ShowSymlinks off` list a
-  link to a directory as a directory with `LIST` too, so `RemoveAll` can't
-  tell them apart there and deletes the files that such a link points to,
-  as before v1.0. `Remove` of a link to a directory fails like for a
+  Pure-FTPd expand glob characters like `[` in that argument. The client
+  library sends `LIST -a`, and servers that don't parse the options of
+  `LIST` take `-a` for a path and list the entry `-a` of the directory
+  instead, so `RemoveAll` doesn't use the listing of a directory that has an
+  entry named `-a`, which it checks with `MLST`, and fails for the
+  directories in such a directory. FTP servers on Windows (IIS with
+  listings in the DOS format, and FileZilla Server or IIS with listings in
+  the Unix format, which list junctions and links to directories as
+  directories) and ProFTPD with `ShowSymlinks off` list a link to a
+  directory as a directory with `LIST` too, so `RemoveAll` can't tell them
+  apart there and deletes the files that such a link points to, as before
+  v1.0. `Remove` of a link to a directory fails like for a
   directory and deletes nothing, and `Move` onto such a link is refused
   with an error wrapping `os.ErrExist`. A dangling link looks missing to
   `Stat`, because MLST follows links, but `Remove` and `RemoveAll` delete
   it and `Move` renames it. If the server refuses to delete it, `Remove`
   and `RemoveAll` return the error of `DELE` if `LIST` of the parent
-  directory lists the path, and report it as missing otherwise. FTP has no
-  command to create a link, so `ftpfs`
-  doesn't implement `fs.SymbolicLinkFileSystem`: `fs.CopyRecursive` copies
-  a link to a file as a file and fails with an error wrapping
-  `errors.ErrUnsupported` for a link to a directory before it writes
-  anything.
+  directory lists the path, and report it as missing otherwise, also if the
+  directory can't be listed, unlike the directory check of `RemoveAll`,
+  which fails without a listing. FTP has no command to create a link, so
+  `ftpfs` doesn't implement `fs.SymbolicLinkFileSystem`:
+  `fs.CopyRecursive` copies a link to a file as a file and fails with an
+  error wrapping `errors.ErrUnsupported` for a link to a directory before
+  it writes anything.
 - **Errors.** Missing files wrap `os.ErrNotExist`, reading or writing a
   directory is an `fs.ErrIsDirectory`, `MakeDir` on an existing path wraps
   `os.ErrExist`, removing a non-empty directory is an
