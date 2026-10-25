@@ -55,11 +55,16 @@ func JoinCleanFilePath(uriParts ...string) File {
 // contract and protects against the copy-then-delete fallback path
 // destroying the file when caller passes identical source and
 // destination. The copy-then-delete fallback also returns nil for two
-// paths of the same local file, like through bind mounts, a symbolic
-// link to a parent directory, a [SubFileSystem] or the local layer of an
-// [OverlayFileSystem], and renames the file for a name in the same directory
-// that only differs in case, like [LocalFileSystem.Move] does it. Moving
-// a local directory into itself through such a path, a local file onto
+// paths of the same file through a [SubFileSystem], also through two
+// SubFileSystems of one parent, or through the layer of an [OverlayFileSystem]
+// that holds the file, on every file system compared by path, and for two
+// paths of the same local file, like through bind mounts or a symbolic link
+// to a parent directory, and it renames a local file for a name in the same
+// directory that only differs in case, like [LocalFileSystem.Move] does it.
+// Moving a directory into itself through such a path, also onto itself,
+// which moves it into itself because an existing directory is moved into,
+// moving an entry of the base layer of an OverlayFileSystem to its path in
+// the upper layer, which removing the source would remove, a local file onto
 // another hard link of it, and a case-only rename through an
 // OverlayFileSystem, which supports only one case of a name, are errors
 // wrapping [os.ErrInvalid] that the fallback returns without changing

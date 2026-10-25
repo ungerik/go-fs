@@ -44,6 +44,32 @@ func TestIsLocalSpecialFile(t *testing.T) {
 	}
 }
 
+// TestIsValidWindowsName is a regression test: on Windows the copy of
+// a name with a character that Windows refuses in names, like the S3 key
+// "report?.pdf", failed at that file, after the copy had written the files
+// before it, because isValidLocalName only rejected the names that
+// filepath.Localize rejects and the names that end with a dot or a space.
+// isValidWindowsName doesn't depend on the platform, so its names are
+// checked everywhere, TestCopyRecursive_WindowsInvalidNames checks the copies
+// on Windows.
+func TestIsValidWindowsName(t *testing.T) {
+	valid := []string{
+		"a.txt", "report.pdf", ".hidden", "a b.txt", "a..b", "ü.txt",
+		"a#b", "a%b", "a&b", "a'b", "a+b,c;d=e", "[a]{b}", "a~b", "a\x7fb",
+	}
+	for _, name := range valid {
+		require.True(t, isValidWindowsName(name), "%q", name)
+	}
+	invalid := []string{
+		"report?.pdf", "a<b", "a>b", `a"b`, "a|b", "a*b", "*",
+		"a\x01b", "a\x1fb", "\ttab", "line\n", "a\x00b",
+		"dot.", "...", "space ", "dot. ",
+	}
+	for _, name := range invalid {
+		require.False(t, isValidWindowsName(name), "%q", name)
+	}
+}
+
 // TestIsSpecialFile checks that isSpecialFile takes the file mode of the
 // local path for a local file and IsRegular of the FileInfo for other file
 // systems, which have no file mode of their own.

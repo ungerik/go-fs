@@ -18,11 +18,15 @@ import (
 // writes to the device, NUL discards the data, a name with a colon writes
 // to an alternate data stream of another file, and Windows removes a dot
 // or a space at the end of a name, so "dot." would be written to "dot".
+// Windows refuses the characters < > " | ? * and control characters in
+// names, so the copy of a name like the S3 key "report?.pdf" failed at that
+// file, after it had written the files before it.
 func TestCopyRecursive_WindowsInvalidNames(t *testing.T) {
 	badPaths := []string{
 		"NUL", "nul", "CON", "AUX", "PRN", "COM1", "LPT1", "NUL.txt",
 		"a:b.txt", "dot.", "space ", "...",
-		"NUL/f.txt", "dot./f.txt", "sub/COM1",
+		"report?.pdf", "a<b", "a>b", `a"b`, "a|b", "a*b", "a\x01b", "a\x1fb",
+		"NUL/f.txt", "dot./f.txt", "sub/COM1", "q?/f.txt", "sub/a|b",
 	}
 	for _, badPath := range badPaths {
 		t.Run(fmt.Sprintf("%q", badPath), func(t *testing.T) {
@@ -51,7 +55,7 @@ func TestCopyRecursive_WindowsInvalidNames(t *testing.T) {
 // a name that Windows writes to another entry must fail the copy and the move
 // before they write anything, and the move must keep its source.
 func TestCopyRecursive_WindowsInvalidEmptyDirNames(t *testing.T) {
-	for _, name := range []string{"NUL", "COM1", "a:b", "dot.", "space "} {
+	for _, name := range []string{"NUL", "COM1", "a:b", "dot.", "space ", "q?", "a*b", "a\x01b"} {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
 			requireInvalidLocalDirName(t, name)
 		})

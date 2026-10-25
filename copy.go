@@ -23,11 +23,15 @@ const copyBufferSize = 1024 * 1024 * 4
 // is created in it, else dest is the path of the copy.
 // An existing file at that path is replaced, an existing directory
 // is an [ErrIsDirectory]. Missing parent directories of the copy are created.
-// Copying a file onto itself is a no-op, for a local file also through
-// another path to it, like a symbolic link, a hard link, a [SubFileSystem]
-// or the local layer of an [OverlayFileSystem]. dest is checked by path
-// before it is opened for writing, which follows a symbolic link at dest,
-// so these guarantees assume that dest is not changed concurrently by others.
+// Copying a file onto itself is a no-op, on every file system also through
+// a [SubFileSystem], also through two SubFileSystems of one parent, and
+// through the layer of an [OverlayFileSystem] that holds the file, compared
+// by path, which doesn't detect another name that the file system matches
+// to the file, like another case. A local file is also compared as file,
+// so another path to it, like a symbolic link or a hard link, is a no-op too.
+// dest is checked by path before it is opened for writing, which follows
+// a symbolic link at dest, so these guarantees assume that dest is not
+// changed concurrently by others.
 // src must exist and must not be a directory ([ErrIsDirectory]).
 //
 // The copy is created with perm, or without perm with the permissions
@@ -152,13 +156,9 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 		if srcFS == destFS && srcPath == destPath {
 			return nil // Copying a file onto itself is a no-op
 		}
-		// The same local file through another path, like a symbolic link,
-		// a hard link, a SubFileSystem or the layer of an OverlayFileSystem,
-		// else the writer would truncate the file that is read. Also within
-		// one file system, because an OverlayFileSystem resolves the links
-		// of its layers to other paths than the local file system.
-		srcLocal, destLocal, _, local := fsLocalPaths(srcFS, srcPath, destFS, destPath)
-		if local && isLocalSameFile(srcLocal, destLocal, os.Stat) {
+		if isCopyOntoItself(srcFS, srcPath, destFS, destPath) {
+			// Through another path to the file, like a SubFileSystem,
+			// the layer of an OverlayFileSystem or a local hard link
 			return nil
 		}
 		srcPerm = copyPermissions(srcFS, srcPerm)
@@ -306,9 +306,13 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 //
 // Copying a directory onto itself is a no-op,
 // copying it into one of its sub-directories is an error wrapping [os.ErrInvalid],
-// for a local directory also through another path to it, like through
-// a symbolic link to a parent directory, a [SubFileSystem] or the local
-// layer of an [OverlayFileSystem].
+// on every file system also through a [SubFileSystem], compared by path,
+// and for a local directory also through another path to it, like through
+// a symbolic link to a parent directory or a bind mount. The directory of an
+// [OverlayFileSystem] merges the entries of both layers: a copy into one of
+// its sub-directories in either layer, also a sub-directory of the base layer
+// that the overlay hides, is an error wrapping [os.ErrInvalid], and a copy
+// onto its directory in one layer copies the entries of the other layer.
 //
 // The filter patterns are applied to the names of files and symbolic links,
 // sub-directories are always copied, like for [File.ListDirRecursive].
@@ -340,7 +344,10 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // Windows takes for an alternate data stream of another file, or a reserved
 // device name like "NUL" or "COM1", which writes to the device. On Windows
 // a name that ends with a dot or a space is not valid either, Windows removes
-// them and writes to another entry. The names of all entries below src, also
+// them and writes to another entry, and neither is a name with one of the
+// characters < > " | ? * or a control character, which Windows refuses, so
+// the copy of an S3 key like "report?.pdf" fails before it writes anything
+// instead of at that file. The names of all entries below src, also
 // of empty directories and of files that don't match the patterns, are checked
 // while src is listed for the links to directories, which happens for every
 // copy to another file system, so the copy fails before it writes anything,
@@ -376,6 +383,20 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 		// Through another path to the directory, like a symbolic link to
 		// a parent directory, a bind mount, a SubFileSystem or an overlay
 		return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
+	}
+	// Through SubFileSystems and OverlayFileSystems also of other
+	// file systems than the local one, compared by path
+	if destTarget, destTargetPath, _, ok := writeTarget(destFS, destPath); ok {
+		srcTarget, srcTargetPath, srcViaOverlay, ok := writeTarget(srcFS, srcPath)
+		if ok && !srcViaOverlay && isSameTarget(srcTarget, srcTargetPath, destTarget, destTargetPath) {
+			// Copying a directory onto itself is a no-op. Not through an
+			// overlay, whose directory merges the entries of both layers:
+			// a copy to one layer copies those of the other one.
+			return nil
+		}
+		if isInsideDirView(srcFS, srcPath, destTarget, destTargetPath) {
+			return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
+		}
 	}
 	c := newTreeCopier(ctx, srcFS, destFS, patterns)
 	if err := c.checkSource(src, dest); err != nil {
@@ -485,20 +506,94 @@ func localWritePath(fileSystem FileSystem, filePath string) (string, bool) {
 	return targetPath, true
 }
 
+// isSameTarget reports if aPath of aFS and bPath of bFS, resolved with
+// writeTarget or fsReadTarget, are the same path of one file system,
+// compared by the paths that its CleanPath returns. Two names that a file
+// system matches to one entry, like another case on a case-insensitive
+// file system, are different paths, only the local file system can also
+// compare files, see isLocalSameFile.
+func isSameTarget(aFS FileSystem, aPath string, bFS FileSystem, bPath string) bool {
+	return aFS == bFS && aFS.CleanPath(aPath) == bFS.CleanPath(bPath)
+}
+
+// isInsideDirView reports if targetPath of target, resolved with
+// writeTarget, is inside the directory dirPath of dirFS, not counting
+// dirPath itself, see isSubPath, or inside one of the directories whose
+// entries dirPath shows: through SubFileSystems the directory of their
+// parent, through OverlayFileSystems the directories of both layers, which
+// an overlay directory merges, also one of the base layer that the overlay
+// hides. A tree copied there would show up in the directory while it is
+// listed for the copy, so the copy would copy itself without end, and the
+// removal of a moved directory would remove the copy. Nothing is requested
+// from the file systems.
+func isInsideDirView(dirFS FileSystem, dirPath string, target FileSystem, targetPath string) bool {
+	switch f := dirFS.(type) {
+	case *SubFileSystem:
+		parentPath, err := f.parentPath(dirPath)
+		return err == nil && isInsideDirView(f.parent, parentPath, target, targetPath)
+	case *OverlayFileSystem:
+		return isInsideDirView(f.upper, f.upperPath(dirPath), target, targetPath) ||
+			isInsideDirView(f.base, f.basePath(dirPath), target, targetPath)
+	}
+	return dirFS == target && isSubPath(dirFS, dirFS.CleanPath(dirPath), target.CleanPath(targetPath))
+}
+
+// isCopyOntoItself reports if a copy of the file srcPath of srcFS to destPath
+// of destFS would write the file that it reads, which the writer would
+// truncate before it is read: the entry that the source shows, see
+// fsReadTarget, is the one that a write to the destination goes to, see
+// writeTarget, compared by path, see isSameTarget, like through
+// SubFileSystems of one file system or the layer of an OverlayFileSystem
+// that holds the file, also when it is not local. A local file is also
+// compared as file, see isLocalSameFile, so another path to it, like
+// a symbolic link, a hard link or a bind mount, is the same file. Also
+// within one file system, because an OverlayFileSystem resolves the links
+// of its layers to other paths than the local file system.
+func isCopyOntoItself(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
+	src, srcTargetPath, _, ok := fsReadTarget(srcFS, srcPath)
+	if !ok {
+		return false
+	}
+	if dest, destTargetPath, _, ok := writeTarget(destFS, destPath); ok && isSameTarget(src, srcTargetPath, dest, destTargetPath) {
+		return true
+	}
+	if _, local := src.(*LocalFileSystem); !local {
+		return false
+	}
+	destLocal, _, ok := fsLocalPath(destFS, destPath)
+	return ok && isLocalSameFile(srcTargetPath, destLocal, os.Stat)
+}
+
 // isValidLocalName reports if the local file system writes a new entry
 // with name to the entry of that name in the directory and not to another
 // one: filepath.Localize must accept the name, which rejects the names that
 // os.DirFS rejects, on every platform a name with a NUL byte, and on Windows
 // a name with a colon, which Windows takes for an alternate data stream of
 // another file, or a reserved device name like "NUL" or "COM1", which writes
-// to the device. On Windows the name must not end with a dot or a space
-// either, Windows removes them, so "a." would be written to "a".
+// to the device. On Windows the name must also pass isValidWindowsName.
 // The separators are checked by isValidName.
 func isValidLocalName(name string) bool {
 	if _, err := filepath.Localize(name); err != nil {
 		return false
 	}
-	return runtime.GOOS != "windows" || !strings.HasSuffix(name, ".") && !strings.HasSuffix(name, " ")
+	return runtime.GOOS != "windows" || isValidWindowsName(name)
+}
+
+// isValidWindowsName reports if Windows writes a new entry with name, which
+// filepath.Localize must accept on Windows, see isValidLocalName, to the
+// entry of that name: the name must not end with a dot or a space, Windows
+// removes them, so "a." would be written to "a", and must not contain one of
+// the characters < > " | ? * or a control character, which Windows refuses
+// in names, so a copy fails before it writes anything instead of at the first
+// such name, like the S3 key "report?.pdf". It doesn't depend on the
+// platform, isValidLocalName only checks it on Windows.
+func isValidWindowsName(name string) bool {
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return false
+	}
+	return !strings.ContainsFunc(name, func(r rune) bool {
+		return r < ' ' || strings.ContainsRune(`<>"|?*`, r)
+	})
 }
 
 // errInvalidName returns the error wrapping os.ErrInvalid for the entry src

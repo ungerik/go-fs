@@ -1616,3 +1616,206 @@ func TestCopyRecursive_MalformedPatternWritesNothing(t *testing.T) {
 		})
 	}
 }
+
+// newRegisteredSubFS returns a SubFileSystem of the directory dirPath
+// of parent that is registered until the end of the test.
+func newRegisteredSubFS(t *testing.T, parent fs.FileSystem, dirPath string) *fs.SubFileSystem {
+	t.Helper()
+	sub, err := fs.NewSubFileSystem(parent, dirPath, "")
+	require.NoError(t, err)
+	register(t, sub)
+	return sub
+}
+
+// requireSameFileNoOps requires CopyFile and Move of a onto b and of b onto
+// a, two paths of the file x.txt in dir with the content "precious", to be
+// no-ops: the file must keep its content and be the only entry of dir.
+func requireSameFileNoOps(t *testing.T, dir, a, b fs.File) {
+	t.Helper()
+	for _, files := range [][2]fs.File{{a, b}, {b, a}} {
+		src, dest := files[0], files[1]
+		require.NoError(t, fs.CopyFile(t.Context(), src, dest), "copying %s onto itself at %s", src, dest)
+		requireContent(t, dest, "precious")
+		require.NoError(t, fs.Move(t.Context(), src, dest), "moving %s onto itself at %s", src, dest)
+		requireContent(t, dest, "precious")
+		requireNames(t, dir, "x.txt")
+	}
+}
+
+// TestCopyAndMove_SameFileThroughSubFileSystem is a regression test: the
+// same-file checks of CopyFile and of the copy then delete fallback of Move
+// only compared local files, so a move through a SubFileSystem of another
+// file system onto the same file of its parent copied the file onto itself
+// and then removed it, returning nil, and a writer that truncates the file,
+// like the one of sftpfs, emptied it before the copy read it. Through
+// a SubFileSystem and its parent, two SubFileSystems of one parent and
+// a SubFileSystem of a SubFileSystem, a copy and a move onto the same file
+// must be no-ops that keep the file and write nothing.
+// TestCopyFile_SameFileThroughSubFileSystem checks the local file system.
+func TestCopyAndMove_SameFileThroughSubFileSystem(t *testing.T) {
+	// requireNoOps checks the paths of the file data/d/x.txt in dir of
+	// parent with the content "precious" through SubFileSystems of parent
+	requireNoOps := func(t *testing.T, parent fs.FileSystem, dir fs.File) {
+		t.Helper()
+		file := dir.Join("data", "d", "x.txt")
+		data := newRegisteredSubFS(t, parent, dir.Join("data").Path())
+		root := newRegisteredSubFS(t, parent, dir.Path())
+		nested := newRegisteredSubFS(t, data, "/d")
+
+		requireSameFileNoOps(t, file.Dir(), data.RootDir().Join("d", "x.txt"), file)
+		requireSameFileNoOps(t, file.Dir(), data.RootDir().Join("d", "x.txt"), root.RootDir().Join("data", "d", "x.txt"))
+		requireSameFileNoOps(t, file.Dir(), nested.RootDir().Join("x.txt"), file)
+		requireSameFileNoOps(t, file.Dir(), nested.RootDir().Join("x.txt"), data.RootDir().Join("d", "x.txt"))
+	}
+
+	t.Run("MemFileSystem", func(t *testing.T) {
+		mem := newLinkMemFS(t, fs.NewMemFile("/data/d/x.txt", []byte("precious")))
+		requireNoOps(t, mem, mem.RootDir())
+	})
+	t.Run("upload writer", func(t *testing.T) {
+		m := newMinimalMemFS(t, fs.NewMemFile("/data/d/x.txt", []byte("precious")))
+		m.uploads = true
+		requireNoOps(t, m, m.RootDir())
+		require.Zero(t, m.commits.Load(), "nothing must be written")
+	})
+	t.Run("truncating writer", func(t *testing.T) {
+		// A file system that is not local whose writer truncates the file
+		m := newMinimalLocalFS(t)
+		dir := fs.File(m.URI(t.TempDir()))
+		writeFiles(t, dir, map[string]string{"data/d/x.txt": "precious"})
+		requireNoOps(t, m, dir)
+	})
+}
+
+// requireTree requires the directory dir of a tree copy test to contain
+// exactly the directory d with the file f.txt with the content "f"
+// and the other names, so no copy was written.
+func requireTree(t *testing.T, dir fs.File, names ...string) {
+	t.Helper()
+	requireNames(t, dir, append(names, "d")...)
+	requireNames(t, dir.Join("d"), "f.txt")
+	requireContent(t, dir.Join("d", "f.txt"), "f")
+}
+
+// TestCopyAndMove_IntoItselfThroughSubFileSystem is a regression test: the
+// checks of CopyRecursive and of the copy then delete fallback of Move for
+// a directory copied or moved into itself only compared local paths, so
+// through a SubFileSystem of another file system the copy copied the new
+// copy directory into itself until the context was done. Copying and moving
+// a directory into one of its sub-directories through a SubFileSystem and
+// its parent or through two SubFileSystems of one parent must fail with an
+// error wrapping os.ErrInvalid before anything is written. Copying the
+// directory onto itself is a no-op, moving it onto itself moves it into the
+// existing directory, which is moving it into itself like for local
+// directories. A copy and a move to a sibling whose name begins with the name
+// of the directory are no copy into itself.
+func TestCopyAndMove_IntoItselfThroughSubFileSystem(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	mem := newLinkMemFS(t, fs.NewMemFile("/data/d/f.txt", []byte("f")))
+	data := mem.RootDir().Join("data")
+	sub := newRegisteredSubFS(t, mem, "/data")
+	root := newRegisteredSubFS(t, mem, "/")
+
+	tests := []struct {
+		name      string
+		src, dest fs.File
+		onto      bool // dest is the directory src, which only a move moves into
+	}{
+		{"SubFileSystem root into the parent", sub.RootDir(), data.Join("copy"), false},
+		{"SubFileSystem directory into the parent", sub.RootDir().Join("d"), data.Join("d", "copy"), false},
+		{"parent directory into the SubFileSystem", data, sub.RootDir().Join("copy"), false},
+		{"two SubFileSystems of one parent", sub.RootDir().Join("d"), root.RootDir().Join("data", "d", "copy"), false},
+		{"moved onto itself", sub.RootDir().Join("d"), data.Join("d"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.onto {
+				err := fs.CopyRecursive(ctx, tt.src, tt.dest)
+				require.ErrorIs(t, err, os.ErrInvalid)
+				requireTree(t, data)
+			}
+			err := fs.Move(ctx, tt.src, tt.dest)
+			require.ErrorIs(t, err, os.ErrInvalid)
+			requireTree(t, data)
+		})
+	}
+
+	require.NoError(t, fs.CopyRecursive(ctx, sub.RootDir().Join("d"), data.Join("d")), "copying onto itself is a no-op")
+	requireTree(t, data)
+	require.NoError(t, fs.CopyRecursive(ctx, sub.RootDir().Join("d"), data.Join("d2")), "a sibling with the name as prefix")
+	requireContent(t, data.Join("d2", "f.txt"), "f")
+	require.NoError(t, fs.CopyRecursive(ctx, sub.RootDir(), mem.RootDir().Join("data2")), "a sibling with the name as prefix")
+	requireContent(t, mem.RootDir().Join("data2", "d", "f.txt"), "f")
+	require.NoError(t, fs.Move(ctx, sub.RootDir().Join("d2"), data.Join("d23")), "a sibling with the name as prefix")
+	requireTree(t, data, "d23")
+	requireContent(t, data.Join("d23", "f.txt"), "f")
+
+	// A link to a directory, which a copy to another file system refuses
+	links := newLinkMemFS(t, fs.NewMemFile("/data/d/f.txt", []byte("f")))
+	require.NoError(t, links.CreateSymbolicLink("/data/d", "/data/link"))
+	linksSub := newRegisteredSubFS(t, links, "/data")
+	err := fs.CopyRecursive(ctx, linksSub.RootDir(), links.RootDir().Join("data"))
+	require.NoError(t, err, "copying onto itself is a no-op, also with a link to a directory")
+}
+
+// TestCopyAndMove_ThroughOverlayLayers is a regression test for the checks
+// of CopyFile, CopyRecursive and the copy then delete fallback of Move
+// between an OverlayFileSystem and its layers, which only compared local
+// paths. The layers keep their files in memory and count the files written
+// with upload writers. A file of the overlay is the file of the layer that
+// holds it, so a copy and a move onto that file are no-ops that write
+// nothing, before the move copied the file onto itself and removed it,
+// and a writer that truncates would have emptied it. Moving a file or directory
+// of the base layer to its path in the upper layer is an error wrapping
+// os.ErrInvalid that changes nothing, before removing the source removed the
+// moved copy from the upper layer, while copying it there copies it up.
+// A directory of the overlay merges the directories of both layers, so
+// copying or moving it into a sub-directory of either layer is an error
+// wrapping os.ErrInvalid before anything is written, before the copy copied
+// itself until the context was done.
+func TestCopyAndMove_ThroughOverlayLayers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	base := newMinimalMemFS(t, fs.NewMemFile("/b.txt", []byte("base")), fs.NewMemFile("/d/f.txt", []byte("f")))
+	upper := newMinimalMemFS(t, fs.NewMemFile("/u.txt", []byte("upper")))
+	base.uploads, upper.uploads = true, true
+	overlay, err := fs.NewOverlayFileSystem(base, upper, "")
+	require.NoError(t, err)
+	register(t, overlay)
+	o, b, u := overlay.RootDir(), base.RootDir(), upper.RootDir()
+
+	sameFiles := [][2]fs.File{
+		{o.Join("u.txt"), u.Join("u.txt")},
+		{u.Join("u.txt"), o.Join("u.txt")},
+		{o.Join("b.txt"), b.Join("b.txt")},
+	}
+	for _, files := range sameFiles {
+		src, dest := files[0], files[1]
+		require.NoError(t, fs.CopyFile(ctx, src, dest), "copying %s onto itself at %s", src, dest)
+		require.NoError(t, fs.Move(ctx, src, dest), "moving %s onto itself at %s", src, dest)
+	}
+	requireNames(t, u, "u.txt")
+	requireContent(t, o.Join("u.txt"), "upper")
+	requireContent(t, o.Join("b.txt"), "base")
+
+	err = fs.Move(ctx, o.Join("b.txt"), u.Join("b.txt"))
+	require.ErrorIs(t, err, os.ErrInvalid)
+	err = fs.Move(ctx, o.Join("d"), u.Join("d"))
+	require.ErrorIs(t, err, os.ErrInvalid)
+	for _, dest := range []fs.File{u.Join("d", "copy"), b.Join("d", "copy")} {
+		err = fs.CopyRecursive(ctx, o.Join("d"), dest)
+		require.ErrorIs(t, err, os.ErrInvalid, "copying into %s", dest)
+		err = fs.Move(ctx, o.Join("d"), dest)
+		require.ErrorIs(t, err, os.ErrInvalid, "moving into %s", dest)
+	}
+	requireNames(t, u, "u.txt")
+	requireTree(t, b, "b.txt")
+	requireTree(t, o, "b.txt", "u.txt")
+	require.Zero(t, base.commits.Load()+upper.commits.Load(), "nothing must be written")
+
+	require.NoError(t, fs.CopyFile(ctx, o.Join("b.txt"), u.Join("b.txt")), "copying up")
+	require.NoError(t, fs.CopyRecursive(ctx, o.Join("d"), u.Join("d")), "copying up")
+	requireTree(t, u, "b.txt", "u.txt")
+	requireContent(t, u.Join("b.txt"), "base")
+}

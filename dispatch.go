@@ -627,6 +627,14 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // Moving a directory into itself that way, a file onto another hard link
 // of it, and a case-only rename through an OverlayFileSystem, which supports
 // only one case of a name, are errors wrapping [os.ErrInvalid].
+// On every file system the paths are also compared through SubFileSystems
+// and OverlayFileSystems, see isSameTarget: a destPath that a write takes to
+// the entry that the source shows, see writeTarget and fsReadTarget, like
+// through two SubFileSystems of one parent, is a no-op. Moving an entry of
+// the base layer of an overlay to its path in the upper layer, which removing
+// the source would remove, and a directory into itself, also into a directory
+// that it shows through a SubFileSystem or in a layer of an overlay, see
+// isInsideDirView, are errors wrapping [os.ErrInvalid].
 //
 // A directory is copied to destPath, which didn't exist, so every entry of
 // the copy is new, see treeCopier.newDestDir: an existing entry where the
@@ -641,7 +649,8 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // treeCopier.validName, is an error wrapping [os.ErrInvalid], below
 // a directory, also of an empty directory, before anything is copied, see
 // treeCopier.checkSource. So is a name of destPath that the local file
-// system would not write to an entry of that name, see isValidLocalName.
+// system would not write to an entry of that name or that Windows refuses,
+// see isValidLocalName.
 //
 // Within a file system that implements [SymbolicLinkFileSystem],
 // symbolic links are copied as links with their target stored verbatim,
@@ -729,6 +738,24 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 			// past the overlay, which supports only one case of a name.
 			return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
 		case srcIsDir && isLocalInsideDir(srcLocal, destLocal):
+			return fmt.Errorf("%w: can't move directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
+		}
+	}
+	// Through SubFileSystems and OverlayFileSystems also of other
+	// file systems than the local one, compared by path
+	if destTarget, destTargetPath, _, ok := writeTarget(destFS, destPath); ok {
+		srcRead, srcReadPath, _, readOK := fsReadTarget(srcFS, srcPath)
+		srcWrite, srcWritePath, _, writeOK := writeTarget(srcFS, srcPath)
+		switch {
+		case readOK && isSameTarget(srcRead, srcReadPath, destTarget, destTargetPath):
+			// The copy would be a no-op and removing
+			// the source would remove the only copy
+			return nil
+		case writeOK && isSameTarget(srcWrite, srcWritePath, destTarget, destTargetPath):
+			// An entry of the base layer of an overlay moved to its path in
+			// the upper layer, where removing the source removes the copy
+			return fmt.Errorf("%w: can't move %s to %s, removing the source would remove the moved file", os.ErrInvalid, errSubject(src), errSubject(dest))
+		case srcIsDir && isInsideDirView(srcFS, srcPath, destTarget, destTargetPath):
 			return fmt.Errorf("%w: can't move directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
 		}
 	}
@@ -1046,30 +1073,45 @@ func fsLocalPaths(aFS FileSystem, aPath string, bFS FileSystem, bPath string) (a
 
 // fsLocalPath returns the local path of filePath of fileSystem and true
 // if it is a path of the local file system, directly or through
-// SubFileSystems and OverlayFileSystems. An OverlayFileSystem is unwrapped
-// to the layer that holds the path, see OverlayFileSystem.pathLayer, and
-// viaOverlay is true then: the local path may only be used to compare
-// files, because a write past the overlay would change its read-only base
-// layer or bring back the base entries that it hides.
+// SubFileSystems and OverlayFileSystems, see fsReadTarget. An
+// OverlayFileSystem is unwrapped to the layer that holds the path, see
+// OverlayFileSystem.pathLayer, and viaOverlay is true then: the local path
+// may only be used to compare files, because a write past the overlay would
+// change its read-only base layer or bring back the base entries that it hides.
 func fsLocalPath(fileSystem FileSystem, filePath string) (localPath string, viaOverlay, ok bool) {
+	target, targetPath, viaOverlay, ok := fsReadTarget(fileSystem, filePath)
+	if _, local := target.(*LocalFileSystem); !ok || !local {
+		return "", false, false
+	}
+	return targetPath, viaOverlay, true
+}
+
+// fsReadTarget returns the file system and the path of the entry that
+// filePath of fileSystem shows, through SubFileSystems to their parent and
+// through OverlayFileSystems to the layer that holds the path, see
+// OverlayFileSystem.pathLayer, which costs a Lstat of the upper layer and,
+// for a path that the upper layer has no entry for, one of the base layer.
+// viaOverlay tells that an OverlayFileSystem was passed: then a write to
+// filePath can go to another entry, the one of writeTarget in the upper
+// layer. ok is false for a path of a SubFileSystem that has no path in its
+// parent and for a path of an OverlayFileSystem whose layer can't be told.
+func fsReadTarget(fileSystem FileSystem, filePath string) (target FileSystem, targetPath string, viaOverlay, ok bool) {
 	for {
 		switch f := fileSystem.(type) {
-		case *LocalFileSystem:
-			return filePath, viaOverlay, true
 		case *SubFileSystem:
 			parentPath, err := f.parentPath(filePath)
 			if err != nil {
-				return "", false, false
+				return nil, "", false, false
 			}
 			fileSystem, filePath = f.parent, parentPath
 		case *OverlayFileSystem:
 			layer, layerPath, err := f.pathLayer(filePath)
 			if err != nil {
-				return "", false, false
+				return nil, "", false, false
 			}
 			fileSystem, filePath, viaOverlay = layer, layerPath, true
 		default:
-			return "", false, false
+			return fileSystem, filePath, viaOverlay, true
 		}
 	}
 }
