@@ -1146,7 +1146,7 @@ func TestSymbolicLinks_MLSDRemoveAllGlobParent(t *testing.T) {
 	for _, arg := range srv.argsOf("LIST") {
 		assert.Equal(t, "-a", arg, "LIST is sent without a path argument")
 	}
-	assert.Equal(t, []string{"/", "/p[q]", "/", "/r[s]", "/r[s]/dir"}, srv.argsOf("CWD"), "CWD to every parent directory of a removed directory once")
+	assert.Equal(t, []string{"/", "/p[q]", "/", "/r[s]", "/r[s]/dir"}, srv.argsOf("CWD"), "CWD to the parent directory of every removed directory")
 }
 
 // TestSymbolicLinks_ArrowInName checks names that contain " -> " on a server
@@ -1516,11 +1516,12 @@ func TestSymbolicLinks_MLSTRemoveRefusedDangling(t *testing.T) {
 	}
 }
 
-// TestRemoveAll_ListingCache checks that RemoveAll on a server with MLST
-// support lists the parent directory of every removed directory only once
-// with LIST and checks the listing for an entry named -a only once, also
-// for several directories in it.
-func TestRemoveAll_ListingCache(t *testing.T) {
+// TestRemoveAll_ListingPerConfirmation checks that RemoveAll on a server
+// with MLST support changes to the parent directory of every removed
+// directory and lists it with LIST again for every directory, also for
+// several directories in it, see TestRemoveAll_DirectoryReplacedByLink,
+// but checks a directory for an entry named -a only once.
+func TestRemoveAll_ListingPerConfirmation(t *testing.T) {
 	srv := newTestFTPServer(t)
 	for _, dir := range []string{"a", "b", "c"} {
 		srv.writeFile("/tree/"+dir+"/x", "data")
@@ -1529,9 +1530,67 @@ func TestRemoveAll_ListingCache(t *testing.T) {
 
 	require.NoError(t, ftpFS.RemoveAll(t.Context(), "/tree"))
 	assert.Empty(t, srv.paths())
-	assert.Equal(t, 2, srv.count("LIST"), "LIST of / for /tree and of /tree for /tree/a, /tree/b and /tree/c")
-	assert.Equal(t, []string{"/", "/tree"}, srv.argsOf("CWD"))
-	assert.Equal(t, []string{"/tree", "/-a", "/tree/-a"}, srv.argsOf("MLST"), "MLST of /tree and one check of each listing for an entry -a")
+	assert.Equal(t, 4, srv.count("LIST"), "LIST of / for /tree and of /tree for each of /tree/a, /tree/b and /tree/c")
+	assert.Equal(t, []string{"/", "/tree", "/tree", "/tree"}, srv.argsOf("CWD"))
+	assert.Equal(t, []string{"/tree", "/-a", "/tree/-a"}, srv.argsOf("MLST"), "MLST of /tree and one check of each directory for an entry -a")
+}
+
+// TestRemoveAll_DirectoryReplacedByLink is the regression test for the LIST
+// listings that RemoveAll on a server with MLST support kept while it
+// removed the directories in a directory: another client replaced the
+// directory /tree/d2 with a symbolic link to /outside after the LIST of
+// /tree that confirmed /tree/d1, the server refused to delete the link, and
+// RemoveAll took the kept listing, which listed d2 as a directory, for
+// the confirmation and deleted the files that the link points to. Every
+// confirmation must list the parent directory again.
+func TestRemoveAll_DirectoryReplacedByLink(t *testing.T) {
+	srv := newTestFTPServer(t)
+	srv.writeFile("/outside/keep.txt", "keep")
+	srv.writeFile("/tree/d1/file.txt", "data")
+	srv.writeFile("/tree/d2/keep.txt", "data")
+	srv.configure(func(s *testFTPServer) {
+		// Right before the DELE of d2, which follows the confirmation of d1
+		s.linkBefore["DELE /tree/d2"] = "/outside"
+		s.refuse["DELE /tree/d2"] = 100
+	})
+	ftpFS := dialInProcess(t, srv)
+
+	err := ftpFS.RemoveAll(t.Context(), "/tree")
+	require.Error(t, err, "RemoveAll must fail for the link that the server doesn't delete")
+	assert.ErrorContains(t, err, "doesn't list it as a directory")
+	assert.ErrorContains(t, err, string(ftpFS.JoinCleanFile("/tree/d2")), "the error names the link")
+	var reply *textproto.Error
+	if assert.ErrorAs(t, err, &reply, "the DELE reply is wrapped") {
+		assert.Equal(t, "permission denied", reply.Msg, "the reply to DELE")
+	}
+	assert.Equal(t, "keep", string(srv.fileContent("/outside/keep.txt")), "RemoveAll must keep the files that the link points to")
+	assert.Equal(t, []string{"/outside", "/outside/keep.txt", "/tree", "/tree/d2"}, srv.paths(), "d1 is removed and the link is kept")
+	assert.Equal(t, 3, srv.count("LIST"), "LIST of / for /tree, and of /tree for /tree/d1 and again for /tree/d2")
+}
+
+// TestRemoveAll_GlobbedLISTKnownLimitation documents a known limitation, see
+// the package documentation: on a server without MLST support that expands
+// glob characters in the path argument of LIST, like wu-ftpd or ProFTPD with
+// UseGlobbing but without mod_facts, LIST of /tree/a[b] lists /tree/ab, so
+// RemoveAll takes the symbolic link /tree/a[b]/L to /victim for the directory
+// /tree/ab/L and deletes the file /victim/keep.txt that the link points to.
+// Change the test when RemoveAll lists without a path argument there too.
+func TestRemoveAll_GlobbedLISTKnownLimitation(t *testing.T) {
+	srv := newTestFTPServer(t)
+	srv.writeFile("/victim/keep.txt", "keep")
+	srv.writeFile("/tree/ab/L/keep.txt", "data")
+	srv.symlink("/victim", "/tree/a[b]/L")
+	srv.configure(func(s *testFTPServer) {
+		s.noMLST = true
+		s.globArgs = true
+	})
+	ftpFS := dialInProcess(t, srv)
+
+	err := ftpFS.RemoveAll(t.Context(), "/tree")
+	assert.Error(t, err, "RMD of the link fails")
+	assert.False(t, srv.exists("/victim/keep.txt"), "known limitation: RemoveAll deletes the file that the link points to")
+	assert.True(t, srv.exists("/tree/ab/L/keep.txt"), "the file that the listing showed is kept")
+	assert.True(t, srv.exists("/tree/a[b]/L"), "the link is kept")
 }
 
 // TestRemoveAll_RelativePath checks RemoveAll of a relative path on a

@@ -172,7 +172,13 @@ and open readers, and afterwards every method returns
   dangling link wraps `os.ErrNotExist`. `ListDir` and `ListDirRecursive`
   describe a link itself, with `IsSymlink` set and neither `IsDir` nor
   `IsRegular`, `ListDirRecursive` follows only a link at the listed path,
-  and `Remove`, `RemoveAll` and `Move` act on the link itself. A server
+  and `Remove`, `RemoveAll` and `Move` act on the link itself. Servers
+  among them that expand glob characters in the path argument of `LIST`,
+  like wu-ftpd and ProFTPD with `UseGlobbing` but without `mod_facts`
+  (which provides MLST), can list another directory for a path with `*`,
+  `?` or `[`: then `ftpfs` describes the entries of that directory, and
+  `RemoveAll` can take a link to a directory for a directory in it and
+  delete the files that the link points to. A server
   whose LIST lists a link itself like `ls -l` instead of the directory it
   points to is supported: `ListDir` and `ListDirRecursive` of a link to a
   directory list the directory. Servers with MLST support describe a link
@@ -185,10 +191,15 @@ and open readers, and afterwards every method returns
   only if `LIST` of the parent directory, which these servers answer like
   `ls -l`, lists the path once and as a directory, and returns an error
   otherwise; the FTP client library lists with `MLSD` on these servers, so
-  `RemoveAll` of a directory dials a second connection for `LIST`. It
-  changes to the parent directory with `CWD` and sends `LIST` without a
-  path argument, because servers like ProFTPD with `UseGlobbing` and
-  Pure-FTPd expand glob characters like `[` in that argument. The client
+  `RemoveAll` of a directory dials a second connection for `LIST`. For
+  every directory it changes to the parent directory with `CWD` and sends
+  `LIST` without a path argument, because servers like ProFTPD with
+  `UseGlobbing` and Pure-FTPd expand glob characters like `[` in that
+  argument. No listing is kept for the next directory, so a directory that
+  another client replaced with a link while `RemoveAll` removed the
+  directories next to it is not deleted through; a replacement in the time
+  from the `LIST` until the content is deleted, at least one round trip,
+  goes unnoticed. The client
   library sends `LIST -a`, and servers that don't parse the options of
   `LIST` take `-a` for a path and list the entry `-a` of the directory
   instead, so `RemoveAll` doesn't use the listing of a directory that has an

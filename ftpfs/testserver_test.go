@@ -78,6 +78,7 @@ type testFTPServer struct {
 	rntoNoReplace    bool              // RNTO onto an existing path fails like on servers that don't replace files
 	refuse           map[string]int    // the next RNFR, RNTO, RMD or DELE commands like "RNFR /path" are refused with 550
 	deleteOnRNFR     string            // RNFR of this path deletes it first, like another client right before
+	linkBefore       map[string]string // the next command like "DELE /path" first replaces the path and the entries below it with a symbolic link to the value, like another client right before
 	dotEntries       bool              // LIST and MLSD list the entries "." and ".." first like most servers
 	lsArgs           bool              // LIST of a file or a symbolic link lists it itself like "ls -l" instead of failing or following the link
 	statArgs         bool              // LIST of a file or a link to a file lists the file under the name of the argument, following links like "ls -lL"
@@ -120,6 +121,7 @@ func newTestFTPServerOn(t *testing.T, address string) *testFTPServer {
 		dropReplyOf: make(map[string]int),
 		refuse:      make(map[string]int),
 		mlstReplies: make(map[string]string),
+		linkBefore:  make(map[string]string),
 	}
 	go srv.acceptLoop()
 	t.Cleanup(func() { ln.Close() })
@@ -316,6 +318,17 @@ func (s *testFTPServer) refused(verb, p string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return takeHook(s.refuse, verb+" "+p)
+}
+
+// replaceWithLink replaces the node at the clean absolute path p and the
+// nodes below it with a symbolic link to target. The caller must hold s.mu.
+func (s *testFTPServer) replaceWithLink(p, target string) {
+	for q := range s.nodes {
+		if q == p || strings.HasPrefix(q, p+"/") {
+			delete(s.nodes, q)
+		}
+	}
+	s.nodes[p] = &testFTPNode{link: target, modified: time.Now()}
 }
 
 // globDir returns the first of the sorted paths that match the glob
@@ -554,6 +567,10 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		dotEntries, lsArgs, statArgs := s.dotEntries, s.lsArgs, s.statArgs
 		listOmits, globArgs, listArgPaths := s.listOmits, s.globArgs, s.listArgPaths
 		pwdReply := s.pwdReply
+		if target, ok := s.linkBefore[verb+" "+abs(arg)]; ok {
+			delete(s.linkBefore, verb+" "+abs(arg))
+			s.replaceWithLink(abs(arg), target)
+		}
 		tooManyListings := (verb == "LIST" || verb == "MLSD") && s.maxListings > 0 && s.commands["LIST"]+s.commands["MLSD"] > s.maxListings
 		s.mu.Unlock()
 

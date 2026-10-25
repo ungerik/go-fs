@@ -32,7 +32,13 @@
 // describe a link itself, with IsSymlink set and neither IsDir nor
 // IsRegular, because a listing doesn't tell what a link points to.
 // ListDirRecursive follows only a link at the listed path, and Remove,
-// RemoveAll and Move act on a link itself.
+// RemoveAll and Move act on a link itself. Servers among them that expand
+// glob characters in the path argument of LIST, like wu-ftpd and ProFTPD
+// with UseGlobbing but without mod_facts, which provides MLST, can list
+// another directory for a path with '*', '?' or '[': then ftpfs describes
+// the entries of that directory, and RemoveAll can take a link to
+// a directory for a directory in it and delete the files that the link
+// points to.
 // Servers with MLST support describe a link with the facts of its target
 // or with a type that the FTP client library reads as a file, so ftpfs
 // can't tell their links from files and directories: ListDir describes
@@ -46,21 +52,26 @@
 // path once and as a directory, not as a link, and else returns an error.
 // The FTP client library lists with MLSD on a connection with MLST
 // support, so RemoveAll of a directory dials a second connection for LIST.
-// It changes to the parent directory of every removed directory once with
-// CWD and lists it with LIST without a path argument, because some servers
-// expand glob characters like '[' in that argument, and it is dialed again
-// once for a listing if it breaks, like when the server closed it while it
-// was idle. The library sends LIST with the option -a, which servers that
-// don't parse the options of LIST take for a path, so that they list the
-// entry -a of the directory instead: RemoveAll doesn't use the listing of
-// a directory that has an entry named -a, which it checks with MLST, and
-// fails for the directories in such a directory. FTP servers on Windows
-// (IIS with listings in the DOS format, and FileZilla Server or IIS with
-// listings in the Unix format, which list junctions and links to
-// directories as directories) and ProFTPD with ShowSymlinks off list a link
-// to a directory as a directory with LIST too, so RemoveAll can't tell them
-// apart there and deletes the files that such a link points to, as before
-// v1.0.
+// For every directory whose DELE failed it changes to the parent directory
+// with CWD and lists it with LIST without a path argument, because some
+// servers expand glob characters like '[' in that argument, and it is
+// dialed again once for a listing if it breaks, like when the server closed
+// it while it was idle. No listing is kept for the next directory, so
+// RemoveAll doesn't delete through a directory that another client replaced
+// with a link while RemoveAll removed the directories next to it; only
+// a replacement in the time from the LIST until the content is deleted, at
+// least one round trip, goes unnoticed, because every FTP command resolves
+// the path again. The library sends LIST with the option -a, which servers
+// that don't parse the options of LIST take for a path, so that they list
+// the entry -a of the directory instead: RemoveAll doesn't use the listing
+// of a directory that has an entry named -a, which it checks once per
+// directory with MLST, and fails for the directories in such a directory.
+// FTP servers on Windows (IIS with listings in the DOS format, and
+// FileZilla Server or IIS with listings in the Unix format, which list
+// junctions and links to directories as directories) and ProFTPD with
+// ShowSymlinks off list a link to a directory as a directory with LIST too,
+// so RemoveAll can't tell them apart there and deletes the files that such
+// a link points to, as before v1.0.
 // Remove of a link to a directory fails like for a directory, with an
 // fs.ErrDirectoryNotEmpty or the error of RMD, and deletes nothing, and
 // Move onto such a link is refused with an error wrapping os.ErrExist.
@@ -1194,10 +1205,10 @@ type remover struct {
 	c   *conn
 	ctx context.Context // of the operation, for the listing connection
 
-	lister    *conn                   // lists with LIST, dialed on first use, see list
-	listerErr error                   // why the listing connection can't be used
-	home      string                  // the working directory after the login, for relative paths
-	listings  map[string][]*ftp.Entry // LIST listings by directory path
+	lister    *conn               // lists with LIST, dialed on first use, see list
+	listerErr error               // why the listing connection can't be used
+	home      string              // the working directory after the login, for relative paths
+	checked   map[string]struct{} // directories without an entry named -a, see checkOptionEntry
 }
 
 // newRemover returns a remover for the operation that runs on c.
@@ -1299,7 +1310,7 @@ func (r *remover) removeContent(dirPath string) error {
 			return err
 		}
 	}
-	delete(r.listings, dirPath)
+	delete(r.checked, dirPath)
 	return r.c.RemoveDir(dirPath)
 }
 
@@ -1317,6 +1328,7 @@ func (r *remover) removeContent(dirPath string) error {
 // would be the only entry named "a -> b": a link entry whose name, " -> "
 // and target start with the name and " -> " lists the name too, see
 // listsName, so that the link and the added line are two entries.
+// The parent directory is listed again for every confirmation, see list.
 func (r *remover) confirmDir(dirPath string, deleteErr error) error {
 	dir, name := splitParent(dirPath)
 	entries, listErr, err := r.list(dir)
@@ -1353,15 +1365,21 @@ func (r *remover) confirmDir(dirPath string, deleteErr error) error {
 // characters like '[' in that argument and some take an argument that
 // starts with '-' for options, so that "LIST -a p[q]" can list another
 // directory. A listing is only used if checkOptionEntry finds no entry
-// named "-a" in the directory. The connection is dialed on first use and
+// named "-a" in the directory, which is checked once per directory until
+// the directory is removed. The connection is dialed on first use and
 // closed by close. If it breaks, like when the server closed it while it
 // was idle, it is dialed again once for the listing, which changes nothing
-// on the server, and if that fails too, it is not used again. The checked
-// listings are kept until their directory is removed.
+// on the server, and if that fails too, it is not used again.
+//
+// Every call lists the directory again, no listing is kept: another client
+// can replace a directory with a symbolic link while RemoveAll removes the
+// directories next to it, and a kept listing would confirm the link as the
+// directory, so that RemoveAll would delete the files that the link points
+// to. CWD is sent for every listing too, so that the listing connection
+// resolves the path again like the commands of the operation do. A
+// directory that is replaced in the time from the LIST until its content
+// is deleted, at least one round trip, is not detected.
 func (r *remover) list(dirPath string) (entries []*ftp.Entry, listErr, err error) {
-	if entries, ok := r.listings[dirPath]; ok {
-		return entries, nil, nil
-	}
 	entries, listErr = r.listOnce(dirPath)
 	if r.lister != nil && r.lister.broken && r.ctx.Err() == nil {
 		r.close()
@@ -1370,16 +1388,18 @@ func (r *remover) list(dirPath string) (entries []*ftp.Entry, listErr, err error
 	if r.lister != nil && r.lister.broken {
 		r.listerErr = errors.Join(errors.New("the connection for LIST broke"), listErr)
 	}
-	if listErr == nil {
-		listErr, err = r.checkOptionEntry(dirPath)
+	if listErr != nil {
+		return nil, listErr, nil
 	}
-	if listErr != nil || err != nil {
-		return nil, listErr, err
+	if _, ok := r.checked[dirPath]; !ok {
+		if listErr, err = r.checkOptionEntry(dirPath); listErr != nil || err != nil {
+			return nil, listErr, err
+		}
+		if r.checked == nil {
+			r.checked = make(map[string]struct{})
+		}
+		r.checked[dirPath] = struct{}{}
 	}
-	if r.listings == nil {
-		r.listings = make(map[string][]*ftp.Entry)
-	}
-	r.listings[dirPath] = entries
 	return entries, nil, nil
 }
 
