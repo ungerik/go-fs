@@ -89,6 +89,8 @@ func (s *SubFileSystem) CleanPath(uriParts ...string) string {
 // system, or a file URI that names no local file, like "file://./x", is
 // an error wrapping [os.ErrInvalid] instead of a root somewhere else.
 // An empty dirPath is [ErrEmptyPath]; "." is the current directory.
+// A local root is made absolute, so it doesn't follow later changes of
+// the working directory.
 func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSystem, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("nil parent file system")
@@ -99,8 +101,8 @@ func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSys
 	case dirPath == "":
 		// Not the working directory or the root of the parent
 		return nil, ErrEmptyPath
-	case uriVolumeLen(dirPath) == 0:
-		// No scheme before a "/", like the path "/cache/https://x"
+	case !hasURIScheme(dirPath):
+		// Also a path with a "://" after a "/", like "/cache/https://x"
 		dir = parent.CleanPath(dirPath)
 	case local && strings.HasPrefix(dirPath, LocalPrefix):
 		// Decoded once, uriPath would decode again in CleanPath
@@ -113,6 +115,13 @@ func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSys
 		dir = uriPath(parent, dirPath)
 	default:
 		return nil, fmt.Errorf("%w: %s is no URI of the parent file system %s", os.ErrInvalid, fsimpl.RedactURI(dirPath), fsimpl.RedactURI(parent.Prefix()))
+	}
+	if localParent, ok := parent.(*LocalFileSystem); ok {
+		// A relative root would follow the working directory, cut the dot
+		// of a name like ".env" from a parent path below the root ".",
+		// and turn the absolute target of a link into a relative one,
+		// which the link's directory resolves outside of a root ".."
+		dir = localParent.AbsPath(dir)
 	}
 	info, err := fsStat(parent, dir)
 	if err != nil {

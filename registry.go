@@ -399,10 +399,11 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 
 	// No registered file system matched.
 	//
-	// A URI that carries a scheme (contains the PrefixSeparator "://") but did
-	// not match any registered file system must not be treated as a local
-	// path: silently resolving e.g. "s3://bucket/key" or "http://host/file"
-	// against the local file system would read or write a bogus local path.
+	// A URI that carries a scheme (the PrefixSeparator "://" with no "/"
+	// before it, see hasURIScheme) but did not match any registered file
+	// system must not be treated as a local path: silently resolving e.g.
+	// "s3://bucket/key" or "http://host/file" against the local file system
+	// would read or write a bogus local path.
 	// The only scheme that maps to the local file system is file://, which
 	// is converted like above also while Local is not registered, so any
 	// other scheme is reported as the invalid file system instead, like
@@ -412,12 +413,21 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 		// like with Local registered, decoding its path once
 		return parseLocalFileURI(Local, uri)
 	}
-	if strings.Contains(uri, PrefixSeparator) {
+	if hasURIScheme(uri) {
 		return Invalid, uri
 	}
 
-	// No scheme: assume uri is a path for the local file system
+	// No scheme: assume uri is a path for the local file system,
+	// also one with a "://" after a "/", like "/data/https://x"
 	return Local, Local.CleanPath(uri)
+}
+
+// hasURIScheme reports if s begins with the scheme of a URI: s contains
+// the [PrefixSeparator] "://" and no "/" before it, like "s3://bucket".
+// A "://" after a "/", like in "/cache/https://x", is part of a path.
+func hasURIScheme(s string) bool {
+	i := strings.Index(s, PrefixSeparator)
+	return i >= 0 && !strings.Contains(s[:i], "/")
 }
 
 // parseLocalFileURI returns local and the clean local path of uri, a URI with

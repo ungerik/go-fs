@@ -366,7 +366,7 @@ signatures. Changes compared to v0.1:
   `fs.NewSubFileSystem` fails with `os.ErrInvalid` for the URI of another
   file system or a file URI that names no local file, like `file://./x`,
   and with `ErrEmptyPath` for an empty directory (pass `"."` for the current
-  one);
+  one, which is made absolute);
   `LocalFileSystem.CleanPath` returns the empty path for such a file URI. Windows long paths keep their URI `file:////?/C:/x`;
   `file:///??/…` names no file, and the short forms `file:/path` and
   `file:path` are relative local paths.

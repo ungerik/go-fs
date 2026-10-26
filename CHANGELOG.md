@@ -9,6 +9,11 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Changed
 
+- Only a `://` with no `/` before it is the scheme of a URI: a string like
+  `/cache/https://x` is the local path `/cache/https:/x` instead of the
+  `Invalid` file system. `s3://bucket/key` without a registered s3fs stays
+  `Invalid`, like every URI of an unregistered scheme.
+
 - `File.URL()` is renamed to `File.URI()`, `fs.FileURLs` to `fs.FileURIs`,
   and `fsimpl.PathHelper.URL` and `LocalFileSystem.URL` to `URI`. The value
   is a go-fs URI, which percent-encodes only `%`: names keep their spaces,
@@ -135,14 +140,18 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   a local path instead of a file URI for a local file. A trimmed name `~`,
   of `~.zip`, is the local file `./~` instead of the home directory, and
   a name that is only an extension, like `.bashrc`, or that would become
-  `.` or `..`, like `..zip` and `...zip`, is not trimmed to its directory
-  or its parent.
+  `.` or `..`, like `..zip` and `...zip` (also percent-encoded in a URL), is
+  not trimmed to its directory or its parent.
 - `fs.NewSubFileSystem` resolves a URI like `File`: it decodes the
   percent-encoding of a URI of the parent file system, and the URI of
   another file system or a file URI that names no local file, like
   `file://./uploads`, which was the root `/uploads`, is an error wrapping
   `os.ErrInvalid`. An empty `dirPath` is `ErrEmptyPath` instead of the
-  working directory or the root of the parent. `LocalFileSystem.CleanPath`
+  working directory or the root of the parent. A local root is made
+  absolute: below a relative root like `.` a name like `.env` lost its dot,
+  so `fs.Move` of a top-level `.cfg` copied `cfg` and removed `.cfg`, and
+  through a root like `..` the absolute target of a new link was stored as
+  a relative path that the link's directory resolved outside of the view. `LocalFileSystem.CleanPath`
   and `SplitPath` of a file URI that names no local file return the empty
   path and nil instead of the path of another file.
 - `fs.TempDir`, `CreateTempFile` and `MakeTempDir` with a `$TMPDIR` that

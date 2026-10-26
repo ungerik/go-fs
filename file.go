@@ -215,7 +215,7 @@ func (file File) TrimExt() File {
 		if end < 0 {
 			end = len(path)
 		}
-		if _, name := fsSplitDirAndName(fileSystem, path[:end]); !strings.HasSuffix(path[:end], ext) || isEmptyOrDotName(strings.TrimSuffix(name, ext)) {
+		if _, name := fsSplitDirAndName(fileSystem, path[:end]); !strings.HasSuffix(path[:end], ext) || isEmptyOrDotName(fsimpl.UnescapeURIPath(strings.TrimSuffix(name, ext))) {
 			return file
 		}
 		return fsFile(fileSystem, path[:end-len(ext)]+path[end:])

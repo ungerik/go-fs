@@ -500,3 +500,18 @@ func TestParseRawURI_LocalUnregistered(t *testing.T) {
 	assert.Equal(t, Local, fileSystem)
 	assert.Equal(t, filepath.Join(dir, "a%b"), fsPath, "the path is decoded")
 }
+
+// TestParseRawURI_PathWithSchemeSeparator checks that only a "://" with no
+// "/" before it is the scheme of a URI: a URI of an unregistered scheme is
+// the Invalid file system, a path with a "://" after a "/" is a local path.
+func TestParseRawURI_PathWithSchemeSeparator(t *testing.T) {
+	for _, uri := range []string{"s3://bucket/key", "x://y", "://x"} {
+		fileSystem, _ := ParseRawURI(uri)
+		assert.Equal(t, Invalid, fileSystem, "ParseRawURI(%q)", uri)
+	}
+	for _, path := range []string{"/cache/https://x", "cache/https://x", "./x://y"} {
+		fileSystem, cleanPath := ParseRawURI(path)
+		assert.Equal(t, Local, fileSystem, "ParseRawURI(%q)", path)
+		assert.Equal(t, Local.CleanPath(path), cleanPath, "ParseRawURI(%q)", path)
+	}
+}

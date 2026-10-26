@@ -54,8 +54,10 @@ before the volume: the prefix is `mem://id/` and a URI is `mem://id/C:\dir`.
 After prefixes and aliases, resolution reaches a fork that is worth stating
 explicitly:
 
-> A URI that contains `://` but matched nothing resolves to the **`Invalid`
-> file system**. A string with no scheme resolves to the **local** file system.
+> A URI with a scheme, a `://` with no `/` before it, that matched nothing
+> resolves to the **`Invalid` file system**. A string with no scheme resolves
+> to the **local** file system, also a path with a `://` after a `/`, like
+> `/cache/https://x`.
 
 The only scheme that maps to local is `file://`, and that matches earlier
 because `Local` is registered with it. Anything else — `s3://`, `http://`,
@@ -252,7 +254,7 @@ defer free()
 | Chosen                              | Given up                                           |
 | ----------------------------------- | -------------------------------------------------- |
 | Longest-prefix match                | Constant-time lookup; resolution scans the sorted registry under a read lock |
-| Unmatched scheme → `Invalid`        | Being able to write a local file whose name contains `://` |
+| Unmatched scheme → `Invalid`        | Being able to write a local path that begins with a name like `x://` |
 | Local files stored without a prefix | One uniform representation for all files           |
 | `Register` rejects a held prefix    | Replacing a registered file system without closing it first |
 | Reference counts in `EnsureRegistered` only | Sharing an instance by registering it twice |

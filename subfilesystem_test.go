@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -636,4 +637,55 @@ func TestNewSubFileSystem_URIs(t *testing.T) {
 	require.ErrorIs(t, err, fs.ErrEmptyPath)
 	_, err = fs.NewSubFileSystem(mem, "", "")
 	require.ErrorIs(t, err, fs.ErrEmptyPath)
+}
+
+// TestNewSubFileSystem_RelativeLocalRoot checks that a relative local root
+// is made absolute: below the root "." a name like ".env" keeps its dot,
+// a move of a top-level dot directory moves it and not the directory
+// without the dot, and the absolute target of a link created through
+// a view rooted at ".." is stored as the absolute parent path, not as
+// a relative path that the link's directory resolves outside of the view.
+func TestNewSubFileSystem_RelativeLocalRoot(t *testing.T) {
+	base := t.TempDir()
+	view := filepath.Join(base, "view")
+	require.NoError(t, os.MkdirAll(filepath.Join(view, "work", ".cfg"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(view, "work", "cfg"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(view, "work", ".cfg", "key"), []byte("private"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(view, "work", "cfg", "key"), []byte("public"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(view, "secret"), []byte("inside"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "secret"), []byte("outside"), 0o600))
+	t.Chdir(filepath.Join(view, "work"))
+
+	dotView, err := fs.NewSubFileSystem(fs.Local, ".", "")
+	require.NoError(t, err)
+	var names []string
+	require.NoError(t, dotView.ListDir(t.Context(), "/", nil, func(info *fs.FileInfo) error {
+		names = append(names, info.Name+"="+strings.TrimPrefix(string(info.File), dotView.Prefix()))
+		return nil
+	}))
+	require.ElementsMatch(t, []string{".cfg=/.cfg", "cfg=/cfg"}, names, "the Files of a listing below the root \".\"")
+	data, err := dotView.ReadAll(t.Context(), "/.cfg/key")
+	require.NoError(t, err)
+	require.Equal(t, "private", string(data))
+
+	require.NoError(t, fs.Register(dotView))
+	t.Cleanup(func() { fs.Unregister(dotView) })
+	mem, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(mem))
+	t.Cleanup(func() { fs.Unregister(mem) })
+	require.NoError(t, fs.Move(t.Context(), dotView.RootDir().Join(".cfg"), mem.RootDir().Join("backup")))
+	moved, err := mem.ReadAll(t.Context(), "/backup/key")
+	require.NoError(t, err)
+	require.Equal(t, "private", string(moved), "the move of .cfg moved .cfg")
+	require.FileExists(t, filepath.Join(view, "work", "cfg", "key"), "cfg is kept")
+
+	upView, err := fs.NewSubFileSystem(fs.Local, "..", "")
+	require.NoError(t, err)
+	if err := upView.CreateSymbolicLink("/secret", "/lnk"); err != nil {
+		t.Skipf("can't create symbolic links: %v", err)
+	}
+	data, err = upView.ReadAll(t.Context(), "/lnk")
+	require.NoError(t, err)
+	require.Equal(t, "inside", string(data), "the link to /secret of the view")
 }

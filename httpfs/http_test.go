@@ -653,6 +653,8 @@ func TestFile_ExtTrimExt_query(t *testing.T) {
 		"https://example.com/dir/.env?token=a.b",
 		"https://example.com/dir/..zip",
 		"https://example.com/dir/...zip",
+		"https://example.com/dir/%2E%2E.zip",
+		"https://example.com/dir/%2e.zip",
 	} {
 		assert.Equal(t, file, file.TrimExt(), "TrimExt doesn't name the directory or its parent")
 	}
