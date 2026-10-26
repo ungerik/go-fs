@@ -16,7 +16,14 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   not valid UTF-8, which zip readers decode as CP-437, that contain a
   control character like NUL or a colon, which marks a drive letter on
   Windows, and names longer than the 65535 bytes of a zip header.
-  `archive/zip` writes all of them.
+  `archive/zip` writes all of them. The `zipfs.Writer` rejects the same
+  names (its paths are cleaned already).
+
+### Fixed
+
+- A `zipfs.Writer` path longer than 65535 bytes made the whole archive
+  unreadable: `archive/zip` adds the name to its central directory before
+  it rejects it, so `Close` returned no error and wrote a corrupt archive.
 
 ## [1.0.0-rc.1] - 2026-10-26
 

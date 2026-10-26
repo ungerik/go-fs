@@ -4,7 +4,9 @@
 // NewReader opens an existing archive for reading,
 // NewWriter creates a new archive that receives files
 // until it is closed. The package mirrors tarfs: both use
-// the same rules for entry names, duplicates and permissions.
+// the same rules for entry names, duplicates and permissions,
+// only the writer of zipfs rejects the names that are not valid
+// in a zip archive.
 //
 // Reading:
 //   - Entry names are made valid paths inside the archive like
@@ -29,6 +31,10 @@
 //     fs.ErrIsDirectory. That way a written archive never has duplicate or
 //     conflicting entries.
 //   - Paths with a backslash are rejected, so archives stay portable.
+//     So are paths that are not valid in a zip archive, see fs.Zip:
+//     names that are not valid UTF-8 or contain a control character
+//     like NUL or a colon, and names longer than 65535 bytes.
+//     All of them are errors wrapping os.ErrInvalid.
 //   - Entries get the current time and the passed permissions,
 //     or DefaultPermissions and DefaultDirPermissions if none are passed.
 //   - A file is buffered in memory until its writer is closed, then it is
@@ -461,6 +467,11 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	if err := f.checkClosedLocked(); err != nil {
 		return err
 	}
+	// archive/zip adds a name that is too long to the central
+	// directory before it rejects it, so it must never get one
+	if err := dirtree.CheckZipName(dirtree.CleanName(filePath), isDir); err != nil {
+		return fmt.Errorf("zipfs: %w", err)
+	}
 	node, isAncestor, err := f.tree.Conflict(filePath)
 	switch {
 	case err != nil:
@@ -574,6 +585,11 @@ func (f *Writer) MakeAllDirs(dirPath string, perm fs.Permissions) error {
 		return fs.ErrEmptyPath
 	}
 	elements, err := dirtree.Elements(dirPath)
+	if err != nil {
+		return fmt.Errorf("zipfs: %w", err)
+	}
+	// The parent directories are shorter and have no other characters
+	err = dirtree.CheckZipName(strings.Join(elements, Separator), true)
 	if err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}

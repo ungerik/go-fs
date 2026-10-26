@@ -90,6 +90,10 @@ set of files into a byte slice without a file system.
   the file without an entry. A path can be written only once: a second write
   returns an error wrapping `os.ErrExist`, so an archive never gets duplicate
   entries. `MakeDir` writes a directory entry, so empty directories are kept.
+  A path that is not valid in a zip archive returns an error wrapping
+  `os.ErrInvalid`, like in `fs.Zip`: a backslash, invalid UTF-8, a control
+  character like NUL, a colon, which marks a drive letter on Windows, or
+  more than 65535 bytes.
   `Close` writes the central directory — an archive whose writer was not
   closed is incomplete.
 - **Permissions and times.** Written entries get the current time and the

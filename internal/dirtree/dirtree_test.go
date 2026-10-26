@@ -3,6 +3,8 @@ package dirtree
 import (
 	"context"
 	"errors"
+	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +140,21 @@ func TestTree_RejectsUnsafeNames(t *testing.T) {
 	_, err = tree.Add("/", true, 0, time.Time{}, "root")
 	require.NoError(t, err, "a directory entry for the root")
 	assert.Equal(t, "root", tree.Root().Sys)
+}
+
+// TestCheckZipName verifies the names that are not valid in a zip archive,
+// up to the length limit that counts the trailing slash of a directory.
+func TestCheckZipName(t *testing.T) {
+	maxName := strings.Repeat("a", math.MaxUint16)
+	for _, name := range []string{"a.txt", "dir/Größe ü.txt", "dir/..a", maxName} {
+		assert.NoError(t, CheckZipName(name, false), "%.20q", name)
+	}
+	assert.NoError(t, CheckZipName(maxName[1:], true), "a directory of the maximum length")
+
+	for _, name := range []string{"\xff.txt", "a\x00b", "a\tb", "a\u0085b", "C:x", "dir/a:b", maxName + "a"} {
+		assert.ErrorIs(t, CheckZipName(name, false), os.ErrInvalid, "%.20q", name)
+	}
+	assert.ErrorIs(t, CheckZipName(maxName, true), os.ErrInvalid, "the slash of a directory is too much")
 }
 
 // TestCleanName verifies that unsafe archive entry names are turned into

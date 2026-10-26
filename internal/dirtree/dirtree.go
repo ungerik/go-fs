@@ -3,17 +3,21 @@
 //
 // It is used by the readers of tarfs and zipfs to look up and list
 // entries, and by their writers to detect entries that were already
-// written or conflict with a written one.
+// written or conflict with a written one. CheckZipName is the name rule
+// of the zip writers fs.Zip and zipfs.Writer.
 package dirtree
 
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -77,6 +81,38 @@ func Elements(name string) ([]string, error) {
 		elements = append(elements, element)
 	}
 	return elements, nil
+}
+
+// CheckZipName returns an error wrapping os.ErrInvalid if name,
+// the slash separated name of a zip entry without the trailing slash
+// of a directory, can't be extracted by every zip tool on every
+// operating system. archive/zip writes all of these names:
+//   - a name that is not valid UTF-8, which zip readers decode as CP-437
+//   - a name with a control character like NUL
+//   - a name with a colon, which marks a drive letter on Windows
+//   - a name longer than the 65535 bytes of a zip header,
+//     which also corrupts the central directory of the archive
+//
+// The path rules, like no ".." elements, are checked separately.
+func CheckZipName(name string, isDir bool) error {
+	switch {
+	case !utf8.ValidString(name):
+		// archive/zip writes it without the UTF-8 flag
+		return fmt.Errorf("%w: zip entry name %q is not valid UTF-8", os.ErrInvalid, name)
+	case strings.ContainsFunc(name, unicode.IsControl):
+		return fmt.Errorf("%w: zip entry name %q contains a control character", os.ErrInvalid, name)
+	case strings.Contains(name, ":"):
+		// fs.UnzipToMemFiles rejects it on Windows
+		return fmt.Errorf("%w: zip entry name %q contains a colon, which marks a drive letter on Windows", os.ErrInvalid, name)
+	}
+	size := len(name)
+	if isDir {
+		size++ // for the trailing slash
+	}
+	if size > math.MaxUint16 {
+		return fmt.Errorf("%w: zip entry name of %d bytes is longer than the %d bytes of a zip header", os.ErrInvalid, size, math.MaxUint16)
+	}
+	return nil
 }
 
 // Add adds the entry name to the tree and returns its node,

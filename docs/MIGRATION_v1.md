@@ -190,7 +190,8 @@ Behaviour changes:
   absolute names (the leading slash of a `MemFile` name is dropped), names
   that are not a clean slash separated path, not valid UTF-8, or contain a
   control character or a colon, and names longer than 65535 bytes;
-  `zipfs.Reader` skips symbolic links, devices and FIFOs.
+  `zipfs.Writer` rejects the same names; `zipfs.Reader` skips symbolic
+  links, devices and FIFOs.
 - XAttr: `XAttrCreate` on an existing attribute wraps `os.ErrExist`,
   `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing attribute wrap
   `os.ErrNotExist`.

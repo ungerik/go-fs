@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -285,6 +287,33 @@ func TestZipWriter_WriteOnce(t *testing.T) {
 	names, err := reader.RootDir().ListDirMax(ctx, -1)
 	require.NoError(t, err)
 	assert.Len(t, names, 3)
+}
+
+// TestZipWriter_InvalidNames is a regression test: the writer wrote names
+// that are not valid in a zip archive, and a name longer than 65535 bytes,
+// which archive/zip adds to its central directory before rejecting it,
+// made the whole archive unreadable although Close returned no error.
+func TestZipWriter_InvalidNames(t *testing.T) {
+	zipFile := newMemFS(t).RootDir().Join("names.zip")
+	zipWriter, err := NewWriter(zipFile, "")
+	require.NoError(t, err)
+	require.NoError(t, zipWriter.Touch("/before.txt", 0))
+
+	longName := "/" + strings.Repeat("a", math.MaxUint16)
+	for _, name := range []string{"/a\x00b.txt", "/a\nb.txt", "/dir/\xff.txt", "/C:x.txt", longName + "a"} {
+		assert.ErrorIs(t, zipWriter.Touch(name, 0), os.ErrInvalid, "Touch %.20q", name)
+		_, err := zipWriter.OpenWriter(name, 0)
+		assert.ErrorIs(t, err, os.ErrInvalid, "OpenWriter %.20q", name)
+		assert.ErrorIs(t, zipWriter.MakeDir(name, 0), os.ErrInvalid, "MakeDir %.20q", name)
+		assert.ErrorIs(t, zipWriter.MakeAllDirs(name+"/sub", 0), os.ErrInvalid, "MakeAllDirs %.20q", name)
+	}
+	assert.ErrorIs(t, zipWriter.MakeDir(longName, 0), os.ErrInvalid, "the slash of a directory entry is too much")
+	require.NoError(t, zipWriter.Touch(longName, 0), "a file name of the maximum length")
+	require.NoError(t, zipWriter.Touch("/after.txt", 0))
+	require.NoError(t, zipWriter.Close())
+
+	assert.Equal(t, []string{"before.txt", longName[1:], "after.txt"}, zipEntryNames(t, zipFile))
+	assert.True(t, openReader(t, zipFile).RootDir().Join("after.txt").Exists(), "the archive is readable")
 }
 
 // TestZipWriter_Abort verifies that an aborted entry writer writes no entry.

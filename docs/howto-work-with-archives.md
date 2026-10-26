@@ -166,7 +166,8 @@ Both packages read and write entries with the same rules:
   `fs.ErrIsNotDirectory`, a file over a directory `fs.ErrIsDirectory`, and a
   path with a backslash `os.ErrInvalid`. So a written archive never has
   duplicate or conflicting entries. `MakeAllDirs` doesn't complain about
-  existing directories.
+  existing directories. The zip writer also rejects the names that are not
+  valid in a zip archive with `os.ErrInvalid`, like `fs.Zip` below.
 - **Permissions and times.** Written entries get the current time and the
   passed permissions, or `DefaultPermissions` / `DefaultDirPermissions` of the
   package. Read entries report the permissions and modification time stored in

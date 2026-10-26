@@ -9,12 +9,11 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
-	"unicode/utf8"
+
+	"github.com/ungerik/go-fs/internal/dirtree"
 )
 
 // UnzipToMemFilesMaxSize is the maximum total uncompressed size
@@ -57,7 +56,7 @@ func Zip(ctx context.Context, files ...FileReader) ([]byte, error) {
 	})
 	copyBuf := make([]byte, zipCopyBufferSize)
 	for _, file := range files {
-		err := zipFileReader(ctx, zipWriter, file, copyBuf)
+		err := addZipEntry(ctx, zipWriter, file, copyBuf)
 		if err != nil {
 			return nil, err
 		}
@@ -77,8 +76,9 @@ func ZipMemFiles(files ...MemFile) ([]byte, error) {
 	return Zip(context.Background(), AsFileReaders(files)...)
 }
 
-// zipFileReader adds file to zipWriter.
-func zipFileReader(ctx context.Context, zipWriter *zip.Writer, file FileReader, copyBuf []byte) error {
+// addZipEntry adds file as entry to zipWriter,
+// copyBuf is the buffer for copying its content.
+func addZipEntry(ctx context.Context, zipWriter *zip.Writer, file FileReader, copyBuf []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -131,30 +131,17 @@ func zipEntryName(file FileReader, isDir bool) (string, error) {
 	default:
 		name = file.Name()
 	}
-	var problem string
-	switch {
-	case name == "":
-		problem = "is empty"
-	case !utf8.ValidString(name):
-		// archive/zip writes it without the UTF-8 flag,
-		// so zip readers would decode it as CP-437
-		problem = "is not valid UTF-8"
-	case strings.ContainsFunc(name, unicode.IsControl):
-		problem = "contains a control character"
-	case strings.Contains(name, ":"):
-		// Rejected by UnzipToMemFiles on Windows
-		problem = "contains a colon, which marks a drive letter on Windows"
-	case name == "." || !iofs.ValidPath(name) || !isLocalZipName(name):
-		problem = "is not a clean, local, slash separated path"
+	if name == "" {
+		return "", fmt.Errorf("can't zip %q: %w: zip entry name is empty", errSubject(file), os.ErrInvalid)
 	}
-	if problem != "" {
-		return "", fmt.Errorf("%w: zip entry name %q for %q %s", os.ErrInvalid, name, errSubject(file), problem)
+	if err := dirtree.CheckZipName(name, isDir); err != nil {
+		return "", fmt.Errorf("can't zip %q: %w", errSubject(file), err)
+	}
+	if name == "." || !iofs.ValidPath(name) || !isLocalZipName(name) {
+		return "", fmt.Errorf("can't zip %q: %w: zip entry name %q is not a clean, local, slash separated path", errSubject(file), os.ErrInvalid, name)
 	}
 	if isDir {
 		name += "/"
-	}
-	if len(name) > math.MaxUint16 {
-		return "", fmt.Errorf("%w: zip entry name of %d bytes is longer than the %d bytes of a zip header", os.ErrInvalid, len(name), math.MaxUint16)
 	}
 	return name, nil
 }
