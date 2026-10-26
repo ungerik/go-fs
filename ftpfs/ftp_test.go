@@ -1183,6 +1183,80 @@ func TestSymbolicLinks_ArrowInName(t *testing.T) {
 	}
 }
 
+// TestSymbolicLinks_ArrowInNameWithoutMLST is the regression test for
+// symbolic links whose names contain " -> " on a server without MLST
+// support. The FTP client library cuts the LIST line of a link at the first
+// " -> ", so it lists the link "a -> b" with the name "a" and the target
+// "b -> <target>", and the lookup of a path in the listing of its parent
+// directory didn't find the link: Stat reported it as missing, Remove and
+// Move failed with an error wrapping os.ErrNotExist, RemoveAll returned nil
+// and kept the link, ListDirRecursive of a link to a directory failed, and
+// ListDir of it on a server whose LIST lists a link itself listed the link
+// as an entry below itself. A file named "a -> b" next to the link "a" to
+// "b -> <target>" is still the file.
+func TestSymbolicLinks_ArrowInNameWithoutMLST(t *testing.T) {
+	for name, lsArgs := range map[string]bool{"LIST follows links": false, "LIST lists a link itself": true} {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			srv := newTestFTPServer(t)
+			srv.configure(func(s *testFTPServer) {
+				s.noMLST = true
+				s.lsArgs = lsArgs
+			})
+			srv.writeFile("/root/file.txt", "data")
+			srv.writeFile("/root/dir/file.txt", "content")
+			srv.symlink("file.txt", "/root/filelink -> x")
+			srv.symlink("dir", "/root/dirlink -> x")
+			srv.symlink("missing.txt", "/root/dangling -> x")
+			srv.symlink("b -> file.txt", "/root/a")
+			srv.writeFile("/root/a -> b", "file")
+			ftpFS := dialInProcess(t, srv)
+			noCallback := func(*fs.FileInfo) error { return nil }
+
+			info, err := ftpFS.Stat("/root/filelink -> x")
+			require.NoError(t, err, "Stat of a link to a file")
+			assert.Equal(t, "filelink -> x", info.Name)
+			assert.True(t, info.IsSymlink)
+			assert.True(t, info.IsRegular, "Stat follows the link")
+			assert.Equal(t, int64(len("data")), info.Size)
+			info, err = ftpFS.Stat("/root/dirlink -> x")
+			require.NoError(t, err, "Stat of a link to a directory")
+			assert.True(t, info.IsSymlink)
+			assert.True(t, info.IsDir, "Stat follows the link")
+			info, err = ftpFS.Stat("/root/a -> b")
+			require.NoError(t, err, "Stat of a file named like the link a and the start of its target")
+			assert.False(t, info.IsSymlink, "the file, not the link a")
+			assert.Equal(t, int64(len("file")), info.Size)
+
+			for name, list := range map[string]func(context.Context, string, []string, func(*fs.FileInfo) error) error{
+				"ListDir":          ftpFS.ListDir,
+				"ListDirRecursive": ftpFS.ListDirRecursive,
+			} {
+				var listed []*fs.FileInfo
+				err := list(ctx, "/root/dirlink -> x", nil, func(info *fs.FileInfo) error {
+					listed = append(listed, info)
+					return nil
+				})
+				require.NoError(t, err, "%s of a link to a directory", name)
+				assert.Equal(t, []string{"/root/dirlink -> x/file.txt"}, relPaths(ftpFS, listed), "%s of a link to a directory", name)
+				assert.ErrorIs(t, list(ctx, "/root/filelink -> x", nil, noCallback), fs.ErrIsNotDirectory{}, "%s of a link to a file", name)
+			}
+
+			require.NoError(t, ftpFS.Move(ctx, "/root/filelink -> x", "/root/moved"), "Move of a link")
+			assert.False(t, srv.exists("/root/filelink -> x"))
+			info, err = ftpFS.Stat("/root/moved")
+			require.NoError(t, err)
+			assert.True(t, info.IsSymlink, "Move renames the link itself")
+			assert.ErrorIs(t, ftpFS.MakeDir("/root/dangling -> x", 0), fs.ErrAlreadyExists{}, "MakeDir of a dangling link")
+			require.NoError(t, ftpFS.Remove("/root/dangling -> x"), "Remove of a dangling link")
+			assert.False(t, srv.exists("/root/dangling -> x"))
+			require.NoError(t, ftpFS.RemoveAll(ctx, "/root/dirlink -> x"), "RemoveAll of a link to a directory")
+			assert.False(t, srv.exists("/root/dirlink -> x"), "RemoveAll removes the link")
+			assert.Equal(t, "content", string(srv.fileContent("/root/dir/file.txt")), "RemoveAll must keep the files that the link points to")
+		})
+	}
+}
+
 // TestSymbolicLinks_MLSDRemoveAllOptionEntry is the regression test for the
 // "LIST -a" that RemoveAll sends on a server with MLST support to tell
 // a directory from a symbolic link: servers that don't parse the options of

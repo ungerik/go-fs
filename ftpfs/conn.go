@@ -242,6 +242,12 @@ func (c *conn) operationContext() context.Context {
 	return c.ctx
 }
 
+// hasMLST reports whether the server supports MLST:
+// IsTimePreciseInList tells that the connection uses MLSD and MLST.
+func (c *conn) hasMLST() bool {
+	return c.IsTimePreciseInList()
+}
+
 // run runs op on the connection. If ctx is done while op is running,
 // the connection is aborted and run returns the cause of ctx.
 func (c *conn) run(ctx context.Context, op func() error) error {

@@ -172,7 +172,13 @@ and open readers, and afterwards every method returns
   dangling link wraps `os.ErrNotExist`. `ListDir` and `ListDirRecursive`
   describe a link itself, with `IsSymlink` set and neither `IsDir` nor
   `IsRegular`, `ListDirRecursive` follows only a link at the listed path,
-  and `Remove`, `RemoveAll` and `Move` act on the link itself. Servers
+  and `Remove`, `RemoveAll` and `Move` act on the link itself. The FTP
+  client library cuts the line of a link at the first ` -> ` into its name
+  and its target, so `ListDir` and `ListDirRecursive` name the link
+  `a -> b` `a`, and `RemoveAll` of a directory with such a link fails.
+  `Stat`, `Remove`, `RemoveAll` and `Move` find the link `a -> b`, but they
+  also take the link `a` to `b -> c` for a link `a -> b` to `c`, because
+  both have the same line. Servers
   among them that expand glob characters in the path argument of `LIST`,
   like wu-ftpd and ProFTPD with `UseGlobbing` but without `mod_facts`
   (which provides MLST), can list another directory for a path with `*`,
