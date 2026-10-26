@@ -116,9 +116,10 @@ and the requests of open file handles, and afterwards every method returns
   directory. The file system implements `fs.ValidateNameFileSystem`, so a
   copy or move into it fails before it writes anything at a name that SMB
   servers don't write: a control character or one of `\ " * : < > ? |`,
-  invalid UTF-8, a trailing dot or space, which Windows servers remove, and
-  device names of Windows like `CON` or `nul.txt`. Existing entries are read
-  with every name.
+  which SMB doesn't allow, invalid UTF-8, and the names that Windows servers
+  refuse or write to another entry, a trailing dot or space and device names
+  like `CON` or `nul.txt`, which Samba writes. Existing entries are read
+  with every name, and copied and moved with it within the share.
 - **Native operations.** SMB has real directories and random access file
   handles, so nearly every optional interface is native: `ReadAll`,
   `WriteAll`, `OpenAppendWriter`, `OpenReadWriter`, `Truncate`, `Touch`,

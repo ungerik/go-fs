@@ -166,9 +166,9 @@ they are.
   like servers on Unix. A path with a NUL character, at which the server
   would end the path, is an error wrapping `os.ErrInvalid` too. The file
   system implements `fs.ValidateNameFileSystem` with these rules and rejects
-  new names that are not valid UTF-8, which go-fs doesn't write and servers
-  on file systems like APFS refuse, so a copy or move into it fails before it
-  writes anything.
+  new names that are not valid UTF-8, which the remote backends of go-fs
+  don't write and servers on file systems like APFS refuse, so a copy or
+  move into it fails before it writes anything.
 - **Native operations.** Real directories and random access file handles,
   so `OpenAppendWriter`, `OpenReadWriter`, `Truncate`, `Touch`,
   `MakeAllDirs`, `RemoveAll`, `ListDirRecursive`, `Move`,
