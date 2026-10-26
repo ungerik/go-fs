@@ -21,15 +21,16 @@ ETag-pinned native `Move` were only tested against Azurite.
 **Context:** Azurite 3.37 rejects the API version without the flag. Check
 the snapshot listing order and paging (Azurite drops a blob's snapshots at a
 page boundary), the 412 codes of failed source conditions (`ConditionNotMet`
-on Azurite, `SourceConditionNotMet` documented for Azure), the codes of failed
-destination conditions of Copy Blob (`If-None-Match: *` on an existing blob:
-409 `BlobAlreadyExists` on Azurite; `If-Match`: `TargetConditionNotMet` or
-`ConditionNotMet`), which `moveBlobs` tells apart with `blobChanged`, the copy
-properties that `Move` reads to recognize its own copy after a retried
-request (and that `x-ms-copy-source` keeps a `snapshot` or `versionid`
-query), the answer to a delete pinned with `If-Match` of a missing blob (412
-`ConditionNotMet` on Azurite, which `Move` checks with `GetProperties`), and
-the deletes of blobs with snapshots.
+on Azurite, `SourceConditionNotMet` documented for Azure), the codes of
+failed destination conditions of Copy Blob (`If-None-Match: *` on an
+existing blob: 409 `BlobAlreadyExists` on Azurite; `If-Match`:
+`TargetConditionNotMet` or `ConditionNotMet`), which `moveBlobs` tells apart
+with a `GetProperties` of the source, the copy properties that `Move` reads
+to recognize its own copy after a retried request (and that
+`x-ms-copy-source` keeps a `snapshot` or `versionid` query), the answer to a
+delete pinned with `If-Match` of a missing blob (412 `ConditionNotMet` on
+Azurite, which `Move` checks with `GetProperties`), and the deletes of blobs
+with snapshots.
 
 **Effort:** S
 **Priority:** P0
@@ -174,7 +175,7 @@ together with a parser of the whole RFC 8089 grammar.
 
 ### One type walk for the SubFileSystem and OverlayFileSystem path mapping
 
-**What:** `writesToLocal`, `writeTarget`, `isInsideDirView`, `fsReadTarget`
+**What:** `newTreeCopier`, `writeTarget`, `isInsideDirView`, `fsReadTarget`
 and `fsLinks` each switch on `*SubFileSystem` and `*OverlayFileSystem` and
 reach into their private fields; "an overlay write goes to its upper layer"
 is written in two of them.
@@ -215,13 +216,13 @@ directory is done.
 
 **Why:** A flat directory of a million files holds about 300 MB of
 `FileInfo`, and an overwrite costs up to three `Lstat`s of one path
-(`checkFileDest`, `wroteEntry`, `recordWrite`), and one `ReadDir` of the
-directory for a match of two hard links.
+(`checkFileDest`, `destDir.checkExisting`, `recordWrite`), and one `ReadDir`
+of the directory for a match of two hard links.
 
 **Context:** Keep a compact identity instead (device and inode on Unix,
 volume and file index on Windows, behind a build-tagged helper), and let one
-local `Lstat` per entry serve the destination check, `wroteEntry` and
-`recordWrite`.
+local `Lstat` per entry serve the destination check, `destDir.checkExisting`
+and `recordWrite`.
 
 **Effort:** S
 **Priority:** P3
@@ -462,10 +463,10 @@ fail closed otherwise, or find another way to detect reparse points.
 ### Fail closed when the client library drops a LIST line
 
 **What:** `jlaffaye/ftp` drops a line of a `LIST` listing that it can't
-parse without an error, like one whose year doesn't have four digits.
-`confirmDir` then can't see the line of a link, and one forged directory
-line with the link's name, from a file whose name contains a line feed, is
-the only entry with that name.
+parse without an error, like one whose year doesn't have four digits. The
+directory check of `remover.removeFolder` then can't see the line of a link,
+and one forged directory line with the link's name, from a file whose name
+contains a line feed, is the only entry with that name.
 
 **Why:** A client that can write into the parent directory and set the
 modification time of its link can make `RemoveAll` on a server with MLST
@@ -475,9 +476,9 @@ server's `listOmits` and `listForged` hooks). Documented in the package doc.
 **Context:** Count the raw lines on the data connections of the listing
 connection (ftpfs dials them with its own `dialFunc`), and make the listing
 an error if the parser dropped any line other than `total N`. Add the test
-case of an omitted link line with one forged line. While there, run the
-`-a` check (`checkOptionEntry`) for every listing instead of once per
-directory, so it is as fresh as the listing.
+case of an omitted link line with one forged line. While there, run the `-a`
+check (in `remover.list`) for every listing instead of once per directory,
+so it is as fresh as the listing.
 
 **Effort:** S
 **Priority:** P1, before v1.0.0
@@ -485,8 +486,8 @@ directory, so it is as fresh as the listing.
 
 ### List without a path argument on servers without MLST that glob LIST arguments
 
-**What:** On servers without MLST support, `removeContent`, the `lstat`
-fallback, `ListDir` and `ListDirRecursive` send `LIST <path>` on the
+**What:** On servers without MLST support, `remover.removeFolder`, the
+`lstat` fallback, `ListDir` and `ListDirRecursive` send `LIST <path>` on the
 connection of the operation. Servers that expand glob characters in that
 argument (wu-ftpd, ProFTPD with `UseGlobbing` but without `mod_facts`) list
 another directory for a path with `*`, `?` or `[`.
