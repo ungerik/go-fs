@@ -157,6 +157,25 @@ names before a copy or move between file systems".
 **Priority:** P3
 **Depends on:** None
 
+### Make CleanPath idempotent on the empty path
+
+**What:** `LocalFileSystem.CleanPath` returns the empty path, which names no
+file, for a file URI without a path or one that names no local file, but
+`CleanPath("")` is `"."` like `filepath.Clean`, and `CleanPath("", "x")` is
+`"x"`.
+
+**Why:** Code outside go-fs that cleans a result again turns "no file" into
+the working directory. Documented on `CleanPath`; no caller in go-fs does it.
+
+**Context:** Returning `""` for `CleanPath("")` changes the result for
+callers that pass `""` for the current directory. Decide it together with
+the other file systems, whose `fsimpl.PathHelper.CleanPath("")` returns the
+root, and pin the result with a conformance check.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ### Recognize the RFC 8089 short forms of file URIs
 
 **What:** `File("file:/etc/hosts")`, and on Windows `file:c:/x`, are

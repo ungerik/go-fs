@@ -621,4 +621,19 @@ func TestNewSubFileSystem_URIs(t *testing.T) {
 	require.Equal(t, "x", string(data))
 	_, err = fs.NewSubFileSystem(mem, "file:///dir", "")
 	require.ErrorIs(t, err, os.ErrInvalid, "a file URI is no URI of a MemFileSystem")
+
+	// A "://" after a "/" is part of a path, like of a cached URL
+	require.NoError(t, mem.MakeAllDirs("/cache/https:/x", 0))
+	require.NoError(t, mem.WriteAll(t.Context(), "/cache/https:/x/y.txt", []byte("y"), 0))
+	subFS, err = fs.NewSubFileSystem(mem, "/cache/https://x", "")
+	require.NoError(t, err, "a path that contains ://")
+	data, err = subFS.ReadAll(t.Context(), "/y.txt")
+	require.NoError(t, err)
+	require.Equal(t, "y", string(data))
+
+	// An unset directory isn't the working directory or the root
+	_, err = fs.NewSubFileSystem(fs.Local, "", "")
+	require.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = fs.NewSubFileSystem(mem, "", "")
+	require.ErrorIs(t, err, fs.ErrEmptyPath)
 }

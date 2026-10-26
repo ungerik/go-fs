@@ -201,7 +201,8 @@ func (file File) ExtLower() string {
 // For URIs with a query or fragment like HTTP URLs,
 // the extension of the name before the query is removed.
 // A name that is only an extension, like ".bashrc", has none to remove,
-// the File is returned unchanged instead of its directory.
+// and neither has a name like "..zip" or "...zip" that would become "." or
+// "..": the File is returned unchanged instead of its directory or parent.
 func (file File) TrimExt() File {
 	fileSystem, path := file.ParseRawURI()
 	if _, ok := fileSystem.(URIFileSystem); ok {
@@ -214,22 +215,26 @@ func (file File) TrimExt() File {
 		if end < 0 {
 			end = len(path)
 		}
-		if _, name := fsSplitDirAndName(fileSystem, path[:end]); !strings.HasSuffix(path[:end], ext) || name == ext {
+		if _, name := fsSplitDirAndName(fileSystem, path[:end]); !strings.HasSuffix(path[:end], ext) || isEmptyOrDotName(strings.TrimSuffix(name, ext)) {
 			return file
 		}
 		return fsFile(fileSystem, path[:end-len(ext)]+path[end:])
 	}
-	if _, ok := fileSystem.(InvalidFileSystem); ok {
-		return File(fsimpl.TrimExt(string(file), fileSystem.Separator()))
-	}
 	// The parsed path, not the string of the File: its percent-encoded
 	// characters are decoded, a "%2F" is a separator, and on Windows
 	// a file URI has slashes where the separator is a backslash.
-	// fsimpl.TrimExt would trim a name like ".bashrc" to its directory.
-	if _, name := fsSplitDirAndName(fileSystem, path); fsimpl.Ext(name, "") == name {
+	// fsimpl.TrimExt would trim a name like ".bashrc" to its directory
+	// and "...zip" to "..", the parent directory.
+	if _, name := fsSplitDirAndName(fileSystem, path); isEmptyOrDotName(strings.TrimSuffix(name, fsimpl.Ext(name, ""))) {
 		return file
 	}
 	return fsFile(fileSystem, fsimpl.TrimExt(path, fileSystem.Separator()))
+}
+
+// isEmptyOrDotName reports if name is empty, "." or "..", which name no
+// entry of a directory but the directory itself or its parent, see TrimExt.
+func isEmptyOrDotName(name string) bool {
+	return name == "" || name == "." || name == ".."
 }
 
 // Join returns a new File with pathParts cleaned and joined to the current File's URI.

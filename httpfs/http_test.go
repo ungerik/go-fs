@@ -649,8 +649,13 @@ func TestFile_ExtTrimExt_query(t *testing.T) {
 	assert.Equal(t, fs.File("https://example.com/dir/report"), fs.File("https://example.com/dir/report").TrimExt())
 
 	// A name that is only an extension isn't trimmed to its directory
-	dotfile := fs.File("https://example.com/dir/.env?token=a.b")
-	assert.Equal(t, dotfile, dotfile.TrimExt())
+	for _, file := range []fs.File{
+		"https://example.com/dir/.env?token=a.b",
+		"https://example.com/dir/..zip",
+		"https://example.com/dir/...zip",
+	} {
+		assert.Equal(t, file, file.TrimExt(), "TrimExt doesn't name the directory or its parent")
+	}
 }
 
 // TestErrorMessage_noQuery checks that error messages of HTTP files

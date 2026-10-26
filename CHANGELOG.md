@@ -134,15 +134,23 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   trims the decoded path now and returns the File of the trimmed path,
   a local path instead of a file URI for a local file. A trimmed name `~`,
   of `~.zip`, is the local file `./~` instead of the home directory, and
-  a name that is only an extension, like `.bashrc`, is not trimmed to its
-  directory.
+  a name that is only an extension, like `.bashrc`, or that would become
+  `.` or `..`, like `..zip` and `...zip`, is not trimmed to its directory
+  or its parent.
 - `fs.NewSubFileSystem` resolves a URI like `File`: it decodes the
   percent-encoding of a URI of the parent file system, and the URI of
   another file system or a file URI that names no local file, like
   `file://./uploads`, which was the root `/uploads`, is an error wrapping
-  `os.ErrInvalid`. `LocalFileSystem.CleanPath` and `SplitPath` of a file URI
-  that names no local file return the empty path and nil instead of the path
-  of another file.
+  `os.ErrInvalid`. An empty `dirPath` is `ErrEmptyPath` instead of the
+  working directory or the root of the parent. `LocalFileSystem.CleanPath`
+  and `SplitPath` of a file URI that names no local file return the empty
+  path and nil instead of the path of another file.
+- `fs.TempDir`, `CreateTempFile` and `MakeTempDir` with a `$TMPDIR` that
+  begins with a literal `~`, which systemd's `Environment=` doesn't expand,
+  returned Files in the home directory instead of below the current
+  directory, where `os.CreateTemp` created them, and the errors of local
+  `Move` named a destination below a directory `./~` like a path in the home
+  directory.
 
 - `azureblobfs` `RemoveAll` stopped with a 409 `SnapshotsPresent` error at
   the first blob with snapshots, after it had already deleted the blobs

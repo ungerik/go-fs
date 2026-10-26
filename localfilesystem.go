@@ -499,7 +499,8 @@ func isDriveLetterPath(filePath string) bool {
 // named "a%20b" is reachable. A file URI without a path, "file://" or
 // "file://localhost", has the empty path too: the result is "", not ".",
 // the working directory, also with more parts, which are not joined to
-// it, so nothing derived from such a URI names a file either.
+// it, so nothing derived from such a URI names a file either. Don't clean
+// that result again: CleanPath("") is ".", like for [filepath.Clean].
 func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 	if len(uriParts) == 0 {
 		return "."
@@ -1060,7 +1061,7 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 			return nil
 		}
 		if destStat.IsDir() {
-			return NewErrIsDirectory(File(destFilePath))
+			return NewErrIsDirectory(localFile(destFilePath))
 		}
 	}
 
@@ -1149,9 +1150,9 @@ func (local *LocalFileSystem) Move(ctx context.Context, filePath string, destPat
 		return moveLocalSameFile(filePath, destPath, srcInfo)
 	case destInfo.IsDir():
 		// os.Rename would replace an empty directory on some platforms
-		return NewErrAlreadyExists(File(destPath))
+		return NewErrAlreadyExists(localFile(destPath))
 	case srcInfo.IsDir():
-		return NewErrIsNotDirectory(File(destPath))
+		return NewErrIsNotDirectory(localFile(destPath))
 	case srcInfo.Mode()&os.ModeSymlink != 0 && isLocalLinkOntoTarget(filePath, destInfo):
 		return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, filePath, destPath)
 	}
@@ -1177,9 +1178,9 @@ func wrapRenameErr(destPath string, err error) error {
 	case errors.Is(err, syscall.ENOTDIR) && !errors.Is(err, os.ErrNotExist):
 		// On Windows syscall.ENOTDIR is ERROR_PATH_NOT_FOUND,
 		// which means a missing directory, not a file in the way
-		return NewErrIsNotDirectory(File(destPath))
+		return NewErrIsNotDirectory(localFile(destPath))
 	case errors.Is(err, syscall.EISDIR), errors.Is(err, os.ErrExist):
-		return NewErrAlreadyExists(File(destPath))
+		return NewErrAlreadyExists(localFile(destPath))
 	default:
 		// Not mapped to a typed error of one path,
 		// because the error can be about both paths

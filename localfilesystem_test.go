@@ -947,6 +947,31 @@ func TestFileURIWithoutPath(t *testing.T) {
 	}
 }
 
+// TestLocalErrorsOfTildeDirectory checks that the errors of Move and
+// CopyFile name a destination below a directory named "~" in the current
+// directory with its "./", so that acting on the File of the error doesn't
+// reach the home directory.
+func TestLocalErrorsOfTildeDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Join("~", "x"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join("~", "y"), []byte("y"), 0o600))
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	err = Local.Move(t.Context(), "."+Separator+filepath.Join("~", "y"), "."+Separator+filepath.Join("~", "x"))
+	var exists ErrAlreadyExists
+	require.ErrorAs(t, err, &exists)
+	existing, _ := exists.File()
+	assert.NotContains(t, existing.LocalPath(), home, "Move error")
+	assert.FileExists(t, filepath.Join("~", "y"), "the source is kept")
+
+	err = Local.CopyFile(t.Context(), "."+Separator+filepath.Join("~", "y"), "."+Separator+filepath.Join("~", "x"))
+	var isDir ErrIsDirectory
+	require.ErrorAs(t, err, &isDir)
+	directory, _ := isDir.File()
+	assert.NotContains(t, directory.LocalPath(), home, "CopyFile error")
+}
+
 // TestCleanPathOfNonLocalFileURI checks that CleanPath and SplitPath of
 // a file URI that names no local file return the empty path, like
 // ParseRawURI returns the InvalidFileSystem for it, instead of the

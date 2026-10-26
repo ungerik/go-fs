@@ -88,6 +88,7 @@ func (s *SubFileSystem) CleanPath(uriParts ...string) string {
 // characters, and must be one of the parent: the URI of another file
 // system, or a file URI that names no local file, like "file://./x", is
 // an error wrapping [os.ErrInvalid] instead of a root somewhere else.
+// An empty dirPath is [ErrEmptyPath]; "." is the current directory.
 func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSystem, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("nil parent file system")
@@ -95,7 +96,11 @@ func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSys
 	var dir string
 	_, local := parent.(*LocalFileSystem)
 	switch {
-	case !strings.Contains(dirPath, PrefixSeparator):
+	case dirPath == "":
+		// Not the working directory or the root of the parent
+		return nil, ErrEmptyPath
+	case uriVolumeLen(dirPath) == 0:
+		// No scheme before a "/", like the path "/cache/https://x"
 		dir = parent.CleanPath(dirPath)
 	case local && strings.HasPrefix(dirPath, LocalPrefix):
 		// Decoded once, uriPath would decode again in CleanPath

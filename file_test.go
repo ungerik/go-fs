@@ -1369,8 +1369,14 @@ func TestFile_TrimExtOfTildeAndDotfiles(t *testing.T) {
 		assert.NotEqual(t, home, trimmed.LocalPath(), "%q.TrimExt() names the home directory", file)
 	}
 
-	dotfile := File(filepath.Join(t.TempDir(), ".bashrc"))
+	dir := t.TempDir()
+	dotfile := File(filepath.Join(dir, ".bashrc"))
 	assert.Equal(t, dotfile, dotfile.TrimExt(), "TrimExt of a dotfile")
+	// "..zip" and "...zip" would become ".", the directory, and "..", its parent
+	for _, name := range []string{"..zip", "...zip", "."} {
+		file := File(filepath.Join(dir, name))
+		assert.Equal(t, file, file.TrimExt(), "TrimExt of %q", name)
+	}
 	config := File(filepath.Join(t.TempDir(), ".config.json"))
 	assert.Equal(t, File(strings.TrimSuffix(string(config), ".json")), config.TrimExt(), "TrimExt of a dotfile with an extension")
 }
