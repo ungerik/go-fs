@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+### Changed
+
+- `fs.Zip` and `ZipMemFiles` reject every name that is not valid in a zip
+  archive with an error wrapping `os.ErrInvalid`, not only the names that
+  `UnzipToMemFiles` rejects: names that are not a clean, slash separated
+  path (`io/fs.ValidPath`, like `a//b.txt`, or `dir/` for a file), that are
+  not valid UTF-8, which zip readers decode as CP-437, that contain a
+  control character like NUL or a colon, which marks a drive letter on
+  Windows, and names longer than the 65535 bytes of a zip header.
+  `archive/zip` writes all of them.
+
 ## [1.0.0-rc.1] - 2026-10-26
 
 First release candidate: file URIs follow RFC 8089 on every platform, copies

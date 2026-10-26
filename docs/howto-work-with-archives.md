@@ -220,9 +220,13 @@ data, err := fs.ZipMemFiles(
 ```
 
 Both use `flate.BestCompression` and build the whole archive in memory.
-An entry name that `fs.UnzipToMemFiles` would reject, because it is absolute,
-escapes with `..` or contains a backslash, is an error wrapping
-`os.ErrInvalid`, so every archive they write can be unzipped again.
+An entry name that is not valid in a zip archive is an error wrapping
+`os.ErrInvalid`, so every archive they write can be unzipped again: an empty
+name, a name that `fs.UnzipToMemFiles` would reject because it is absolute,
+escapes with `..` or contains a backslash, a name that is not a clean slash
+separated path (`io/fs.ValidPath`), not valid UTF-8, or contains a control
+character or a colon (a drive letter on Windows), and a name longer than
+65535 bytes. `archive/zip` itself writes all of them.
 
 ## Unzip in memory
 

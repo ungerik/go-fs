@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	iofs "io/fs"
+	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +114,57 @@ func TestZip_InsecureNames(t *testing.T) {
 		NewMemFile("dir/sub/b.txt", []byte("b")),
 		NewMemFile("dir/c..txt", []byte("c")),
 	}, unzipped)
+}
+
+// TestZip_InvalidNames is a regression test: archive/zip writes almost
+// every name, so ZipMemFiles and Zip wrote entries with names that are not
+// valid in a zip archive, like a NUL byte, invalid UTF-8 that zip readers
+// decode as CP-437, or a drive letter that UnzipToMemFiles rejects on Windows.
+func TestZip_InvalidNames(t *testing.T) {
+	longName := strings.Repeat("a", math.MaxUint16)
+	data := NewMemFile("data.txt", []byte("x"))
+	for _, tc := range []struct {
+		desc string
+		file FileReader
+	}{
+		{"empty", NewMemFile("", []byte("x"))},
+		{"root", NewMemFile("/", nil)},
+		{"NUL", NewMemFile("a\x00b.txt", []byte("x"))},
+		{"newline", NewMemFile("a\nb.txt", []byte("x"))},
+		{"DEL", NewMemFile("a\x7fb.txt", []byte("x"))},
+		{"invalid UTF-8", NewMemFile("dir/\xff.txt", []byte("x"))},
+		{"drive letter", NewMemFile("C:x.txt", []byte("x"))},
+		{"drive letter with slash", NewMemFile("C:/x.txt", []byte("x"))},
+		{"colon", NewMemFile("dir/a:b.txt", []byte("x"))},
+		{"too long", NewMemFile(longName+"a", []byte("x"))},
+		{"too long with the slash of a directory", NewMemFile(longName+"/", nil)},
+		{"FileReader with empty name", FileReaderWithName(data, "")},
+		{"FileReader with trailing slash", FileReaderWithName(data, "dir/")},
+		{"FileReader with empty element", FileReaderWithName(data, "a//b.txt")},
+		{"FileReader with dot element", FileReaderWithName(data, "a/./b.txt")},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			_, err := Zip(t.Context(), tc.file)
+			require.ErrorIs(t, err, os.ErrInvalid)
+			if memFile, ok := tc.file.(MemFile); ok {
+				_, err = ZipMemFiles(memFile)
+				require.ErrorIs(t, err, os.ErrInvalid, "ZipMemFiles")
+			}
+		})
+	}
+
+	// Valid names up to the maximum length survive the round trip
+	files := []MemFile{
+		NewMemFile("dir/Größe ü.txt", []byte("a")),
+		NewMemFile(longName, []byte("b")),
+		NewMemFile(longName[1:]+"/", nil),
+	}
+	zipped, err := ZipMemFiles(files...)
+	require.NoError(t, err)
+	require.Equal(t, []string{"dir/Größe ü.txt", longName, longName[1:] + "/"}, zipEntryNamesOf(t, zipped))
+	unzipped, err := UnzipToMemFiles(t.Context(), NewMemFile("x.zip", zipped))
+	require.NoError(t, err)
+	require.Equal(t, files[:2], unzipped)
 }
 
 // TestZip_Modified checks that Zip takes the modification time from Stat.

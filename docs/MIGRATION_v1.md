@@ -185,9 +185,12 @@ Behaviour changes:
   `os.ErrInvalid` ("are the same file").
 - `LocalFileSystem.Move` of a file with more than one hard link goes through a
   temporary `.gofs-move-*` name in the source directory.
-- `fs.Zip` and `ZipMemFiles` reject names that escape with `..`, names with a
-  backslash and absolute names (the leading slash of a `MemFile` name is
-  dropped); `zipfs.Reader` skips symbolic links, devices and FIFOs.
+- `fs.Zip` and `ZipMemFiles` reject names that are not valid in a zip
+  archive: empty names, names that escape with `..`, names with a backslash,
+  absolute names (the leading slash of a `MemFile` name is dropped), names
+  that are not a clean slash separated path, not valid UTF-8, or contain a
+  control character or a colon, and names longer than 65535 bytes;
+  `zipfs.Reader` skips symbolic links, devices and FIFOs.
 - XAttr: `XAttrCreate` on an existing attribute wraps `os.ErrExist`,
   `XAttrReplace` and `GetXAttr`/`RemoveXAttr` of a missing attribute wrap
   `os.ErrNotExist`.
