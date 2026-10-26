@@ -27,7 +27,7 @@ func CleanFilePath(uri string) File {
 // other parts are not joined to it.
 func JoinCleanFilePath(uriParts ...string) File {
 	if len(uriParts) == 0 {
-		return fsJoinCleanFile(Invalid)
+		return InvalidFile
 	}
 	fileSystem, path := ParseRawURI(uriParts[0])
 	if isEmptyLocalPath(fileSystem, path) {

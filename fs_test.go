@@ -412,4 +412,5 @@ func TestCleanFilePath_DecodesURIs(t *testing.T) {
 	require.Equal(t, "/dir/a b", fs.CleanFilePath(uri).Path(), "CleanFilePath(%q)", uri)
 	require.Equal(t, fs.File(uri).Join("c%20d"), fs.JoinCleanFilePath(uri, "c%20d"), "JoinCleanFilePath(%q, c%%20d)", uri)
 	require.Equal(t, "/dir/a b/c%20d", fs.JoinCleanFilePath(uri, "c%20d").Path())
+	require.Equal(t, fs.InvalidFile, fs.JoinCleanFilePath(), "JoinCleanFilePath without parts")
 }
