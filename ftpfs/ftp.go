@@ -125,6 +125,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jlaffaye/ftp"
 
@@ -297,10 +298,16 @@ func (f *fileSystem) checkPath(filePath string) error {
 }
 
 // ValidateName implements fs.ValidateNameFileSystem: a name that
-// checkPath rejects, with a CR, LF or NUL character or a backslash,
-// is an error wrapping os.ErrInvalid, so a copy or move into the file
-// system fails before it writes anything instead of at that name.
+// checkPath rejects, with a CR, LF or NUL character, or with a backslash
+// unless Options.AllowBackslashInNames is set, and a name that is not valid
+// UTF-8, which servers in the UTF8 mode of RFC 2640, which the client turns
+// on, expect, are errors wrapping os.ErrInvalid, so a copy or move into the
+// file system fails before it writes anything instead of at that name.
+// Existing entries are read with every name.
 func (f *fileSystem) ValidateName(name string) error {
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("%w: ftpfs name %.200q is not valid UTF-8", os.ErrInvalid, name)
+	}
 	return f.checkPath(name)
 }
 

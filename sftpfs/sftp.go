@@ -133,11 +133,11 @@ func (f *fileSystem) checkPath(paths ...string) error {
 }
 
 // ValidateName implements fs.ValidateNameFileSystem: a name that
-// checkPath rejects and a name that is not valid UTF-8, which version 4
-// of the SFTP protocol requires and file systems like APFS reject, are
-// errors wrapping os.ErrInvalid, so a copy or move into the file system
-// fails before it writes anything instead of at that name. Existing
-// entries are read with every name.
+// checkPath rejects and a name that is not valid UTF-8, which go-fs
+// doesn't write and servers on file systems like APFS refuse, are errors
+// wrapping os.ErrInvalid, so a copy or move into the file system fails
+// before it writes anything instead of at that name. Existing entries are
+// read with every name, and copied and moved with it within the server.
 func (f *fileSystem) ValidateName(name string) error {
 	if !utf8.ValidString(name) {
 		return fmt.Errorf("%w: sftpfs name %.200q is not valid UTF-8", os.ErrInvalid, name)

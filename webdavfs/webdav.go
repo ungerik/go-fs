@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
@@ -383,10 +384,18 @@ func (f *fileSystem) checkPath(paths ...string) error {
 }
 
 // ValidateName implements fs.ValidateNameFileSystem: a name that
-// checkPath rejects is an error wrapping os.ErrInvalid, so a copy
-// or move into the file system fails before it writes anything
-// instead of at that name.
+// checkPath rejects, a name with a NUL character and a name that is not
+// valid UTF-8, which the servers that store the files on disk can't
+// write, are errors wrapping os.ErrInvalid, so a copy or move into the
+// file system fails before it writes anything instead of at that name.
+// Existing entries are read with every name.
 func (f *fileSystem) ValidateName(name string) error {
+	switch {
+	case strings.Contains(name, "\x00"):
+		return fmt.Errorf("%w: webdavfs name %.200q contains a NUL character", os.ErrInvalid, name)
+	case !utf8.ValidString(name):
+		return fmt.Errorf("%w: webdavfs name %.200q is not valid UTF-8", os.ErrInvalid, name)
+	}
 	return f.checkPath(name)
 }
 

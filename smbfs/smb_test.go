@@ -644,7 +644,7 @@ func TestValidateName(t *testing.T) {
 	for _, name := range []string{
 		`a\b`, "a:b", "a?b", "a*b", `a"b`, "a<b", "a>b", "a|b", "a\x01b", "a\tb",
 		"\xff.txt", "trailing.", "trailing ",
-		"CON", "con", "nul.txt", "Lpt1 .txt", "COM0", "COM¹", "aux.tar.gz",
+		"CON", "con", "nul.txt", "Lpt1 .txt", "COM0", "COM¹", "aux.tar.gz", "CONIN$", "conout$.txt",
 	} {
 		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%q", name)
 	}

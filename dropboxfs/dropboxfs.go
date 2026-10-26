@@ -201,10 +201,14 @@ func (dbfs *fileSystem) ReadableWritable() (readable, writable bool) {
 // ValidateName implements fs.ValidateNameFileSystem: a name that is not
 // valid UTF-8 is an error wrapping os.ErrInvalid, because the JSON of the
 // Dropbox API would replace its invalid bytes with U+FFFD and the file
-// would get another name. Existing files are read with every name.
+// would get another name, and so is a name with a NUL character, which
+// no file system stores. Existing files are read with every name.
 func (dbfs *fileSystem) ValidateName(name string) error {
-	if !utf8.ValidString(name) {
+	switch {
+	case !utf8.ValidString(name):
 		return fmt.Errorf("%w: dropboxfs name %.200q is not valid UTF-8", os.ErrInvalid, name)
+	case strings.Contains(name, "\x00"):
+		return fmt.Errorf("%w: dropboxfs name %.200q contains a NUL character", os.ErrInvalid, name)
 	}
 	return nil
 }

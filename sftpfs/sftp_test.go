@@ -331,8 +331,12 @@ func Test_fileSystemInProcess(t *testing.T) {
 		// where os.Chmod only toggles the read-only attribute and
 		// os.Symlink rewrites the target with backslashes. Real SFTP
 		// servers are checked by Test_fileSystem against OpenSSH.
+		// Windows also refuses names that a server on Unix writes, which
+		// ValidateName can't tell apart.
 		cfg.PermissionMask = fs.UserWrite
-		cfg.Skip = func(name string) bool { return name == "OptionalWrite/SymbolicLink" }
+		cfg.Skip = func(name string) bool {
+			return name == "OptionalWrite/SymbolicLink" || name == "ValidateName/Accepted"
+		}
 	}
 	fstest.RunConformance(t, f, cfg)
 }
@@ -978,6 +982,9 @@ func TestValidateName(t *testing.T) {
 	for _, name := range []string{`a\b.txt`, "a\x00b", "\xff.txt"} {
 		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%q", name)
 	}
+	err := f.ValidateName(strings.Repeat("a", 70000) + `\`)
+	assert.ErrorIs(t, err, os.ErrInvalid)
+	assert.Less(t, len(err.Error()), 1000, "the error quotes at most 200 characters of a long name")
 	f.opts.AllowBackslashInNames = true
 	assert.NoError(t, f.ValidateName(`a\b.txt`), "Options.AllowBackslashInNames")
 	assert.ErrorIs(t, f.ValidateName("a\x00b"), os.ErrInvalid, "a NUL character, also with Options.AllowBackslashInNames")

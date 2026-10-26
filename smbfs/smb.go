@@ -37,6 +37,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -220,18 +221,20 @@ func checkPath(filePath string) error {
 
 // ValidateName implements fs.ValidateNameFileSystem: a name is an error
 // wrapping os.ErrInvalid if SMB servers don't write it to an entry of that
-// name, which the server of a share can't tell before it is written:
+// name, so a copy or move into the share fails before it writes anything:
 //   - a name with a control character or one of the characters
 //     \ " * : < > ? |, which the SMB protocol doesn't allow in names
 //   - a name that is not valid UTF-8, which the UTF-16 names of the
 //     protocol can't hold, go-smb2 would write another name
 //   - a name ending with a dot or a space, which Windows servers remove,
 //     so they would write to another entry
-//   - a device name of Windows like CON, NUL or COM1, also with an
-//     extension, which a Windows server opens instead of a file
+//   - a device name of Windows like CON, NUL, COM1 or CONIN$, also in other
+//     cases, with an extension like "nul.txt" or spaces before the dot,
+//     which a Windows server opens instead of a file
 //
 // Existing entries are read with every name.
 func (f *fileSystem) ValidateName(name string) error {
+	base, _, _ := strings.Cut(name, ".")
 	var reason string
 	switch {
 	case strings.ContainsFunc(name, func(r rune) bool { return r < ' ' || strings.ContainsRune(`\"*:<>?|`, r) }):
@@ -240,7 +243,7 @@ func (f *fileSystem) ValidateName(name string) error {
 		reason = "is not valid UTF-8"
 	case strings.HasSuffix(name, ".") || strings.HasSuffix(name, " "):
 		reason = "ends with a dot or a space, which Windows servers remove"
-	case isWindowsDeviceName(name):
+	case slices.Contains(windowsDeviceNames, strings.ToUpper(strings.TrimRight(base, " "))):
 		reason = "is a device name of Windows"
 	default:
 		return nil
@@ -248,18 +251,11 @@ func (f *fileSystem) ValidateName(name string) error {
 	return fmt.Errorf("%w: smbfs name %.200q %s", os.ErrInvalid, name, reason)
 }
 
-// isWindowsDeviceName reports if name is a device name of Windows, like
-// CON or LPT1, also in other cases, with an extension like "nul.txt" or
-// spaces before the dot, which Windows treats like the device.
-func isWindowsDeviceName(name string) bool {
-	base, _, _ := strings.Cut(name, ".")
-	switch strings.ToUpper(strings.TrimRight(base, " ")) {
-	case "CON", "PRN", "AUX", "NUL",
-		"COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
-		"LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³":
-		return true
-	}
-	return false
+// windowsDeviceNames are the device names of Windows, see ValidateName.
+var windowsDeviceNames = []string{
+	"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+	"COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+	"LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 }
 
 // checkLinkTarget checks the target of a symbolic link with checkPath and
