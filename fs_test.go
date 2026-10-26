@@ -355,6 +355,26 @@ func TestMove_CaseOnlyRenameThroughSubFileSystem(t *testing.T) {
 	requireContent(t, dir.Join("FILE.txt"), "file")
 }
 
+// TestMove_CaseOnlyRenameBetweenOverlayAndLayer checks a move between an
+// OverlayFileSystem and its case-insensitive local upper layer to a name that
+// only differs in case, with only one side of the move through the overlay.
+// The overlay supports only one case of a name, so like within the overlay,
+// see TestOverlayFileSystem_CaseOnlyRename, the move is refused with an error
+// wrapping os.ErrInvalid instead of renaming the file of the layer past the
+// overlay, whichever side is the overlay, and keeps the file.
+func TestMove_CaseOnlyRenameBetweenOverlayAndLayer(t *testing.T) {
+	upperDir := caseInsensitiveTempDir(t)
+	writeFiles(t, upperDir, map[string]string{"file.txt": "precious"})
+	overlay := newLocalOverlay(t, t.TempDir(), upperDir.LocalPath())
+
+	err := fs.Move(t.Context(), overlay.RootDir().Join("file.txt"), upperDir.Join("File.txt"))
+	require.ErrorIs(t, err, os.ErrInvalid, "from the overlay to its layer")
+	err = fs.Move(t.Context(), upperDir.Join("file.txt"), overlay.RootDir().Join("File.txt"))
+	require.ErrorIs(t, err, os.ErrInvalid, "from the layer to its overlay")
+	requireNames(t, upperDir, "file.txt")
+	requireContent(t, upperDir.Join("file.txt"), "precious")
+}
+
 // TestMove_CaseOnlyRenameOfDirectory is a regression test: on a
 // case-insensitive file system Move of a directory to a name that only
 // differs in case found the destination to be an existing directory, the

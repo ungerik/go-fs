@@ -137,3 +137,36 @@ func TestNewDestDir(t *testing.T) {
 	require.False(t, existing.isNew, "an existing directory of another file system")
 	require.Nil(t, existing.written, "other file systems have no identity of a file to record")
 }
+
+// TestEmptyPathIsNoTarget checks the same-target and into-itself checks
+// behind the ErrEmptyPath of CopyRecursive, Move and moveByCopy for an empty
+// path, like the one of a file URI without a path: the empty path names no
+// file, so a copy to or from it is neither a copy onto itself nor into
+// itself, although CleanPath of the local file system makes it ".", the
+// working directory, filepath.Abs makes it the working directory too, and
+// CleanPath of a rooted file system makes it the root.
+func TestEmptyPathIsNoTarget(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "work")
+	require.NoError(t, os.Mkdir(work, 0o700))
+	t.Chdir(work)
+	parent, root := filepath.Dir(work), Local.CleanPath(Separator)
+	mem, err := NewMemFileSystem(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mem.Close() })
+
+	require.False(t, isSameTarget(Local, "", Local, "."), "the empty path and the working directory")
+	require.False(t, isSameTarget(Local, ".", Local, ""), "the working directory and the empty path")
+	require.False(t, isSameTarget(Local, "", Local, ""), "two empty paths")
+	require.False(t, isSameTarget(mem, "", mem, "/"), "the empty path and the root")
+	require.False(t, isInsideDirView(mem, "", mem, "/x"), "a file in the root inside the empty path")
+	require.False(t, isInsideDirView(Local, root, Local, ""), "the empty path inside the root")
+	require.False(t, isLocalInsideDir(parent, ""), "the empty path inside the parent of the working directory")
+	require.False(t, isCopyIntoItself(Local, parent, Local, parent, Local, ""), "a copy of the parent of the working directory to the empty path")
+
+	// The paths that the empty path was taken for
+	require.True(t, isSameTarget(Local, ".", Local, "d/.."), "the working directory")
+	require.True(t, isInsideDirView(mem, "/", mem, "/x"), "a file in the root")
+	require.True(t, isInsideDirView(Local, root, Local, "."), "the working directory inside the root")
+	require.True(t, isLocalInsideDir(parent, "."), "the working directory inside its parent")
+	require.True(t, isCopyIntoItself(Local, parent, Local, parent, Local, "."), "a copy of the parent of the working directory to it")
+}

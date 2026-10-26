@@ -1819,3 +1819,54 @@ func TestCopyAndMove_ThroughOverlayLayers(t *testing.T) {
 	requireTree(t, u, "b.txt", "u.txt")
 	requireContent(t, u.Join("b.txt"), "base")
 }
+
+// TestCopyAndMove_EmptyLocalPath is a regression test: a file URI without
+// a path, "file://" or "file://localhost", has the empty path of the local
+// file system, which names no file, but the checks of CopyRecursive and of
+// the copy then delete fallback of Move for a copy onto itself cleaned the
+// empty path to ".", the working directory. So copying the working directory
+// to it, also from the root of a SubFileSystem rooted at ".", and moving that
+// root to it returned nil without doing anything, and Move took the empty
+// paths of "file://" and "file://localhost" for the same file. Every copy
+// and move to or from the empty path must fail with an error wrapping
+// ErrEmptyPath and keep the working directory as it was, the copy of
+// a directory of another file system before it lists the source.
+func TestCopyAndMove_EmptyLocalPath(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	work := fs.File(t.TempDir())
+	writeFiles(t, work, map[string]string{"d/f.txt": "f"})
+	t.Chdir(work.LocalPath())
+	sub := newRegisteredSubFS(t, fs.Local, ".")
+
+	empty := []fs.File{"file://", "file://localhost"}
+	dirs := []fs.File{".", sub.RootDir(), "d", sub.RootDir().Join("d")}
+	files := []fs.File{fs.File("d").Join("f.txt"), sub.RootDir().Join("d", "f.txt")}
+	for _, e := range empty {
+		for _, other := range append(dirs, files...) {
+			require.ErrorIs(t, fs.CopyRecursive(ctx, other, e), fs.ErrEmptyPath, "copying %s to %s", other, e)
+			require.ErrorIs(t, fs.Move(ctx, other, e), fs.ErrEmptyPath, "moving %s to %s", other, e)
+			require.ErrorIs(t, fs.CopyRecursive(ctx, e, other), fs.ErrEmptyPath, "copying %s to %s", e, other)
+			require.ErrorIs(t, fs.Move(ctx, e, other), fs.ErrEmptyPath, "moving %s to %s", e, other)
+			requireTree(t, work)
+		}
+		for _, file := range files {
+			require.ErrorIs(t, fs.CopyFile(ctx, file, e), fs.ErrEmptyPath, "copying %s to %s", file, e)
+			require.ErrorIs(t, fs.CopyFile(ctx, e, file), fs.ErrEmptyPath, "copying %s to %s", e, file)
+		}
+		for _, e2 := range empty {
+			require.ErrorIs(t, fs.CopyRecursive(ctx, e, e2), fs.ErrEmptyPath, "copying %s to %s", e, e2)
+			require.ErrorIs(t, fs.Move(ctx, e, e2), fs.ErrEmptyPath, "moving %s to %s", e, e2)
+		}
+	}
+	requireTree(t, work)
+
+	other := newListHookFS(t, func(dirPath string) {
+		t.Errorf("the source %s must not be listed", dirPath)
+	}, fs.NewMemFile("/d/f.txt", []byte("f")))
+	for _, e := range empty {
+		require.ErrorIs(t, fs.CopyRecursive(ctx, other.RootDir().Join("d"), e), fs.ErrEmptyPath, "copying to %s", e)
+		require.ErrorIs(t, fs.Move(ctx, other.RootDir().Join("d"), e), fs.ErrEmptyPath, "moving to %s", e)
+	}
+	requireContent(t, other.RootDir().Join("d", "f.txt"), "f")
+}

@@ -371,6 +371,12 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 	}
 	srcFS, srcPath := src.ParseRawURI()
 	destFS, destPath := dest.ParseRawURI()
+	if srcPath == "" || destPath == "" {
+		// Like a file URI without a path, "file://", which names no file,
+		// also not the working directory, which the checks below would
+		// compare it to, because the local file system cleans "" to "."
+		return ErrEmptyPath
+	}
 	if srcFS == destFS {
 		if srcPath == destPath {
 			return nil // Copying a directory onto itself is a no-op
@@ -379,9 +385,8 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 			return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
 		}
 	}
-	if srcLocal, destLocal, _, local := fsLocalPaths(srcFS, srcPath, destFS, destPath); local && isLocalInsideDir(srcLocal, destLocal) {
-		// Through another path to the directory, like a symbolic link to
-		// a parent directory, a bind mount, a SubFileSystem or an overlay
+	srcRead, srcReadPath, _, _ := fsReadTarget(srcFS, srcPath)
+	if isCopyIntoItself(srcFS, srcPath, srcRead, srcReadPath, destFS, destPath) {
 		return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
 	}
 	// Through SubFileSystems and OverlayFileSystems also of other
@@ -393,9 +398,6 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 			// overlay, whose directory merges the entries of both layers:
 			// a copy to one layer copies those of the other one.
 			return nil
-		}
-		if isInsideDirView(srcFS, srcPath, destTarget, destTargetPath) {
-			return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
 		}
 	}
 	c := newTreeCopier(ctx, srcFS, destFS, patterns)
@@ -511,8 +513,13 @@ func localWritePath(fileSystem FileSystem, filePath string) (string, bool) {
 // compared by the paths that its CleanPath returns. Two names that a file
 // system matches to one entry, like another case on a case-insensitive
 // file system, are different paths, only the local file system can also
-// compare files, see isLocalSameFile.
+// compare files, see isLocalSameFile. The empty path names no file, so it
+// is no path of any file, also not of the one that CleanPath makes of it,
+// like "." of the local file system, the working directory.
 func isSameTarget(aFS FileSystem, aPath string, bFS FileSystem, bPath string) bool {
+	if aPath == "" || bPath == "" {
+		return false
+	}
 	return aFS == bFS && aFS.CleanPath(aPath) == bFS.CleanPath(bPath)
 }
 
@@ -525,8 +532,12 @@ func isSameTarget(aFS FileSystem, aPath string, bFS FileSystem, bPath string) bo
 // hides. A tree copied there would show up in the directory while it is
 // listed for the copy, so the copy would copy itself without end, and the
 // removal of a moved directory would remove the copy. Nothing is requested
-// from the file systems.
+// from the file systems. The empty path names no file, see isSameTarget,
+// so it is neither inside a directory nor a directory with files inside.
 func isInsideDirView(dirFS FileSystem, dirPath string, target FileSystem, targetPath string) bool {
+	if dirPath == "" || targetPath == "" {
+		return false
+	}
 	switch f := dirFS.(type) {
 	case *SubFileSystem:
 		parentPath, err := f.parentPath(dirPath)
@@ -562,6 +573,31 @@ func isCopyOntoItself(srcFS FileSystem, srcPath string, destFS FileSystem, destP
 	}
 	destLocal, _, ok := fsLocalPath(destFS, destPath)
 	return ok && isLocalSameFile(srcTargetPath, destLocal, os.Stat)
+}
+
+// isCopyIntoItself reports if a copy of the directory srcPath of srcFS to
+// destPath of destFS would write into the directory that it copies, where
+// the copy would show up while the directory is listed for it, so it would
+// copy itself without end, and the removal of a moved directory would remove
+// the copy. srcRead and srcReadPath are the entry that the source shows, see
+// fsReadTarget, srcRead is nil if that can't be told: the callers need it
+// for their other checks too, through an OverlayFileSystem it costs Lstats
+// of the layers. A local directory is also compared as directory, see
+// isLocalInsideDir, so another path to it, like a symbolic link to a parent
+// directory, a bind mount, a SubFileSystem or the local layer of an overlay,
+// is the directory too. On every file system the paths are also compared
+// through SubFileSystems and OverlayFileSystems, see isInsideDirView, which
+// counts the directories of both layers of an overlay. The directory itself
+// is not inside, the callers check a copy onto it.
+func isCopyIntoItself(srcFS FileSystem, srcPath string, srcRead FileSystem, srcReadPath string, destFS FileSystem, destPath string) bool {
+	if _, local := srcRead.(*LocalFileSystem); local {
+		destLocal, _, ok := fsLocalPath(destFS, destPath)
+		if ok && isLocalInsideDir(srcReadPath, destLocal) {
+			return true
+		}
+	}
+	destTarget, destTargetPath, _, ok := writeTarget(destFS, destPath)
+	return ok && isInsideDirView(srcFS, srcPath, destTarget, destTargetPath)
 }
 
 // isValidLocalName reports if the local file system writes a new entry

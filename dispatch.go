@@ -673,6 +673,11 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // Removing the source never follows symbolic links, see fsRemoveAll.
 // The copied files get permissions like with CopyFile.
 func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) error {
+	if srcPath == "" || destPath == "" {
+		// Like the one of a file URI without a path, which names no file,
+		// also not the working directory, see isSameTarget
+		return ErrEmptyPath
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -718,16 +723,21 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return errInvalidName(src, name, dest)
 	}
 
-	if srcLocal, destLocal, viaOverlay, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
-		switch {
-		case isLocalSameFile(srcLocal, destLocal, os.Lstat):
+	// The entry that the source shows, see fsReadTarget, for all checks
+	// below: through an OverlayFileSystem it costs Lstats of the layers
+	srcRead, srcReadPath, srcViaOverlay, readOK := fsReadTarget(srcFS, srcPath)
+	if _, srcIsLocal := srcRead.(*LocalFileSystem); readOK && srcIsLocal {
+		// The local paths of both, like fsLocalPaths tells them
+		srcLocal := srcReadPath
+		destLocal, destViaOverlay, destIsLocal := fsLocalPath(destFS, destPath)
+		if destIsLocal && isLocalSameFile(srcLocal, destLocal, os.Lstat) {
 			// The copy would be a no-op and removing
 			// the source would remove the only copy
 			if isLocalSameDirEntry(srcLocal, destLocal) {
 				if filepath.Base(srcLocal) == filepath.Base(destLocal) {
 					return nil
 				}
-				if !viaOverlay {
+				if !srcViaOverlay && !destViaOverlay {
 					// Another case of the name, renamed like by LocalFileSystem.Move
 					srcLocalInfo, err := os.Lstat(srcLocal)
 					if err != nil {
@@ -742,14 +752,14 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 			// nothing is removed. A layer of an overlay is never renamed
 			// past the overlay, which supports only one case of a name.
 			return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
-		case srcIsDir && isLocalInsideDir(srcLocal, destLocal):
-			return fmt.Errorf("%w: can't move directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
 		}
+	}
+	if srcIsDir && isCopyIntoItself(srcFS, srcPath, srcRead, srcReadPath, destFS, destPath) {
+		return fmt.Errorf("%w: can't move directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
 	}
 	// Through SubFileSystems and OverlayFileSystems also of other
 	// file systems than the local one, compared by path
 	if destTarget, destTargetPath, _, ok := writeTarget(destFS, destPath); ok {
-		srcRead, srcReadPath, _, readOK := fsReadTarget(srcFS, srcPath)
 		srcWrite, srcWritePath, _, writeOK := writeTarget(srcFS, srcPath)
 		switch {
 		case readOK && isSameTarget(srcRead, srcReadPath, destTarget, destTargetPath):
@@ -760,8 +770,6 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 			// An entry of the base layer of an overlay moved to its path in
 			// the upper layer, where removing the source removes the copy
 			return fmt.Errorf("%w: can't move %s to %s, removing the source would remove the moved file", os.ErrInvalid, errSubject(src), errSubject(dest))
-		case srcIsDir && isInsideDirView(srcFS, srcPath, destTarget, destTargetPath):
-			return fmt.Errorf("%w: can't move directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
 		}
 	}
 	if moveLink && !c.canCopyDirLinks() {
@@ -1189,8 +1197,12 @@ func isLocalRenameOfDirEntry(srcFS FileSystem, srcPath string, destFS FileSystem
 // isLocalInsideDir reports if the local path filePath is inside the directory
 // dirPath, also through another path to the directory, like through a bind
 // mount or a symbolic link: one of the parent directories of filePath is
-// the same directory as dirPath.
+// the same directory as dirPath. The empty path names no file, see
+// isSameTarget, filepath.Abs would make it the working directory.
 func isLocalInsideDir(dirPath, filePath string) bool {
+	if dirPath == "" || filePath == "" {
+		return false
+	}
 	dirInfo, err := os.Stat(dirPath)
 	if err != nil {
 		return false

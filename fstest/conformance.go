@@ -582,14 +582,18 @@ func (c *conformance) testMetadata(t *testing.T) {
 func (c *conformance) testPaths(t *testing.T) {
 	sep := c.fs.Separator()
 
-	// CleanPath must be pure: it must not modify the passed slice.
-	parts := []string{c.fs.Prefix() + "a", "b", "..", "c", "file.txt"}
+	// CleanPath must be pure: it must not modify the passed slice. The first
+	// part is the URI of a path of the file system: the prefix followed by
+	// a relative path can be the URI of another path, like "file://a", which
+	// is the UNC path \\a on Windows.
+	parts := []string{c.uri(c.path("a")), "b", "..", "c", "file.txt"}
 	partsCopy := slices.Clone(parts)
 	joined := c.fs.CleanPath(parts...)
 	checkStrings(t, partsCopy, parts, "CleanPath must not modify the passed uriParts")
 	checkFalse(t, strings.HasPrefix(joined, c.fs.Prefix()), "CleanPath must strip the prefix: %q", joined)
-	checkFalse(t, strings.Contains(joined, ".."), "CleanPath must clean the path: %q", joined)
+	checkFalse(t, slices.Contains(strings.Split(joined, sep), ".."), "CleanPath must clean the path: %q", joined)
 	checkTrue(t, strings.HasSuffix(joined, "a"+sep+"c"+sep+"file.txt"), "CleanPath must join with the separator: %q", joined)
+	checkEqual(t, c.path("a/c/file.txt"), joined, "CleanPath must join the path of the URI with the other parts")
 	checkEqual(t, joined, c.fs.CleanPath(joined), "CleanPath must be idempotent")
 
 	// The prefix must be stripped from a URI and the path must survive the round trip

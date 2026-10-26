@@ -117,11 +117,14 @@ func JoinCleanFilePath(uriParts ...string) File {
 // the fallback fails with an error wrapping [os.ErrExist] at the first
 // entry of it that the copy would replace, and keeps the source.
 func Move(ctx context.Context, source, destination File) error {
-	if source == "" || destination == "" {
-		return ErrEmptyPath
-	}
 	srcFS, srcPath := source.ParseRawURI()
 	destFS, destPath := destination.ParseRawURI()
+	if srcPath == "" || destPath == "" {
+		// Also a file URI without a path, like "file://" or
+		// "file://localhost", which names no file, so two of them
+		// are not the same file, see LocalFileSystem.CleanPath
+		return ErrEmptyPath
+	}
 	if srcFS == destFS && srcPath == destPath {
 		return nil
 	}
