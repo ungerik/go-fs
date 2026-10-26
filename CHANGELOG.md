@@ -231,8 +231,9 @@ lockstep, the `tools` module is not tagged.
   directory are two entries, both are written into the one file, which keeps
   the data written last, like `cp`.
 - A copy or move to the local file system wrote source names to other
-  entries. On Windows `NUL`, `CON`, `AUX` or `COM1` (also with an extension)
-  went to the device, `NUL` discarding the data; `a:b` went to an alternate
+  entries. On Windows `NUL`, `CON`, `AUX` or `COM1` (on older Windows
+  versions also with an extension) went to the device, `NUL` discarding the
+  data; `a:b` went to an alternate
   data stream; a trailing dot or space was stripped. A move then removed the
   source. Names that `filepath.Localize` rejects, and on Windows names
   ending in a dot or space or containing `< > " | ? *` or a control

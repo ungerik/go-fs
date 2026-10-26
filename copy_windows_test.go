@@ -3,6 +3,7 @@ package fs_test
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ func TestCopyRecursive_WindowsInvalidNames(t *testing.T) {
 	}
 	for _, badPath := range badPaths {
 		t.Run(fmt.Sprintf("%q", badPath), func(t *testing.T) {
+			skipUnlessReservedName(t, badPath)
 			mem := newLinkMemFS(t, fs.NewMemFile("/src/a.txt", []byte("a")), fs.NewMemFile("/src/"+badPath, []byte("bad")))
 			src := mem.RootDir().Join("src")
 			dir := fs.File(t.TempDir())
@@ -59,5 +61,19 @@ func TestCopyRecursive_WindowsInvalidEmptyDirNames(t *testing.T) {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
 			requireInvalidLocalDirName(t, name)
 		})
+	}
+}
+
+// skipUnlessReservedName skips the test of name if it is a device name with
+// an extension, like "NUL.txt", that this version of Windows doesn't treat
+// as the device: Windows 11 and Windows Server 2025 write "NUL.txt" to an
+// ordinary file, which filepath.Localize, asking Windows, accepts.
+func skipUnlessReservedName(t *testing.T, name string) {
+	t.Helper()
+	if name != "NUL.txt" {
+		return
+	}
+	if _, err := filepath.Localize(name); err == nil {
+		t.Skipf("this version of Windows doesn't treat %q as a device", name)
 	}
 }

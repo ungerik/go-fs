@@ -123,10 +123,12 @@ func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSys
 	// and turn the absolute target of a link into a relative one,
 	// which the link's directory resolves outside of a root ".."
 	switch {
-	case local && windowsPaths:
+	case local && windowsPaths && !isLongPath(dir):
 		// Windows resolves ".." from the path of the current directory,
 		// like filepath.Abs, which also gives `\x` and "/" without
-		// a drive, for which filepath.IsAbs is false, the current drive
+		// a drive, for which filepath.IsAbs is false, the current drive.
+		// A long path is absolute and keeps the trailing dots and spaces
+		// of its names, which filepath.Abs would remove
 		absDir, err := filepath.Abs(dir)
 		if err != nil {
 			return nil, err

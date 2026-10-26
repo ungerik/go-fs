@@ -250,9 +250,15 @@ func (local *LocalFileSystem) IsAbsPath(filePath string) bool {
 // A leading "~" is not expanded, that is done by [LocalFileSystem.CleanPath].
 // The empty path, of a file URI without a path like "file://", names no
 // file and stays empty instead of becoming the working directory.
+// A Windows long path like `\\?\C:\x\name.` is returned unchanged:
+// filepath.Abs would remove the trailing dot or space of a name, which
+// the prefix `\\?\` keeps, and so name another file.
 func (local *LocalFileSystem) AbsPath(filePath string) string {
 	if filePath == "" {
 		return ""
+	}
+	if windowsPaths && isLongPath(filePath) {
+		return filePath
 	}
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
