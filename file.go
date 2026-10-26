@@ -1299,14 +1299,13 @@ func (file File) Rename(ctx context.Context, newName string) (renamedFile File, 
 	if path == "" {
 		return "", ErrEmptyPath
 	}
-	if !isValidWriteName(fileSystem, newName) {
-		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
-	}
+	// Like a name that Windows writes to another entry, "a." to "a",
+	// which the rename would replace
 	dir, _ := fsSplitDirAndName(fileSystem, path)
-	newPath := fileSystem.CleanPath(dir, newName)
-	if target, _, _, ok := writeTarget(fileSystem, newPath); ok && !isValidWriteName(target, newName) {
-		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
+	if err := validateNameIn(fsFile(fileSystem, dir), newName); err != nil {
+		return "", withNameCause(fmt.Errorf("%w: invalid new name %.200q for Rename", os.ErrInvalid, newName), err)
 	}
+	newPath := fileSystem.CleanPath(dir, newName)
 	err = fsMove(ctx, fileSystem, path, newPath)
 	if err != nil {
 		return "", err

@@ -320,7 +320,8 @@ func TestZipWriter_InvalidNames(t *testing.T) {
 // TestZipReader_CP437Names is a regression test: the reader used the CP-437
 // bytes of an entry name without the UTF-8 flag, like old Windows tools write
 // umlauts, as path, so the file couldn't be copied into a zipfs.Writer,
-// which rejects names that are not valid UTF-8.
+// which rejects names that are not valid UTF-8. The *zip.FileHeader
+// of FileInfo.Sys keeps the stored name, like the package documents.
 func TestZipReader_CP437Names(t *testing.T) {
 	ctx := t.Context()
 	memFS := newMemFS(t)
@@ -332,6 +333,11 @@ func TestZipReader_CP437Names(t *testing.T) {
 	data, err := file.ReadAllString(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "pdf", data)
+	info, err := reader.Stat("/dir/Müller.pdf")
+	require.NoError(t, err)
+	header, ok := info.Sys.(*zip.FileHeader)
+	require.True(t, ok, "Sys is the zip.FileHeader")
+	assert.Equal(t, "dir/M\x81ller.pdf", header.Name, "Sys keeps the stored name")
 
 	copied := memFS.RootDir().Join("copied.zip")
 	zipWriter, err := NewWriter(copied, "")
@@ -342,10 +348,10 @@ func TestZipReader_CP437Names(t *testing.T) {
 	assert.Equal(t, []string{"dir/", "dir/Müller.pdf"}, zipEntryNames(t, copied))
 }
 
-// TestZipWriter_ValidName is a regression test: a copy or move into a
+// TestZipWriter_ValidateName is a regression test: a copy or move into a
 // zipfs.Writer failed at the first name that the writer rejects, like a
 // name with a colon, and left the files copied until then in the archive.
-func TestZipWriter_ValidName(t *testing.T) {
+func TestZipWriter_ValidateName(t *testing.T) {
 	ctx := t.Context()
 	memFS := newMemFS(t)
 	src := memFS.RootDir().Join("src")
@@ -358,13 +364,19 @@ func TestZipWriter_ValidName(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, fs.Register(zipWriter))
 
-	assert.NoError(t, zipWriter.ValidName("a.txt"))
+	assert.NoError(t, zipWriter.ValidateName("a.txt"))
 	for _, name := range []string{"b:c.txt", `a\b.txt`, "a\x00b", "evil\u202etxt.exe", "\xff.txt"} {
-		assert.ErrorIs(t, zipWriter.ValidName(name), os.ErrInvalid, "%q", name)
+		assert.ErrorIs(t, zipWriter.ValidateName(name), os.ErrInvalid, "%q", name)
 	}
 
-	assert.ErrorIs(t, fs.CopyRecursive(ctx, src, zipWriter.RootDir().Join("copy")), os.ErrInvalid)
+	// The errors tell why a name is not valid
+	err = fs.CopyRecursive(ctx, src, zipWriter.RootDir().Join("copy"))
+	assert.ErrorIs(t, err, os.ErrInvalid)
+	assert.ErrorContains(t, err, "contains a colon")
 	assert.ErrorIs(t, fs.Move(ctx, src, zipWriter.RootDir().Join("moved")), os.ErrInvalid)
+	err = fs.CopyFile(ctx, src.Join("a.txt"), zipWriter.RootDir().Join("bad:dir", "x.txt"))
+	assert.ErrorIs(t, err, os.ErrInvalid)
+	assert.ErrorContains(t, err, "contains a colon")
 	assert.True(t, src.Join("a.txt").Exists(), "the source of a failed move is kept")
 	// A new path is checked before its parent directories are written
 	assert.ErrorIs(t, fs.CopyFile(ctx, src.Join("a.txt"), zipWriter.RootDir().Join("newdir", "x:y.txt")), os.ErrInvalid)

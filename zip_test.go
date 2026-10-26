@@ -336,32 +336,47 @@ func TestUnzipToMemFiles_CP437Names(t *testing.T) {
 	require.Equal(t, []MemFile{NewMemFile("dir/Müller.pdf", []byte("pdf"))}, files)
 }
 
-// TestUnzipToMemFiles_InsecureUnicodePath verifies that the names that
-// UnzipToMemFiles takes from the Info-ZIP Unicode Path extra field of an
-// entry are checked like stored names, so they can't escape a directory either.
+// TestUnzipToMemFiles_InsecureUnicodePath verifies that the Info-ZIP
+// Unicode Path extra field of an entry can't make its name escape
+// a directory: a field that changes the ASCII parts of the stored name is
+// ignored, and the name of a field that keeps them is checked like
+// a stored name.
 func TestUnzipToMemFiles_InsecureUnicodePath(t *testing.T) {
-	for _, name := range []string{"../evil.txt", "/abs.txt", `dir\evil.txt`} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		stored, field string
+		want          string // empty for zip.ErrInsecurePath
+	}{
+		{"\x93vil.txt", "../evil.txt", "ôvil.txt"},
+		{"\x93vil.txt", "/abs.txt", "ôvil.txt"},
+		{"\x93vil.txt", `dir\evil.txt`, "ôvil.txt"},
+		{"../\x93.txt", "../日.txt", ""},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
 			// Info-ZIP Unicode Path extra field of ID 0x7075 with the version 1,
 			// the CRC-32 of the stored name and the UTF-8 name
-			stored := "\x93vil.txt"
 			field := []byte{1}
-			field = binary.LittleEndian.AppendUint32(field, crc32.ChecksumIEEE([]byte(stored)))
-			field = append(field, name...)
+			field = binary.LittleEndian.AppendUint32(field, crc32.ChecksumIEEE([]byte(tc.stored)))
+			field = append(field, tc.field...)
 			extra := binary.LittleEndian.AppendUint16(nil, 0x7075)
 			extra = binary.LittleEndian.AppendUint16(extra, uint16(len(field))) //#nosec G115 -- short test names
 			extra = append(extra, field...)
 
 			var buf bytes.Buffer
 			zw := zip.NewWriter(&buf)
-			w, err := zw.CreateHeader(&zip.FileHeader{Name: stored, NonUTF8: true, Extra: extra})
+			w, err := zw.CreateHeader(&zip.FileHeader{Name: tc.stored, NonUTF8: true, Extra: extra})
 			require.NoError(t, err)
 			_, err = w.Write([]byte("evil"))
 			require.NoError(t, err)
 			require.NoError(t, zw.Close())
 
-			_, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
-			require.ErrorIs(t, err, zip.ErrInsecurePath)
+			files, err := UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
+			if tc.want == "" {
+				require.ErrorIs(t, err, zip.ErrInsecurePath)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			require.Equal(t, tc.want, files[0].FileName)
 		})
 	}
 }
@@ -378,6 +393,29 @@ func TestUnzipToMemFiles_LongNameError(t *testing.T) {
 	_, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
 	require.ErrorIs(t, err, zip.ErrInsecurePath)
 	require.Less(t, len(err.Error()), 1000)
+}
+
+// TestUnzipToMemFiles_OpenError verifies that an entry that can't be
+// opened, like one with a compression method that archive/zip doesn't
+// know, is an error naming the entry with its decoded name.
+func TestUnzipToMemFiles_OpenError(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateRaw(&zip.FileHeader{
+		Name:               "M\x81ller.txt",
+		NonUTF8:            true,
+		Method:             99,
+		CompressedSize64:   1,
+		UncompressedSize64: 1,
+	})
+	require.NoError(t, err)
+	_, err = w.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	_, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
+	require.ErrorIs(t, err, zip.ErrAlgorithm)
+	require.ErrorContains(t, err, `"Müller.txt"`)
 }
 
 // TestUnzipToMemFiles_MaxSize is a regression test: UnzipToMemFiles had

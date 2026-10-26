@@ -15,10 +15,11 @@
 //     `..\..\evil.txt` is read as "evil.txt". No entry can address
 //     a path outside of the archive when it is extracted.
 //   - A name without the UTF-8 flag of the zip format is taken from
-//     its Info-ZIP Unicode Path extra field if it has one, else a name
-//     that is not valid UTF-8 is converted to UTF-8 from CP-437,
-//     the encoding of names without the flag. The *zip.FileHeader
-//     of FileInfo.Sys keeps the stored name.
+//     its Info-ZIP Unicode Path extra field if it has one that only
+//     differs in the characters that the stored name can't hold, its
+//     ASCII parts must be the same, else a name that is not valid UTF-8
+//     is converted to UTF-8 from CP-437, the encoding of names without
+//     the flag. The *zip.FileHeader of FileInfo.Sys keeps the stored name.
 //   - A later entry replaces an earlier one with the same path, like
 //     extracting the archive would, also when one of them is a file and
 //     the other a directory. Directories that are only implied by the
@@ -41,9 +42,9 @@
 //     bidirectional formatting character or a colon, and names longer
 //     than 65535 bytes. All of them are errors wrapping os.ErrInvalid.
 //     Names that only Windows can't extract are not checked.
-//     The Writer implements fs.ValidNameFileSystem, so fs.CopyFile,
-//     fs.CopyRecursive, fs.Move and File.Rename into the archive
-//     fail before they write anything.
+//     The Writer implements fs.ValidateNameFileSystem, so fs.CopyFile,
+//     fs.CopyRecursive and fs.Move into the archive fail before they
+//     write anything.
 //   - Entries get the current time and the passed permissions,
 //     or DefaultPermissions and DefaultDirPermissions if none are passed.
 //   - A file is buffered in memory until its writer is closed, then it is
@@ -95,7 +96,7 @@ var (
 	_ fs.WriteFileSystem            = new(Writer)
 	_ fs.TouchFileSystem            = new(Writer)
 	_ fs.MakeAllDirsFileSystem      = new(Writer)
-	_ fs.ValidNameFileSystem        = new(Writer)
+	_ fs.ValidateNameFileSystem     = new(Writer)
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -499,14 +500,14 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	}
 }
 
-// ValidName returns an error wrapping os.ErrInvalid if name, the name
+// ValidateName returns an error wrapping os.ErrInvalid if name, the name
 // of a directory entry, can't be written to the archive: if it contains
 // a backslash or is not valid in a zip archive, see fs.Zip.
-// fs.CopyFile, fs.CopyRecursive, fs.Move and File.Rename check the
-// names they write with it, so they fail before they write anything,
-// also for the parent directories of a new path.
+// fs.CopyFile, fs.CopyRecursive and fs.Move check the names they write
+// with it, so they fail before they write anything, also for the parent
+// directories of a new path, whose names MakeAllDirs checks first.
 // The length of a whole path is checked when it is written.
-func (f *Writer) ValidName(name string) error {
+func (f *Writer) ValidateName(name string) error {
 	if _, err := dirtree.Elements(name); err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}

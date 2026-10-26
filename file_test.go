@@ -938,6 +938,29 @@ func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
 	return wrapped.RootDir()
 }
 
+// TestFile_Rename_WindowsName is a regression test: Rename didn't check
+// a new name like Windows writes it, so on Windows "report." was written
+// to "report" and replaced an unrelated file.
+func TestFile_Rename_WindowsName(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows writes a name like report. to another entry")
+	}
+	ctx := t.Context()
+	dir := File(t.TempDir())
+	keep := dir.Join("report")
+	require.NoError(t, keep.WriteAllString(ctx, "keep"))
+	draft := dir.Join("draft.txt")
+	require.NoError(t, draft.WriteAllString(ctx, "draft"))
+	for _, name := range []string{"report.", "report ", "what?.txt"} {
+		_, err := draft.Rename(ctx, name)
+		require.ErrorIs(t, err, os.ErrInvalid, name)
+	}
+	data, err := keep.ReadAllString(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "keep", data, "the unrelated file is kept")
+	require.True(t, draft.Exists(), "the file is not renamed")
+}
+
 // TestFile_Rename_DefaultBranch covers the move emulation used by file systems
 // that don't implement MoveFileSystem. A previous implementation created
 // an empty directory and then tried file.Remove(), which silently discarded

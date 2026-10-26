@@ -161,6 +161,7 @@ Every check is a named sub-test, so `go test -run` can select one,
 | `MoveFileSystem` | readable + writable, `fs.MoveFileSystem` | The overwrite semantics of the native `Move`: `Self`, `ToMissing`, `Overwrite`, `OntoDirectory`, `DirectoryOntoFile`, `IntoItself` |
 | `CopyFileSystem` | readable + writable, `fs.CopyFileSystem` | The overwrite semantics of the native `CopyFile`: `Self`, `ToMissing`, `Overwrite`, `OntoDirectory` |
 | `Rename`         | readable + writable        | `File.Rename`, native or emulated: `Self`, `ToMissing`, `Overwrite`, `OntoDirectory`, `DirectoryOntoFile`, `InvalidName` |
+| `ValidateName`   | writable `fs.ValidateNameFileSystem` | `ValidateName` accepts names that every file system writes and wraps `os.ErrInvalid` for the others; `Rejected`: `fs.CopyFile` to such a name fails with `os.ErrInvalid` before it writes anything; `Accepted` (readable only): every name it accepts is written, read back and listed with that name |
 | `MoveTo`         | readable + writable        | `File.MoveTo`: `Self`, `Overwrite`, `IntoDirectory`, `DirectoryOntoFile`, `IntoItself` |
 | `CopyFile`       | readable + writable        | `fs.CopyFile`: `Self`, `Overwrite`, `IntoDirectory`, `MissingParents` |
 | `Abort`          | readable + writable        | Writers that implement `fs.WriteAborter` (`OpenWriter`, `OpenAppendWriter`, `File.OpenAppendWriter`, each with `NewFile` and `ExistingFile`): `Abort` leaves nothing behind, `Close` after `Abort` returns nil |

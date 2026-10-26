@@ -32,6 +32,12 @@
 //     fs.ErrIsDirectory. That way a written archive never has duplicate or
 //     conflicting entries.
 //   - Paths with a backslash are rejected, so archives stay portable.
+//     So are cleaned paths with a NUL character, which a tar header can't
+//     hold, and paths that are not valid UTF-8, which the PAX format
+//     requires. All of them are errors wrapping os.ErrInvalid.
+//     The Writer implements fs.ValidateNameFileSystem, so fs.CopyFile,
+//     fs.CopyRecursive and fs.Move into the archive fail before they
+//     write anything.
 //   - Entries get the current time and the passed permissions,
 //     or DefaultPermissions and DefaultDirPermissions if none are passed.
 package tarfs
@@ -45,9 +51,11 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
+	"os"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
@@ -80,6 +88,7 @@ var (
 	_ fs.WriteAllFileSystem         = new(Writer)
 	_ fs.TouchFileSystem            = new(Writer)
 	_ fs.MakeAllDirsFileSystem      = new(Writer)
+	_ fs.ValidateNameFileSystem     = new(Writer)
 )
 
 // gzipMagic are the first bytes of a gzip stream.
@@ -611,6 +620,9 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	if err := f.checkClosedLocked(); err != nil {
 		return err
 	}
+	if err := validateEntryName(dirtree.CleanName(filePath)); err != nil {
+		return err
+	}
 	node, isAncestor, err := f.tree.Conflict(filePath)
 	switch {
 	case err != nil:
@@ -624,6 +636,35 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	default:
 		return fs.NewErrAlreadyExists(f.file(filePath))
 	}
+}
+
+// ValidateName returns an error wrapping os.ErrInvalid if name, the name
+// of a directory entry, can't be written to the archive: if it contains
+// a backslash or a NUL character, or is not valid UTF-8, see
+// validateEntryName. fs.CopyFile, fs.CopyRecursive and fs.Move check the
+// names they write with it, so they fail before they write anything, also
+// for the parent directories of a new path, whose names MakeAllDirs checks
+// first.
+func (f *Writer) ValidateName(name string) error {
+	if _, err := dirtree.Elements(name); err != nil {
+		return fmt.Errorf("tarfs: %w", err)
+	}
+	return validateEntryName(name)
+}
+
+// validateEntryName returns an error wrapping os.ErrInvalid for the slash
+// separated name of an entry with a NUL character, which archive/tar can't
+// write to a header, or that is not valid UTF-8, which the PAX format
+// requires and which archive/tar writes unchanged.
+// Error messages quote at most 200 characters of a name.
+func validateEntryName(name string) error {
+	switch {
+	case strings.Contains(name, "\x00"):
+		return fmt.Errorf("%w: tarfs: entry name %.200q contains a NUL character", os.ErrInvalid, name)
+	case !utf8.ValidString(name):
+		return fmt.Errorf("%w: tarfs: entry name %.200q is not valid UTF-8", os.ErrInvalid, name)
+	}
+	return nil
 }
 
 // Stat is not possible for an archive that is being written.
@@ -755,6 +796,10 @@ func (f *Writer) MakeAllDirs(dirPath string, perm fs.Permissions) error {
 	elements, err := dirtree.Elements(dirPath)
 	if err != nil {
 		return fmt.Errorf("tarfs: %w", err)
+	}
+	// The parent directories have no other characters
+	if err := validateEntryName(strings.Join(elements, Separator)); err != nil {
+		return err
 	}
 	f.mtx.Lock()
 	defer f.mtx.Unlock()

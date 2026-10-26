@@ -711,6 +711,12 @@ func (o *OverlayFileSystem) makeAllDirs(dirPath string, perm Permissions) error 
 	case dirPath == "/":
 		return err
 	}
+	// The upper layer can be a file system like a zip writer, which can't
+	// remove directories, so the names of the missing directories are
+	// checked before the first one is made
+	if err := validateWriteDirName(o, dirPath); err != nil {
+		return err
+	}
 	if err := o.makeAllDirs(o.CleanPath(dirPath, ".."), perm); err != nil {
 		return err
 	}

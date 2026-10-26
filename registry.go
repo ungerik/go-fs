@@ -440,23 +440,24 @@ func hasURIScheme(s string) bool {
 	return i >= 0 && !strings.ContainsAny(s[:i], `/\`)
 }
 
-// isValidNameIn reports if name is valid for a new entry of the directory
-// dir, see isValidWriteName, also for the file system that the writes
-// to dir go to, and for the local file system also isValidLocalName.
-func isValidNameIn(dir File, name string) bool {
+// validateNameIn returns an error if name is not valid for a new entry of the
+// directory dir, see validateWriteName, also for the file system that the
+// writes to dir go to, and os.ErrInvalid for the local file system if
+// isValidLocalName rejects it.
+func validateNameIn(dir File, name string) error {
 	dirFS, dirPath := dir.ParseRawURI()
-	if !isValidWriteName(dirFS, name) {
-		return false
+	if err := validateWriteName(dirFS, name); err != nil {
+		return err
 	}
 	if target, _, _, ok := writeTarget(dirFS, dirPath); ok {
-		if !isValidWriteName(target, name) {
-			return false
+		if err := validateWriteName(target, name); err != nil {
+			return err
 		}
-		if _, local := target.(*LocalFileSystem); local {
-			return isValidLocalName(name)
+		if _, local := target.(*LocalFileSystem); local && !isValidLocalName(name) {
+			return os.ErrInvalid
 		}
 	}
-	return true
+	return nil
 }
 
 // parseLocalFileURI returns local and the clean local path of uri, a URI with

@@ -158,8 +158,10 @@ Both packages read and write entries with the same rules:
   read as `evil.txt` and `fs.CopyRecursive` can't write outside of the
   destination. One unusual entry never makes the whole archive unreadable.
   zipfs takes a name without the UTF-8 flag from its Info-ZIP Unicode Path
-  extra field if it has one, else it converts a name that is not valid
-  UTF-8, like the umlauts of old Windows tools, from CP-437.
+  extra field if it has one that keeps the ASCII parts of the stored name,
+  so it can't change an extension or directory, else it converts a name
+  that is not valid UTF-8, like the umlauts of old Windows tools, from
+  CP-437.
 - **A later entry replaces an earlier one** with the same path, like
   extracting the archive would, also when one is a file and the other a
   directory.
@@ -170,8 +172,9 @@ Both packages read and write entries with the same rules:
   path with a backslash `os.ErrInvalid`. So a written archive never has
   duplicate or conflicting entries. `MakeAllDirs` doesn't complain about
   existing directories. The zip writer also rejects the names that are not
-  valid in a zip archive with `os.ErrInvalid`, like `fs.Zip` below; its
-  paths are cleaned first.
+  valid in a zip archive with `os.ErrInvalid`, with the same rules as
+  `fs.Zip` below except for device names, which it doesn't reject on
+  Windows; its paths are cleaned first.
 - **Permissions and times.** Written entries get the current time and the
   passed permissions, or `DefaultPermissions` / `DefaultDirPermissions` of the
   package. Read entries report the permissions and modification time stored in
@@ -256,7 +259,8 @@ for _, mf := range memFiles {
 Directory entries are skipped. `FileName` keeps the full path from the archive,
 so it may contain slashes. A name that the archive stores in CP-437, like the
 umlauts of old Windows tools, is converted to UTF-8, or taken from its Info-ZIP
-Unicode Path extra field. Names are not checked like the names `fs.Zip`
+Unicode Path extra field if that keeps the ASCII parts of the stored name.
+Names are not checked like the names `fs.Zip`
 writes, so a name with a colon or a control character can't be zipped again.
 
 This reads every entry into memory at once. For a large archive use

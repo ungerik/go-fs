@@ -183,6 +183,39 @@ func TestDecode(t *testing.T) {
 			"ä.txt",
 		},
 		{
+			// The second byte of a Shift-JIS character can be ASCII
+			"Unicode Path field of a double-byte code page",
+			zip.FileHeader{Name: "\x83A.txt", NonUTF8: true, Extra: unicodePathExtra("\x83A.txt", "ア.txt")},
+			"ア.txt",
+		},
+		{
+			"Unicode Path field with substitutes between ASCII parts",
+			zip.FileHeader{Name: "a_b?c.txt", Extra: unicodePathExtra("a_b?c.txt", "a日b本c.txt")},
+			"a日b本c.txt",
+		},
+		{
+			// Regression: the field renamed an entry that archive/zip
+			// and the zip tools that ignore the field show differently
+			"Unicode Path field that changes an ASCII name",
+			zip.FileHeader{Name: "photo.jpg", Extra: unicodePathExtra("photo.jpg", "photo.html")},
+			"photo.jpg",
+		},
+		{
+			"Unicode Path field that changes the extension",
+			zip.FileHeader{Name: "\x84.txt", NonUTF8: true, Extra: unicodePathExtra("\x84.txt", "日.exe")},
+			"ä.txt",
+		},
+		{
+			"Unicode Path field that adds a directory",
+			zip.FileHeader{Name: "\x84.txt", NonUTF8: true, Extra: unicodePathExtra("\x84.txt", "日/x.txt")},
+			"ä.txt",
+		},
+		{
+			"Unicode Path field with a character for no stored byte",
+			zip.FileHeader{Name: "ab.txt", Extra: unicodePathExtra("ab.txt", "a日b.txt")},
+			"ab.txt",
+		},
+		{
 			"Unicode Path field of another name",
 			zip.FileHeader{Name: "\x84.txt", NonUTF8: true, Extra: unicodePathExtra("other.txt", "日本.txt")},
 			"ä.txt",

@@ -87,9 +87,10 @@ set of files into a byte slice without a file system.
   `io/fs` view, so no entry can be extracted outside of the destination. A
   later entry replaces an earlier one with the same path. A name without the
   UTF-8 flag of the zip format is taken from its Info-ZIP Unicode Path extra
-  field if it has one, else a name that is not valid UTF-8, like the umlauts
-  of old Windows tools, is converted from CP-437, the encoding of names
-  without the flag; `archive/zip` returns the stored bytes.
+  field if it has one that keeps the ASCII parts of the stored name, else a
+  name that is not valid UTF-8, like the umlauts of old Windows tools, is
+  converted from CP-437, the encoding of names without the flag;
+  `archive/zip` returns the stored bytes.
 - **Writer.** Each file is buffered in memory until its writer is closed,
   then it is compressed into the archive, so several files can be written at
   the same time. The writers implement `fs.WriteAborter`, `Abort` discards
@@ -103,7 +104,7 @@ set of files into a byte slice without a file system.
   Paths are cleaned first, and names that only Windows can't extract, like
   `NUL` or `what?.txt`, are not checked, also not on Windows, unlike by
   `fs.Zip`, which rejects device names there. The writer implements
-  `fs.ValidNameFileSystem`, so a copy or move into it checks the names it
+  `fs.ValidateNameFileSystem`, so a copy or move into it checks the names it
   writes first and fails before it writes anything.
   `Close` writes the central directory — an archive whose writer was not
   closed is incomplete.

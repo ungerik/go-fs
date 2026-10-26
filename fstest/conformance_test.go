@@ -180,6 +180,33 @@ var violations = map[string]struct {
 			return committingAborter{w}, nil
 		}
 	}},
+	"ValidateNameUnwrapped": {"ValidateName", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockValidateName = func(name string) error {
+			if strings.Contains(name, ":") {
+				return errors.New("no colons")
+			}
+			return nil
+		}
+	}},
+	"ValidateNameRejectsPlainNames": {"ValidateName", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockValidateName = func(name string) error { return os.ErrInvalid }
+	}},
+	"ValidateNameAcceptsUnwritable": {"ValidateName/Accepted", func(ref *MockFullyFeaturedFileSystem) {
+		base := *ref
+		ref.MockOpenWriter = func(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+			if strings.Contains(filePath, ":") {
+				return nil, errors.New("no colons")
+			}
+			return base.OpenWriter(filePath, perm)
+		}
+	}},
+	"ValidateNameAcceptsMangled": {"ValidateName/Accepted", func(ref *MockFullyFeaturedFileSystem) {
+		// Like Windows, which removes a trailing dot
+		base := *ref
+		ref.MockOpenWriter = func(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+			return base.OpenWriter(strings.TrimSuffix(filePath, "."), perm)
+		}
+	}},
 	"StatAfterCloseNotExist": {"Close/Stat", func(ref *MockFullyFeaturedFileSystem) {
 		base := *ref
 		closed := false

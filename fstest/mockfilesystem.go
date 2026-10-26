@@ -40,7 +40,7 @@ var (
 	_ fs.XAttrFileSystem            = &MockFullyFeaturedFileSystem{}
 	_ fs.VolumeNameFileSystem       = &MockFullyFeaturedFileSystem{}
 	_ fs.AbsPathFileSystem          = &MockFullyFeaturedFileSystem{}
-	_ fs.ValidNameFileSystem        = &MockFullyFeaturedFileSystem{}
+	_ fs.ValidateNameFileSystem     = &MockFullyFeaturedFileSystem{}
 )
 
 // MockFileSystem is a fs.FileSystem and fs.WriteFileSystem implementation
@@ -102,7 +102,7 @@ type MockFileSystem struct {
 //   - Touch creates a missing file and returns an error wrapping
 //     errors.ErrUnsupported for an existing one
 //   - IsHidden reports names beginning with a dot
-//   - ValidName accepts every name
+//   - ValidateName accepts every name
 //   - Lstat returns Stat
 //   - VolumeName returns "", IsAbsPath returns true, AbsPath returns
 //     the path and RelPath computes the relative path of the elements
@@ -157,7 +157,7 @@ type MockFullyFeaturedFileSystem struct {
 	MockAbsPath    func(filePath string) string
 	MockRelPath    func(basePath, targPath string) (string, error)
 
-	MockValidName func(name string) error
+	MockValidateName func(name string) error
 }
 
 func (m *MockFileSystem) pathHelper() fsimpl.PathHelper {
@@ -609,12 +609,12 @@ func (m *MockFullyFeaturedFileSystem) IsHidden(filePath string) bool {
 	return m.MockIsHidden(filePath)
 }
 
-// ValidName implements fs.ValidNameFileSystem
-func (m *MockFullyFeaturedFileSystem) ValidName(name string) error {
-	if m.MockValidName == nil {
+// ValidateName implements fs.ValidateNameFileSystem
+func (m *MockFullyFeaturedFileSystem) ValidateName(name string) error {
+	if m.MockValidateName == nil {
 		return nil
 	}
-	return m.MockValidName(name)
+	return m.MockValidateName(name)
 }
 
 // SetPermissions implements fs.PermissionsFileSystem

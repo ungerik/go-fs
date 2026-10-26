@@ -64,10 +64,60 @@ func Zip(ctx context.Context, files ...FileReader) ([]byte, error) {
 		return flate.NewWriter(out, flate.BestCompression)
 	})
 	copyBuf := make([]byte, zipCopyBufferSize)
+	// Error messages quote at most 200 characters of a name
 	for _, file := range files {
-		err := addZipEntry(ctx, zipWriter, file, copyBuf)
-		if err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		info, err := file.Stat()
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat %.200q: %w", file.Name(), err)
+		}
+		var name string
+		switch f := file.(type) {
+		case MemFile:
+			name = strings.TrimLeft(f.CleanPath(), "/")
+		case *MemFile:
+			name = strings.TrimLeft(f.CleanPath(), "/")
+		default:
+			name = file.Name()
+		}
+		if name == "" {
+			return nil, fmt.Errorf("can't zip %.200q: %w: zip entry name is empty", errSubject(file), os.ErrInvalid)
+		}
+		err = zipname.Check(name, info.IsDir())
+		if err != nil {
+			return nil, fmt.Errorf("can't zip %.200q: %w", errSubject(file), err)
+		}
+		if name == "." || !iofs.ValidPath(name) || !isLocalZipName(name) {
+			return nil, fmt.Errorf("can't zip %.200q: %w: zip entry name %.200q is not a clean, local, slash separated path", errSubject(file), os.ErrInvalid, name)
+		}
+		header := &zip.FileHeader{
+			Name:     name,
+			Modified: info.ModTime(),
+			Method:   zip.Deflate,
+		}
+		if info.IsDir() {
+			header.Name += "/"
+			header.Method = zip.Store
+			_, err = zipWriter.CreateHeader(header)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create zip header for %.200q: %w", name, err)
+			}
+			continue
+		}
+		w, err := zipWriter.CreateHeader(header)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create zip header for %.200q: %w", name, err)
+		}
+		r, err := file.OpenReader()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open reader for %.200q: %w", name, err)
+		}
+		err = copyBuffer(ctx, w, r, copyBuf)
+		err = errors.Join(err, r.Close())
+		if err != nil {
+			return nil, fmt.Errorf("failed to zip file %.200q: %w", name, err)
 		}
 	}
 	err := zipWriter.Close()
@@ -85,66 +135,6 @@ func ZipMemFiles(files ...MemFile) ([]byte, error) {
 	return Zip(context.Background(), AsFileReaders(files)...)
 }
 
-// addZipEntry adds file as entry to zipWriter,
-// copyBuf is the buffer for copying its content.
-func addZipEntry(ctx context.Context, zipWriter *zip.Writer, file FileReader, copyBuf []byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	// Error messages quote at most 200 characters of a name
-	info, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to stat %.200q: %w", file.Name(), err)
-	}
-	var name string
-	switch f := file.(type) {
-	case MemFile:
-		name = strings.TrimLeft(f.CleanPath(), "/")
-	case *MemFile:
-		name = strings.TrimLeft(f.CleanPath(), "/")
-	default:
-		name = file.Name()
-	}
-	if name == "" {
-		return fmt.Errorf("can't zip %.200q: %w: zip entry name is empty", errSubject(file), os.ErrInvalid)
-	}
-	err = zipname.Check(name, info.IsDir())
-	if err != nil {
-		return fmt.Errorf("can't zip %.200q: %w", errSubject(file), err)
-	}
-	if name == "." || !iofs.ValidPath(name) || !isLocalZipName(name) {
-		return fmt.Errorf("can't zip %.200q: %w: zip entry name %.200q is not a clean, local, slash separated path", errSubject(file), os.ErrInvalid, name)
-	}
-	header := &zip.FileHeader{
-		Name:     name,
-		Modified: info.ModTime(),
-		Method:   zip.Deflate,
-	}
-	if info.IsDir() {
-		header.Name += "/"
-		header.Method = zip.Store
-		_, err = zipWriter.CreateHeader(header)
-		if err != nil {
-			return fmt.Errorf("failed to create zip header for %.200q: %w", name, err)
-		}
-		return nil
-	}
-	w, err := zipWriter.CreateHeader(header)
-	if err != nil {
-		return fmt.Errorf("failed to create zip header for %.200q: %w", name, err)
-	}
-	r, err := file.OpenReader()
-	if err != nil {
-		return fmt.Errorf("failed to open reader for %.200q: %w", name, err)
-	}
-	err = copyBuffer(ctx, w, r, copyBuf)
-	err = errors.Join(err, r.Close())
-	if err != nil {
-		return fmt.Errorf("failed to zip file %.200q: %w", name, err)
-	}
-	return nil
-}
-
 // isLocalZipName reports if the zip entry name is a relative,
 // slash separated path that stays within the directory
 // it is extracted to, see archive/zip.ErrInsecurePath.
@@ -159,9 +149,10 @@ func isLocalZipName(name string) bool {
 // The FileName of a MemFile is the name of its zip entry,
 // which is a slash separated relative path like "dir/file.txt".
 // A name without the UTF-8 flag of the zip format is taken from
-// the Info-ZIP Unicode Path extra field of the entry if it has one,
-// else a name that is not valid UTF-8 is converted to UTF-8 from CP-437,
-// the encoding of names without the flag.
+// the Info-ZIP Unicode Path extra field of the entry if it has one that
+// only differs in the characters that the stored name can't hold, its
+// ASCII parts must be the same, else a name that is not valid UTF-8 is
+// converted to UTF-8 from CP-437, the encoding of names without the flag.
 // Only regular files are returned, directory entries
 // and symbolic links are skipped.
 //

@@ -481,10 +481,45 @@ func fsMakeAllDirs(fileSystem FileSystem, dirPath string, perm Permissions) erro
 	if err != nil {
 		return err
 	}
+	if _, ok := w.(ValidateNameFileSystem); ok {
+		// A file system like a zip writer can't remove directories, so the
+		// names of the missing ones are checked before the first one is made
+		for p := dirPath; ; {
+			if _, err := w.Stat(p); err == nil {
+				break
+			}
+			if err := validateWriteDirName(w, p); err != nil {
+				return err
+			}
+			dir, name := fsSplitDirAndName(w, p)
+			if name == "" || dir == p {
+				break
+			}
+			p = dir
+		}
+	}
 	if m, ok := w.(MakeAllDirsFileSystem); ok {
 		return m.MakeAllDirs(dirPath, perm)
 	}
 	return makeAllDirs(w, dirPath, perm)
+}
+
+// validateWriteDirName returns an error wrapping the error of the ValidateName
+// method of the file system that the writes to dirPath of fileSystem go to,
+// see writeTarget, if it is a ValidateNameFileSystem that rejects the name of
+// the directory dirPath.
+func validateWriteDirName(fileSystem FileSystem, dirPath string) error {
+	target, targetPath, _, ok := writeTarget(fileSystem, dirPath)
+	v, validates := target.(ValidateNameFileSystem)
+	if !ok || !validates {
+		return nil
+	}
+	if _, name := fsSplitDirAndName(target, targetPath); name != "" {
+		if err := v.ValidateName(name); err != nil {
+			return fmt.Errorf("can't make directory %q: %w", errSubject(fsFile(fileSystem, dirPath)), err)
+		}
+	}
+	return nil
 }
 
 // makeAllDirs recursively creates dirPath and its parents.
@@ -624,9 +659,12 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // the replaced one. A name that is not valid for destFS, see
 // treeCopier.validName, is an error wrapping [os.ErrInvalid], below
 // a directory, also of an empty directory, before anything is copied, see
-// treeCopier.checkSource. So is a name of destPath that the local file
-// system would not write to an entry of that name or that Windows refuses,
-// see isValidLocalName.
+// treeCopier.checkSource. So is a name of destPath that the ValidateName
+// method of a [ValidateNameFileSystem] rejects, see
+// treeCopier.validateWriteName, and one that the local file system would
+// not write to an entry of that name or that Windows refuses, see
+// isValidLocalName, checked before the parent directories of destPath
+// are made.
 //
 // Within a file system that implements [SymbolicLinkFileSystem],
 // symbolic links are copied as links with their target stored verbatim,
@@ -690,9 +728,16 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	}
 	srcIsDir := srcInfo.IsDir && !srcInfo.IsSymlink
 	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
-	if _, name := fsSplitDirAndName(destFS, destPath); name != "" && (!c.validWriteName(destFS, name) || c.localDest && !isValidLocalName(name)) {
+	if _, name := fsSplitDirAndName(destFS, destPath); name != "" {
+		// The copy would fail at a name that ValidateName rejects after it made
+		// the parent directories, which a zip writer can't remove
+		if err := c.validateWriteName(destFS, name); err != nil {
+			return errInvalidName(src, name, dest, err)
+		}
 		// Like the name of a device, the move would write to it
-		return errInvalidName(src, name, dest)
+		if c.localDest && !isValidLocalName(name) {
+			return errInvalidName(src, name, dest, nil)
+		}
 	}
 
 	// The entry that the source shows, see fsReadTarget, for all checks
@@ -916,18 +961,37 @@ func isValidName(fileSystem FileSystem, name string) bool {
 	return true
 }
 
-// isValidWriteName reports if fileSystem can write an entry with name:
-// see isValidName, and the ValidName method of a ValidNameFileSystem
-// must accept it. Existing entries are read and removed with every
+// validateWriteName returns an error if fileSystem can't write an entry with
+// name: os.ErrInvalid for a name that is not valid, see isValidName, and
+// the error of the ValidateName method of a ValidateNameFileSystem that rejects
+// it, which tells why. Existing entries are read and removed with every
 // name of isValidName.
-func isValidWriteName(fileSystem FileSystem, name string) bool {
+func validateWriteName(fileSystem FileSystem, name string) error {
 	if !isValidName(fileSystem, name) {
-		return false
+		return os.ErrInvalid
 	}
-	if v, ok := fileSystem.(ValidNameFileSystem); ok {
-		return v.ValidName(name) == nil
+	if v, ok := fileSystem.(ValidateNameFileSystem); ok {
+		return v.ValidateName(name)
 	}
-	return true
+	return nil
+}
+
+// validateWritePathName returns the name of filePath and the error of
+// validateWriteName for it, of fileSystem and of the file system that the
+// writes to filePath go to, see writeTarget. A path without a name,
+// like the root, is no error.
+func validateWritePathName(fileSystem FileSystem, filePath string) (name string, err error) {
+	_, name = fsSplitDirAndName(fileSystem, filePath)
+	if name == "" {
+		return "", nil
+	}
+	if err := validateWriteName(fileSystem, name); err != nil {
+		return name, err
+	}
+	if target, _, _, ok := writeTarget(fileSystem, filePath); ok && target != fileSystem {
+		return name, validateWriteName(target, name)
+	}
+	return name, nil
 }
 
 func fsListDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {

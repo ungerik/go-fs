@@ -789,7 +789,7 @@ does not apply.
 The archive and request-scoped backends implement a mode-dependent subset:
 `zipfs.Reader` and `tarfs.Reader` provide `Exists`, `ReadAll` and
 `ListDirRecursive`, the writers provide `Touch` and `MakeAllDirs`
-(`tarfs.Writer` also `WriteAll`, `zipfs.Writer` also `ValidName`), and
+(`tarfs.Writer` also `WriteAll`, both writers also `ValidateName`), and
 `multipartfs` is read-only and provides
 `Exists` and `ReadAll`. `httpfs` implements `URIFileSystem`, because its paths
 are URLs in their escaped form.

@@ -90,8 +90,11 @@ func isDisguisingRune(r rune) bool {
 // A name without the UTF-8 flag of the zip format, or that is not
 // valid UTF-8, is taken from its Info-ZIP Unicode Path extra field
 // if it has one for the stored name that agrees on being a directory,
-// like zip tools do. The field can name the entry differently than
-// the stored name, which header.Name keeps.
+// like zip tools do, and only differs from the stored name in the
+// characters that its encoding can't hold, see keepsASCII. So the field
+// can't give the entry another extension or directory than archive/zip
+// and the zip tools that ignore the field show. header.Name keeps the
+// stored name.
 // Else a name that is valid UTF-8 is returned as it is, because many
 // zip tools write UTF-8 without the UTF-8 flag, and any other name
 // is decoded from CP-437, the encoding of the zip format for names
@@ -118,7 +121,9 @@ func Decode(header *zip.FileHeader) string {
 			if len(field) > 5 && field[0] == 1 && utf8.Valid(field[5:]) &&
 				(field[len(field)-1] == '/') == strings.HasSuffix(name, "/") &&
 				binary.LittleEndian.Uint32(field[1:]) == crc32.ChecksumIEEE([]byte(name)) {
-				return string(field[5:])
+				if unicodeName := string(field[5:]); keepsASCII(name, unicodeName) {
+					return unicodeName
+				}
 			}
 			// Zip tools write one Unicode Path field per entry.
 			// Only the first counts, so a long name is hashed once
@@ -129,8 +134,15 @@ func Decode(header *zip.FileHeader) string {
 	if validUTF8 {
 		return name
 	}
+	// The characters of the bytes from 0x80 take two or three bytes in UTF-8
+	size := len(name)
+	for i := range len(name) {
+		if c := name[i]; c >= 0x80 {
+			size += utf8.RuneLen(cp437[c-0x80]) - 1
+		}
+	}
 	var decoded strings.Builder
-	decoded.Grow(2 * len(name))
+	decoded.Grow(size)
 	for i := range len(name) {
 		if c := name[i]; c < 0x80 {
 			decoded.WriteByte(c)
@@ -139,4 +151,44 @@ func Decode(header *zip.FileHeader) string {
 		}
 	}
 	return decoded.String()
+}
+
+// keepsASCII reports if unicodeName, the name of a Unicode Path field,
+// only differs from stored, the stored name, in the characters that the
+// encoding of stored can't hold: the ASCII parts of unicodeName must be
+// the ones of stored in the same order, and every run of other characters
+// stands for at least one byte of stored, like a character of another code
+// page, whose second byte can be ASCII, or a substitute like "_".
+func keepsASCII(stored, unicodeName string) bool {
+	isASCII := func(r rune) bool { return r < utf8.RuneSelf }
+	isOther := func(r rune) bool { return r >= utf8.RuneSelf }
+	i := strings.IndexFunc(unicodeName, isOther)
+	if i < 0 {
+		return unicodeName == stored
+	}
+	// The ASCII part before the first other character starts stored
+	if !strings.HasPrefix(stored, unicodeName[:i]) {
+		return false
+	}
+	pos, rest := i, unicodeName[i:]
+	for {
+		// rest starts with a run of other characters
+		i = strings.IndexFunc(rest, isASCII)
+		if i < 0 {
+			return len(stored) > pos
+		}
+		rest = rest[i:]
+		i = strings.IndexFunc(rest, isOther)
+		if i < 0 {
+			// The ASCII part after the last other character ends stored
+			return len(stored)-len(rest) > pos && strings.HasSuffix(stored, rest)
+		}
+		// The leftmost match leaves the most bytes for the parts after it
+		at := strings.Index(stored[pos+1:], rest[:i])
+		if at < 0 {
+			return false
+		}
+		pos += 1 + at + i
+		rest = rest[i:]
+	}
 }

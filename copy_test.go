@@ -1897,20 +1897,20 @@ func TestCopyFileAndMove_IntoDirectoryInvalidName(t *testing.T) {
 	require.False(t, destFS.RootDir().Join("top", "evil.txt").Exists(), "nothing is written outside of the directory")
 }
 
-// validNameFS is a MemFileSystem that can't write names starting with "bad".
-type validNameFS struct{ *fs.MemFileSystem }
+// validateNameFS is a MemFileSystem that can't write names starting with "bad".
+type validateNameFS struct{ *fs.MemFileSystem }
 
-func (f validNameFS) ValidName(name string) error {
+func (f validateNameFS) ValidateName(name string) error {
 	if strings.HasPrefix(name, "bad") {
-		return fmt.Errorf("%w: %q", os.ErrInvalid, name)
+		return fmt.Errorf("%w: the name %.200q starts with bad", os.ErrInvalid, name)
 	}
 	return nil
 }
 
-// TestCopyRecursive_ValidName verifies that a copy checks the names of the
-// source with the ValidName method of the destination before it writes
+// TestCopyRecursive_ValidateName verifies that a copy checks the names of the
+// source with the ValidateName method of the destination before it writes
 // anything, also of the parent of a SubFileSystem, which gets the writes.
-func TestCopyRecursive_ValidName(t *testing.T) {
+func TestCopyRecursive_ValidateName(t *testing.T) {
 	ctx := t.Context()
 	srcFS, err := fs.NewMemFileSystem(nil)
 	require.NoError(t, err)
@@ -1923,7 +1923,7 @@ func TestCopyRecursive_ValidName(t *testing.T) {
 
 	memFS, err := fs.NewMemFileSystem(nil)
 	require.NoError(t, err)
-	destFS := validNameFS{memFS}
+	destFS := validateNameFS{memFS}
 	require.NoError(t, fs.Register(destFS))
 	t.Cleanup(func() { fs.Unregister(destFS) })
 	view := destFS.RootDir().Join("view")
@@ -1939,14 +1939,14 @@ func TestCopyRecursive_ValidName(t *testing.T) {
 	require.False(t, view.Join("copy").Exists(), "nothing was written through the SubFileSystem")
 }
 
-// TestValidName_WritesOnly verifies that ValidName is only consulted for
+// TestValidateName_WritesOnly verifies that ValidateName is only consulted for
 // names that get written: a single file copied, moved or renamed into a
-// ValidNameFileSystem fails before it writes anything, while the existing
-// entries of a ValidNameFileSystem stay readable through a SubFileSystem
+// ValidateNameFileSystem fails before it writes anything, while the existing
+// entries of a ValidateNameFileSystem stay readable through a SubFileSystem
 // and as base layer of an OverlayFileSystem, which gets no writes, and a
 // copy into such an overlay writes to the upper layer.
 // Regression: the base and the parent rejected reads of such names.
-func TestValidName_WritesOnly(t *testing.T) {
+func TestValidateName_WritesOnly(t *testing.T) {
 	ctx := t.Context()
 	newMemFS := func() *fs.MemFileSystem {
 		memFS, err := fs.NewMemFileSystem(nil)
@@ -1963,7 +1963,7 @@ func TestValidName_WritesOnly(t *testing.T) {
 
 	baseMemFS, err := fs.NewMemFileSystem(nil)
 	require.NoError(t, err)
-	base := validNameFS{baseMemFS}
+	base := validateNameFS{baseMemFS}
 	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { fs.Unregister(base) })
 	require.NoError(t, base.RootDir().Join("view").MakeDir())
@@ -2002,16 +2002,21 @@ func TestValidName_WritesOnly(t *testing.T) {
 	require.Equal(t, "bad", data)
 }
 
-// TestValidName_CopyPaths verifies the ValidName checks of the copy paths
-// that review found unchecked: a copy within one ValidNameFileSystem that
+// TestValidateName_CopyPaths verifies the ValidateName checks of the copy paths
+// that review found unchecked: a copy within one ValidateNameFileSystem that
 // copies links, CopyFile, Move and Rename through a SubFileSystem, which
 // must check the parent that gets the writes, and CopyRecursive with
 // patterns, which must not reject a file that it doesn't copy.
-func TestValidName_CopyPaths(t *testing.T) {
+// Listing the names for the check must not reject a link to a directory
+// that the copy within one file system copies as link, a copy within
+// a SubFileSystem, which copies links itself, is checked against the
+// parent before it writes anything, and so is the new name of a directory
+// that is moved through a SubFileSystem.
+func TestValidateName_CopyPaths(t *testing.T) {
 	ctx := t.Context()
 	memFS, err := fs.NewMemFileSystem(nil)
 	require.NoError(t, err)
-	base := validNameFS{memFS}
+	base := validateNameFS{memFS}
 	require.NoError(t, fs.Register(base))
 	t.Cleanup(func() { fs.Unregister(base) })
 	src := base.RootDir().Join("src")
@@ -2028,6 +2033,16 @@ func TestValidName_CopyPaths(t *testing.T) {
 	require.NoError(t, fs.CopyRecursive(ctx, src, base.RootDir().Join("pdfs"), "*.pdf"))
 	require.True(t, base.RootDir().Join("pdfs", "ok.pdf").Exists())
 	require.False(t, base.RootDir().Join("pdfs", "bad.txt").Exists())
+
+	// A link to a directory is still copied as link within the file system,
+	// the listing for the name check doesn't reject it as a link that can't
+	// be copied
+	require.NoError(t, base.RootDir().Join("target").MakeDir())
+	linked := base.RootDir().Join("linked")
+	require.NoError(t, linked.MakeDir())
+	require.NoError(t, memFS.CreateSymbolicLink("/target", "/linked/link"))
+	require.NoError(t, fs.CopyRecursive(ctx, linked, base.RootDir().Join("linkcopy")))
+	requireLink(t, base.RootDir().Join("linkcopy", "link"), "/target")
 
 	// Through a SubFileSystem, whose parent gets the writes
 	require.NoError(t, base.RootDir().Join("view").MakeDir())
@@ -2049,5 +2064,225 @@ func TestValidName_CopyPaths(t *testing.T) {
 	require.False(t, base.RootDir().Join("view", "bad.txt").Exists(), "nothing was written")
 	require.False(t, base.RootDir().Join("view", "new").Exists(), "no parent directory was made")
 	_, err = sub.RootDir().Join("x.txt").Rename(ctx, "bad.txt")
+	require.ErrorIs(t, err, os.ErrInvalid)
+
+	// A copy within the SubFileSystem, which copies links itself, so the
+	// names are only listed because the parent that gets the writes checks them
+	subSrc := sub.RootDir().Join("src")
+	require.NoError(t, subSrc.MakeDir())
+	for _, name := range []string{"a.txt", "bad.txt"} {
+		require.NoError(t, subSrc.Join(name).WriteAllString(ctx, name))
+	}
+	require.ErrorIs(t, fs.CopyRecursive(ctx, subSrc, sub.RootDir().Join("dst")), os.ErrInvalid)
+	require.False(t, base.RootDir().Join("view", "dst").Exists(), "nothing was written")
+
+	// The new name of a directory moved through the SubFileSystem is
+	// checked against the parent before the directory is made
+	dirSrc := otherFS.RootDir().Join("dir")
+	require.NoError(t, dirSrc.MakeDir())
+	require.NoError(t, dirSrc.Join("a.txt").WriteAllString(ctx, "a"))
+	require.ErrorIs(t, fs.Move(ctx, dirSrc, sub.RootDir().Join("bad")), os.ErrInvalid)
+	require.True(t, dirSrc.Join("a.txt").Exists(), "the source of a failed move is kept")
+	require.False(t, base.RootDir().Join("view", "bad").Exists(), "no directory was made")
+}
+
+// TestValidateName_LongNameError verifies that the errors for a name that
+// ValidateName rejects don't grow with the name, which can be one that is too
+// long for the file system, like for a zip archive.
+func TestValidateName_LongNameError(t *testing.T) {
+	ctx := t.Context()
+	srcFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(srcFS))
+	t.Cleanup(func() { _ = srcFS.Close() })
+	memFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	base := validateNameFS{memFS}
+	require.NoError(t, fs.Register(base))
+	t.Cleanup(func() { fs.Unregister(base) })
+	longName := "bad" + strings.Repeat("a", 70000)
+	src := srcFS.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	longSrc := src.Join(longName)
+	require.NoError(t, longSrc.WriteAllString(ctx, "x"))
+	require.NoError(t, base.RootDir().Join("x.txt").WriteAllString(ctx, "x"))
+
+	for what, err := range map[string]error{
+		"CopyRecursive":      fs.CopyRecursive(ctx, src, base.RootDir().Join("copy")),
+		"CopyFile into dir":  fs.CopyFile(ctx, longSrc, base.RootDir()),
+		"CopyFile to a path": fs.CopyFile(ctx, longSrc, base.RootDir().Join("dir", longName)),
+		"Move into dir":      fs.Move(ctx, longSrc, base.RootDir()),
+		"Rename": func() error {
+			_, err := base.RootDir().Join("x.txt").Rename(ctx, longName)
+			return err
+		}(),
+	} {
+		require.ErrorIs(t, err, os.ErrInvalid, what)
+		require.Less(t, len(err.Error()), 1000, what)
+	}
+}
+
+// TestValidateName_DirAndLinkNames verifies that CopyRecursive checks the names
+// of directories and links with ValidateName before it writes anything, also
+// below a directory that patterns don't filter, because a directory is
+// always copied and only files and links have to match the patterns.
+func TestValidateName_DirAndLinkNames(t *testing.T) {
+	ctx := t.Context()
+	srcFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(srcFS))
+	t.Cleanup(func() { _ = srcFS.Close() })
+	memFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	base := validateNameFS{memFS}
+	require.NoError(t, fs.Register(base))
+	t.Cleanup(func() { fs.Unregister(base) })
+
+	// The name of a directory, from another file system,
+	// and with patterns also below a directory with a valid name
+	for i, bad := range []string{"baddir/x.pdf", "sub/bad.pdf"} {
+		src := srcFS.RootDir().Join(fmt.Sprint("src", i))
+		for _, name := range []string{"a.pdf", bad} {
+			require.NoError(t, src.Join(name).Dir().MakeAllDirs())
+			require.NoError(t, src.Join(name).WriteAllString(ctx, name))
+		}
+		dest := base.RootDir().Join(fmt.Sprint("copy", i))
+		require.ErrorIs(t, fs.CopyRecursive(ctx, src, dest), os.ErrInvalid, bad)
+		require.ErrorIs(t, fs.CopyRecursive(ctx, src, dest, "*.pdf"), os.ErrInvalid, bad)
+		require.False(t, dest.Exists(), "nothing was written for %s", bad)
+	}
+
+	// The name of a link that the copy within one file system copies as link
+	require.NoError(t, base.RootDir().Join("target").MakeDir())
+	linked := base.RootDir().Join("linked")
+	require.NoError(t, linked.MakeDir())
+	require.NoError(t, linked.Join("a.txt").WriteAllString(ctx, "a"))
+	require.NoError(t, memFS.CreateSymbolicLink("/target", "/linked/badlink"))
+	require.ErrorIs(t, fs.CopyRecursive(ctx, linked, base.RootDir().Join("linkcopy")), os.ErrInvalid)
+	require.False(t, base.RootDir().Join("linkcopy").Exists(), "nothing was written")
+}
+
+// TestValidateName_MoveWithinFileSystem verifies that a move within one file
+// system, which moves natively, checks the new name with ValidateName, into
+// a directory and to a path, also of the parent of a SubFileSystem, which
+// gets the write.
+func TestValidateName_MoveWithinFileSystem(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	base := validateNameFS{memFS}
+	require.NoError(t, fs.Register(base))
+	t.Cleanup(func() { fs.Unregister(base) })
+	require.NoError(t, base.RootDir().Join("dir").MakeDir())
+	require.NoError(t, base.RootDir().Join("view", "dir").MakeAllDirs())
+	sub, err := fs.NewSubFileSystem(base, "/view", "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(sub))
+	t.Cleanup(func() { _ = sub.Close() })
+
+	for _, dir := range []fs.File{base.RootDir(), sub.RootDir()} {
+		existing := dir.Join("bad.txt")
+		require.NoError(t, existing.WriteAllString(ctx, "existing"))
+		require.ErrorIs(t, fs.Move(ctx, existing, dir.Join("dir")), os.ErrInvalid, dir)
+		require.True(t, existing.Exists(), "the source is kept")
+		require.False(t, dir.Join("dir", "bad.txt").Exists(), "nothing was written")
+
+		ok := dir.Join("ok.txt")
+		require.NoError(t, ok.WriteAllString(ctx, "ok"))
+		require.ErrorIs(t, fs.Move(ctx, ok, dir.Join("dir", "bad.txt")), os.ErrInvalid, dir)
+		require.True(t, ok.Exists(), "the source is kept")
+		require.False(t, dir.Join("dir", "bad.txt").Exists(), "nothing was written")
+		require.NoError(t, fs.Move(ctx, ok, dir.Join("dir", "ok.txt")), dir)
+	}
+}
+
+// TestValidateName_NewDirectories verifies that the directories that a copy
+// or move makes, also the parents of its destination, are checked with
+// ValidateName before the first one is made, also through a SubFileSystem
+// and for the upper layer of an OverlayFileSystem, and that an existing
+// directory isn't checked, because it isn't written.
+func TestValidateName_NewDirectories(t *testing.T) {
+	ctx := t.Context()
+	newMemFS := func() *fs.MemFileSystem {
+		memFS, err := fs.NewMemFileSystem(nil)
+		require.NoError(t, err)
+		require.NoError(t, fs.Register(memFS))
+		t.Cleanup(func() { _ = memFS.Close() })
+		return memFS
+	}
+	otherFS := newMemFS()
+	src := otherFS.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	require.NoError(t, src.Join("a.txt").WriteAllString(ctx, "a"))
+	okSrc := otherFS.RootDir().Join("ok.txt")
+	require.NoError(t, okSrc.WriteAllString(ctx, "ok"))
+
+	memFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	base := validateNameFS{memFS}
+	require.NoError(t, fs.Register(base))
+	t.Cleanup(func() { fs.Unregister(base) })
+	require.NoError(t, base.RootDir().Join("view").MakeDir())
+	sub, err := fs.NewSubFileSystem(base, "/view", "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(sub))
+	t.Cleanup(func() { _ = sub.Close() })
+	overlay, err := fs.NewOverlayFileSystem(newMemFS(), base, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
+	t.Cleanup(func() { _ = overlay.Close() })
+
+	for _, root := range []fs.File{base.RootDir(), sub.RootDir(), overlay.RootDir()} {
+		require.ErrorIs(t, fs.CopyFile(ctx, okSrc, root.Join("new", "baddir", "ok.txt")), os.ErrInvalid, root)
+		require.ErrorIs(t, fs.Move(ctx, okSrc, root.Join("baddir", "ok.txt")), os.ErrInvalid, root)
+		require.True(t, okSrc.Exists(), "the source of a failed move is kept")
+		require.ErrorIs(t, fs.CopyRecursive(ctx, src, root.Join("bad")), os.ErrInvalid, root)
+		require.ErrorIs(t, fs.CopyRecursive(ctx, src, root.Join("new", "badder")), os.ErrInvalid, root)
+		require.ErrorIs(t, root.Join("new", "baddir").MakeAllDirs(), os.ErrInvalid, root)
+		for _, name := range []string{"new", "baddir", "bad"} {
+			require.False(t, root.Join(name).Exists(), "%s was not made in %s", name, root)
+		}
+	}
+
+	// An existing directory isn't written, so its name isn't checked
+	require.NoError(t, memFS.MakeDir("/badexisting", fs.NoPermissions))
+	require.NoError(t, fs.CopyFile(ctx, okSrc, base.RootDir().Join("badexisting", "new", "ok.txt")))
+	require.NoError(t, fs.CopyRecursive(ctx, src, base.RootDir().Join("badexisting")))
+	require.True(t, base.RootDir().Join("badexisting", "a.txt").Exists())
+}
+
+// TestValidateName_OverlayUpperLayer verifies that copies and renames into an
+// OverlayFileSystem check the names with the ValidateName method of its upper
+// layer, which gets the writes, before they write anything.
+func TestValidateName_OverlayUpperLayer(t *testing.T) {
+	ctx := t.Context()
+	newMemFS := func() *fs.MemFileSystem {
+		memFS, err := fs.NewMemFileSystem(nil)
+		require.NoError(t, err)
+		require.NoError(t, fs.Register(memFS))
+		t.Cleanup(func() { _ = memFS.Close() })
+		return memFS
+	}
+	src := newMemFS().RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	require.NoError(t, src.Join("bad.txt").WriteAllString(ctx, "bad"))
+	upperMemFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	upper := validateNameFS{upperMemFS}
+	require.NoError(t, fs.Register(upper))
+	t.Cleanup(func() { fs.Unregister(upper) })
+	overlay, err := fs.NewOverlayFileSystem(newMemFS(), upper, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
+	t.Cleanup(func() { _ = overlay.Close() })
+
+	require.ErrorIs(t, fs.CopyRecursive(ctx, src, overlay.RootDir().Join("copy")), os.ErrInvalid)
+	require.ErrorIs(t, fs.CopyFile(ctx, src.Join("bad.txt"), overlay.RootDir()), os.ErrInvalid)
+	require.ErrorIs(t, fs.CopyFile(ctx, src.Join("bad.txt"), overlay.RootDir().Join("new", "bad.txt")), os.ErrInvalid)
+	require.False(t, upper.RootDir().Join("copy").Exists(), "nothing was written")
+	require.False(t, upper.RootDir().Join("bad.txt").Exists(), "nothing was written")
+	require.False(t, upper.RootDir().Join("new").Exists(), "no parent directory was made")
+	require.NoError(t, overlay.RootDir().Join("x.txt").WriteAllString(ctx, "x"))
+	_, err = overlay.RootDir().Join("x.txt").Rename(ctx, "bad.txt")
 	require.ErrorIs(t, err, os.ErrInvalid)
 }
