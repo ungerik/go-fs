@@ -84,11 +84,31 @@ func (s *SubFileSystem) CleanPath(uriParts ...string) string {
 // whose root is the directory dirPath of the parent file system.
 // A random id is used if id is empty. dirPath is a parent path or URI
 // and must be an existing directory. The file system is not registered.
+// A URI is resolved like by [File], decoding its percent-encoded
+// characters, and must be one of the parent: the URI of another file
+// system, or a file URI that names no local file, like "file://./x", is
+// an error wrapping [os.ErrInvalid] instead of a root somewhere else.
 func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSystem, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("nil parent file system")
 	}
-	dir := parent.CleanPath(dirPath)
+	var dir string
+	_, local := parent.(*LocalFileSystem)
+	switch {
+	case !strings.Contains(dirPath, PrefixSeparator):
+		dir = parent.CleanPath(dirPath)
+	case local && strings.HasPrefix(dirPath, LocalPrefix):
+		// Decoded once, uriPath would decode again in CleanPath
+		resolved, resolvedPath := parseLocalFileURI(parent, dirPath)
+		if resolved != parent || resolvedPath == "" {
+			return nil, fmt.Errorf("%w: the file URI %s names no local directory", os.ErrInvalid, fsimpl.RedactURI(dirPath))
+		}
+		dir = resolvedPath
+	case fsPrefixMatchLen(parent, dirPath) >= 0:
+		dir = uriPath(parent, dirPath)
+	default:
+		return nil, fmt.Errorf("%w: %s is no URI of the parent file system %s", os.ErrInvalid, fsimpl.RedactURI(dirPath), fsimpl.RedactURI(parent.Prefix()))
+	}
 	info, err := fsStat(parent, dir)
 	if err != nil {
 		return nil, err

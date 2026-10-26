@@ -49,7 +49,10 @@ func fsFile(fileSystem FileSystem, cleanPath string) File {
 			// file, see fileURILocalPath, File("") would be InvalidFile
 			return File(LocalPrefix)
 		}
-		return File(cleanPath)
+		// A path that begins with a directory named "~", like "~" that
+		// TrimExt makes of "~.zip", stays below the current directory
+		// instead of naming the home directory
+		return localFile(cleanPath)
 	}
 	if _, ok := fileSystem.(InvalidFileSystem); ok && cleanPath == "" {
 		return InvalidFile

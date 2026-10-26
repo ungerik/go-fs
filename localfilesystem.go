@@ -485,10 +485,8 @@ func isDriveLetterPath(filePath string) bool {
 // host ".", ".." or "?" on every platform (except "file://?/C:/x", the
 // Windows long path of a drive), or on Windows of the device namespace
 // like "file:///??/x", has no local path: [ParseRawURI] returns the
-// [InvalidFileSystem] for it. CleanPath can't report that and
-// returns the host as first element of an absolute path, which cleaning
-// removes for "." and "..": "file://./x" becomes "/x", a path of another
-// file, so resolve URIs with ParseRawURI or [File], not with CleanPath.
+// [InvalidFileSystem] for it, and CleanPath the empty path, which names
+// no file, instead of the path of another file.
 //
 // Only the tilde at the start of the first element is expanded,
 // so a "~" after a relative directory, like in CleanPath(".", "~", "x"),
@@ -499,17 +497,18 @@ func isDriveLetterPath(filePath string) bool {
 // The percent-encoded characters of a file URI are decoded like by
 // [ParseRawURI], a local path is used verbatim, so a local file literally
 // named "a%20b" is reachable. A file URI without a path, "file://" or
-// "file://localhost", has the empty path, which names no file: the result
-// is "", not ".", the working directory, also with more parts, which are
-// not joined to it, so nothing derived from it names a file either.
+// "file://localhost", has the empty path too: the result is "", not ".",
+// the working directory, also with more parts, which are not joined to
+// it, so nothing derived from such a URI names a file either.
 func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 	if len(uriParts) == 0 {
 		return "."
 	}
 	first := uriParts[0]
 	if strings.HasPrefix(first, LocalPrefix) {
-		first, _ = decodeLocalFileURI(first)
-		if first == "" {
+		var isLocal bool
+		first, isLocal = decodeLocalFileURI(first)
+		if !isLocal || first == "" {
 			return ""
 		}
 	}
@@ -527,10 +526,15 @@ func cleanLocalPath(first string, more []string) string {
 // [LocalFileSystem.CleanPath], decoding its percent-encoded characters,
 // but without expanding the tilde, and splits on [Separator].
 // Leading and trailing separators are dropped, so the result has no
-// empty elements. An empty or root-only path returns nil.
+// empty elements. An empty or root-only path returns nil, and so does
+// a file URI that names no local file.
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
 	if strings.HasPrefix(filePath, LocalPrefix) {
-		filePath, _ = decodeLocalFileURI(filePath)
+		var isLocal bool
+		filePath, isLocal = decodeLocalFileURI(filePath)
+		if !isLocal {
+			return nil
+		}
 		filePath = filepath.FromSlash(filePath)
 	}
 	filePath = strings.Trim(filePath, Separator)

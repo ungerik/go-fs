@@ -78,6 +78,8 @@ func Ext(filePath, separator string) string {
 }
 
 // TrimExt returns a filePath with a path where the extension is removed.
+// Like Ext, it takes a name that begins with its only point, like
+// ".bashrc", for an extension: TrimExt("dir/.bashrc", "/") is "dir/".
 func TrimExt(filePath, separator string) string {
 	sep := -1
 	if separator != "" {

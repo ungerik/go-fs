@@ -362,7 +362,10 @@ signatures. Changes compared to v0.1:
   also `%2F` and `%2E%2E`, which become a separator and `..`: build URIs
   with `File.URI()` or `fsimpl.EscapeURIPath`, not with `"file://" + path`.
   `File.TrimExt` of a file URI returns the local path without the
-  extension. Windows long paths keep their URI `file:////?/C:/x`;
+  extension, and leaves a name like `.bashrc` unchanged.
+  `fs.NewSubFileSystem` fails with `os.ErrInvalid` for the URI of another
+  file system or a file URI that names no local file, like `file://./x`;
+  `LocalFileSystem.CleanPath` returns the empty path for such a file URI. Windows long paths keep their URI `file:////?/C:/x`;
   `file:///??/…` names no file, and the short forms `file:/path` and
   `file:path` are relative local paths.
 - Moves and `CopyRecursive` fail with `os.ErrExist` where two source names

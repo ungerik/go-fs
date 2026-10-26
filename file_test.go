@@ -1355,3 +1355,22 @@ func TestNewFileReadWriteAllSeekCloser(t *testing.T) {
 	require.NoError(t, rw.Close())
 	assert.Equal(t, "hello world!", mustReadString(t, file))
 }
+
+// TestFile_TrimExtOfTildeAndDotfiles checks that TrimExt of "~.zip" is the
+// local file "./~", not the home directory that "~" names, and that a name
+// that is only an extension, like ".bashrc", is not trimmed to its
+// directory.
+func TestFile_TrimExtOfTildeAndDotfiles(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	for _, file := range []File{"~.zip", "./~.zip"} {
+		trimmed := file.TrimExt()
+		assert.Equal(t, File("."+Separator+"~"), trimmed, "%q.TrimExt()", file)
+		assert.NotEqual(t, home, trimmed.LocalPath(), "%q.TrimExt() names the home directory", file)
+	}
+
+	dotfile := File(filepath.Join(t.TempDir(), ".bashrc"))
+	assert.Equal(t, dotfile, dotfile.TrimExt(), "TrimExt of a dotfile")
+	config := File(filepath.Join(t.TempDir(), ".config.json"))
+	assert.Equal(t, File(strings.TrimSuffix(string(config), ".json")), config.TrimExt(), "TrimExt of a dotfile with an extension")
+}

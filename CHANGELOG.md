@@ -132,7 +132,17 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   Windows at a dot in a directory or host name of a file URI, like
   `file://fileserver.corp/share/README`, which became another host. It
   trims the decoded path now and returns the File of the trimmed path,
-  a local path instead of a file URI for a local file.
+  a local path instead of a file URI for a local file. A trimmed name `~`,
+  of `~.zip`, is the local file `./~` instead of the home directory, and
+  a name that is only an extension, like `.bashrc`, is not trimmed to its
+  directory.
+- `fs.NewSubFileSystem` resolves a URI like `File`: it decodes the
+  percent-encoding of a URI of the parent file system, and the URI of
+  another file system or a file URI that names no local file, like
+  `file://./uploads`, which was the root `/uploads`, is an error wrapping
+  `os.ErrInvalid`. `LocalFileSystem.CleanPath` and `SplitPath` of a file URI
+  that names no local file return the empty path and nil instead of the path
+  of another file.
 
 - `azureblobfs` `RemoveAll` stopped with a 409 `SnapshotsPresent` error at
   the first blob with snapshots, after it had already deleted the blobs

@@ -110,7 +110,9 @@ name.
 
 `CleanFilePath` and `JoinCleanFilePath` resolve a URI the same way, and
 `LocalFileSystem.CleanPath` decodes a file URI; the parts joined to it are
-names, used verbatim. Only the form `file://` is a file URI: the RFC 8089
+names, used verbatim. For a file URI that names no local file, like
+`file://./x`, `CleanPath` returns the empty path, and `NewSubFileSystem`
+fails with `os.ErrInvalid` for it and for URIs of other file systems. Only the form `file://` is a file URI: the RFC 8089
 short forms `file:/path` and `file:path` are relative local paths.
 
 This asymmetry is deliberate. Percent-encoding is part of URI syntax and not

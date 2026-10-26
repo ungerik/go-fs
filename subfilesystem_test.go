@@ -592,3 +592,33 @@ func (m *symlinkMockFileSystem) CreateSymbolicLink(targetPath, linkPath string) 
 func (m *symlinkMockFileSystem) ReadSymbolicLink(linkPath string) (string, error) {
 	return m.readLink(linkPath)
 }
+
+// TestNewSubFileSystem_URIs checks that NewSubFileSystem resolves a URI
+// like File: a file URI of a local directory and the URI of the parent
+// with percent-encoded characters are roots, the URI of another file
+// system and a file URI that names no local directory, like "file://./x"
+// that "/x" would otherwise be, are errors wrapping os.ErrInvalid.
+func TestNewSubFileSystem_URIs(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "a b"), 0o700))
+
+	subFS, err := fs.NewSubFileSystem(fs.Local, fs.Local.URI(filepath.Join(dir, "a b")), "")
+	require.NoError(t, err)
+	require.NoError(t, subFS.WriteAll(t.Context(), "/y.txt", []byte("y"), 0))
+	require.FileExists(t, filepath.Join(dir, "a b", "y.txt"), "the root of the file URI")
+
+	for _, uri := range []string{"file://./etc", "file://../tmp", "file://", "file://localhost", "mem://x/dir"} {
+		_, err := fs.NewSubFileSystem(fs.Local, uri, "")
+		require.ErrorIs(t, err, os.ErrInvalid, "NewSubFileSystem(Local, %q)", uri)
+	}
+
+	mem, err := fs.NewMemFileSystem(nil, fs.NewMemFile("/dir/a b/x.txt", []byte("x")))
+	require.NoError(t, err)
+	subFS, err = fs.NewSubFileSystem(mem, mem.Prefix()+"/dir/a%20b", "")
+	require.NoError(t, err, "a URI of the parent is decoded")
+	data, err := subFS.ReadAll(t.Context(), "/x.txt")
+	require.NoError(t, err)
+	require.Equal(t, "x", string(data))
+	_, err = fs.NewSubFileSystem(mem, "file:///dir", "")
+	require.ErrorIs(t, err, os.ErrInvalid, "a file URI is no URI of a MemFileSystem")
+}

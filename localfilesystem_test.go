@@ -927,7 +927,7 @@ func TestFileURIWithoutPath(t *testing.T) {
 		assert.ErrorIs(t, err, ErrEmptyPath, "RelPathOf from %q", uri)
 		_, err = File("x").RelPathOf(file)
 		assert.ErrorIs(t, err, ErrEmptyPath, "RelPathOf to %q", uri)
-		assert.Equal(t, File(LocalPrefix), file.TrimExt(), "TrimExt of %q", uri)
+		assert.Equal(t, file, file.TrimExt(), "TrimExt of %q", uri)
 		assert.Equal(t, File(LocalPrefix), CleanFilePath(uri), "CleanFilePath(%q)", uri)
 		assert.Equal(t, File(LocalPrefix), JoinCleanFilePath(uri, "x"), "JoinCleanFilePath(%q, x)", uri)
 
@@ -944,6 +944,24 @@ func TestFileURIWithoutPath(t *testing.T) {
 			assert.Equal(t, Local, joined.FileSystem(), "%q.Join(%q) file system", uri, part)
 			assert.Equal(t, "", file.Joinf("%s", part).Path(), "%q.Joinf(%q) has the empty path", uri, part)
 		}
+	}
+}
+
+// TestCleanPathOfNonLocalFileURI checks that CleanPath and SplitPath of
+// a file URI that names no local file return the empty path, like
+// ParseRawURI returns the InvalidFileSystem for it, instead of the
+// absolute path of another file: "file://./etc" isn't "/etc".
+func TestCleanPathOfNonLocalFileURI(t *testing.T) {
+	uris := []string{"file://./etc", "file://../tmp", "file://?/x"}
+	if Separator != `\` {
+		uris = append(uris, "file://host/share/x") // a UNC path on Windows
+	}
+	for _, uri := range uris {
+		fileSystem, _ := ParseRawURI(uri)
+		require.Equal(t, Invalid, fileSystem, "ParseRawURI(%q)", uri)
+		assert.Equal(t, "", Local.CleanPath(uri), "CleanPath(%q)", uri)
+		assert.Equal(t, "", Local.CleanPath(uri, "x"), "CleanPath(%q, x)", uri)
+		assert.Nil(t, Local.SplitPath(uri), "SplitPath(%q)", uri)
 	}
 }
 
