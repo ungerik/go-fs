@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -317,7 +318,7 @@ func dockerUserProcesses(t *testing.T) int {
 // SFTP renames with os.Rename. That one replaces existing files and
 // empty directories, so the overwrite rules must be checked by sftpfs.
 func Test_fileSystemInProcess(t *testing.T) {
-	root := t.TempDir()
+	root := filepath.ToSlash(t.TempDir()) // SFTP paths use slashes, also on a server on Windows
 	s := startTestServer(t, testServerConfig{root: root})
 	f := s.dial(t, nil)
 	cfg := fstest.Config{
@@ -339,7 +340,7 @@ func Test_fileSystemInProcess(t *testing.T) {
 // TestMoveWithoutPosixRename replaces an existing file without the
 // posix-rename@openssh.com extension by removing it before the rename.
 func TestMoveWithoutPosixRename(t *testing.T) {
-	root := t.TempDir()
+	root := filepath.ToSlash(t.TempDir())
 	s := startTestServer(t, testServerConfig{root: root})
 	f := s.dial(t, nil)
 	f.currentConn().posixRename = false
@@ -379,7 +380,7 @@ func TestMoveWithoutPosixRename(t *testing.T) {
 // file system, where the destination is the source under another name:
 // removing the destination before the rename removed the source.
 func TestMoveCaseOnlyWithoutPosixRename(t *testing.T) {
-	root := t.TempDir()
+	root := filepath.ToSlash(t.TempDir())
 	require.NoError(t, os.WriteFile(root+"/file.txt", []byte("content"), 0o600))
 	if _, err := os.Stat(root + "/FILE.TXT"); err != nil {
 		t.Skip("the temporary directory is on a case-sensitive file system")
@@ -399,7 +400,7 @@ func TestMoveCaseOnlyWithoutPosixRename(t *testing.T) {
 // posix-rename@openssh.com extension to a destination path that reaches
 // the same file through a symbolic link to its directory.
 func TestMoveAliasWithoutPosixRename(t *testing.T) {
-	root := t.TempDir()
+	root := filepath.ToSlash(t.TempDir())
 	require.NoError(t, os.Mkdir(root+"/dir", 0o700))
 	require.NoError(t, os.Symlink("dir", root+"/link"))
 	require.NoError(t, os.WriteFile(root+"/dir/file.txt", []byte("content"), 0o600))
@@ -459,7 +460,7 @@ func TestMoveLinkOntoTarget(t *testing.T) {
 			"through-dir": func(string) string { return "dirlink/file.txt" },
 		} {
 			t.Run(fmt.Sprintf("%s/posixRename=%t", name, posixRename), func(t *testing.T) {
-				root := t.TempDir()
+				root := filepath.ToSlash(t.TempDir())
 				require.NoError(t, os.Mkdir(root+"/dir", 0o700))
 				require.NoError(t, os.Symlink("dir", root+"/dirlink"))
 				require.NoError(t, os.WriteFile(root+"/dir/file.txt", []byte("content"), 0o600))
@@ -494,7 +495,7 @@ func TestMoveLinkOntoTarget(t *testing.T) {
 func TestMoveLinkOntoOtherFile(t *testing.T) {
 	for _, posixRename := range []bool{true, false} {
 		t.Run(fmt.Sprintf("posixRename=%t", posixRename), func(t *testing.T) {
-			root := t.TempDir()
+			root := filepath.ToSlash(t.TempDir())
 			require.NoError(t, os.WriteFile(root+"/target.txt", []byte("target"), 0o600))
 			require.NoError(t, os.WriteFile(root+"/other.txt", []byte("other file"), 0o600))
 			require.NoError(t, os.Symlink("target.txt", root+"/link"))
@@ -531,7 +532,7 @@ func TestMoveLinkOntoOtherFile(t *testing.T) {
 // TestListDirRecursiveSymlink lists a symbolic link to a directory:
 // the files of the directory are listed below the path of the link.
 func TestListDirRecursiveSymlink(t *testing.T) {
-	root := t.TempDir()
+	root := filepath.ToSlash(t.TempDir())
 	require.NoError(t, os.MkdirAll(root+"/dir/sub", 0o700))
 	require.NoError(t, os.WriteFile(root+"/dir/a.txt", []byte("a"), 0o600))
 	require.NoError(t, os.WriteFile(root+"/dir/sub/b.txt", []byte("b"), 0o600))
