@@ -29,3 +29,5 @@ http://alice:s3cr@et#Pw@127.0.0.1:1
 http://alice:s3cr3t@cloud.example.com:8080
 http://alice:s3cr3t@cloud.example.com
 http://alice:secret@cloud.example.com:8080
+# The redacted form of an edge case of fsimpl.RedactURI that TODOS.md documents
+http://localhost:xxxxx@example.com`,
