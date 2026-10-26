@@ -103,6 +103,36 @@ release from the CHANGELOG section.
 **Priority:** P0
 **Depends on:** The other release items
 
+### Explain in the README what go-fs protects against
+
+**What:** A section in `README.md` that explains which pitfalls and security
+issues go-fs solves compared with working with string paths and the
+standard library (`os`, `path/filepath`, `io/fs`), and compared with using
+the client packages of a storage directly (`pkg/sftp`, `jlaffaye/ftp`,
+`go-smb2`, the AWS and Azure SDKs, a WebDAV client) instead of the go-fs
+file systems built on them (`sftpfs`, `ftpfs`, `smbfs`, `s3fs`,
+`azureblobfs`, `webdavfs`).
+
+**Why:** The protections are spread over the package docs, the CHANGELOG and
+`docs/MIGRATION_v1.md`, so a reader of the README can't see why to use go-fs
+instead of plain paths and SDK calls.
+
+**Context:** Candidates from the v1.0 work, each with a one-line example of
+the failure it prevents: a URI of an unregistered scheme is the `Invalid`
+file system instead of a silent local write; RFC 8089 file URIs and the SMB
+host check of Windows UNC paths; names that collide on case-insensitive or
+normalizing targets fail instead of overwriting; Windows reserved names,
+alternate data streams and trailing dots are rejected before anything is
+written; copies don't write into pipes or devices; `RemoveAll` doesn't delete
+through symbolic links (ftpfs, SubFileSystem, OverlayFileSystem); Azure moves
+pinned to ETags; checked names of `CopyFile`/`Move` into directories;
+redacted credentials in errors; aborted uploads that commit nothing. Link to
+the reference docs for the details and the documented limits.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+
 ### Update the dependents
 
 **What:** Update the repositories that use go-fs to v1.0.0.
