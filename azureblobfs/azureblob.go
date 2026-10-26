@@ -256,6 +256,15 @@ func deref[T any](p *T) T {
 	return *p
 }
 
+// ifMatch returns the access conditions that pin a request to the version
+// etag of a blob (If-Match), and nil for a nil etag.
+func ifMatch(etag *azcore.ETag) *blob.AccessConditions {
+	if etag == nil {
+		return nil
+	}
+	return &blob.AccessConditions{ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: etag}}
+}
+
 func (f *fileSystem) fileInfo(name string, size int64, modified time.Time) *fs.FileInfo {
 	base := path.Base(name)
 	return &fs.FileInfo{
@@ -567,12 +576,7 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	}
 	// The closure keeps only the ETag of the answer, not its metadata
 	etag := props.ETag
-	var access *blob.AccessConditions
-	if etag != nil {
-		access = &blob.AccessConditions{
-			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: etag},
-		}
-	}
+	access := ifMatch(etag)
 	return &fsimpl.RangeReader{
 		Size: deref(props.ContentLength),
 		Open: func(offset, count int64) (io.ReadCloser, error) {
@@ -809,11 +813,9 @@ func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 		return redactErr(err)
 	}
 	opts := &blob.SetMetadataOptions{}
-	if item.Properties != nil && item.Properties.ETag != nil {
+	if item.Properties != nil {
 		// Don't replace the metadata of a blob that changed after the listing
-		opts.AccessConditions = &blob.AccessConditions{
-			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: item.Properties.ETag},
-		}
+		opts.AccessConditions = ifMatch(item.Properties.ETag)
 	}
 	_, err = f.client.NewBlobClient(name).SetMetadata(ctx, item.Metadata, opts)
 	if bloberror.HasCode(err, bloberror.ConditionNotMet) {
@@ -850,14 +852,9 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 // Azurite also for a missing blob. Other errors, like 404 Blob Not Found
 // for a missing blob, are returned redacted.
 func (f *fileSystem) deleteBlob(ctx context.Context, name string, etag *azcore.ETag) error {
-	opts := &blob.DeleteOptions{}
+	opts := &blob.DeleteOptions{AccessConditions: ifMatch(etag)}
 	if f.deleteSnapshots {
 		opts.DeleteSnapshots = new(blob.DeleteSnapshotsOptionTypeInclude)
-	}
-	if etag != nil {
-		opts.AccessConditions = &blob.AccessConditions{
-			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: etag},
-		}
 	}
 	_, err := f.client.NewBlobClient(name).Delete(ctx, opts)
 	if bloberror.HasCode(err, bloberror.SnapshotsPresent) {

@@ -29,22 +29,18 @@ func isNotFound(err error) bool {
 	return bloberror.HasCode(err, bloberror.BlobNotFound, bloberror.ContainerNotFound, bloberror.ResourceNotFound)
 }
 
-// isPermissionDenied reports whether err is a 403 Forbidden response.
-func isPermissionDenied(err error) bool {
-	if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok {
-		return respErr.StatusCode == http.StatusForbidden
-	}
-	return false
+// hasStatus reports whether err is a response with the HTTP status code.
+func hasStatus(err error, code int) bool {
+	respErr, ok := errors.AsType[*azcore.ResponseError](err)
+	return ok && respErr.StatusCode == code
 }
+
+// isPermissionDenied reports whether err is a 403 Forbidden response.
+func isPermissionDenied(err error) bool { return hasStatus(err, http.StatusForbidden) }
 
 // isPreconditionFailed reports whether err is a 412 Precondition Failed
 // response, like the ConditionNotMet answer to a failed If-Match.
-func isPreconditionFailed(err error) bool {
-	if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok {
-		return respErr.StatusCode == http.StatusPreconditionFailed
-	}
-	return false
-}
+func isPreconditionFailed(err error) bool { return hasStatus(err, http.StatusPreconditionFailed) }
 
 var (
 	// urlQuery matches URLs with a query in error messages,
