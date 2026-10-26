@@ -204,7 +204,12 @@ and open readers, and afterwards every method returns
   `LIST` take `-a` for a path and list the entry `-a` of the directory
   instead, so `RemoveAll` doesn't use the listing of a directory that has an
   entry named `-a`, which it checks with `MLST`, and fails for the
-  directories in such a directory. FTP servers on Windows (IIS with
+  directories in such a directory. The client library drops a `LIST` line
+  that it can't parse without an error, like one whose year doesn't have
+  four digits, so a client that can write into the directory and set the
+  modification time of its link can hide the link's line and, with a file
+  whose name contains a line feed followed by a forged directory line, make
+  `RemoveAll` delete through the link. FTP servers on Windows (IIS with
   listings in the DOS format, and FileZilla Server or IIS with listings in
   the Unix format, which list junctions and links to directories as
   directories) and ProFTPD with `ShowSymlinks off` list a link to a

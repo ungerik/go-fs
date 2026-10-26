@@ -17,7 +17,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   Windows and UNC paths, which follow RFC 8089 now, see below.
 - `fs.ReadHeader` and `fs.ReadHeaderString` take a `ctx` as first argument
   like the other functions that read content. It is checked before the file
-  is opened and between the reads.
+  is opened and between the reads. A reader that fails with
+  `io.ErrUnexpectedEOF`, like a truncated stream, is an error now instead of
+  a short header.
 - `fsimpl.ReadonlyFileBuffer`, `NewReadonlyFileBuffer` and
   `NewReadonlyFileBufferReadAll` are renamed to `ReadOnlyFileBuffer`,
   `NewReadOnlyFileBuffer` and `NewReadOnlyFileBufferReadAll`, the spelling of
@@ -35,8 +37,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   file system, also on Windows, where it would be the device path `\\.\x`.
   `File.URI()` of a relative path that can't be made absolute, because the
   working directory can't be determined, is `file://./…`, which names no
-  file. `file://` and `file://localhost` without a path are the root `/`
-  instead of the working directory. A Windows long path of a drive or a UNC
+  file. `file://` and `file://localhost` without a path have the empty path
+  instead of the working directory: they resolve to the local file system,
+  whose operations fail for the empty path with `fs.ErrEmptyPath`. A Windows long path of a drive or a UNC
   path keeps its prefix, `\\?\C:\x` has the URI `file:////?/C:/x` like in
   beta.3, because the prefix keeps names that Windows would normalize, like
   a trailing dot. Other paths of the device and file namespaces, like
@@ -96,6 +99,11 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   `webdavfs` and `smbfs` share.
 
 ### Fixed
+
+- `fs.CleanFilePath`, `fs.JoinCleanFilePath` and `LocalFileSystem.CleanPath`
+  and `SplitPath` didn't decode the percent-encoded characters of a file
+  URI, unlike `File` and `fs.ParseRawURI`: `file:///tmp/a%25b` was the path
+  `/tmp/a%25b` instead of `/tmp/a%b`.
 
 - `azureblobfs` `RemoveAll` stopped with a 409 `SnapshotsPresent` error at
   the first blob with snapshots, after it had already deleted the blobs
@@ -203,7 +211,8 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   still goes unnoticed. FTP servers on Windows and ProFTPD with
   `ShowSymlinks off` list a link to a directory as a directory with `LIST`
   too, so `RemoveAll` still deletes through such links there, and so do
-  servers without MLST support that expand glob characters in the path
+  links whose `LIST` line the client library can't parse and drops, together
+  with a forged directory line, and servers without MLST support that expand glob characters in the path
   argument of `LIST` (wu-ftpd, ProFTPD with `UseGlobbing` but without
   `mod_facts`) for paths with `*`, `?` or `[`.
 - `ftpfs` `RemoveAll` kept a dangling symbolic link or a cycle of links on

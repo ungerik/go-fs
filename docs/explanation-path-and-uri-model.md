@@ -108,6 +108,9 @@ A URI that carries a scheme has its percent-encoded characters decoded, so
 **verbatim**, so a local file literally named `a%20b` is reachable by that
 name.
 
+`CleanFilePath`, `JoinCleanFilePath` and `LocalFileSystem.CleanPath` decode
+a file URI the same way; the parts joined to it are names, used verbatim.
+
 This asymmetry is deliberate. Percent-encoding is part of URI syntax and not
 part of local path syntax, so decoding a local path would make some real
 filenames unaddressable. If the decode fails, the original string is used
@@ -186,7 +189,8 @@ the go-fs shorthand for `~/x` in the home directory. The hosts `.`, `..` and
 system, also on Windows, where it would be the device path `\\.\x`. A relative
 path that can't be made absolute, because the working directory can't be
 determined, has such a URI: `file://./data/x` names no file. `file://` and
-`file://localhost` without a path are the root `/`.
+`file://localhost` without a path resolve to the local file system with the
+empty path, which names no file: its operations fail with `ErrEmptyPath`.
 
 On Windows the long paths of a drive or a UNC path keep their prefix:
 `\\?\C:\dir\name.` has the URI `file:////?/C:/dir/name.`, because the prefix

@@ -842,10 +842,10 @@ func TestFileURILocalPath(t *testing.T) {
 		{"localhost/etc/hosts", false, "/etc/hosts", true},
 		{"LocalHost/etc/hosts", false, "/etc/hosts", true},
 		{"/", false, "/", true},
-		{"", false, "/", true},          // RFC 8089 requires an absolute path
-		{"localhost", false, "/", true}, // it used to be the working directory
-		{"", true, "/", true},
-		{"localhost", true, "/", true},
+		{"", false, "", true},          // RFC 8089 requires an absolute path
+		{"localhost", false, "", true}, // it used to be the working directory
+		{"", true, "", true},
+		{"localhost", true, "", true},
 		{"//?/C:/x", true, "//?/C:/x", true}, // long path, written by beta.3 too
 		{"//?/C:", true, "//?/C:/", true},    // the root, not the volume device
 		{"?/C:", true, "//?/C:/", true},
@@ -893,6 +893,46 @@ func TestFileURILocalPath(t *testing.T) {
 		assert.Equal(t, tc.wantPath, gotPath, "fileURILocalPath(%q, windows=%t) path", tc.rest, tc.windows)
 		assert.Equal(t, tc.wantIsLocal, gotIsLocal, "fileURILocalPath(%q, windows=%t) isLocal", tc.rest, tc.windows)
 	}
+}
+
+// TestFileURIWithoutPath checks that a local file URI without a path names
+// no file: it resolves to the local file system with the empty path, whose
+// operations fail, not to the working directory like before v1.0.0, nor to
+// the root.
+func TestFileURIWithoutPath(t *testing.T) {
+	for _, uri := range []string{"file://", "file://localhost"} {
+		fileSystem, filePath := ParseRawURI(uri)
+		assert.Equal(t, Local, fileSystem, "ParseRawURI(%q) file system", uri)
+		assert.Equal(t, "", filePath, "ParseRawURI(%q) path", uri)
+		assert.Equal(t, "", Local.CleanPath(uri), "CleanPath(%q)", uri)
+		assert.Equal(t, "x", Local.CleanPath(uri, "x"), "CleanPath(%q, x) joins to the empty path", uri)
+		assert.Nil(t, Local.SplitPath(uri), "SplitPath(%q)", uri)
+
+		file := File(uri)
+		assert.False(t, file.Exists(), "%q exists", uri)
+		_, err := file.ReadAll(t.Context())
+		assert.ErrorIs(t, err, ErrEmptyPath, "ReadAll of %q", uri)
+		err = file.WriteAll(t.Context(), []byte("x"))
+		assert.ErrorIs(t, err, ErrEmptyPath, "WriteAll of %q", uri)
+		assert.Equal(t, InvalidFile, CleanFilePath(uri), "CleanFilePath(%q)", uri)
+	}
+}
+
+// TestFileURIDecoding checks that the local file system decodes the
+// percent-encoded characters of a file URI in CleanPath and SplitPath,
+// and so CleanFilePath and JoinCleanFilePath, like ParseRawURI and File,
+// and uses a local path verbatim.
+func TestFileURIDecoding(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "a%b c")
+	uri := Local.URI(filePath) // escapes the % as %25
+	require.Contains(t, uri, "a%25b c")
+
+	assert.Equal(t, filePath, File(uri).Path(), "File(%q).Path()", uri)
+	assert.Equal(t, filePath, Local.CleanPath(uri), "CleanPath(%q)", uri)
+	assert.Equal(t, File(filePath), CleanFilePath(uri), "CleanFilePath(%q)", uri)
+	assert.Equal(t, File(filepath.Join(filePath, "d%20e")), JoinCleanFilePath(uri, "d%20e"), "the joined parts are names, used verbatim")
+	assert.Equal(t, "a%b c", Local.SplitPath(uri)[len(Local.SplitPath(uri))-1], "SplitPath(%q)", uri)
+	assert.Equal(t, filePath, Local.CleanPath(filePath), "a local path is used verbatim")
 }
 
 func TestFileURIPathOf(t *testing.T) {

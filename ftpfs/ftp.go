@@ -66,6 +66,13 @@
 // the entry -a of the directory instead: RemoveAll doesn't use the listing
 // of a directory that has an entry named -a, which it checks once per
 // directory with MLST, and fails for the directories in such a directory.
+// The FTP client library drops a line of a LIST listing that it can't
+// parse without an error, like one whose year doesn't have four digits,
+// so a client that can write into the directory and set the modification
+// time of its link to such a year can hide the line of the link, and with
+// a file whose name contains a line feed followed by a line that lists
+// a directory with the name of the link, make the check confirm the link
+// and RemoveAll delete the files that it points to.
 // FTP servers on Windows (IIS with listings in the DOS format, and
 // FileZilla Server or IIS with listings in the Unix format, which list
 // junctions and links to directories as directories) and ProFTPD with

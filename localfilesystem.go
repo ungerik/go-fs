@@ -332,8 +332,9 @@ func fileURIPathOf(slashPath string, windows bool) string {
 // "file:////?/C:/x" and "file://?/C:/x" are `\\?\C:\x` and
 // "file:////?/UNC/server/share/x" is `\\?\UNC\server\share\x`,
 // which name local files.
-// A local URI without a path, "file://" or "file://localhost",
-// is the root "/", because RFC 8089 requires an absolute path.
+// A local URI without a path, "file://" or "file://localhost", has the
+// empty path, which names no file, the operations of [LocalFileSystem]
+// return [ErrEmptyPath] for it: RFC 8089 requires an absolute path.
 func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool) {
 	separators := "/"
 	if windows {
@@ -360,8 +361,8 @@ func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool)
 		return "/" + authority + filePath, false
 	}
 	if filePath == "" {
-		// RFC 8089 requires an absolute path, "file://localhost" is the root
-		filePath = "/"
+		// RFC 8089 requires an absolute path, "file://localhost" names no file
+		return "", true
 	}
 	if windows && len(filePath) == 6 && isLongPath(filePath+"/") {
 		// `\\?\C:` is the volume device of the drive, like "file:///C:"
@@ -439,8 +440,12 @@ func isDriveLetterPath(filePath string) bool {
 // for ParseRawURI.
 func cleanFileURI(uri string) (cleanPath string, isLocal bool) {
 	filePath, isLocal := fileURILocalPath(fsimpl.UnescapeURIPath(strings.TrimPrefix(uri, LocalPrefix)), filepath.Separator == '\\')
-	if !isLocal {
+	switch {
+	case !isLocal:
 		return "", false
+	case filePath == "":
+		// Not cleaned to ".", the working directory
+		return "", true
 	}
 	return cleanLocalPath(filePath, nil), true
 }
@@ -473,15 +478,23 @@ func cleanFileURI(uri string) (cleanPath string, isLocal bool) {
 // cleaning is returned with a leading "./", like "./~/x",
 // so cleaning it again doesn't expand it either.
 //
-// Percent-encoded characters are not decoded, that is done by
-// [ParseRawURI] for URIs with the [LocalPrefix].
+// The percent-encoded characters of a file URI are decoded like by
+// [ParseRawURI], a local path is used verbatim, so a local file literally
+// named "a%20b" is reachable. A file URI without a path, "file://" or
+// "file://localhost", has the empty path, which names no file, also
+// after joining no more parts: the result is "", not ".", the working
+// directory. More parts are joined to it like to an empty path, so
+// CleanPath("file://", "x") is the relative path "x".
 func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 	if len(uriParts) == 0 {
 		return "."
 	}
 	first := uriParts[0]
 	if rest, ok := strings.CutPrefix(first, LocalPrefix); ok {
-		first, _ = fileURILocalPath(rest, filepath.Separator == '\\')
+		first, _ = fileURILocalPath(fsimpl.UnescapeURIPath(rest), filepath.Separator == '\\')
+		if first == "" && len(uriParts) == 1 {
+			return ""
+		}
 	}
 	return cleanLocalPath(first, uriParts[1:])
 }
@@ -493,12 +506,13 @@ func cleanLocalPath(first string, more []string) string {
 	return literalTilde(filepath.Clean(filepath.Join(append([]string{expandTilde(first)}, more...)...)))
 }
 
-// SplitPath converts a file URI like [LocalPrefix] and splits on [Separator].
+// SplitPath converts a file URI like [LocalFileSystem.CleanPath], decoding
+// its percent-encoded characters, and splits on [Separator].
 // Leading and trailing separators are dropped, so the result has no
 // empty elements. An empty or root-only path returns nil.
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
 	if rest, ok := strings.CutPrefix(filePath, LocalPrefix); ok {
-		filePath, _ = fileURILocalPath(rest, filepath.Separator == '\\')
+		filePath, _ = fileURILocalPath(fsimpl.UnescapeURIPath(rest), filepath.Separator == '\\')
 		filePath = filepath.FromSlash(filePath)
 	}
 	filePath = strings.Trim(filePath, Separator)

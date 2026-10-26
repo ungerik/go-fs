@@ -138,6 +138,24 @@ breaking. The partial copy is documented in `docs/MIGRATION_v1.md`.
 **Priority:** P3
 **Depends on:** None
 
+### Check that the source can read the names before a copy
+
+**What:** sftpfs, ftpfs and webdavfs list a name with a backslash of a
+server on Unix, but reject every operation on it without
+`Options.AllowBackslashInNames`.
+
+**Why:** `CopyRecursive` or `Move` from such a server fails at that file
+after the files before it were copied, because `checkSource` only checks
+the names against the destination.
+
+**Context:** Check the names of the source with the same rule in
+`checkSource`, through the optional `ValidName` hook of "Check destination
+names before a copy or move between file systems".
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ### Bound the memory of the collision check of copies
 
 **What:** When `CopyRecursive` copies into an existing local directory, it
@@ -388,6 +406,30 @@ fail closed otherwise, or find another way to detect reparse points.
 
 **Effort:** M
 **Priority:** P2
+**Depends on:** None
+
+### Fail closed when the client library drops a LIST line
+
+**What:** `jlaffaye/ftp` drops a line of a `LIST` listing that it can't
+parse without an error, like one whose year doesn't have four digits.
+`confirmDir` then can't see the line of a link, and one forged directory
+line with the link's name, from a file whose name contains a line feed, is
+the only entry with that name.
+
+**Why:** A client that can write into the parent directory and set the
+modification time of its link can make `RemoveAll` on a server with MLST
+support delete the files that the link points to (reproduced with the test
+server's `listOmits` and `listForged` hooks). Documented in the package doc.
+
+**Context:** Count the raw lines on the data connections of the listing
+connection (ftpfs dials them with its own `dialFunc`), and make the listing
+an error if the parser dropped any line other than `total N`. Add the test
+case of an omitted link line with one forged line. While there, run the
+`-a` check (`checkOptionEntry`) for every listing instead of once per
+directory, so it is as fresh as the listing.
+
+**Effort:** S
+**Priority:** P1, before v1.0.0
 **Depends on:** None
 
 ### List without a path argument on servers without MLST that glob LIST arguments
