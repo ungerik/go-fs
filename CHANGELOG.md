@@ -5,7 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## [Unreleased]
+## [1.0.0-rc.1] - 2026-10-26
+
+First release candidate: file URIs follow RFC 8089 on every platform, copies
+and moves refuse what would overwrite, misplace or leave their destination
+instead of losing data (name collisions, invalid and reserved names, special
+files, the same file through another path), `ftpfs` `RemoveAll` no longer
+deletes through symbolic links on servers that show them, `azureblobfs`
+handles blobs with snapshots and moves blobs natively, pinned to their
+ETags, and `File.URL` is renamed to `File.URI`. All modules are tagged in
+lockstep, the `tools` module is not tagged.
 
 ### Changed
 
@@ -32,37 +41,37 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   `NewReadonlyFileBufferReadAll` are renamed to `ReadOnlyFileBuffer`,
   `NewReadOnlyFileBuffer` and `NewReadOnlyFileBufferReadAll`, the spelling of
   every other read-only identifier.
-- File URIs follow RFC 8089. `File.URI()` (was `File.URL()`) of a Windows path is
-  `file:///C:/dir/file` instead of `file://C:/dir/file`, and of a UNC path
-  `file://server/share/file`, of the servers `localhost` and `~` and of
-  a server like `C:` `file:////localhost/share/file`, because as host
+- File URIs follow RFC 8089. `File.URI()` (was `File.URL()`) of a Windows
+  path is `file:///C:/dir/file` instead of `file://C:/dir/file`, and of a
+  UNC path `file://server/share/file`, of the servers `localhost` and `~`
+  and of a server like `C:` `file:////localhost/share/file`, because as host
   `localhost` is a local path, `~` the home directory and `C:` the drive.
   Only the form `file://` is recognized, the short forms `file:/path` and
   `file:path` of RFC 8089 are relative local paths. Parsing accepts
-  `file://localhost/…`, on Windows also the old `file://C:/…` form, and
-  maps `file://server/share/…`
-  to the UNC path `\\server\share\…`. On other platforms a file URI with a
-  host other than `localhost` resolves to the `Invalid` file system instead
-  of a path relative to the working directory. So does a relative URI that
-  v0 wrote or accepted, like `file://data/uploads`, which names the host
-  `data` (on Windows the UNC path `\\data\uploads`). The hosts `.`, `..` and
-  `?` name no host on any platform: `file://./x` resolves to the `Invalid`
-  file system, also on Windows, where it would be the device path `\\.\x`.
-  `File.URI()` of a relative path that can't be made absolute, because the
-  working directory can't be determined, is `file://./…`, which names no
-  file. `file://` and `file://localhost` without a path have the empty path
-  instead of the working directory: they resolve to the local file system,
-  whose operations fail for the empty path with `fs.ErrEmptyPath`, and the
-  Files derived from them, like by `Join` or `Dir`, have the empty path too,
-  with the URI `file://`. A Windows long path of a drive or a UNC
-  path keeps its prefix, `\\?\C:\x` has the URI `file:////?/C:/x` like in
-  beta.3, because the prefix keeps names that Windows would normalize, like
-  a trailing dot. Other paths of the device and file namespaces, like
-  `\\.\COM1`, `\\?\Volume{…}\x` and `\??\PhysicalDrive0`, get a URI that
-  names no file. On Windows a file URI with a host is a UNC path, so opening
-  a `File` from an untrusted file URI can connect to that host over SMB, also
-  for forms without a host like `file:////server/share/x`; check the resolved
-  path, see `ParseRawURI`.
+  `file://localhost/…`, on Windows also the old `file://C:/…` form, and maps
+  `file://server/share/…` to the UNC path `\\server\share\…`. On other
+  platforms a file URI with a host other than `localhost` resolves to the
+  `Invalid` file system instead of a path relative to the working directory.
+  So does a relative URI that v0 wrote or accepted, like
+  `file://data/uploads`, which names the host `data` (on Windows the UNC
+  path `\\data\uploads`). The hosts `.`, `..` and `?` name no host on any
+  platform: `file://./x` resolves to the `Invalid` file system, also on
+  Windows, where it would be the device path `\\.\x`. `File.URI()` of a
+  relative path that can't be made absolute, because the working directory
+  can't be determined, is `file://./…`, which names no file. `file://` and
+  `file://localhost` without a path have the empty path instead of the
+  working directory: they resolve to the local file system, whose operations
+  fail for the empty path with `fs.ErrEmptyPath`, and the Files derived from
+  them, like by `Join` or `Dir`, have the empty path too, with the URI
+  `file://`. A Windows long path of a drive or a UNC path keeps its prefix,
+  `\\?\C:\x` has the URI `file:////?/C:/x` like in beta.3, because the
+  prefix keeps names that Windows would normalize, like a trailing dot.
+  Other paths of the device and file namespaces, like `\\.\COM1`,
+  `\\?\Volume{…}\x` and `\??\PhysicalDrive0`, get a URI that names no file.
+  On Windows a file URI with a host is a UNC path, so opening a `File` from
+  an untrusted file URI can connect to that host over SMB, also for forms
+  without a host like `file:////server/share/x`; check the resolved path,
+  see `ParseRawURI`.
 - `sftpfs`, `ftpfs` and `webdavfs` reject a path with a backslash with an
   error wrapping `os.ErrInvalid`, in `sftpfs` also a symbolic link target
   and in `ftpfs` a listed link target that `Stat` follows.
@@ -166,13 +175,15 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   `file://./uploads`, which was the root `/uploads`, is an error wrapping
   `os.ErrInvalid`. An empty `dirPath` is `ErrEmptyPath` instead of the
   working directory or the root of the parent. A relative local root is made
-  absolute, on Unix with the working directory without symbolic links,
-  from which the system resolves `..`, on Windows like `filepath.Abs`: below a relative root like `.` a name like `.env` lost its dot,
-  so `fs.Move` of a top-level `.cfg` copied `cfg` and removed `.cfg`, and
-  through a root like `..` the absolute target of a new link was stored as
-  a relative path that the link's directory resolved outside of the view. `LocalFileSystem.CleanPath`
-  and `SplitPath` of a file URI that names no local file return the empty
-  path and nil instead of the path of another file.
+  absolute, on Unix with the working directory without symbolic links, from
+  which the system resolves `..`, on Windows like `filepath.Abs`: below a
+  relative root like `.` a name like `.env` lost its dot, so `fs.Move` of a
+  top-level `.cfg` copied `cfg` and removed `.cfg`, and through a root like
+  `..` the absolute target of a new link was stored as a relative path that
+  the link's directory resolved outside of the view.
+  `LocalFileSystem.CleanPath` and `SplitPath` of a file URI that names no
+  local file return the empty path and nil instead of the path of another
+  file.
 - `fs.TempDir`, `CreateTempFile` and `MakeTempDir` with a `$TMPDIR` that
   begins with a literal `~`, which systemd's `Environment=` doesn't expand,
   returned Files in the home directory instead of below the current
@@ -223,12 +234,12 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   entries. On Windows `NUL`, `CON`, `AUX` or `COM1` (also with an extension)
   went to the device, `NUL` discarding the data; `a:b` went to an alternate
   data stream; a trailing dot or space was stripped. A move then removed the
-  source. Names that `filepath.Localize` rejects, and on Windows names ending
-  in a dot or space or containing `< > " | ? *` or a control character, like
-  the S3 key `report?.pdf`, are now errors wrapping `os.ErrInvalid`. Between file
-  systems this happens before anything is written, also for the names of
-  empty directories and of entries the patterns don't select; it also
-  applies to the final name of a moved file.
+  source. Names that `filepath.Localize` rejects, and on Windows names
+  ending in a dot or space or containing `< > " | ? *` or a control
+  character, like the S3 key `report?.pdf`, are now errors wrapping
+  `os.ErrInvalid`. Between file systems this happens before anything is
+  written, also for the names of empty directories and of entries the
+  patterns don't select; it also applies to the final name of a moved file.
 - `fs.Move` through a `SubFileSystem` onto the same file of a file system
   that is not local, also through two SubFileSystems of one parent, copied
   the file onto itself and removed it, returning nil; a writer that truncates
@@ -261,34 +272,35 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   the destination first, and a copy of a source without files didn't fail.
 - The `os.ErrInvalid` error of `CopyRecursive` for invalid names printed URI
   passwords; it redacts them now.
-- `ftpfs` `RemoveAll` on servers with MLST support could delete the files that
-  a symbolic link to a directory points to, outside of the removed tree, when
-  the server refused to delete the link, for example in a directory without
-  write permission. After a failed `DELE` it now deletes the content of a
-  directory only if `LIST` of the parent directory lists it once and as a
-  directory, and otherwise returns an error wrapping the `DELE` error. The
-  client library lists with `MLSD` on these servers, so `RemoveAll` of a
-  directory dials a second connection for `LIST`; on a server that allows
-  only one connection per user it fails instead of deleting. For every such
-  directory that connection changes to the parent directory with `CWD` and
-  sends `LIST -a` without a path argument, which servers like ProFTPD with `UseGlobbing` and Pure-FTPd
-  would expand as a glob pattern, and it is dialed again once for a listing
-  if the server closed it while it was idle. A symbolic link whose name
-  contains ` -> `, which the client library cuts at the first ` -> `, is
-  still recognized, so a forged directory line can't confirm it. The listing
-  of a directory with an entry named `-a` is not used: servers that don't
-  parse the options of `LIST` (like ftpserverlib with `DisableLISTArgs`) list
-  that entry for `LIST -a`, so `RemoveAll` fails for the directories in such
-  a directory. The parent directory is listed again for every directory, so
-  a directory that another client replaces with a link while `RemoveAll`
-  removes the directories next to it is not confirmed from an earlier
-  listing; a replacement between the `LIST` and the deletion of the content
-  still goes unnoticed. FTP servers on Windows and ProFTPD with
-  `ShowSymlinks off` list a link to a directory as a directory with `LIST`
-  too, so `RemoveAll` still deletes through such links there, and so do
-  links whose `LIST` line the client library can't parse and drops, together
-  with a forged directory line, and servers without MLST support that expand glob characters in the path
-  argument of `LIST` (wu-ftpd, ProFTPD with `UseGlobbing` but without
+- `ftpfs` `RemoveAll` on servers with MLST support could delete the files
+  that a symbolic link to a directory points to, outside of the removed
+  tree, when the server refused to delete the link, for example in a
+  directory without write permission. After a failed `DELE` it now deletes
+  the content of a directory only if `LIST` of the parent directory lists it
+  once and as a directory, and otherwise returns an error wrapping the
+  `DELE` error. The client library lists with `MLSD` on these servers, so
+  `RemoveAll` of a directory dials a second connection for `LIST`; on a
+  server that allows only one connection per user it fails instead of
+  deleting. For every such directory that connection changes to the parent
+  directory with `CWD` and sends `LIST -a` without a path argument, which
+  servers like ProFTPD with `UseGlobbing` and Pure-FTPd would expand as a
+  glob pattern, and it is dialed again once for a listing if the server
+  closed it while it was idle. A symbolic link whose name contains ` -> `,
+  which the client library cuts at the first ` -> `, is still recognized, so
+  a forged directory line can't confirm it. The listing of a directory with
+  an entry named `-a` is not used: servers that don't parse the options of
+  `LIST` (like ftpserverlib with `DisableLISTArgs`) list that entry for
+  `LIST -a`, so `RemoveAll` fails for the directories in such a directory.
+  The parent directory is listed again for every directory, so a directory
+  that another client replaces with a link while `RemoveAll` removes the
+  directories next to it is not confirmed from an earlier listing; a
+  replacement between the `LIST` and the deletion of the content still goes
+  unnoticed. FTP servers on Windows and ProFTPD with `ShowSymlinks off` list
+  a link to a directory as a directory with `LIST` too, so `RemoveAll` still
+  deletes through such links there, and so do links whose `LIST` line the
+  client library can't parse and drops, together with a forged directory
+  line, and servers without MLST support that expand glob characters in the
+  path argument of `LIST` (wu-ftpd, ProFTPD with `UseGlobbing` but without
   `mod_facts`) for paths with `*`, `?` or `[`.
 - `ftpfs` `RemoveAll` kept a dangling symbolic link or a cycle of links on
   servers with MLST support, and `Remove` and `Move` of it failed with

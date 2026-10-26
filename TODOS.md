@@ -238,6 +238,42 @@ the trailing dot and space, and document the rule.
 **Priority:** P3
 **Depends on:** None
 
+### Run the Windows test of SubFileSystem roots without a drive in CI
+
+**What:** `TestNewSubFileSystem_WindowsRootWithoutDrive` skips when the
+temp directory and the working directory are on different drives, which
+they are on the GitHub Windows runners (`C:` and `D:`).
+
+**Why:** The test of the Windows branch of `NewSubFileSystem` for roots like
+`\x` and `/` never runs in CI, so a regression back to a root below the
+working directory would pass.
+
+**Context:** `t.Chdir(t.TempDir())` before `os.Getwd()` puts both on one
+drive. Also add a file URI without a drive, `"file://" +
+filepath.ToSlash(withoutDrive)`.
+
+**Effort:** S
+**Priority:** P1, before v1.0.0
+**Depends on:** None
+
+### Keep Windows long-path roots of SubFileSystem unnormalized
+
+**What:** `NewSubFileSystem` calls `filepath.Abs` on every local root on
+Windows, also on an absolute long path like `\\?\C:\data\name.`, and
+`GetFullPathNameW` may strip the trailing dot of a `\\?\` path.
+
+**Why:** The view would root at the sibling `\\?\C:\data\name`; long
+paths are the documented way to address such names.
+
+**Context:** Call `filepath.Abs` only when `!filepath.IsAbs(dir)`, which
+still covers `\x`, `/`, `C:` and relative roots. The first Windows CI run of
+`TestLocalFileSystem_LongPathURI` shows whether `LocalFileSystem.AbsPath`
+needs the same guard.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Windows CI
+
 ### Make CleanPath idempotent on the empty path
 
 **What:** `LocalFileSystem.CleanPath` returns the empty path, which names no
