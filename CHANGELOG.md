@@ -107,6 +107,12 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Fixed
 
+- `CopyRecursive` and `Move` fail with `ErrEmptyPath` when the source or the
+  destination has the empty path, like a file URI without a path (`file://`,
+  `file://localhost`). Their same-file checks took that path for the working
+  directory: copying the working directory to `file://` returned nil without
+  copying anything, and so did `Move` from `file://` to `file://localhost`.
+
 - `ftpfs` on servers without MLST support: `Stat`, `Remove`, `RemoveAll`,
   `Move` and `MakeDir` find a symbolic link whose name contains ` -> `, and
   `ListDir` and `ListDirRecursive` of such a link to a directory list the
