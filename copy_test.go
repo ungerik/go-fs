@@ -2198,9 +2198,10 @@ func TestValidateName_MoveWithinFileSystem(t *testing.T) {
 
 // TestValidateName_NewDirectories verifies that the directories that a copy
 // or move makes, also the parents of its destination, are checked with
-// ValidateName before the first one is made, also through a SubFileSystem
-// and for the upper layer of an OverlayFileSystem, and that an existing
-// directory isn't checked, because it isn't written.
+// ValidateName before the first one is made, also a missing directory above
+// one with a valid name, also through a SubFileSystem and for the upper
+// layer of an OverlayFileSystem, and that an existing directory isn't
+// checked, because it isn't written.
 func TestValidateName_NewDirectories(t *testing.T) {
 	ctx := t.Context()
 	newMemFS := func() *fs.MemFileSystem {
@@ -2239,6 +2240,9 @@ func TestValidateName_NewDirectories(t *testing.T) {
 		require.ErrorIs(t, fs.CopyRecursive(ctx, src, root.Join("bad")), os.ErrInvalid, root)
 		require.ErrorIs(t, fs.CopyRecursive(ctx, src, root.Join("new", "badder")), os.ErrInvalid, root)
 		require.ErrorIs(t, root.Join("new", "baddir").MakeAllDirs(), os.ErrInvalid, root)
+		// Not only the name of the deepest missing directory is checked
+		require.ErrorIs(t, root.Join("baddir", "new").MakeAllDirs(), os.ErrInvalid, root)
+		require.ErrorIs(t, fs.CopyFile(ctx, okSrc, root.Join("baddir", "new", "ok.txt")), os.ErrInvalid, root)
 		for _, name := range []string{"new", "baddir", "bad"} {
 			require.False(t, root.Join(name).Exists(), "%s was not made in %s", name, root)
 		}

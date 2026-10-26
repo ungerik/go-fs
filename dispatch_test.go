@@ -1193,7 +1193,8 @@ func TestMoveEmulation_NameCollisions(t *testing.T) {
 
 // TestMoveEmulation_InvalidLocalName checks that a move of a file to a name
 // of the local file system that filepath.Localize rejects fails with an error
-// wrapping os.ErrInvalid and keeps the source. filepath.Localize rejects
+// wrapping os.ErrInvalid and keeps the source, also a move to a path below
+// a missing directory, which is not made. filepath.Localize rejects
 // a name with a NUL byte on every platform, dispatch_windows_test.go has
 // the Windows names, like "NUL", which would write to the device.
 func TestMoveEmulation_InvalidLocalName(t *testing.T) {
@@ -1201,6 +1202,12 @@ func TestMoveEmulation_InvalidLocalName(t *testing.T) {
 	dir := fs.File(t.TempDir())
 
 	err := fs.Move(t.Context(), src, dir)
+	require.ErrorIs(t, err, os.ErrInvalid)
+	requireNames(t, dir)
+	requireContent(t, src, "data")
+
+	// The name is checked before the parent directories are made
+	err = fs.Move(t.Context(), src, dir.Join("new", "z\x00.txt"))
 	require.ErrorIs(t, err, os.ErrInvalid)
 	requireNames(t, dir)
 	requireContent(t, src, "data")

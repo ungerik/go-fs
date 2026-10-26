@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -216,6 +217,28 @@ func TestDecode(t *testing.T) {
 			"ab.txt",
 		},
 		{
+			// The ASCII start of the field, like a directory, must start
+			// the stored name
+			"Unicode Path field that changes the ASCII start",
+			zip.FileHeader{Name: "ab\x84.txt", NonUTF8: true, Extra: unicodePathExtra("ab\x84.txt", "x/日.txt")},
+			"abä.txt",
+		},
+		{
+			"Unicode Path field that changes an ASCII part between other characters",
+			zip.FileHeader{Name: "a_b?c.txt", Extra: unicodePathExtra("a_b?c.txt", "a日z本c.txt")},
+			"a_b?c.txt",
+		},
+		{
+			"Unicode Path field of a name without an extension",
+			zip.FileHeader{Name: "\x83A\x83C", NonUTF8: true, Extra: unicodePathExtra("\x83A\x83C", "アイ")},
+			"アイ",
+		},
+		{
+			"Unicode Path field that appends a character for no stored byte",
+			zip.FileHeader{Name: "ab", Extra: unicodePathExtra("ab", "ab日")},
+			"ab",
+		},
+		{
 			"Unicode Path field of another name",
 			zip.FileHeader{Name: "\x84.txt", NonUTF8: true, Extra: unicodePathExtra("other.txt", "日本.txt")},
 			"ä.txt",
@@ -225,9 +248,50 @@ func TestDecode(t *testing.T) {
 			zip.FileHeader{Name: "\x84.txt", NonUTF8: true, Extra: unicodePathExtra("\x84.txt", "日本.txt")[:8]},
 			"ä.txt",
 		},
+		{
+			// Regression: keepsASCII sliced the stored name past its end, so
+			// a crafted entry panicked UnzipToMemFiles and the zipfs reader
+			"Unicode Path field with characters after the end of the stored name",
+			zip.FileHeader{Name: "ab", Extra: unicodePathExtra("ab", "ab日c本")},
+			"ab",
+		},
+		{
+			// Decode documents that the field can't give the entry another
+			// directory than archive/zip shows
+			"Unicode Path field that removes a directory",
+			zip.FileHeader{Name: "a/\x84.txt", NonUTF8: true, Extra: unicodePathExtra("a/\x84.txt", "a日.txt")},
+			"a/ä.txt",
+		},
+		{
+			"Unicode Path field that removes an extension",
+			zip.FileHeader{Name: "\x84.exe", NonUTF8: true, Extra: unicodePathExtra("\x84.exe", "日")},
+			"ä.exe",
+		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
 			assert.Equal(t, tc.want, Decode(&tc.header))
 		})
 	}
+}
+
+// FuzzKeepsASCII verifies that keepsASCII never panics and that a Unicode
+// Path name it accepts has the slashes and dots of the stored name, so it
+// can't name another directory or extension.
+// Regression: it sliced the stored name past its end for a field whose
+// ASCII parts used up the stored name.
+func FuzzKeepsASCII(f *testing.F) {
+	f.Add("ab", "ab日c本")
+	f.Add("a/\x84.txt", "a日.txt")
+	f.Add("\x83A.txt", "ア.txt")
+	f.Add("a_b?c.txt", "a日b本c.txt")
+	f.Fuzz(func(t *testing.T, stored, unicodeName string) {
+		if !utf8.ValidString(unicodeName) || !keepsASCII(stored, unicodeName) {
+			return
+		}
+		for _, c := range []string{"/", "."} {
+			if strings.Count(stored, c) != strings.Count(unicodeName, c) {
+				t.Errorf("keepsASCII(%q, %q) accepted another number of %q", stored, unicodeName, c)
+			}
+		}
+	})
 }

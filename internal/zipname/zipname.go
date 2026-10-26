@@ -157,11 +157,13 @@ func Decode(header *zip.FileHeader) string {
 // only differs from stored, the stored name, in the characters that the
 // encoding of stored can't hold: the ASCII parts of unicodeName must be
 // the ones of stored in the same order, and every run of other characters
-// stands for at least one byte of stored, like a character of another code
-// page, whose second byte can be ASCII, or a substitute like "_".
+// stands for at least one byte of stored that is no slash and no dot, like
+// a character of another code page, whose second byte can be ASCII, or
+// a substitute like "_". So a run can't hide a directory or an extension.
 func keepsASCII(stored, unicodeName string) bool {
 	isASCII := func(r rune) bool { return r < utf8.RuneSelf }
 	isOther := func(r rune) bool { return r >= utf8.RuneSelf }
+	isRunBytes := func(b string) bool { return b != "" && !strings.ContainsAny(b, "/.") }
 	i := strings.IndexFunc(unicodeName, isOther)
 	if i < 0 {
 		return unicodeName == stored
@@ -175,17 +177,22 @@ func keepsASCII(stored, unicodeName string) bool {
 		// rest starts with a run of other characters
 		i = strings.IndexFunc(rest, isASCII)
 		if i < 0 {
-			return len(stored) > pos
+			return isRunBytes(stored[pos:])
 		}
 		rest = rest[i:]
 		i = strings.IndexFunc(rest, isOther)
 		if i < 0 {
 			// The ASCII part after the last other character ends stored
-			return len(stored)-len(rest) > pos && strings.HasSuffix(stored, rest)
+			end := len(stored) - len(rest)
+			return end > pos && strings.HasSuffix(stored, rest) && isRunBytes(stored[pos:end])
+		}
+		if pos >= len(stored) {
+			return false
 		}
 		// The leftmost match leaves the most bytes for the parts after it
+		// and the fewest for the run before it
 		at := strings.Index(stored[pos+1:], rest[:i])
-		if at < 0 {
+		if at < 0 || !isRunBytes(stored[pos:pos+1+at]) {
 			return false
 		}
 		pos += 1 + at + i

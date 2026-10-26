@@ -223,6 +223,14 @@ func (r *zipTestReadCloser) Stat() (iofs.FileInfo, error) {
 	return nil, errors.New("not implemented")
 }
 
+// zipOpenErrorFileReader is a MemFile whose OpenReader fails with err.
+type zipOpenErrorFileReader struct {
+	MemFile
+	err error
+}
+
+func (f zipOpenErrorFileReader) OpenReader() (ReadCloser, error) { return nil, f.err }
+
 // TestZip_ReaderErrors is a regression test: Zip didn't close the reader
 // of a file when copying it failed and ignored the context while copying.
 func TestZip_ReaderErrors(t *testing.T) {
@@ -242,6 +250,16 @@ func TestZip_ReaderErrors(t *testing.T) {
 		zipped, err := Zip(t.Context(), NewMemFile("a.txt", []byte("a")), FileReaderWithName(missing, "a:b.txt"))
 		require.ErrorIs(t, err, os.ErrNotExist)
 		require.NotErrorIs(t, err, os.ErrInvalid)
+		require.Nil(t, zipped)
+	})
+
+	// A file that can't be opened, like one without read permission,
+	// fails Zip with an error that names it instead of zipping it empty
+	t.Run("open error", func(t *testing.T) {
+		errOpen := errors.New("open failed")
+		zipped, err := Zip(t.Context(), NewMemFile("a.txt", []byte("a")), zipOpenErrorFileReader{NewMemFile("b.txt", []byte("b")), errOpen})
+		require.ErrorIs(t, err, errOpen)
+		require.ErrorContains(t, err, `"b.txt"`)
 		require.Nil(t, zipped)
 	})
 
