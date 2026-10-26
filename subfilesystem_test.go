@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -591,4 +592,126 @@ func (m *symlinkMockFileSystem) CreateSymbolicLink(targetPath, linkPath string) 
 
 func (m *symlinkMockFileSystem) ReadSymbolicLink(linkPath string) (string, error) {
 	return m.readLink(linkPath)
+}
+
+// TestNewSubFileSystem_URIs checks that NewSubFileSystem resolves a URI
+// like File: a file URI of a local directory and the URI of the parent
+// with percent-encoded characters are roots, the URI of another file
+// system and a file URI that names no local directory, like "file://./x"
+// that "/x" would otherwise be, are errors wrapping os.ErrInvalid.
+func TestNewSubFileSystem_URIs(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "a b"), 0o700))
+
+	subFS, err := fs.NewSubFileSystem(fs.Local, fs.Local.URI(filepath.Join(dir, "a b")), "")
+	require.NoError(t, err)
+	require.NoError(t, subFS.WriteAll(t.Context(), "/y.txt", []byte("y"), 0))
+	require.FileExists(t, filepath.Join(dir, "a b", "y.txt"), "the root of the file URI")
+
+	for _, uri := range []string{"file://./etc", "file://../tmp", "file://", "file://localhost", "mem://x/dir"} {
+		_, err := fs.NewSubFileSystem(fs.Local, uri, "")
+		require.ErrorIs(t, err, os.ErrInvalid, "NewSubFileSystem(Local, %q)", uri)
+	}
+
+	mem, err := fs.NewMemFileSystem(nil, fs.NewMemFile("/dir/a b/x.txt", []byte("x")))
+	require.NoError(t, err)
+	subFS, err = fs.NewSubFileSystem(mem, mem.Prefix()+"/dir/a%20b", "")
+	require.NoError(t, err, "a URI of the parent is decoded")
+	data, err := subFS.ReadAll(t.Context(), "/x.txt")
+	require.NoError(t, err)
+	require.Equal(t, "x", string(data))
+	_, err = fs.NewSubFileSystem(mem, "file:///dir", "")
+	require.ErrorIs(t, err, os.ErrInvalid, "a file URI is no URI of a MemFileSystem")
+
+	// A "://" after a "/" is part of a path, like of a cached URL
+	require.NoError(t, mem.MakeAllDirs("/cache/https:/x", 0))
+	require.NoError(t, mem.WriteAll(t.Context(), "/cache/https:/x/y.txt", []byte("y"), 0))
+	subFS, err = fs.NewSubFileSystem(mem, "/cache/https://x", "")
+	require.NoError(t, err, "a path that contains ://")
+	data, err = subFS.ReadAll(t.Context(), "/y.txt")
+	require.NoError(t, err)
+	require.Equal(t, "y", string(data))
+
+	// An unset directory isn't the working directory or the root
+	_, err = fs.NewSubFileSystem(fs.Local, "", "")
+	require.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = fs.NewSubFileSystem(mem, "", "")
+	require.ErrorIs(t, err, fs.ErrEmptyPath)
+}
+
+// TestNewSubFileSystem_RelativeLocalRoot checks that a relative local root
+// is made absolute: below the root "." a name like ".env" keeps its dot,
+// a move of a top-level dot directory moves it and not the directory
+// without the dot, and the absolute target of a link created through
+// a view rooted at ".." is stored as the absolute parent path, not as
+// a relative path that the link's directory resolves outside of the view.
+func TestNewSubFileSystem_RelativeLocalRoot(t *testing.T) {
+	base := t.TempDir()
+	view := filepath.Join(base, "view")
+	require.NoError(t, os.MkdirAll(filepath.Join(view, "work", ".cfg"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(view, "work", "cfg"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(view, "work", ".cfg", "key"), []byte("private"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(view, "work", "cfg", "key"), []byte("public"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(view, "secret"), []byte("inside"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "secret"), []byte("outside"), 0o600))
+	t.Chdir(filepath.Join(view, "work"))
+
+	dotView, err := fs.NewSubFileSystem(fs.Local, ".", "")
+	require.NoError(t, err)
+	var names []string
+	require.NoError(t, dotView.ListDir(t.Context(), "/", nil, func(info *fs.FileInfo) error {
+		names = append(names, info.Name+"="+strings.TrimPrefix(string(info.File), dotView.Prefix()))
+		return nil
+	}))
+	require.ElementsMatch(t, []string{".cfg=/.cfg", "cfg=/cfg"}, names, "the Files of a listing below the root \".\"")
+	data, err := dotView.ReadAll(t.Context(), "/.cfg/key")
+	require.NoError(t, err)
+	require.Equal(t, "private", string(data))
+
+	require.NoError(t, fs.Register(dotView))
+	t.Cleanup(func() { fs.Unregister(dotView) })
+	mem, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(mem))
+	t.Cleanup(func() { fs.Unregister(mem) })
+	require.NoError(t, fs.Move(t.Context(), dotView.RootDir().Join(".cfg"), mem.RootDir().Join("backup")))
+	moved, err := mem.ReadAll(t.Context(), "/backup/key")
+	require.NoError(t, err)
+	require.Equal(t, "private", string(moved), "the move of .cfg moved .cfg")
+	require.FileExists(t, filepath.Join(view, "work", "cfg", "key"), "cfg is kept")
+
+	upView, err := fs.NewSubFileSystem(fs.Local, "..", "")
+	require.NoError(t, err)
+	if err := upView.CreateSymbolicLink("/secret", "/lnk"); err != nil {
+		t.Skipf("can't create symbolic links: %v", err)
+	}
+	data, err = upView.ReadAll(t.Context(), "/lnk")
+	require.NoError(t, err)
+	require.Equal(t, "inside", string(data), "the link to /secret of the view")
+}
+
+// TestNewSubFileSystem_RelativeRootBelowLinkedWorkDir checks that the
+// relative local root ".." is resolved against the real working directory
+// like the operating system resolves "..", not against a path through
+// a symbolic link to it that os.Getwd returns from $PWD.
+func TestNewSubFileSystem_RelativeRootBelowLinkedWorkDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(`Windows resolves ".." from the path of the current directory`)
+	}
+	base := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "b", "c"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "a"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "b", "in-b.txt"), []byte("b"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "a", "in-a.txt"), []byte("a"), 0o600))
+	if err := os.Symlink(filepath.Join(base, "b", "c"), filepath.Join(base, "a", "link")); err != nil {
+		t.Skipf("can't create symbolic links: %v", err)
+	}
+	t.Chdir(filepath.Join(base, "a", "link"))
+	t.Setenv("PWD", filepath.Join(base, "a", "link")) // like a shell that entered through the link
+
+	view, err := fs.NewSubFileSystem(fs.Local, "..", "")
+	require.NoError(t, err)
+	data, err := view.ReadAll(t.Context(), "/in-b.txt")
+	require.NoError(t, err, "the view of .. is the parent of the real working directory")
+	require.Equal(t, "b", string(data))
 }

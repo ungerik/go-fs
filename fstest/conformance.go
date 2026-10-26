@@ -36,7 +36,7 @@ type Seed map[string][]byte
 
 // DefaultSeed returns the tree used by RunConformance when
 // Config.Seed is nil. It contains an empty file, a hidden file,
-// a file with URL escapes in its name that must not be decoded,
+// a file with percent-encoded characters in its name that must not be decoded,
 // and two levels of sub directories.
 func DefaultSeed() Seed {
 	return Seed{
@@ -60,7 +60,7 @@ func FlatSeed() Seed {
 	}
 }
 
-// escapedSeedName is a file name that looks URL escaped.
+// escapedSeedName is a file name that looks percent-encoded.
 // It must keep its name, a file named "100% a b.txt" is another file.
 const escapedSeedName = "100%25 a%20b.txt"
 
@@ -375,20 +375,20 @@ func (c *conformance) fileOf(cleanPath string) fs.File {
 	if c.isLocalFS() {
 		return fs.File(cleanPath) // Local files have no prefix
 	}
-	return fs.File(c.url(cleanPath))
+	return fs.File(c.uri(cleanPath))
 }
 
-// url returns the URI of a file system path as documented by
+// uri returns the URI of a file system path as documented by
 // fs.FileSystem: the prefix followed by the path with "%" escaped
 // as "%25", or the result of URIFromPath for a fs.URIFileSystem.
-func (c *conformance) url(cleanPath string) string {
+func (c *conformance) uri(cleanPath string) string {
 	if c.isLocalFS() {
-		return fs.File(cleanPath).URL()
+		return fs.File(cleanPath).URI()
 	}
 	if u, ok := c.fs.(fs.URIFileSystem); ok {
 		return u.URIFromPath(cleanPath)
 	}
-	return fsimpl.PathHelper{URIPrefix: c.fs.Prefix(), PathSep: c.fs.Separator()}.URL(cleanPath)
+	return fsimpl.PathHelper{URIPrefix: c.fs.Prefix(), PathSep: c.fs.Separator()}.URI(cleanPath)
 }
 
 // boundaryPrefix returns the longest prefix or prefix alias of fileSystem
@@ -561,7 +561,9 @@ func (c *conformance) testMetadata(t *testing.T) {
 	}
 	prefix := c.fs.Prefix()
 	checkTrue(t, prefix != "", "Prefix() must not be empty")
-	checkTrue(t, strings.Contains(prefix, fs.PrefixSeparator), "Prefix() %q must contain %q", prefix, fs.PrefixSeparator)
+	// A separator before the "://" makes the prefix a path, see fs.ParseRawURI
+	schemeEnd := strings.Index(prefix, fs.PrefixSeparator)
+	checkTrue(t, schemeEnd > 0 && !strings.ContainsAny(prefix[:schemeEnd], `/\`), "Prefix() %q must begin with a scheme followed by %q", prefix, fs.PrefixSeparator)
 	checkTrue(t, c.fs.String() != "", "String() must not be empty")
 	checkTrue(t, c.fs.Separator() != "", "Separator() must not be empty")
 	checkTrue(t, c.readable || c.writable, "the file system must be readable or writable")
@@ -582,29 +584,33 @@ func (c *conformance) testMetadata(t *testing.T) {
 func (c *conformance) testPaths(t *testing.T) {
 	sep := c.fs.Separator()
 
-	// CleanPath must be pure: it must not modify the passed slice.
-	parts := []string{c.fs.Prefix() + "a", "b", "..", "c", "file.txt"}
+	// CleanPath must be pure: it must not modify the passed slice. The first
+	// part is the URI of a path of the file system: the prefix followed by
+	// a relative path can be the URI of another path, like "file://a", which
+	// is the UNC path \\a on Windows.
+	parts := []string{c.uri(c.path("a")), "b", "..", "c", "file.txt"}
 	partsCopy := slices.Clone(parts)
 	joined := c.fs.CleanPath(parts...)
 	checkStrings(t, partsCopy, parts, "CleanPath must not modify the passed uriParts")
 	checkFalse(t, strings.HasPrefix(joined, c.fs.Prefix()), "CleanPath must strip the prefix: %q", joined)
-	checkFalse(t, strings.Contains(joined, ".."), "CleanPath must clean the path: %q", joined)
+	checkFalse(t, slices.Contains(strings.Split(joined, sep), ".."), "CleanPath must clean the path: %q", joined)
 	checkTrue(t, strings.HasSuffix(joined, "a"+sep+"c"+sep+"file.txt"), "CleanPath must join with the separator: %q", joined)
+	checkEqual(t, c.path("a/c/file.txt"), joined, "CleanPath must join the path of the URI with the other parts")
 	checkEqual(t, joined, c.fs.CleanPath(joined), "CleanPath must be idempotent")
 
 	// The prefix must be stripped from a URI and the path must survive the round trip
 	testPath := c.fs.CleanPath(c.cfg.TestDir, "x", "y.txt")
-	uri := c.url(testPath)
+	uri := c.uri(testPath)
 	checkTrue(t, strings.HasPrefix(uri, c.fs.Prefix()), "URI %q must have prefix %q", uri, c.fs.Prefix())
 	c.checkURI(t, fs.File(uri), testPath, "the URI of a path")
 	checkEqual(t, testPath, c.fs.CleanPath(uri), "CleanPath(uri) must return the path")
 	checkEqual(t, testPath, fs.File(uri).Path(), "File(uri).Path() must return the path")
-	checkEqual(t, uri, fs.File(uri).URL(), "File(uri).URL() must return the URI")
+	checkEqual(t, uri, fs.File(uri).URI(), "File(uri).URI() must return the URI")
 	checkSameFS(t, c.fs, fs.File(uri).FileSystem(), "File(uri) must resolve to the file system")
 
 	// File path methods
 	f := c.file("x/y.txt")
-	checkEqual(t, uri, f.URL(), "File.URL()")
+	checkEqual(t, uri, f.URI(), "File.URI()")
 	checkEqual(t, "y.txt", f.Name(), "File.Name()")
 	checkEqual(t, c.file("x"), f.Dir(), "File.Dir()")
 	c.checkURI(t, f.Dir(), c.path("x"), "File.Dir()")
@@ -613,13 +619,13 @@ func (c *conformance) testPaths(t *testing.T) {
 	c.checkURI(t, f.Dir().Join("y.txt"), testPath, "File.Join()")
 	checkEqual(t, ".txt", f.Ext(), "File.Ext()")
 
-	// Names that look URL escaped must not be decoded on the way
+	// Names that look percent-encoded must not be decoded on the way
 	// from a path to a File and back, the URI escapes every "%".
 	escPath := c.fs.CleanPath(c.cfg.TestDir, "50% a%20b", "100%25.txt")
-	escURI := c.url(escPath)
+	escURI := c.uri(escPath)
 	c.checkURI(t, fs.File(escURI), escPath, "the URI of a path with escaped names")
 	checkEqual(t, escPath, fs.File(escURI).Path(), "File(uri).Path() must not decode the names of the path")
-	checkEqual(t, escURI, fs.File(escURI).URL(), "File(uri).URL() must return the URI with escaped names")
+	checkEqual(t, escURI, fs.File(escURI).URI(), "File(uri).URI() must return the URI with escaped names")
 	escFile := c.file("50% a%20b/100%25.txt")
 	checkEqual(t, escPath, escFile.Path(), "File.Path() with escaped names")
 	checkEqual(t, "100%25.txt", escFile.Name(), "File.Name() must not decode the name")

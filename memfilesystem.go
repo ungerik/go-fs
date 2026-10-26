@@ -112,7 +112,7 @@ func (n *memFileNode) size() int64 {
 // new bytes or appends behind the bytes that readers can see. So readers
 // share the content without copying it, and callers never share a slice
 // with the file system:
-//   - OpenReader returns a fsimpl.ReadonlyFileBuffer with a snapshot of the
+//   - OpenReader returns a fsimpl.ReadOnlyFileBuffer with a snapshot of the
 //     content at the time of the call, later changes don't affect it
 //   - ReadAll returns a copy of the content, WriteAll and CopyFile store a copy
 //   - OpenWriter and OpenAppendWriter return a writer whose writes are
@@ -374,7 +374,7 @@ func (fs *MemFileSystem) elemsPath(elems []string) string {
 // elemsFile returns the File of path elements, built from the prefix of the
 // file system, so it is valid even if the file system is not registered.
 func (fs *MemFileSystem) elemsFile(elems []string) File {
-	return File(fs.paths.URL(fs.elemsPath(elems)))
+	return File(fs.paths.URI(fs.elemsPath(elems)))
 }
 
 // fileOf returns the File of filePath, see elemsFile.
@@ -1411,7 +1411,7 @@ func (fs *MemFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 	// Limit the capacity, so the snapshot can't be extended
 	// into bytes that a later append stores behind it
 	snapshot := node.FileData[:len(node.FileData):len(node.FileData)]
-	return fsimpl.NewReadonlyFileBuffer(snapshot, info.StdFileInfo()), nil
+	return fsimpl.NewReadOnlyFileBuffer(snapshot, info.StdFileInfo()), nil
 }
 
 // OpenWriter opens the file for writing, creating it if it does not exist

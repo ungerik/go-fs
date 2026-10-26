@@ -124,6 +124,16 @@ type Options struct {
 	// and the address of the server as "host:port".
 	// If nil, a net.Dialer is used.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// AllowBackslashInNames lets paths contain backslashes, which are
+	// an error wrapping os.ErrInvalid by default, also in the target
+	// of a symbolic link. For the separator "/" of SFTP a backslash is
+	// part of a name, but an SFTP server on Windows, like OpenSSH for
+	// Windows, takes it for a separator: a name like `..\x` would reach
+	// a file outside of the directory that it is meant to be in, also for
+	// fs.SubFileSystem and fs.CopyRecursive. Set it only for servers
+	// that store backslashes in names, like servers on Unix.
+	AllowBackslashInNames bool
 }
 
 // effective returns the effective value of the Options field v

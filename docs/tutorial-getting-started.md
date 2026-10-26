@@ -113,7 +113,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("%-40s %s\n", file.URL(), text)
+		fmt.Printf("%-40s %s\n", file.URI(), text)
 	}
 }
 ```
@@ -152,9 +152,10 @@ import (
 )
 ```
 
-```bash
-go get github.com/ungerik/go-fs/httpfs
-```
+`httpfs` is a package of the root module, so the `go get` of step 1 already
+fetched it. The blank import runs its `init`, which registers
+`httpfs.Default` and `httpfs.DefaultTLS` for the `http://` and `https://`
+prefixes.
 
 Then add this at the end of `main`:
 
@@ -390,8 +391,11 @@ What you actually learned:
 
 - **`fs.File` is a string.** String literals work, `const` works, and it
   marshals for free. See [Why File is a string](explanation-the-file-type.md).
-- **The URI prefix selects the backend.** Importing a backend registers it; an
-  unmatched scheme is an error, never a silent local write. See
+- **The URI prefix selects the backend.** A backend serves its prefix once it
+  is registered: `httpfs` registers itself when imported, the others are
+  registered with `fs.Register` or their `NewAndRegister` or
+  `EnsureRegistered` functions. An unmatched scheme is an error, never a
+  silent local write. See
   [Paths, URIs and the registry](explanation-path-and-uri-model.md).
 - **`ctx` appears only where an operation can take long.** See
   [the context rule](explanation-context-rule.md).

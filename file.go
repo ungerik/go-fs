@@ -65,15 +65,24 @@ func (file File) RawURI() string {
 }
 
 // String implements the fmt.Stringer interface
-// by returning the URL of the file.
+// by returning the URI of the file.
 func (file File) String() string {
-	return file.URL()
+	return file.URI()
 }
 
-// URL returns the URL of the file.
-func (file File) URL() string {
+// URI returns the URI of the file: the prefix of its file system
+// followed by its clean path, for a local file the file URI of
+// RFC 8089 like "file:///etc/hosts", see LocalFileSystem.URI.
+//
+// Only "%" is percent-encoded, as "%25", so the URI resolves to the same
+// file with ParseRawURI. Other characters of names, like spaces, "?" and "#",
+// are kept as they are, so the URI is no RFC 3986 URL to pass to net/url,
+// an HTTP client or a browser: there "#b.txt" of "a#b.txt" is a fragment.
+// File systems that implement URIFileSystem, like httpfs, define their own
+// URIs; for httpfs the URI is the HTTP URL with its query.
+func (file File) URI() string {
 	fileSystem, path := file.ParseRawURI()
-	return fsURL(fileSystem, path)
+	return fsURI(fileSystem, path)
 }
 
 // Path returns the cleaned path of the file.
@@ -136,8 +145,21 @@ func (file File) Dir() File {
 // If filePath is the root of the file system, then an empty string will be returned for name.
 func (file File) DirAndName() (dir File, name string) {
 	fileSystem, path := file.ParseRawURI()
+	if isEmptyLocalPath(fileSystem, path) {
+		return file, ""
+	}
 	dirPath, name := fsSplitDirAndName(fileSystem, path)
 	return fsJoinCleanFile(fileSystem, dirPath), name
+}
+
+// isEmptyLocalPath reports if path of fileSystem is the empty path of the
+// local file system, the one of a file URI without a path like "file://",
+// which names no file, see [LocalFileSystem.CleanPath]: the Files derived
+// from it, like by Join or Dir, have the empty path too, else an empty path
+// would be the working directory and a joined part a path of its own.
+func isEmptyLocalPath(fileSystem FileSystem, path string) bool {
+	_, local := fileSystem.(*LocalFileSystem)
+	return local && path == ""
 }
 
 // VolumeName returns the name of the volume at the beginning of the file path,
@@ -178,6 +200,11 @@ func (file File) ExtLower() string {
 // Note that this does not rename an actual existing file.
 // For URIs with a query or fragment like HTTP URLs,
 // the extension of the name before the query is removed.
+// A name that is only an extension, like ".bashrc", has none to remove,
+// and neither has a name like "..zip" or "...zip" that would become "." or
+// "..": the File is returned unchanged instead of its directory or parent.
+// On Windows a local name that would end with a dot or a space, like
+// "report..zip", is returned unchanged too, Windows would remove them.
 func (file File) TrimExt() File {
 	fileSystem, path := file.ParseRawURI()
 	if _, ok := fileSystem.(URIFileSystem); ok {
@@ -190,12 +217,33 @@ func (file File) TrimExt() File {
 		if end < 0 {
 			end = len(path)
 		}
-		if !strings.HasSuffix(path[:end], ext) {
+		if _, name := fsSplitDirAndName(fileSystem, path[:end]); !strings.HasSuffix(path[:end], ext) || isEmptyOrDotName(fsimpl.UnescapeURIPath(strings.TrimSuffix(name, ext))) {
 			return file
 		}
 		return fsFile(fileSystem, path[:end-len(ext)]+path[end:])
 	}
-	return File(fsimpl.TrimExt(string(file), fileSystem.Separator()))
+	// The parsed path, not the string of the File: its percent-encoded
+	// characters are decoded, a "%2F" is a separator, and on Windows
+	// a file URI has slashes where the separator is a backslash.
+	// fsimpl.TrimExt would trim a name like ".bashrc" to its directory
+	// and "...zip" to "..", the parent directory.
+	_, name := fsSplitDirAndName(fileSystem, path)
+	trimmedName := strings.TrimSuffix(name, fsimpl.Ext(name, ""))
+	if isEmptyOrDotName(trimmedName) {
+		return file
+	}
+	if _, local := fileSystem.(*LocalFileSystem); local && windowsPaths && !isValidWindowsName(trimmedName) {
+		// Windows removes a trailing dot or space: "report..zip" would
+		// become "report.", which is the file "report"
+		return file
+	}
+	return fsFile(fileSystem, fsimpl.TrimExt(path, fileSystem.Separator()))
+}
+
+// isEmptyOrDotName reports if name is empty, "." or "..", which name no
+// entry of a directory but the directory itself or its parent, see TrimExt.
+func isEmptyOrDotName(name string) bool {
+	return name == "" || name == "." || name == ".."
 }
 
 // Join returns a new File with pathParts cleaned and joined to the current File's URI.
@@ -207,6 +255,9 @@ func (file File) Join(pathParts ...string) File {
 		return file
 	}
 	fileSystem, path := file.ParseRawURI()
+	if isEmptyLocalPath(fileSystem, path) {
+		return file
+	}
 	if path != "" {
 		pathParts = append([]string{path}, pathParts...)
 	}
@@ -217,6 +268,9 @@ func (file File) Join(pathParts ...string) File {
 // The resulting URI path will be cleaned, removing relative directory names like "..".
 func (file File) Joinf(format string, args ...any) File {
 	fileSystem, path := file.ParseRawURI()
+	if isEmptyLocalPath(fileSystem, path) {
+		return file
+	}
 	return fsJoinCleanFile(fileSystem, path, fmt.Sprintf(format, args...))
 }
 
@@ -310,6 +364,9 @@ func (file File) CheckExists() error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
+	if isEmptyLocalPath(fileSystem, path) {
+		return ErrEmptyPath
+	}
 	exists, err := fsExists(fileSystem, path)
 	if err != nil {
 		return err
@@ -360,7 +417,11 @@ func (file File) AbsPath() string {
 // path depending on the file system.
 func (file File) HasAbsPath() bool {
 	fileSystem, path := file.ParseRawURI()
-	return fsIsAbsPath(fileSystem, path)
+	// Paths are always absolute except for AbsPathFileSystem implementations
+	if a, ok := fileSystem.(AbsPathFileSystem); ok {
+		return a.IsAbsPath(path)
+	}
+	return true
 }
 
 // ToAbsPath returns the File with an absolute
@@ -387,7 +448,30 @@ func (file File) RelPathOf(target File) (string, error) {
 	if targetFileSystem != fileSystem {
 		return "", fmt.Errorf("%w: %s and %s", ErrFileSystemsDoNotMatch, fileSystem, targetFileSystem)
 	}
-	return fsRelPath(fileSystem, basePath, targetPath)
+	if isEmptyLocalPath(fileSystem, basePath) || isEmptyLocalPath(fileSystem, targetPath) {
+		return "", ErrEmptyPath
+	}
+	if a, ok := fileSystem.(AbsPathFileSystem); ok {
+		return a.RelPath(basePath, targetPath)
+	}
+	// Every element of basePath after the ones that it shares with
+	// targetPath is left with "..", then the rest of targetPath follows
+	sep := fileSystem.Separator()
+	base := fsSplitPath(fileSystem, basePath)
+	targ := fsSplitPath(fileSystem, targetPath)
+	common := 0
+	for common < len(base) && common < len(targ) && base[common] == targ[common] {
+		common++
+	}
+	var parts []string
+	for range base[common:] {
+		parts = append(parts, "..")
+	}
+	parts = append(parts, targ[common:]...)
+	if len(parts) == 0 {
+		return ".", nil
+	}
+	return strings.Join(parts, sep), nil
 }
 
 // IsRegular reports if this is a regular file.
@@ -497,9 +581,8 @@ func (file File) Size() int64 {
 	return info.Size
 }
 
-// ContentHash returns the DefaultContentHash for the file.
-// If the FileSystem implementation does not have this hash pre-computed,
-// then the whole file is read to compute it.
+// ContentHash returns the DefaultContentHash for the file,
+// computed by reading the whole file.
 // If the file is a directory, then an empty string will be returned.
 func (file File) ContentHash(ctx context.Context) (string, error) {
 	if file == "" {
@@ -870,7 +953,18 @@ func (file File) ListDirInfoRecursive(ctx context.Context, callback func(*FileIn
 // at least one of the patterns are returned.
 func (file File) ListDirMax(ctx context.Context, max int, patterns ...string) (files []File, err error) {
 	fileSystem, path := file.ParseRawURI()
-	return fsListDirMax(ctx, fileSystem, path, max, patterns)
+	if path == "" {
+		return nil, ErrEmptyPath
+	}
+	if max == 0 {
+		return nil, nil
+	}
+	if err = fsReadable(fileSystem); err != nil {
+		return nil, err
+	}
+	return listDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
+		return fsListDir(ctx, fileSystem, path, patterns, FileInfoToFileCallback(callback))
+	})
 }
 
 // ListDirRecursiveMax returns at most max files from the directory and its sub-directories.
@@ -1089,7 +1183,7 @@ func (file File) OpenReadSeeker() (ReadAtSeekCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fsimpl.NewReadonlyFileBufferReadAll(reader, info)
+	return fsimpl.NewReadOnlyFileBufferReadAll(reader, info)
 }
 
 // OpenWriter opens the file for writing and returns a WriteCloser that has to be closed after writing.
@@ -1202,7 +1296,15 @@ func (file File) Truncate(ctx context.Context, newSize int64) error {
 // where the file is copied and the original removed.
 func (file File) Rename(ctx context.Context, newName string) (renamedFile File, err error) {
 	fileSystem, path := file.ParseRawURI()
-	newPath, err := fsRename(ctx, fileSystem, path, newName)
+	if path == "" {
+		return "", ErrEmptyPath
+	}
+	if !isValidName(fileSystem, newName) {
+		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
+	}
+	dir, _ := fsSplitDirAndName(fileSystem, path)
+	newPath := fileSystem.CleanPath(dir, newName)
+	err = fsMove(ctx, fileSystem, path, newPath)
 	if err != nil {
 		return "", err
 	}

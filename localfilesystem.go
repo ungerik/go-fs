@@ -248,7 +248,18 @@ func (local *LocalFileSystem) IsAbsPath(filePath string) bool {
 // AbsPath resolves filePath to an absolute path via [filepath.Abs].
 // If resolution fails, filePath is returned unchanged.
 // A leading "~" is not expanded, that is done by [LocalFileSystem.CleanPath].
+// The empty path, of a file URI without a path like "file://", names no
+// file and stays empty instead of becoming the working directory.
+// A Windows long path like `\\?\C:\x\name.` is returned unchanged:
+// filepath.Abs would remove the trailing dot or space of a name, which
+// the prefix `\\?\` keeps, and so name another file.
 func (local *LocalFileSystem) AbsPath(filePath string) string {
+	if filePath == "" {
+		return ""
+	}
+	if windowsPaths && isLongPath(filePath) {
+		return filePath
+	}
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		return filePath
@@ -262,18 +273,226 @@ func (local *LocalFileSystem) RelPath(basePath, targPath string) (string, error)
 	return filepath.Rel(basePath, targPath)
 }
 
-// URL returns the [LocalPrefix] followed by the absolute path with
-// platform separators converted to forward slashes, so a Windows path like
-// `C:\dir\file` becomes "file://C:/dir/file".
-func (local *LocalFileSystem) URL(cleanPath string) string {
-	return LocalPrefix + fsimpl.EscapeURIPath(filepath.ToSlash(local.AbsPath(cleanPath)))
+// URI returns the file URI of the absolute path as defined by RFC 8089:
+// the [LocalPrefix] followed by the path with forward slashes,
+// "file:///dir/file" on Unix, "file:///C:/dir/file" for the Windows path
+// `C:\dir\file` and "file://server/share/file" for the UNC path
+// `\\server\share\file`. Every "%" of the path is escaped as "%25".
+//
+// A relative path that can't be made absolute, because the working
+// directory can't be determined, gets the authority ".", like
+// "file://./data/x", which names no file: [ParseRawURI] returns the
+// [InvalidFileSystem] for it, so the URI never names another file.
+// The empty path, which names no file, has the URI "file://" without
+// a path, not the one of the working directory.
+func (local *LocalFileSystem) URI(cleanPath string) string {
+	if cleanPath == "" {
+		return LocalPrefix
+	}
+	return LocalPrefix + fsimpl.EscapeURIPath(fileURIPathOf(filepath.ToSlash(local.AbsPath(cleanPath)), windowsPaths))
 }
 
-// CleanPath strips a leading [LocalPrefix] from the first element,
-// expands a first element that is "~" or begins with "~" followed
-// by a separator to the home directory of the current user,
+// windowsPaths tells that the local file system uses the paths of Windows,
+// the rules of fileURIPathOf and fileURILocalPath for Windows apply.
+const windowsPaths = filepath.Separator == '\\'
+
+// decodeLocalFileURI returns the local path of uri, a URI with the
+// [LocalPrefix] whose percent-encoded characters are decoded like by
+// [ParseRawURI], and reports if it names a local file, see fileURILocalPath.
+func decodeLocalFileURI(uri string) (filePath string, isLocal bool) {
+	return fileURILocalPath(fsimpl.UnescapeURIPath(strings.TrimPrefix(uri, LocalPrefix)), windowsPaths)
+}
+
+// fileURIPathOf returns the part of the file URI after the [LocalPrefix]
+// for an absolute path with forward slashes: a path with a drive letter
+// gets the leading slash of the empty authority ("C:/x" becomes "/C:/x"),
+// the server of a UNC path becomes the authority ("//server/share/x"
+// becomes "server/share/x"), except the servers "localhost" and "~" and
+// servers like "C:", which keep the empty authority
+// ("file:////localhost/share/x"), because as authority they mean the local
+// host, the home directory and the drive, and a Unix path is used as is.
+// A relative path gets the authority "." of no host ("data/x" becomes
+// "./data/x"), see fileURILocalPath. windows selects the rules of Windows.
+//
+// On Windows a long path of a drive or a UNC path keeps its prefix `\\?\`
+// after the empty authority, `\\?\C:\x` gets the URI "file:////?/C:/x",
+// because the prefix turns off the normalization of names with a trailing
+// dot or space and of reserved names like "aux". Other paths of the file
+// and device namespaces, like `\\?\Volume{…}\x` and `\\.\COM1`, get a URI
+// with the authority "?" or "." that names no file.
+func fileURIPathOf(slashPath string, windows bool) string {
+	switch {
+	case windows && isLongPath(slashPath):
+		// The empty authority keeps the long path: "file:////?/C:/x"
+		return slashPath
+	case strings.HasPrefix(slashPath, "//"):
+		if windows {
+			// A server that a file URI can't have as authority, because as
+			// authority it means something else: "file://localhost/share/x",
+			// "localhost" in any case, would be "/share/x", "file://~/share/x"
+			// the home directory and "file://C:/x" the drive C:, the empty
+			// authority keeps the UNC path: "file:////localhost/share/x"
+			server, _ := uncServer(slashPath)
+			if strings.EqualFold(server, "localhost") || server == "~" || isDriveLetterPath(server) {
+				return slashPath
+			}
+		}
+		return slashPath[2:]
+	case strings.HasPrefix(slashPath, "/"):
+		return slashPath
+	case windows && isDriveLetterPath(slashPath):
+		return "/" + slashPath
+	}
+	return "./" + slashPath
+}
+
+// fileURILocalPath returns the local path for rest, the part of a file
+// URI after the [LocalPrefix], as defined by RFC 8089, and reports if
+// the URI names a local file. windows selects the rules of Windows.
+//
+// The authority before the first slash of rest is empty or "localhost"
+// for a local file: "file:///etc/hosts" and "file://localhost/etc/hosts"
+// are "/etc/hosts". On Windows the slash before a drive letter is removed,
+// "file:///C:/x" is "C:/x", the form "file://C:/x" written by go-fs before
+// v1.0.0 is accepted too, and another authority is the server of a UNC
+// path, "file://server/share/x" is "//server/share/x". On other platforms
+// a file URI with another authority names a file on another host, then
+// isLocal is false and the authority is returned as the first element
+// of an absolute path, "/server/share/x".
+//
+// The authority "~" is no host but the home directory: "file://~/x"
+// is returned as "~/x" for expandTilde. The authorities ".", ".." and "?"
+// name no host, isLocal is false for them on every platform: go-fs before
+// v1.0.0 resolved "file://./x" relative to the working directory, and on
+// Windows `\\.\` and `\\?\` begin the device and file namespaces,
+// `\\.\PhysicalDrive0` is a disk, so on Windows the form "file:////./x"
+// of such a UNC path is not local either, and neither is a path with the
+// NT object namespace prefix `\??\`, like "file:///??/PhysicalDrive0".
+// The exceptions are the long paths of a drive or a UNC path,
+// "file:////?/C:/x" and "file://?/C:/x" are `\\?\C:\x` and
+// "file:////?/UNC/server/share/x" is `\\?\UNC\server\share\x`,
+// which name local files.
+// A local URI without a path, "file://" or "file://localhost", has the
+// empty path, which names no file, the operations of [LocalFileSystem]
+// return [ErrEmptyPath] for it: RFC 8089 requires an absolute path.
+func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool) {
+	separators := "/"
+	if windows {
+		separators = `/\`
+	}
+	authority, filePath := rest, ""
+	if i := strings.IndexAny(rest, separators); i >= 0 {
+		authority, filePath = rest[:i], rest[i:]
+	}
+	if strings.EqualFold(authority, "localhost") {
+		authority = ""
+	}
+	switch {
+	case authority == "~":
+		return rest, true
+	case authority == "" && windows && isDriveLetterPath(filePath[min(1, len(filePath)):]):
+		filePath = filePath[1:]
+	case authority == "":
+	case windows && isDriveLetterPath(authority):
+		filePath = authority + filePath
+	case windows:
+		filePath = "//" + authority + filePath
+	default:
+		return "/" + authority + filePath, false
+	}
+	if filePath == "" {
+		// RFC 8089 requires an absolute path, "file://localhost" names no file
+		return "", true
+	}
+	if !windows {
+		return filePath, true
+	}
+	if len(filePath) == 6 && isLongPath(filePath+"/") {
+		// `\\?\C:` is the volume device of the drive, like "file:///C:"
+		// is the root of the drive, not its current directory
+		return filePath + "/", true
+	}
+	if isLongPath(filePath) {
+		return filePath, true
+	}
+	// A UNC path with the server ".", ".." or "?", which are no servers, and
+	// a path that begins with the NT object namespace prefix `\??\`, like
+	// `\??\PhysicalDrive0`, which reaches devices, name no local file
+	server, isUNC := uncServer(filePath)
+	noServerUNC := isUNC && (server == "." || server == ".." || server == "?")
+	ntNamespace := len(filePath) >= 3 && isSlash(filePath[0]) && filePath[1] == '?' && filePath[2] == '?' && (len(filePath) == 3 || isSlash(filePath[3]))
+	if noServerUNC || ntNamespace {
+		return "/" + strings.TrimLeft(filePath, `/\`), false
+	}
+	if len(filePath) == 2 && filePath[1] == ':' {
+		// "file:///C:" is the root of the drive, not its current directory
+		filePath += "/"
+	}
+	return filePath, true
+}
+
+// uncServer returns the server of p, a Windows UNC path with forward or
+// backward slashes, and false if p doesn't begin with two slashes.
+func uncServer(p string) (server string, ok bool) {
+	if len(p) < 2 || !isSlash(p[0]) || !isSlash(p[1]) {
+		return "", false
+	}
+	server = p[2:]
+	if i := strings.IndexAny(server, `/\`); i >= 0 {
+		server = server[:i]
+	}
+	return server, true
+}
+
+// isLongPath reports if the Windows path p with forward or backward
+// slashes is a long path of a drive or a UNC path in the file namespace,
+// like `\\?\C:\x` or `\\?\UNC\server\share\x`, the only paths
+// of the file namespace that name local files, see fileURILocalPath.
+func isLongPath(p string) bool {
+	if len(p) < 4 || !isSlash(p[0]) || !isSlash(p[1]) || p[2] != '?' || !isSlash(p[3]) {
+		return false
+	}
+	rest := p[4:]
+	// A drive needs the separator: `\\?\C:` is the volume device of the drive
+	return len(rest) > 2 && isDriveLetterPath(rest) || len(rest) > 4 && strings.EqualFold(rest[:3], "UNC") && isSlash(rest[3])
+}
+
+// isSlash reports if c is a forward or a backward slash.
+func isSlash(c byte) bool {
+	return c == '/' || c == '\\'
+}
+
+// isDriveLetterPath reports if filePath begins with a Windows drive letter
+// and a colon that are the whole path or followed by a separator.
+func isDriveLetterPath(filePath string) bool {
+	if len(filePath) < 2 || filePath[1] != ':' {
+		return false
+	}
+	if c := filePath[0] | 0x20; c < 'a' || c > 'z' { // | 0x20 lower-cases ASCII letters
+		return false
+	}
+	return len(filePath) == 2 || isSlash(filePath[2])
+}
+
+// CleanPath converts a first element that begins with the [LocalPrefix]
+// from a file URI to a local path, expands a first element that is "~"
+// or begins with "~" followed by a separator
+// to the home directory of the current user,
 // and joins the parts with [filepath.Join], which cleans the result.
 // It is the only method that expands the tilde.
+//
+// A file URI is converted as defined by RFC 8089: "file:///etc/hosts" and
+// "file://localhost/etc/hosts" are "/etc/hosts", on Windows "file:///C:/x"
+// is `C:\x` and "file://server/share/x" is the UNC path `\\server\share\x`.
+// A tilde in place of the host is the home directory like in a path,
+// "file://~/x" is "~/x" expanded, every other tilde of a file URI is
+// a name, "file:///~/x" is "/~/x". A URI that names no local file, with
+// another host than localhost on platforms other than Windows, with the
+// host ".", ".." or "?" on every platform (except "file://?/C:/x", the
+// Windows long path of a drive), or on Windows of the device namespace
+// like "file:///??/x", has no local path: [ParseRawURI] returns the
+// [InvalidFileSystem] for it, and CleanPath the empty path, which names
+// no file, instead of the path of another file.
 //
 // Only the tilde at the start of the first element is expanded,
 // so a "~" after a relative directory, like in CleanPath(".", "~", "x"),
@@ -281,22 +500,50 @@ func (local *LocalFileSystem) URL(cleanPath string) string {
 // cleaning is returned with a leading "./", like "./~/x",
 // so cleaning it again doesn't expand it either.
 //
-// URL escapes are not decoded, that is done by
-// [ParseRawURI] for URIs with the [LocalPrefix].
+// The percent-encoded characters of a file URI are decoded like by
+// [ParseRawURI], a local path is used verbatim, so a local file literally
+// named "a%20b" is reachable. A file URI without a path, "file://" or
+// "file://localhost", has the empty path too: the result is "", not ".",
+// the working directory, also with more parts, which are not joined to
+// it, so nothing derived from such a URI names a file either. Don't clean
+// that result again: CleanPath("") is ".", like for [filepath.Clean].
 func (local *LocalFileSystem) CleanPath(uriParts ...string) string {
 	if len(uriParts) == 0 {
 		return "."
 	}
-	// Don't modify the passed slice
-	first := expandTilde(strings.TrimPrefix(uriParts[0], LocalPrefix))
-	return literalTilde(filepath.Clean(filepath.Join(append([]string{first}, uriParts[1:]...)...)))
+	first := uriParts[0]
+	if strings.HasPrefix(first, LocalPrefix) {
+		var isLocal bool
+		first, isLocal = decodeLocalFileURI(first)
+		if !isLocal || first == "" {
+			return ""
+		}
+	}
+	return cleanLocalPath(first, uriParts[1:])
 }
 
-// SplitPath trims an optional [LocalPrefix] and splits on [Separator].
+// cleanLocalPath expands the tilde of the local path first and joins it
+// with more like [LocalFileSystem.CleanPath], which cleans the result.
+func cleanLocalPath(first string, more []string) string {
+	// Don't modify the passed slice
+	return literalTilde(filepath.Clean(filepath.Join(append([]string{expandTilde(first)}, more...)...)))
+}
+
+// SplitPath converts a file URI to a local path like
+// [LocalFileSystem.CleanPath], decoding its percent-encoded characters,
+// but without expanding the tilde, and splits on [Separator].
 // Leading and trailing separators are dropped, so the result has no
-// empty elements. An empty or root-only path returns nil.
+// empty elements. An empty or root-only path returns nil, and so does
+// a file URI that names no local file.
 func (local *LocalFileSystem) SplitPath(filePath string) []string {
-	filePath = strings.TrimPrefix(filePath, LocalPrefix)
+	if strings.HasPrefix(filePath, LocalPrefix) {
+		var isLocal bool
+		filePath, isLocal = decodeLocalFileURI(filePath)
+		if !isLocal {
+			return nil
+		}
+		filePath = filepath.FromSlash(filePath)
+	}
 	filePath = strings.Trim(filePath, Separator)
 	if filePath == "" {
 		return nil
@@ -350,8 +597,12 @@ func (local *LocalFileSystem) VolumeName(filePath string) string {
 
 // Stat returns the FileInfo of filePath. A symbolic link is followed,
 // so the FileInfo describes its target, with IsSymlink set.
-// A non-existent path is returned as [ErrDoesNotExist].
+// A non-existent path is returned as [ErrDoesNotExist],
+// the empty path as [ErrEmptyPath].
 func (local *LocalFileSystem) Stat(filePath string) (*FileInfo, error) {
+	if filePath == "" {
+		return nil, ErrEmptyPath
+	}
 	linkInfo, err := os.Lstat(filePath)
 	if err != nil {
 		return nil, wrapOSErr(filePath, err)
@@ -381,6 +632,10 @@ func (local *LocalFileSystem) IsHidden(filePath string) bool {
 // info can be nil, else the hidden attribute is read from it
 // on platforms where it carries the attribute.
 func localIsHidden(filePath string, info os.FileInfo) bool {
+	if filePath == "" {
+		// filepath.Base would return "."
+		return false
+	}
 	name := filepath.Base(filePath)
 	if len(name) > 0 && name[0] == '.' {
 		return true
@@ -462,11 +717,11 @@ func (local *LocalFileSystem) ListDir(ctx context.Context, dirPath string, patte
 		return NewErrIsNotDirectory(localFile(dirPath))
 	}
 
-	f, err := os.Open(dirPath) //#nosec G304
+	f, err := os.Open(dirPath) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return fmt.Errorf("error opening directory: %w", err)
 	}
-	defer f.Close() //#nosec G307
+	defer f.Close()
 
 	for eof := false; !eof; {
 		if ctx.Err() != nil {
@@ -538,7 +793,7 @@ func (local *LocalFileSystem) Touch(filePath string, perm Permissions) error {
 		now := time.Now()
 		return wrapOSErr(filePath, os.Chtimes(filePath, now, now))
 	}
-	f, err := os.OpenFile(filePath, os.O_CREATE, local.filePermissions(perm).FileMode(false)) //#nosec G304
+	f, err := os.OpenFile(filePath, os.O_CREATE, local.filePermissions(perm).FileMode(false)) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return wrapOSErr(filePath, err)
 	}
@@ -622,7 +877,7 @@ func (local *LocalFileSystem) MakeAllDirs(dirPath string, perm Permissions) erro
 // with its FileInfo. A directory is an [ErrIsDirectory], because opening
 // a directory for reading succeeds, only reading it fails.
 func openFileReader(filePath string) (*os.File, os.FileInfo, error) {
-	f, err := os.Open(filePath) //#nosec G304
+	f, err := os.Open(filePath) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return nil, nil, wrapOSErr(filePath, err)
 	}
@@ -653,7 +908,7 @@ func (local *LocalFileSystem) ReadAll(ctx context.Context, filePath string) ([]b
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close() //#nosec G307
+	defer f.Close()
 
 	// Like os.ReadFile, use the size as hint for the buffer,
 	// a file can change while it is read and the files
@@ -725,7 +980,7 @@ func (local *LocalFileSystem) OpenWriter(filePath string, perm Permissions) (io.
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, local.filePermissions(perm).FileMode(false)) //#nosec G304
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, local.filePermissions(perm).FileMode(false)) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return nil, wrapFileOpErr(filePath, err)
 	}
@@ -740,7 +995,7 @@ func (local *LocalFileSystem) OpenAppendWriter(filePath string, perm Permissions
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, local.filePermissions(perm).FileMode(false)) //#nosec G304
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, local.filePermissions(perm).FileMode(false)) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return nil, wrapFileOpErr(filePath, err)
 	}
@@ -755,7 +1010,7 @@ func (local *LocalFileSystem) OpenReadWriter(filePath string, perm Permissions) 
 	if filePath == "" {
 		return nil, ErrEmptyPath
 	}
-	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, local.filePermissions(perm).FileMode(false)) //#nosec G304
+	f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, local.filePermissions(perm).FileMode(false)) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return nil, wrapFileOpErr(filePath, err)
 	}
@@ -805,18 +1060,18 @@ func (local *LocalFileSystem) CopyFile(ctx context.Context, srcFilePath string, 
 	if err != nil {
 		return err
 	}
-	defer r.Close() //#nosec G307
+	defer r.Close()
 
 	if destStat, err := os.Stat(destFilePath); err == nil {
 		if os.SameFile(srcStat, destStat) {
 			return nil
 		}
 		if destStat.IsDir() {
-			return NewErrIsDirectory(File(destFilePath))
+			return NewErrIsDirectory(localFile(destFilePath))
 		}
 	}
 
-	w, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm()) //#nosec G304
+	w, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcStat.Mode().Perm()) //#nosec G304 -- the local file system intentionally opens caller-provided paths
 	if err != nil {
 		return wrapFileOpErr(destFilePath, err)
 	}
@@ -901,9 +1156,9 @@ func (local *LocalFileSystem) Move(ctx context.Context, filePath string, destPat
 		return moveLocalSameFile(filePath, destPath, srcInfo)
 	case destInfo.IsDir():
 		// os.Rename would replace an empty directory on some platforms
-		return NewErrAlreadyExists(File(destPath))
+		return NewErrAlreadyExists(localFile(destPath))
 	case srcInfo.IsDir():
-		return NewErrIsNotDirectory(File(destPath))
+		return NewErrIsNotDirectory(localFile(destPath))
 	case srcInfo.Mode()&os.ModeSymlink != 0 && isLocalLinkOntoTarget(filePath, destInfo):
 		return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, filePath, destPath)
 	}
@@ -929,9 +1184,9 @@ func wrapRenameErr(destPath string, err error) error {
 	case errors.Is(err, syscall.ENOTDIR) && !errors.Is(err, os.ErrNotExist):
 		// On Windows syscall.ENOTDIR is ERROR_PATH_NOT_FOUND,
 		// which means a missing directory, not a file in the way
-		return NewErrIsNotDirectory(File(destPath))
+		return NewErrIsNotDirectory(localFile(destPath))
 	case errors.Is(err, syscall.EISDIR), errors.Is(err, os.ErrExist):
-		return NewErrAlreadyExists(File(destPath))
+		return NewErrAlreadyExists(localFile(destPath))
 	default:
 		// Not mapped to a typed error of one path,
 		// because the error can be about both paths

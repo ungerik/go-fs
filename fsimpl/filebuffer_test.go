@@ -316,10 +316,10 @@ func (m *mockReadWriteAllFile) WriteAll(data []byte) error {
 	return nil
 }
 
-func TestReadonlyFileBuffer(t *testing.T) {
+func TestReadOnlyFileBuffer(t *testing.T) {
 	t.Run("BasicReadOperations", func(t *testing.T) {
-		data := []byte("Hello, ReadonlyFileBuffer!")
-		buf := NewReadonlyFileBuffer(data, nil)
+		data := []byte("Hello, ReadOnlyFileBuffer!")
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Test Size
@@ -344,7 +344,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("ReadEOF", func(t *testing.T) {
 		data := []byte("Short")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Read all data
@@ -362,7 +362,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("ReadAt", func(t *testing.T) {
 		data := []byte("0123456789")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Read at specific offset
@@ -381,7 +381,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("ReadAtEOF", func(t *testing.T) {
 		data := []byte("Short")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Try to read past end
@@ -404,7 +404,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("ReadAtNegativeOffset", func(t *testing.T) {
 		data := []byte("Test")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		readBuf := make([]byte, 2)
@@ -416,7 +416,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("SeekStart", func(t *testing.T) {
 		data := []byte("0123456789")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Seek to position 5
@@ -434,7 +434,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("SeekCurrent", func(t *testing.T) {
 		data := []byte("0123456789")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Read some data first
@@ -460,7 +460,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("SeekEnd", func(t *testing.T) {
 		data := []byte("0123456789")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Seek to 3 bytes before end
@@ -488,7 +488,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("SeekNegativePosition", func(t *testing.T) {
 		data := []byte("Test")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Try to seek before start
@@ -506,7 +506,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("SeekInvalidWhence", func(t *testing.T) {
 		data := []byte("Test")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		newPos, err := buf.Seek(0, 999)
@@ -517,7 +517,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("Close", func(t *testing.T) {
 		data := []byte("Test data")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 
 		// Verify data is accessible before close
 		assert.NotNil(t, buf.data)
@@ -533,7 +533,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 	})
 
 	t.Run("ReadsAfterClose", func(t *testing.T) {
-		buf := NewReadonlyFileBuffer([]byte("Test data"), nil)
+		buf := NewReadOnlyFileBuffer([]byte("Test data"), nil)
 		require.NoError(t, buf.Close())
 		require.NoError(t, buf.Close(), "Close is idempotent")
 
@@ -554,7 +554,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 		info := &mockFileInfo{name: "test.txt", size: 100}
 		data := []byte("Test data")
-		buf := NewReadonlyFileBuffer(data, info)
+		buf := NewReadOnlyFileBuffer(data, info)
 		defer buf.Close()
 
 		// Test Stat
@@ -563,11 +563,11 @@ func TestReadonlyFileBuffer(t *testing.T) {
 		assert.Equal(t, info, statInfo)
 	})
 
-	t.Run("NewReadonlyFileBufferReadAll", func(t *testing.T) {
+	t.Run("NewReadOnlyFileBufferReadAll", func(t *testing.T) {
 		data := []byte("Data from reader")
 		reader := strings.NewReader(string(data))
 
-		buf, err := NewReadonlyFileBufferReadAll(reader, nil)
+		buf, err := NewReadOnlyFileBufferReadAll(reader, nil)
 		require.NoError(t, err)
 		defer buf.Close()
 
@@ -583,7 +583,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 	})
 
 	t.Run("EmptyBuffer", func(t *testing.T) {
-		buf := NewReadonlyFileBuffer([]byte{}, nil)
+		buf := NewReadOnlyFileBuffer([]byte{}, nil)
 		defer buf.Close()
 
 		assert.Equal(t, int64(0), buf.Size())
@@ -597,7 +597,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 	})
 
 	t.Run("NilBuffer", func(t *testing.T) {
-		buf := NewReadonlyFileBuffer(nil, nil)
+		buf := NewReadOnlyFileBuffer(nil, nil)
 		defer buf.Close()
 
 		assert.Equal(t, int64(0), buf.Size())
@@ -612,7 +612,7 @@ func TestReadonlyFileBuffer(t *testing.T) {
 
 	t.Run("InterfaceCompliance", func(t *testing.T) {
 		data := []byte("Interface test")
-		buf := NewReadonlyFileBuffer(data, nil)
+		buf := NewReadOnlyFileBuffer(data, nil)
 		defer buf.Close()
 
 		// Verify it implements the expected interfaces

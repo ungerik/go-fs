@@ -5,7 +5,9 @@ package fsimpl
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 )
@@ -32,14 +34,14 @@ func RandomString() string {
 // every "%" becomes "%25" and nothing else is changed,
 // so UnescapeURIPath returns filePath for the result.
 //
-// fs.ParseRawURI decodes the URL escapes in the path part of a URI,
+// fs.ParseRawURI decodes the percent-encoded characters in the path part of a URI,
 // so the URI of a path is the prefix of its file system followed by
 // the escaped path. That way a file named "a%20b" keeps its name.
 func EscapeURIPath(filePath string) string {
 	return strings.ReplaceAll(filePath, "%", "%25")
 }
 
-// UnescapeURIPath decodes the URL escapes in the path part of a URI,
+// UnescapeURIPath decodes the percent-encoded characters in the path part of a URI,
 // the inverse of EscapeURIPath. If uriPath contains an invalid escape,
 // like "50% off", it is returned unchanged.
 func UnescapeURIPath(uriPath string) string {
@@ -76,6 +78,8 @@ func Ext(filePath, separator string) string {
 }
 
 // TrimExt returns a filePath with a path where the extension is removed.
+// Like Ext, it takes a name that begins with its only point, like
+// ".bashrc", for an extension: TrimExt("dir/.bashrc", "/") is "dir/".
 func TrimExt(filePath, separator string) string {
 	sep := -1
 	if separator != "" {
@@ -154,4 +158,21 @@ func SplitPath(filePath, separator string) []string {
 		return nil
 	}
 	return strings.Split(filePath, separator)
+}
+
+// CheckNoBackslash returns an error wrapping [os.ErrInvalid] if filePath
+// contains a backslash. It is the path check of remote file systems with
+// the separator "/" whose servers can take a backslash for a separator,
+// like servers on Windows: a name like `..\x` is a single name for the
+// separator "/", also for fs.SubFileSystem and fs.CopyRecursive, but such
+// a server would split it and resolve "..", so the name would reach a file
+// outside of the directory that it is meant to be in. The error message
+// names the file system with fsName and ends with reason, which tells
+// which servers split at a backslash and how to allow backslashes for
+// the servers that store them in names, if the file system can.
+func CheckNoBackslash(fsName, filePath, reason string) error {
+	if !strings.Contains(filePath, `\`) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s path %q contains a backslash, %s", os.ErrInvalid, fsName, filePath, reason)
 }

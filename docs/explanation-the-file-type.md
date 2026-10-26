@@ -67,7 +67,7 @@ Everything on the cost list above disappears:
 - There is no embedded file system reference, so a `File` is trivially
   copyable, comparable, and usable as a map key.
 
-`File` still implements `fmt.Stringer`. `String()` returns `URL()`, so a local
+`File` still implements `fmt.Stringer`. `String()` returns `URI()`, so a local
 path prints with its `file://` scheme rather than as a bare path, which makes
 `%s` and `%v` output say which file system the value belongs to:
 
@@ -75,7 +75,7 @@ path prints with its `file://` scheme rather than as a bare path, which makes
 f := fs.File("/etc/hosts")
 f.Path()    // "/etc/hosts"
 f.RawURI()  // "/etc/hosts"   the string as stored
-f.URL()     // "file:///etc/hosts"
+f.URI()     // "file:///etc/hosts"
 f.String()  // "file:///etc/hosts"
 ```
 
@@ -112,8 +112,9 @@ missing file; match it with `errors.Is(err, fs.ErrInvalidFileSystem)`.
 Because an unrecognized string could be read as a local path, resolution has a
 rule that is easy to miss and important:
 
-> A URI that carries a scheme (contains `://`) but matches no registered file
-> system resolves to the **`Invalid` file system**, not to the local one.
+> A URI that carries a scheme (a `://` with no slash or backslash before it)
+> but matches no registered file system resolves to the **`Invalid` file
+> system**, not to the local one.
 
 Without it, `fs.File("s3://bucket/key").WriteAll(ctx, data)` in a program that
 forgot to import `s3fs` would silently create a local file literally named

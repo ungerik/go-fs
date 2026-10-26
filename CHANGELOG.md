@@ -5,6 +5,323 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [1.0.0-rc.1] - 2026-10-26
+
+First release candidate: file URIs follow RFC 8089 on every platform, copies
+and moves refuse what would overwrite, misplace or leave their destination
+instead of losing data (name collisions, invalid and reserved names, special
+files, the same file through another path), `ftpfs` `RemoveAll` no longer
+deletes through symbolic links on servers that show them, `azureblobfs`
+handles blobs with snapshots and moves blobs natively, pinned to their
+ETags, and `File.URL` is renamed to `File.URI`. All modules are tagged in
+lockstep, the `tools` module is not tagged.
+
+### Changed
+
+- Only a `://` with no slash or backslash before it is the scheme of a URI:
+  a string like `/cache/https://x` is the local path `/cache/https:/x`
+  instead of the `Invalid` file system. `s3://bucket/key` without
+  a registered s3fs stays `Invalid`, like every URI of an unregistered
+  scheme. `fs.Register` refuses a prefix with a separator before its `://`,
+  whose URIs would be local paths after `Unregister`, and so do the s3fs
+  `Options.Prefix` check and the conformance suite.
+
+- `File.URL()` is renamed to `File.URI()`, `fs.FileURLs` to `fs.FileURIs`,
+  and `fsimpl.PathHelper.URL` and `LocalFileSystem.URL` to `URI`. The value
+  is a go-fs URI, which percent-encodes only `%`: names keep their spaces,
+  `?` and `#`, so it is no RFC 3986 URL to pass to `net/url`, an HTTP client
+  or a browser. The value is unchanged, except for the file URIs of
+  Windows and UNC paths, which follow RFC 8089 now, see below.
+- `fs.ReadHeader` and `fs.ReadHeaderString` take a `ctx` as first argument
+  like the other functions that read content. It is checked before the file
+  is opened and between the reads. A reader that fails with
+  `io.ErrUnexpectedEOF`, like a truncated stream, is an error now instead of
+  a short header.
+- `fsimpl.ReadonlyFileBuffer`, `NewReadonlyFileBuffer` and
+  `NewReadonlyFileBufferReadAll` are renamed to `ReadOnlyFileBuffer`,
+  `NewReadOnlyFileBuffer` and `NewReadOnlyFileBufferReadAll`, the spelling of
+  every other read-only identifier.
+- File URIs follow RFC 8089. `File.URI()` (was `File.URL()`) of a Windows
+  path is `file:///C:/dir/file` instead of `file://C:/dir/file`, and of a
+  UNC path `file://server/share/file`, of the servers `localhost` and `~`
+  and of a server like `C:` `file:////localhost/share/file`, because as host
+  `localhost` is a local path, `~` the home directory and `C:` the drive.
+  Only the form `file://` is recognized, the short forms `file:/path` and
+  `file:path` of RFC 8089 are relative local paths. Parsing accepts
+  `file://localhost/…`, on Windows also the old `file://C:/…` form, and maps
+  `file://server/share/…` to the UNC path `\\server\share\…`. On other
+  platforms a file URI with a host other than `localhost` resolves to the
+  `Invalid` file system instead of a path relative to the working directory.
+  So does a relative URI that v0 wrote or accepted, like
+  `file://data/uploads`, which names the host `data` (on Windows the UNC
+  path `\\data\uploads`). The hosts `.`, `..` and `?` name no host on any
+  platform: `file://./x` resolves to the `Invalid` file system, also on
+  Windows, where it would be the device path `\\.\x`. `File.URI()` of a
+  relative path that can't be made absolute, because the working directory
+  can't be determined, is `file://./…`, which names no file. `file://` and
+  `file://localhost` without a path have the empty path instead of the
+  working directory: they resolve to the local file system, whose operations
+  fail for the empty path with `fs.ErrEmptyPath`, and the Files derived from
+  them, like by `Join` or `Dir`, have the empty path too, with the URI
+  `file://`. A Windows long path of a drive or a UNC path keeps its prefix,
+  `\\?\C:\x` has the URI `file:////?/C:/x` like in beta.3, because the
+  prefix keeps names that Windows would normalize, like a trailing dot.
+  Other paths of the device and file namespaces, like `\\.\COM1`,
+  `\\?\Volume{…}\x` and `\??\PhysicalDrive0`, get a URI that names no file.
+  On Windows a file URI with a host is a UNC path, so opening a `File` from
+  an untrusted file URI can connect to that host over SMB, also for forms
+  without a host like `file:////server/share/x`; check the resolved path,
+  see `ParseRawURI`.
+- `sftpfs`, `ftpfs` and `webdavfs` reject a path with a backslash with an
+  error wrapping `os.ErrInvalid`, in `sftpfs` also a symbolic link target
+  and in `ftpfs` a listed link target that `Stat` follows.
+  For their separator `/` the backslash is part of a name, but a server on
+  Windows takes it for a separator and resolves `..`, so a name like `..\x`
+  from a `SubFileSystem`, an archive or `CopyRecursive` reached a file outside
+  of its directory, like the backslash rule of `smbfs`. The new
+  `Options.AllowBackslashInNames` of the three backends allows backslashes
+  for servers that store them in names, like servers on Unix.
+
+### Added
+
+- `azureblobfs.Options.DeleteSnapshots` deletes the snapshots of a blob
+  together with it in `Remove`, `RemoveAll` and `Move`. Without it, removing
+  a blob with snapshots keeps the blob and returns an error wrapping the new
+  `azureblobfs.ErrSnapshotsPresent`, `RemoveAll` checks the whole tree for
+  snapshots before it deletes anything, and `Move` before it copies anything.
+- `azureblobfs` implements `fs.MoveFileSystem`: `Move` copies the blobs
+  server-side and deletes the source after every copy succeeded. Every copy
+  and delete is pinned to the ETag the source blob had when `Move` found it
+  (`x-ms-source-if-match`, `If-Match`), so a blob that another client
+  replaces during the move is kept, and `Move` returns an error saying that
+  it changed while it was being moved. A source blob that another client
+  deletes before its copy stops `Move` with an error wrapping
+  `os.ErrNotExist`. Every copy is pinned to its destination too: to a
+  missing destination, like every blob of a directory, with
+  `If-None-Match: *`, onto an existing destination blob with `If-Match` and
+  the ETag `Move` found. A blob that another client creates at the
+  destination or below a moved directory, or a newer version of the
+  destination blob, is not overwritten: `Move` stops with an error wrapping
+  `fs.ErrAlreadyExists` (`os.ErrExist`) for it. Both errors copy nothing
+  more and delete no source blob. When the SDK retries a copy whose answer
+  was lost and the retry fails the destination condition against the copy
+  Azure already made, `Move` recognizes the completed copy of the source
+  blob it found (copy source, size, Content-MD5, completed after the source
+  was last modified) and finishes the move. A copy of a snapshot or version
+  of the source (a `snapshot` or `versionid` parameter in the copy source)
+  is not taken for that copy. A source blob that another client deletes
+  after its copy, or whose delete the SDK retried after a lost answer, is no
+  error also when the pinned delete is answered with 412 instead of 404, as
+  Azurite does: `Move` looks the blob up after a 412 and goes on if it is
+  gone. Only a move within one file system
+  is pinned; `fs.Move` to another container or file system copies and calls
+  `RemoveAll`, which isn't. The generic move copied first and
+  then failed to delete a source with snapshots, after it had replaced the
+  destination.
+- `fsimpl.CheckNoBackslash` returns the error of the backslash rule of the
+  remote file systems with the separator `/`, which `ftpfs`, `sftpfs`,
+  `webdavfs` and `smbfs` share.
+
+### Fixed
+
+- `fs.CopyFile` and `fs.Move` into an existing directory joined the name of
+  the source unchecked: a name like `..\evil.txt` of a source on a file
+  system with the separator `/` was written outside of the directory on
+  a file system with the separator `\`, and `Move` removed the source. On
+  Windows `NUL` or `a:b` went to a device or an alternate data stream. A name
+  that is not one valid name in the directory is now an error wrapping
+  `os.ErrInvalid`, like for `CopyRecursive`.
+- `ftpfs` `RemoveAll` refuses a directory whose name its listing lists more
+  than once, like for a file whose name contains a line feed followed by
+  a forged line that lists a directory with the name of a link. On servers
+  without MLST support the listing is all that tells a directory from
+  a link, so it deleted the files that such a link points to. Servers that
+  hide dotfiles from `LIST`, like vsftpd by default, hide them from `ftpfs`
+  too; this is documented.
+
+- `CopyRecursive` and `Move` fail with `ErrEmptyPath` when the source or the
+  destination has the empty path, like a file URI without a path (`file://`,
+  `file://localhost`). Their same-file checks took that path for the working
+  directory: copying the working directory to `file://` returned nil without
+  copying anything, and so did `Move` from `file://` to `file://localhost`.
+
+- `ftpfs` on servers without MLST support: `Stat`, `Remove`, `RemoveAll`,
+  `Move` and `MakeDir` find a symbolic link whose name contains ` -> `, and
+  `ListDir` and `ListDirRecursive` of such a link to a directory list the
+  directory. The FTP client library cuts the `LIST` line of a link at the
+  first ` -> `, so ftpfs reported such a link as missing, and `RemoveAll`
+  returned nil and kept it. `ListDir` still names the link by the part
+  before the first ` -> `.
+
+- `fs.CleanFilePath` and `fs.JoinCleanFilePath` didn't decode the
+  percent-encoded characters of a URI, unlike `File` and `fs.ParseRawURI`:
+  `file:///tmp/a%25b` was the path `/tmp/a%25b` instead of `/tmp/a%b`, and
+  `s3://bucket/a%20b` the key `a%20b` instead of `a b`. They resolve the
+  first part like `File` now, the other parts are names, used verbatim.
+  `LocalFileSystem.CleanPath` and `SplitPath` decode a file URI too.
+- `File.TrimExt` trimmed the string of the File instead of its path, so it
+  could cut at a dot before an encoded separator `%2F` of a URI, or on
+  Windows at a dot in a directory or host name of a file URI, like
+  `file://fileserver.corp/share/README`, which became another host. It
+  trims the decoded path now and returns the File of the trimmed path,
+  a local path instead of a file URI for a local file. A trimmed name `~`,
+  of `~.zip`, is the local file `./~` instead of the home directory, and
+  a name that is only an extension, like `.bashrc`, or that would become
+  `.` or `..`, like `..zip` and `...zip` (also percent-encoded in a URL), is
+  not trimmed to its directory or its parent.
+- `fs.NewSubFileSystem` resolves a URI like `File`: it decodes the
+  percent-encoding of a URI of the parent file system, and the URI of
+  another file system or a file URI that names no local file, like
+  `file://./uploads`, which was the root `/uploads`, is an error wrapping
+  `os.ErrInvalid`. An empty `dirPath` is `ErrEmptyPath` instead of the
+  working directory or the root of the parent. A relative local root is made
+  absolute, on Unix with the working directory without symbolic links, from
+  which the system resolves `..`, on Windows like `filepath.Abs`: below a
+  relative root like `.` a name like `.env` lost its dot, so `fs.Move` of a
+  top-level `.cfg` copied `cfg` and removed `.cfg`, and through a root like
+  `..` the absolute target of a new link was stored as a relative path that
+  the link's directory resolved outside of the view.
+  `LocalFileSystem.CleanPath` and `SplitPath` of a file URI that names no
+  local file return the empty path and nil instead of the path of another
+  file.
+- `fs.TempDir`, `CreateTempFile` and `MakeTempDir` with a `$TMPDIR` that
+  begins with a literal `~`, which systemd's `Environment=` doesn't expand,
+  returned Files in the home directory instead of below the current
+  directory, where `os.CreateTemp` created them, and the errors of local
+  `Move` named a destination below a directory `./~` like a path in the home
+  directory.
+
+- `azureblobfs` `RemoveAll` stopped with a 409 `SnapshotsPresent` error at
+  the first blob with snapshots, after it had already deleted the blobs
+  before it, and `Remove` returned that raw error.
+- The reader of `azureblobfs` `OpenReader` pins its range requests to the
+  ETag the blob had when it was opened (`If-Match`). After the blob was
+  replaced, a seek or `ReadAt` returned bytes of the new blob after those of
+  the old one; now it returns an error saying that the blob changed while it
+  was being read.
+- `ftpfs` reports a symbolic link that a server lists with LIST with
+  `IsSymlink` set and neither `IsDir` nor `IsRegular` in `ListDir` and
+  `ListDirRecursive`, instead of as a regular file. `Stat` follows the listed
+  target and describes the file or directory it points to, so
+  `fs.CopyRecursive` from `ftpfs` copies a link to a file as a file and fails
+  with an error wrapping `errors.ErrUnsupported` before it writes anything
+  for a link to a directory, instead of copying that link like a file.
+  `Remove`, `RemoveAll` and `Move` still act on the link itself.
+  `ListDir` and `ListDirRecursive` of a link to a directory list the
+  directory also on servers whose LIST lists a link itself like `ls -l`.
+- `ftpfs` `RemoveAll` deletes a symbolic link to a directory instead of the
+  files it points to, outside of the removed tree, on servers with MLST
+  support, which describe such a link like the directory: it tries `DELE`
+  before it deletes the content of a directory.
+- A move between file systems lost files when two source names are one entry
+  at the destination, like `A.txt` and `a.txt` of a case-sensitive source
+  (MemFileSystem, s3fs, azureblobfs, sftpfs on Unix) on the local file system
+  of macOS or Windows, smbfs or WebDAV on IIS, or two Unicode normalizations
+  of a name on macOS. The second file replaced the first, `Sub` and `sub` were
+  merged, the move returned nil and removed the source. Now the move fails
+  with an error wrapping `os.ErrExist` that names the entry, and keeps the
+  source. So does a move whose destination directory another process
+  creates while the move lists the source, instead of replacing that
+  process's entries.
+- `fs.CopyRecursive` silently replaced an entry it had just written for
+  another source name. It now fails with `os.ErrExist`: in directories it
+  creates on every file system, and in existing directories on the local
+  file system (also through a `SubFileSystem` or as the upper layer of an
+  `OverlayFileSystem`). Two hard links of one file in an existing local
+  directory are two entries, both are written into the one file, which keeps
+  the data written last, like `cp`.
+- A copy or move to the local file system wrote source names to other
+  entries. On Windows `NUL`, `CON`, `AUX` or `COM1` (on older Windows
+  versions also with an extension) went to the device, `NUL` discarding the
+  data; `a:b` went to an alternate
+  data stream; a trailing dot or space was stripped. A move then removed the
+  source. Names that `filepath.Localize` rejects, and on Windows names
+  ending in a dot or space or containing `< > " | ? *` or a control
+  character, like the S3 key `report?.pdf`, are now errors wrapping
+  `os.ErrInvalid`. Between file systems this happens before anything is
+  written, also for the names of empty directories and of entries the
+  patterns don't select; it also applies to the final name of a moved file.
+- `fs.Move` through a `SubFileSystem` onto the same file of a file system
+  that is not local, also through two SubFileSystems of one parent, copied
+  the file onto itself and removed it, returning nil; a writer that truncates
+  like the one of sftpfs emptied it first, also for `fs.CopyFile`. The
+  same-file checks of `CopyFile` and of the copy then delete fallback of
+  `Move` now also compare by path the entry that the source shows (through
+  SubFileSystems to the parent, through an `OverlayFileSystem` to the layer
+  that holds it) with the path that the destination writes to, on every file
+  system: onto itself is a no-op. Moving an entry of the base layer of an
+  overlay to its path in the upper layer, which removing the source would
+  remove again, is an error wrapping `os.ErrInvalid`.
+- `fs.CopyRecursive` and the copy then delete fallback of `Move` of
+  a directory into one of its sub-directories through a `SubFileSystem` of
+  a file system that is not local copied the copy into itself until the
+  context was done. This is now an error wrapping `os.ErrInvalid` before
+  anything is written, also into a sub-directory of either layer of an
+  `OverlayFileSystem` directory. Copying a directory onto itself through
+  a SubFileSystem is a no-op.
+- `CopyRecursive` and moves wrote into an existing named pipe, device or
+  socket at the destination (blocking on a pipe until it had a reader)
+  instead of replacing it. This is now an error wrapping `os.ErrExist`.
+  Local files are told by their file mode, so the placeholders of OneDrive
+  files, which Windows reports as irregular, are replaced like regular files;
+  writing over other reparse points, like AppExecLinks, fails with the error
+  of the write. A special file in the base layer of an `OverlayFileSystem` is
+  no error, the write to the upper layer hides it.
+- `CopyRecursive` rejects a malformed pattern with an error wrapping
+  `path.ErrBadPattern` before it writes anything, also for a file source,
+  whose copy ignores the patterns. A copy within one file system created
+  the destination first, and a copy of a source without files didn't fail.
+- The `os.ErrInvalid` error of `CopyRecursive` for invalid names printed URI
+  passwords; it redacts them now.
+- `ftpfs` `RemoveAll` on servers with MLST support could delete the files
+  that a symbolic link to a directory points to, outside of the removed
+  tree, when the server refused to delete the link, for example in a
+  directory without write permission. After a failed `DELE` it now deletes
+  the content of a directory only if `LIST` of the parent directory lists it
+  once and as a directory, and otherwise returns an error wrapping the
+  `DELE` error. The client library lists with `MLSD` on these servers, so
+  `RemoveAll` of a directory dials a second connection for `LIST`; on a
+  server that allows only one connection per user it fails instead of
+  deleting. For every such directory that connection changes to the parent
+  directory with `CWD` and sends `LIST -a` without a path argument, which
+  servers like ProFTPD with `UseGlobbing` and Pure-FTPd would expand as a
+  glob pattern, and it is dialed again once for a listing if the server
+  closed it while it was idle. A symbolic link whose name contains ` -> `,
+  which the client library cuts at the first ` -> `, is still recognized, so
+  a forged directory line can't confirm it. The listing of a directory with
+  an entry named `-a` is not used: servers that don't parse the options of
+  `LIST` (like ftpserverlib with `DisableLISTArgs`) list that entry for
+  `LIST -a`, so `RemoveAll` fails for the directories in such a directory.
+  The parent directory is listed again for every directory, so a directory
+  that another client replaces with a link while `RemoveAll` removes the
+  directories next to it is not confirmed from an earlier listing; a
+  replacement between the `LIST` and the deletion of the content still goes
+  unnoticed. FTP servers on Windows and ProFTPD with `ShowSymlinks off` list
+  a link to a directory as a directory with `LIST` too, so `RemoveAll` still
+  deletes through such links there, and so do links whose `LIST` line the
+  client library can't parse and drops, together with a forged directory
+  line, and servers without MLST support that expand glob characters in the
+  path argument of `LIST` (wu-ftpd, ProFTPD with `UseGlobbing` but without
+  `mod_facts`) for paths with `*`, `?` or `[`.
+- `ftpfs` `RemoveAll` kept a dangling symbolic link or a cycle of links on
+  servers with MLST support, and `Remove` and `Move` of it failed with
+  `os.ErrNotExist`, because MLST follows links and reports such a link as
+  missing. They now try `DELE` or the rename for a path that MLST reports as
+  missing. If the server refuses the `DELE`, `Remove` and `RemoveAll` return
+  its error if `LIST` of the parent directory lists the path, and report the
+  path as missing otherwise, also if the directory can't be listed. `Stat`
+  still reports a dangling link as not existing.
+- `s3fs` `Stat`, the directory check of the writes and `Touch`, and the
+  not-empty check of `Remove` read further `ListObjectsV2` pages while a page
+  is truncated and has fewer keys than requested, even none, instead of
+  deciding from the first page. S3-compatible stores that answer with such
+  pages made `Stat` report a directory as missing, let writes create an
+  object onto a directory, and let `Remove` delete the marker of a directory
+  with content. A truncated page without a new continuation token, also
+  with the token of an earlier page, is now an error instead of a listing
+  that never ends, and so is a listing that has no decision after 1000
+  pages; the pages after a truncated one without a match ask for 1000 keys.
+
 ## [1.0.0-beta.3] - 2026-10-24
 
 Third beta: an empty indent of the `…Indent` writers puts every element on its

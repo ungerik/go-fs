@@ -955,3 +955,68 @@ func TestClosed(t *testing.T) {
 	assert.ErrorIs(t, davFS.(fs.RemoveAllFileSystem).RemoveAll(ctx, "/"), fs.ErrFileSystemClosed)
 	assert.True(t, errors.Is(davFS.(fs.WriteFileSystem).Remove("/"), fs.ErrFileSystemClosed))
 }
+
+// TestBackslashInNames checks that paths with a backslash are rejected
+// unless Options.AllowBackslashInNames is set, because a WebDAV server
+// on Windows takes `..\x` for a name in the parent directory.
+func TestBackslashInNames(t *testing.T) {
+	srv := newStyledServer(t, styleXNet, "", true)
+	f := newTestFS(t, srv.Server, "").(*fileSystem)
+	ctx := t.Context()
+	require.NoError(t, f.MakeDir("/dir", 0))
+	require.NoError(t, f.WriteAll(ctx, "/victim.txt", []byte("keep me"), 0))
+	requestsBefore := len(srv.requests())
+
+	noCallback := func(*fs.FileInfo) error { return nil }
+	for _, name := range []string{`/dir/..\victim.txt`, `/dir\x`} {
+		for op, call := range map[string]func() error{
+			"Stat":          func() error { _, err := f.Stat(name); return err },
+			"ListDir":       func() error { return f.ListDir(ctx, name, nil, noCallback) },
+			"OpenReader":    func() error { _, err := f.OpenReader(name); return err },
+			"ReadAll":       func() error { _, err := f.ReadAll(ctx, name); return err },
+			"WriteAll":      func() error { return f.WriteAll(ctx, name, []byte("x"), 0) },
+			"OpenWriter":    func() error { _, err := f.OpenWriter(name, 0); return err },
+			"MakeDir":       func() error { return f.MakeDir(name, 0) },
+			"Remove":        func() error { return f.Remove(name) },
+			"RemoveAll":     func() error { return f.RemoveAll(ctx, name) },
+			"Move from":     func() error { return f.Move(ctx, name, "/moved.txt") },
+			"Move to":       func() error { return f.Move(ctx, "/victim.txt", name) },
+			"CopyFile from": func() error { return f.CopyFile(ctx, name, "/copied.txt") },
+			"CopyFile to":   func() error { return f.CopyFile(ctx, "/victim.txt", name) },
+		} {
+			assert.ErrorIs(t, call(), os.ErrInvalid, "%s(%q)", op, name)
+		}
+	}
+	// Every request is checked, also of a method that doesn't check its paths
+	_, err := f.do(ctx, "PROPFIND", `/dir/..\victim.txt`, false, nil, nil)
+	assert.ErrorIs(t, err, os.ErrInvalid, "do checks the path of a request")
+	err = f.send(ctx, "MOVE", "/victim.txt", `/dir/..\moved.txt`, false, false)
+	assert.ErrorIs(t, err, os.ErrInvalid, "send checks the destination")
+	assert.Len(t, srv.requests(), requestsBefore, "no request may reach the server")
+
+	// An empty path is an fs.ErrEmptyPath, also for the second path
+	for op, err := range map[string]error{
+		"Stat":          func() error { _, err := f.Stat(""); return err }(),
+		"WriteAll":      f.WriteAll(ctx, "", []byte("x"), 0),
+		"Move to":       f.Move(ctx, "/victim.txt", ""),
+		"CopyFile from": f.CopyFile(ctx, "", "/copied.txt"),
+	} {
+		assert.ErrorIs(t, err, fs.ErrEmptyPath, op)
+	}
+
+	// Servers on Unix store a backslash as part of a name
+	allowFS, err := New(ctx, srv.URL, &Options{Username: "alice", Password: "secret", AllowBackslashInNames: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = allowFS.Close() })
+	allow := allowFS.(*fileSystem)
+	require.NoError(t, allow.WriteAll(ctx, `/dir/a\b.txt`, []byte("unix name"), 0))
+	var names []string
+	require.NoError(t, allow.ListDir(ctx, "/dir", nil, func(info *fs.FileInfo) error {
+		names = append(names, info.Name)
+		return nil
+	}))
+	assert.Equal(t, []string{`a\b.txt`}, names)
+	data, err := allow.ReadAll(ctx, `/dir/a\b.txt`)
+	require.NoError(t, err)
+	assert.Equal(t, "unix name", string(data))
+}

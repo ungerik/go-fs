@@ -108,7 +108,7 @@ Seed{
 }
 ```
 
-An empty file, a hidden file, a file whose name looks URL escaped (it must
+An empty file, a hidden file, a file whose name looks percent-encoded (it must
 keep that name, `100% a b.txt` would be another file) and two levels of
 sub-directories, which is what exercises the listing and recursion paths.
 
@@ -229,7 +229,7 @@ use the primitives, `Touch` creates a missing file, `Lstat` is `Stat`,
 
 `MockFullyFeaturedFileSystem` deliberately does not implement
 `fs.URIFileSystem`: a file system that does maps its URIs to paths itself and
-the package stops decoding URL escapes, which would give the mock another path
+the package stops decoding percent-encoded characters, which would give the mock another path
 model than every other file system. Embed the mock in a type with the three
 methods of `fs.URIFileSystem` to test that model.
 

@@ -40,7 +40,7 @@ Use `errors.As` only when you need the `File` the error is about:
 var notExist fs.ErrDoesNotExist
 if errors.As(err, &notExist) {
     if f, ok := notExist.File(); ok {
-        log.Printf("missing: %s", f.URL())
+        log.Printf("missing: %s", f.URI())
     }
 }
 ```

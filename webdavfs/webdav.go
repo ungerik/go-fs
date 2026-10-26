@@ -100,18 +100,28 @@ type Options struct {
 	// A refused redirect is a *StatusError. Other redirects are passed
 	// to the CheckRedirect of Client, if it has one.
 	Client *http.Client
+
+	// AllowBackslashInNames lets paths contain backslashes, which are
+	// an error wrapping os.ErrInvalid by default. For the separator "/"
+	// of WebDAV a backslash is part of a name, but a server on Windows,
+	// like IIS, takes it for a separator: a name like `..\x` would reach
+	// a file outside of the directory that it is meant to be in, also for
+	// fs.SubFileSystem and fs.CopyRecursive. Set it only for servers
+	// that store backslashes in names, like servers on Unix.
+	AllowBackslashInNames bool
 }
 
 type fileSystem struct {
 	fsimpl.PathHelper
 
-	client    *http.Client
-	baseURL   url.URL // scheme, host and base path without trailing slash
-	username  string
-	password  string
-	basicAuth bool // send username and password, false if header has an Authorization
-	header    http.Header
-	closed    atomic.Bool
+	client         *http.Client
+	baseURL        url.URL // scheme, host and base path without trailing slash
+	username       string
+	password       string
+	basicAuth      bool // send username and password, false if header has an Authorization
+	header         http.Header
+	allowBackslash bool // Options.AllowBackslashInNames
+	closed         atomic.Bool
 }
 
 // New returns a file system for the WebDAV server at baseURL
@@ -194,6 +204,7 @@ func New(ctx context.Context, baseURL string, opts *Options) (fs.FileSystem, err
 		}
 		client = opts.Client
 		f.header = opts.Header
+		f.allowBackslash = opts.AllowBackslashInNames
 	}
 	f.client = f.newClient(client)
 	f.basicAuth = (f.username != "" || f.password != "") && !hasAuthorization(f.header)
@@ -355,6 +366,32 @@ func (f *fileSystem) checkClosed() error {
 	return nil
 }
 
+// checkPath returns fs.ErrEmptyPath for an empty path and an error
+// wrapping os.ErrInvalid for a path with a backslash
+// unless Options.AllowBackslashInNames is set, see checkBackslash.
+func (f *fileSystem) checkPath(paths ...string) error {
+	for _, filePath := range paths {
+		if filePath == "" {
+			return fs.ErrEmptyPath
+		}
+		if err := f.checkBackslash(filePath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkBackslash returns an error wrapping os.ErrInvalid for a path with
+// a backslash unless Options.AllowBackslashInNames is set. The methods
+// check their paths with checkPath, do checks the path of every request
+// and send its destination, so no such path reaches the server.
+func (f *fileSystem) checkBackslash(filePath string) error {
+	if f.allowBackslash {
+		return nil
+	}
+	return fsimpl.CheckNoBackslash("webdavfs", filePath, "which WebDAV servers on Windows take for a separator, see Options.AllowBackslashInNames")
+}
+
 // check returns the first error of the closed check and the context.
 func (f *fileSystem) check(ctx context.Context) error {
 	if err := f.checkClosed(); err != nil {
@@ -396,6 +433,9 @@ func (f *fileSystem) urlOf(filePath string, dir bool) string {
 // *StatusError returned, see fsError for its mapping to the fs errors.
 func (f *fileSystem) do(ctx context.Context, method, filePath string, dir bool, body []byte, header map[string]string) (*http.Response, error) {
 	if err := f.check(ctx); err != nil {
+		return nil, err
+	}
+	if err := f.checkBackslash(filePath); err != nil {
 		return nil, err
 	}
 	var bodyReader io.Reader
@@ -597,7 +637,7 @@ func (f *fileSystem) stat(ctx context.Context, filePath string) (*fs.FileInfo, e
 // file system path, or returns false if the response carries no
 // successful properties.
 func (f *fileSystem) responseInfo(r propfindResponse) (*fs.FileInfo, string, bool) {
-	// The href is URL escaped, url.Parse decodes its path exactly once,
+	// The href is percent-encoded, url.Parse decodes its path exactly once,
 	// so a file named "100%25" is not mistaken for "100%"
 	href := r.Href
 	if u, err := url.Parse(href); err == nil {
@@ -639,16 +679,16 @@ func (f *fileSystem) responseInfo(r propfindResponse) (*fs.FileInfo, string, boo
 // Reading
 
 func (f *fileSystem) Stat(filePath string) (*fs.FileInfo, error) {
-	if filePath == "" {
-		return nil, fs.ErrEmptyPath
+	if err := f.checkPath(filePath); err != nil {
+		return nil, err
 	}
 	return f.stat(context.Background(), filePath)
 }
 
 // ListDir lists the children of a collection with a PROPFIND of depth 1.
 func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
-	if dirPath == "" {
-		return fs.ErrEmptyPath
+	if err := f.checkPath(dirPath); err != nil {
+		return err
 	}
 	infos, err := f.propfind(ctx, dirPath, "1", true)
 	if err != nil {
@@ -732,8 +772,8 @@ func (f *fileSystem) getRange(filePath string, offset, count int64) (io.ReadClos
 
 // ReadAll downloads the file with a single GET request.
 func (f *fileSystem) ReadAll(ctx context.Context, filePath string) ([]byte, error) {
-	if filePath == "" {
-		return nil, fs.ErrEmptyPath
+	if err := f.checkPath(filePath); err != nil {
+		return nil, err
 	}
 	response, err := f.do(ctx, http.MethodGet, filePath, false, nil, nil)
 	if err != nil {
@@ -799,8 +839,8 @@ func (f *fileSystem) readError(ctx context.Context, err error, filePath string) 
 
 // WriteAll uploads the data with a PUT request.
 func (f *fileSystem) WriteAll(ctx context.Context, filePath string, data []byte, perm fs.Permissions) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	if err := f.checkPath(filePath); err != nil {
+		return err
 	}
 	if data == nil {
 		data = []byte{} // PUT with a Content-Length of zero
@@ -846,8 +886,8 @@ func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteC
 	if err := f.checkClosed(); err != nil {
 		return nil, err
 	}
-	if filePath == "" {
-		return nil, fs.ErrEmptyPath
+	if err := f.checkPath(filePath); err != nil {
+		return nil, err
 	}
 	return fsimpl.NewWriteOnCloseFileBuffer(nil, func(data []byte) error {
 		return f.WriteAll(context.Background(), filePath, data, perm)
@@ -856,8 +896,8 @@ func (f *fileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteC
 
 // MakeDir creates a collection with MKCOL.
 func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
-	if dirPath == "" {
-		return fs.ErrEmptyPath
+	if err := f.checkPath(dirPath); err != nil {
+		return err
 	}
 	if err := f.checkClosed(); err != nil {
 		return err
@@ -890,8 +930,8 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 // It returns an fs.ErrDirectoryNotEmpty for a collection with members
 // and an error wrapping os.ErrInvalid for the root directory.
 func (f *fileSystem) Remove(filePath string) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	if err := f.checkPath(filePath); err != nil {
+		return err
 	}
 	ctx := context.Background()
 	filePath = cleanPath(filePath)
@@ -925,8 +965,8 @@ func (f *fileSystem) Remove(filePath string) error {
 // A missing path is not an error. The root directory can't be removed,
 // that is an error wrapping os.ErrInvalid.
 func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
-	if filePath == "" {
-		return fs.ErrEmptyPath
+	if err := f.checkPath(filePath); err != nil {
+		return err
 	}
 	if err := f.check(ctx); err != nil {
 		return err
@@ -960,8 +1000,8 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 // in its collection and from there onto destPath, and moved back if that
 // fails. An error that leaves it at the temporary name contains that name.
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
-	if filePath == "" || destPath == "" {
-		return fs.ErrEmptyPath
+	if err := f.checkPath(filePath, destPath); err != nil {
+		return err
 	}
 	if err := f.check(ctx); err != nil {
 		return err
@@ -990,8 +1030,8 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 // and back. A copy onto the file itself, like on a case-insensitive
 // server, does nothing.
 func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
-	if srcFile == "" || destFile == "" {
-		return fs.ErrEmptyPath
+	if err := f.checkPath(srcFile, destFile); err != nil {
+		return err
 	}
 	if err := f.check(ctx); err != nil {
 		return err
@@ -1051,6 +1091,9 @@ func (f *fileSystem) relocate(ctx context.Context, method string, srcInfo *fs.Fi
 // send sends a MOVE or COPY request for src to dest with the Overwrite
 // header T or F, for a collection with both URLs as collection URLs.
 func (f *fileSystem) send(ctx context.Context, method, src, dest string, dir, overwrite bool) error {
+	if err := f.checkBackslash(dest); err != nil {
+		return err
+	}
 	header := map[string]string{
 		// nginx wants both URLs of a collection with trailing slash
 		"Destination": f.urlOf(dest, dir),

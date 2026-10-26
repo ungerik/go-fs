@@ -33,7 +33,7 @@ absolute paths starting with the separator; a non-rooted one has paths
 that start with a host name.
 
 A path is the output of `CleanPath`: cleaned, with the separator of the file
-system and without the prefix. URL escapes are not decoded by `PathHelper`,
+system and without the prefix. Percent-encoded characters are not decoded by `PathHelper`,
 that is the job of `fs.ParseRawURI`. The URI of a path is the prefix followed
 by the path escaped with `EscapeURIPath`, so a file named `a%20b` keeps its
 name: its URI ends with `a%2520b`.
@@ -47,12 +47,12 @@ Methods it provides:
 | `Separator()`                                      | `PathSep`, or `"/"` if empty                   |
 | `CleanPath(uriParts ...string) string`             | The joined, cleaned, prefix-stripped path      |
 | `TrimPrefix(uri string) string`                    | `uri` without the longest matching `URIPrefix` or `AltPrefixes` |
-| `URL(cleanPath string) string`                     | `URIPrefix` + `EscapeURIPath(cleanPath)`       |
-| `JoinCleanURI(uriParts ...string) string`          | `URL(CleanPath(uriParts...))`                  |
+| `URI(cleanPath string) string`                     | `URIPrefix` + `EscapeURIPath(cleanPath)`       |
+| `JoinCleanURI(uriParts ...string) string`          | `URI(CleanPath(uriParts...))`                  |
 | `SplitDirAndName(filePath string) (dir, name string)` | Parent dir and name, prefix and volume aware |
 | `SplitPath(filePath string) []string`              | Path elements without prefix and volume        |
 
-`URL` does not double the separator when `URIPrefix` ends with one after a
+`URI` does not double the separator when `URIPrefix` ends with one after a
 host, like `mem://id/`. A prefix that is only a scheme is followed by the whole
 rooted path, so with `URIPrefix: "file://"` the URI of `/a` is `file:///a`.
 
@@ -157,19 +157,19 @@ r := &fsimpl.RangeReader{
 defer r.Close()
 ```
 
-## FileBuffer and ReadonlyFileBuffer
+## FileBuffer and ReadOnlyFileBuffer
 
 In-memory buffers that implement the `io` interfaces a file needs.
 
 ```go
-func NewReadonlyFileBuffer(data []byte, info iofs.FileInfo) *ReadonlyFileBuffer
-func NewReadonlyFileBufferReadAll(reader io.Reader, info iofs.FileInfo) (*ReadonlyFileBuffer, error)
+func NewReadOnlyFileBuffer(data []byte, info iofs.FileInfo) *ReadOnlyFileBuffer
+func NewReadOnlyFileBufferReadAll(reader io.Reader, info iofs.FileInfo) (*ReadOnlyFileBuffer, error)
 
 func NewFileBuffer(data []byte) *FileBuffer
 func NewWriteOnCloseFileBuffer(data []byte, write func(data []byte) error) *FileBuffer
 ```
 
-`ReadonlyFileBuffer` covers `io/fs.File`, `io.Reader`, `io.ReaderAt`,
+`ReadOnlyFileBuffer` covers `io/fs.File`, `io.Reader`, `io.ReaderAt`,
 `io.Seeker` and `io.Closer`, plus `Bytes`, `Size` and `Stat`. `FileBuffer`
 embeds it and adds `Write`, `WriteAt`, `Truncate` and `Abort`, so it satisfies
 `fs.ReadWriteSeekCloser` and `fs.WriteAborter`.
@@ -235,9 +235,10 @@ Standalone helpers, useful when embedding `PathHelper` does not fit.
 | `SplitDirAndName(filePath string, volumeLen int, separator string) (dir, name string)` | Handles a trailing separator correctly, unlike `path.Split`. Returns `"."` as dir when there is no separator before the name, and an empty name at the root of the file system or of a volume. The first `volumeLen` bytes are the volume: `C:\a` splits into `C:\` and `a`. |
 | `SplitPath(filePath, separator string) []string`   | Elements after trimming leading and trailing separators. `nil` if nothing is left. |
 | `EscapeURIPath(filePath string) string`            | `filePath` for the path part of a URI: every `%` becomes `%25`, nothing else changes. |
-| `UnescapeURIPath(uriPath string) string`           | Decodes the URL escapes of a URI path, the inverse of `EscapeURIPath`. An invalid escape like `50% off` returns the input unchanged. |
+| `UnescapeURIPath(uriPath string) string`           | Decodes the percent-encoded characters of a URI path, the inverse of `EscapeURIPath`. An invalid escape like `50% off` returns the input unchanged. |
 | `MatchAnyPattern(name string, patterns []string) (bool, error)` | `true` if `name` matches any pattern via `path.Match`, and `true` when `patterns` is empty. |
 | `RandomString() string`                            | 120 random bits as a 20 character URL-safe base64 string, never starting with `-` or `_` so it can't be mistaken for a command line option. |
+| `CheckNoBackslash(fsName, filePath, reason string) error` | An error wrapping `os.ErrInvalid` if `filePath` contains a backslash, `nil` otherwise. The path check of remote file systems with the separator `/` whose servers can split names at a backslash, like servers on Windows, so that a name like `..\x` can't leave its directory. The message names the file system with `fsName` after the text of `os.ErrInvalid` and ends with `reason`. `ftpfs`, `sftpfs`, `webdavfs` and `smbfs` use it. |
 
 `Ext` is worth a second look because the empty-separator case is the surprise:
 
@@ -313,8 +314,10 @@ func DropboxContentHash(ctx context.Context, reader io.Reader) (string, error)
 
 The Dropbox content hash algorithm. It is the value of `fs.DefaultContentHash`,
 so `File.ContentHash` and `FileReader.ContentHash` return it unless you replace
-that variable. Choosing it as the default means `dropboxfs` can answer
-`ContentHash` from metadata instead of downloading the file.
+that variable. The hash is always computed from the content: `ContentHash`
+reads the whole file on every file system. Dropbox stores the same value in
+its file metadata, so hashes computed by go-fs can be compared with the
+`content_hash` that Dropbox clients and APIs report.
 
 To use a standard hash instead, set `fs.DefaultContentHash` with
 `fs.ContentHashFuncFrom`, which creates a new hash for every call:

@@ -92,31 +92,62 @@ func (oneByteReadCloser) Stat() (iofs.FileInfo, error) { return nil, errors.New(
 // TestReadHeader is a regression test: ReadHeader did a single Read,
 // which may return fewer bytes than requested although more are available.
 func TestReadHeader(t *testing.T) {
+	ctx := t.Context()
 	file := oneByteFileReader{NewMemFile("x.pdf", []byte("%PDF-1.7 hello"))}
 
-	header, err := ReadHeader(file, 5)
+	header, err := ReadHeader(ctx, file, 5)
 	require.NoError(t, err)
 	require.Equal(t, "%PDF-", string(header), "all requested bytes")
 
-	header, err = ReadHeader(file, 100)
+	header, err = ReadHeader(ctx, file, 100)
 	require.NoError(t, err, "a file shorter than the header is no error")
 	require.Equal(t, "%PDF-1.7 hello", string(header))
 
-	str, err := ReadHeaderString(file, 4)
+	str, err := ReadHeaderString(ctx, file, 4)
 	require.NoError(t, err)
 	require.Equal(t, "%PDF", str)
 
-	header, err = ReadHeader(file, 0)
+	header, err = ReadHeader(ctx, file, 0)
 	require.NoError(t, err)
 	require.Nil(t, header)
 
 	// MemFile fast path
-	header, err = ReadHeader(file.MemFile, 4)
+	header, err = ReadHeader(ctx, file.MemFile, 4)
 	require.NoError(t, err)
 	require.Equal(t, "%PDF", string(header))
-	header, err = ReadHeader(file.MemFile, 100)
+	header, err = ReadHeader(ctx, file.MemFile, 100)
 	require.NoError(t, err)
 	require.Equal(t, "%PDF-1.7 hello", string(header))
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = ReadHeader(canceled, file, 5)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = ReadHeaderString(canceled, file.MemFile, 5)
+	require.ErrorIs(t, err, context.Canceled, "also for the MemFile fast path")
+
+	// Canceled after the check before opening and two one-byte reads
+	errCanceled := errors.New("canceled while reading")
+	header, err = ReadHeader(&failContext{errAfter: 3, err: errCanceled}, file, 5)
+	require.ErrorIs(t, err, errCanceled)
+	require.Equal(t, "%P", string(header), "the bytes read before the cancellation")
+
+	// A read error that is no io.EOF returns the bytes read before it
+	errRead := errors.New("read failed")
+	header, err = ReadHeader(ctx, failingFileReader{NewMemFile("x.pdf", []byte("%P")), errRead}, 5)
+	require.ErrorIs(t, err, errRead)
+	require.Equal(t, "%P", string(header), "the bytes read before the error")
+}
+
+// failingFileReader is a FileReader whose reader returns
+// the data and then err instead of io.EOF.
+type failingFileReader struct {
+	MemFile
+	err error
+}
+
+func (f failingFileReader) OpenReader() (ReadCloser, error) {
+	return oneByteReadCloser{io.MultiReader(bytes.NewReader(f.FileData), iotest.ErrReader(f.err))}, nil
 }
 
 func TestExecutableFile(t *testing.T) {

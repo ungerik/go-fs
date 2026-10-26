@@ -1,6 +1,9 @@
 package fs
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -84,4 +87,25 @@ func tempFilesWithExt(t *testing.T, ext string) []string {
 	})
 	require.NoError(t, err)
 	return names
+}
+
+// TestTempWithTildeInTMPDIR checks that a $TMPDIR that begins with a literal
+// "~", which systemd's Environment= doesn't expand, is a directory below the
+// current one like for os.CreateTemp: the Files of the temp functions name
+// the files they created, not paths in the home directory.
+func TestTempWithTildeInTMPDIR(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+		t.Skip("os.TempDir doesn't use $TMPDIR")
+	}
+	t.Chdir(t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Join("~", "tmpx"), 0o700))
+	t.Setenv("TMPDIR", "~/tmpx")
+
+	require.Equal(t, File("./~/tmpx"), TempDir())
+	file, err := CreateTempFile(".txt")
+	require.NoError(t, err)
+	require.True(t, file.Exists(), "CreateTempFile returned the created file %s", file)
+	dir, err := MakeTempDir()
+	require.NoError(t, err)
+	require.True(t, dir.IsDir(), "MakeTempDir returned the created directory %s", dir)
 }

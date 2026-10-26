@@ -14,8 +14,9 @@
 // # Context rule
 //
 // A method takes a [context.Context] as first parameter only if it can
-// take long: reading or writing content (ReadAll, WriteAll, Append,
-// ContentHash, Truncate, MoveTo), listing directories (ListDir*, Glob,
+// take long: reading or writing content (ReadAll, ReadHeader, WriteAll,
+// Append, ContentHash, Truncate), moving and copying (MoveTo, Rename,
+// Renamef, CopyFile, CopyRecursive), listing directories (ListDir*, Glob,
 // RemoveRecursive) and dialing connections. Metadata, open, and path
 // methods have no context parameter.
 //

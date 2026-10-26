@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -92,7 +93,9 @@ func sameFileSystem(a, b FileSystem) (same bool) {
 // Registering the same file system again is a no-op.
 // An error wrapping ErrAlreadyRegistered is returned
 // if another file system is registered with the same
-// prefix or one of the prefix aliases.
+// prefix or one of the prefix aliases. A prefix with a slash or
+// backslash before its "://" is an error wrapping os.ErrInvalid:
+// after Unregister its URIs would be local paths, see ParseRawURI.
 func Register(fileSystem FileSystem) error {
 	if fileSystem == nil {
 		return fmt.Errorf("can't register nil file system")
@@ -100,6 +103,12 @@ func Register(fileSystem FileSystem) error {
 	prefixes := fsPrefixes(fileSystem)
 	if prefixes[0] == "" {
 		return fmt.Errorf("can't register file system with empty prefix: %s", fileSystem)
+	}
+	for _, prefix := range prefixes {
+		if strings.Contains(prefix, PrefixSeparator) && !hasURIScheme(prefix) {
+			// After Unregister its URIs would be local paths, see hasURIScheme
+			return fmt.Errorf("%w: can't register the prefix %s with a separator before %q", os.ErrInvalid, fsimpl.RedactURI(prefix), PrefixSeparator)
+		}
 	}
 
 	registryMtx.Lock()
@@ -360,8 +369,20 @@ func fsPrefixMatchLen(fileSystem FileSystem, uri string) int {
 // that the URI starts with at a boundary is used: the prefix "s3://logs"
 // matches "s3://logs/key" but not "s3://logs-archive/key".
 //
-// URL escapes in a URI that carries a scheme are decoded, a scheme-less
+// Percent-encoded characters in a URI that carries a scheme are decoded, a scheme-less
 // local path is used verbatim, so a local file literally named "a%20b" is reachable.
+//
+// File URIs are converted to local paths as defined by RFC 8089,
+// see [LocalFileSystem.CleanPath]. A file URI with another host than
+// localhost, like "file://server/share/x", is a UNC path on Windows;
+// on other platforms it returns the [InvalidFileSystem]. So on Windows
+// a file operation on a File from an untrusted file URI can connect to
+// any host over SMB, with the automatic NTLM login of Windows, like one
+// on an untrusted UNC path. That includes URIs without a host for
+// url.Parse, like "file:////server/share/x" and
+// "file:////?/UNC/server/share/x", so check the resolved path, not the
+// host of the URI: a local path whose volume, see [filepath.VolumeName],
+// begins with `\\` and is no `\\?\` path of a drive is on another host.
 func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	if uri == "" {
 		return Invalid, ""
@@ -379,29 +400,84 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 		}
 	}
 	if bestFS != nil {
+		if _, ok := bestFS.(*LocalFileSystem); ok && strings.HasPrefix(uri, LocalPrefix) {
+			return parseLocalFileURI(bestFS, uri)
+		}
 		return bestFS, uriPath(bestFS, uri)
 	}
 
 	// No registered file system matched.
 	//
-	// A URI that carries a scheme (contains the PrefixSeparator "://") but did
-	// not match any registered file system must not be treated as a local
-	// path: silently resolving e.g. "s3://bucket/key" or "http://host/file"
-	// against the local file system would read or write a bogus local path.
-	// The only scheme that maps to the local file system is file:// (matched
-	// above via the registered Local file system), so any other scheme is
-	// reported as the invalid file system instead.
-	if strings.Contains(uri, PrefixSeparator) && !strings.HasPrefix(uri, LocalPrefix) {
+	// A URI that carries a scheme (the PrefixSeparator "://" with no slash
+	// or backslash before it, see hasURIScheme) but did not match any registered file
+	// system must not be treated as a local path: silently resolving e.g.
+	// "s3://bucket/key" or "http://host/file" against the local file system
+	// would read or write a bogus local path.
+	// The only scheme that maps to the local file system is file://, which
+	// is converted like above also while Local is not registered, so any
+	// other scheme is reported as the invalid file system instead, like
+	// a file URI that names no local file, see fileURILocalPath.
+	if strings.HasPrefix(uri, LocalPrefix) {
+		// A file URI while Local is not registered is converted
+		// like with Local registered, decoding its path once
+		return parseLocalFileURI(Local, uri)
+	}
+	if hasURIScheme(uri) {
 		return Invalid, uri
 	}
 
-	// No scheme: assume uri is a path for the local file system
+	// No scheme: assume uri is a path for the local file system,
+	// also one with a "://" after a "/", like "/data/https://x"
 	return Local, Local.CleanPath(uri)
 }
 
+// hasURIScheme reports if s begins with the scheme of a URI: s contains
+// the [PrefixSeparator] "://" and no slash or backslash before it, like
+// "s3://bucket", a scheme can't contain them. A "://" after a separator,
+// like in "/cache/https://x" or `C:\cache\https://x`, is part of a path.
+func hasURIScheme(s string) bool {
+	i := strings.Index(s, PrefixSeparator)
+	return i >= 0 && !strings.ContainsAny(s[:i], `/\`)
+}
+
+// isValidNameIn reports if name is valid for an entry of the directory dir,
+// see isValidName, and also for the local file system, see
+// isValidLocalName, if the writes to dir go to the local file system.
+func isValidNameIn(dir File, name string) bool {
+	dirFS, dirPath := dir.ParseRawURI()
+	if !isValidName(dirFS, name) {
+		return false
+	}
+	if target, _, _, ok := writeTarget(dirFS, dirPath); ok {
+		if _, local := target.(*LocalFileSystem); local {
+			return isValidLocalName(name)
+		}
+	}
+	return true
+}
+
+// parseLocalFileURI returns local and the clean local path of uri, a URI with
+// the [LocalPrefix] whose path is percent-encoded like in a File, like
+// [LocalFileSystem.CleanPath] of the decoded uri, decoding and converting uri
+// once for ParseRawURI. For a file URI that names no local file, see
+// fileURILocalPath, like one with a host like "file://server/share/x", which
+// has no local path on platforms without UNC paths, it returns the
+// [InvalidFileSystem] and uri.
+func parseLocalFileURI(local FileSystem, uri string) (FileSystem, string) {
+	filePath, isLocal := decodeLocalFileURI(uri)
+	switch {
+	case !isLocal:
+		return Invalid, uri
+	case filePath == "":
+		// Not cleaned to ".", the working directory
+		return local, ""
+	}
+	return local, cleanLocalPath(filePath, nil)
+}
+
 // uriPath returns the clean path of uri within fileSystem,
-// the inverse of fsURL: the longest matching prefix of fileSystem
-// or one of its prefix aliases is trimmed and the URL escapes
+// the inverse of fsURI: the longest matching prefix of fileSystem
+// or one of its prefix aliases is trimmed and the percent-encoded characters
 // of the rest are decoded, see [fsimpl.UnescapeURIPath].
 // A uri without such a prefix is a path that is only cleaned.
 // File systems implementing URIFileSystem map the URI themselves.

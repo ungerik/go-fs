@@ -100,6 +100,7 @@ prefix of the connection (`sftp://user@host`), `sftpFS.String()` is
 | `Timeout` | limit of every connection attempt: TCP connect, SSH handshake and start of the SFTP session | `DefaultTimeout` (30 s), negative: none |
 | `KeepAlive` | interval of SSH keep-alive requests, at most one outstanding; a connection that leaves `KeepAliveCountMax` (3) intervals in a row without an answer is closed, a slower answer keeps it | `DefaultKeepAlive` (30 s), negative: off |
 | `DialContext` | opens the network connection, for example through a proxy | `net.Dialer` |
+| `AllowBackslashInNames` | lets paths and link targets contain `\`, for servers on Unix that store it in names, see [Paths](#how-sftp-concepts-map-to-the-file-system) | a `\` is an error wrapping `os.ErrInvalid` |
 
 ### Credentials in URIs
 
@@ -155,7 +156,14 @@ they are.
 
 ## How SFTP concepts map to the file system
 
-- **Paths.** SFTP paths are the server's absolute paths, separator `/`.
+- **Paths.** SFTP paths are the server's absolute paths, separator `/`. A path
+  or link target with a backslash is an error wrapping `os.ErrInvalid` unless
+  `Options.AllowBackslashInNames` is set: for the separator `/` the backslash
+  is part of a name, but a server on Windows (OpenSSH for Windows) takes it
+  for a separator and resolves `..`, so a name like `..\x` from a
+  `SubFileSystem` or `CopyRecursive` would reach a file outside of its
+  directory. Set the option only for servers that store backslashes in names,
+  like servers on Unix.
 - **Native operations.** Real directories and random access file handles,
   so `OpenAppendWriter`, `OpenReadWriter`, `Truncate`, `Touch`,
   `MakeAllDirs`, `RemoveAll`, `ListDirRecursive`, `Move`,
@@ -199,9 +207,12 @@ servers of `pkg/sftp`, including the go-fs conformance suite on a
 temporary directory and tests that lose the connection at chosen requests.
 
 The conformance suite also runs against an OpenSSH server in a Docker
-container built from `Dockerfile.sftp-test`. If Docker is not installed
-these tests are skipped, if it is installed but the container can't be
-started the tests fail.
+container built from `Dockerfile.sftp-test`. These tests are skipped when
+Docker is unavailable, meaning the `docker` command is not installed or its
+daemon doesn't answer `docker info`. When Docker is available but the image
+can't be built or the container can't be started, the test run fails
+instead of skipping, except on Windows, where Docker usually can't run the
+Linux image and the tests are skipped.
 
 Tests against public internet SFTP servers only run with
 `GOFS_ONLINE_TESTS=1`.

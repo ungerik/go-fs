@@ -92,7 +92,7 @@ func TestMove_CrossFileSystemSymlinks(t *testing.T) {
 		// The source file system has no RemoveAll,
 		// so the emulation would remove the source.
 		m := newMinimalLocalFS(t)
-		tree, outside := symlinkTree(t, fs.File(m.URL(t.TempDir())), os.Symlink)
+		tree, outside := symlinkTree(t, fs.File(m.URI(t.TempDir())), os.Symlink)
 		dest := newMinimalMemFS(t).RootDir().Join("moved")
 
 		err := tree.MoveTo(t.Context(), dest)
@@ -355,6 +355,26 @@ func TestMove_CaseOnlyRenameThroughSubFileSystem(t *testing.T) {
 	requireContent(t, dir.Join("FILE.txt"), "file")
 }
 
+// TestMove_CaseOnlyRenameBetweenOverlayAndLayer checks a move between an
+// OverlayFileSystem and its case-insensitive local upper layer to a name that
+// only differs in case, with only one side of the move through the overlay.
+// The overlay supports only one case of a name, so like within the overlay,
+// see TestOverlayFileSystem_CaseOnlyRename, the move is refused with an error
+// wrapping os.ErrInvalid instead of renaming the file of the layer past the
+// overlay, whichever side is the overlay, and keeps the file.
+func TestMove_CaseOnlyRenameBetweenOverlayAndLayer(t *testing.T) {
+	upperDir := caseInsensitiveTempDir(t)
+	writeFiles(t, upperDir, map[string]string{"file.txt": "precious"})
+	overlay := newLocalOverlay(t, t.TempDir(), upperDir.LocalPath())
+
+	err := fs.Move(t.Context(), overlay.RootDir().Join("file.txt"), upperDir.Join("File.txt"))
+	require.ErrorIs(t, err, os.ErrInvalid, "from the overlay to its layer")
+	err = fs.Move(t.Context(), upperDir.Join("file.txt"), overlay.RootDir().Join("File.txt"))
+	require.ErrorIs(t, err, os.ErrInvalid, "from the layer to its overlay")
+	requireNames(t, upperDir, "file.txt")
+	requireContent(t, upperDir.Join("file.txt"), "precious")
+}
+
 // TestMove_CaseOnlyRenameOfDirectory is a regression test: on a
 // case-insensitive file system Move of a directory to a name that only
 // differs in case found the destination to be an existing directory, the
@@ -395,4 +415,22 @@ func TestRemoveFiles(t *testing.T) {
 	require.NoError(t, root.ListDir(t.Context(), fs.File.Remove, "*.tmp"))
 	require.False(t, root.Join("b.tmp").Exists())
 	requireContent(t, root.Join("c.txt"), "c")
+}
+
+// TestCleanFilePath_DecodesURIs checks that CleanFilePath and
+// JoinCleanFilePath resolve the first part like File and ParseRawURI, also
+// for other schemes than file://: the percent-encoded characters of a URI
+// are decoded, the joined parts are names, used verbatim.
+func TestCleanFilePath_DecodesURIs(t *testing.T) {
+	mem, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(mem))
+	t.Cleanup(func() { fs.Unregister(mem) })
+
+	uri := mem.Prefix() + "/dir/a%20b"
+	require.Equal(t, "/dir/a b", fs.File(uri).Path())
+	require.Equal(t, "/dir/a b", fs.CleanFilePath(uri).Path(), "CleanFilePath(%q)", uri)
+	require.Equal(t, fs.File(uri).Join("c%20d"), fs.JoinCleanFilePath(uri, "c%20d"), "JoinCleanFilePath(%q, c%%20d)", uri)
+	require.Equal(t, "/dir/a b/c%20d", fs.JoinCleanFilePath(uri, "c%20d").Path())
+	require.Equal(t, fs.InvalidFile, fs.JoinCleanFilePath(), "JoinCleanFilePath without parts")
 }

@@ -3,6 +3,7 @@ package s3fs
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -362,6 +363,8 @@ func TestNew(t *testing.T) {
 	assert.Error(t, err, "Prefix without ://")
 	_, err = New(client, "bucket", &Options{Prefix: "s3://host/bucket/"})
 	assert.Error(t, err, "Prefix with a trailing slash")
+	_, err = New(client, "bucket", &Options{Prefix: "backup/s3://bucket"})
+	assert.Error(t, err, "Prefix with a slash before ://, a local path when unregistered")
 
 	f, err := New(client, "bucket", nil)
 	require.NoError(t, err)
@@ -585,6 +588,266 @@ func TestWriteWithoutListPermission(t *testing.T) {
 	_, err = f.Stat("/dir")
 	assert.Error(t, err)
 	assert.False(t, isAccessDenied(err))
+}
+
+// listBucketResult is the XML answer of a ListObjectsV2 request.
+type listBucketResult struct {
+	XMLName               xml.Name `xml:"http://s3.amazonaws.com/doc/2006-03-01/ ListBucketResult"`
+	Name                  string
+	Prefix                string
+	KeyCount              int
+	MaxKeys               string
+	IsTruncated           bool
+	ContinuationToken     string `xml:",omitempty"`
+	NextContinuationToken string `xml:",omitempty"`
+	Contents              []listedObject
+}
+
+// listedObject is an object of a listBucketResult.
+type listedObject struct {
+	Key          string
+	LastModified string
+	Size         int
+}
+
+// shortPageStore stands in for an S3-compatible store with the objects
+// of keys that answers ListObjectsV2 with truncated pages of fewer keys
+// than MaxKeys: the pages alternate between no key and one key, so the
+// first page is always empty, and the last page is an empty one that
+// isn't truncated. The continuation token is the number of the next page.
+//
+// With brokenToken the pages from number brokenFrom on are truncated
+// without a usable continuation token: "missing" omits it, "repeated"
+// sends the number of the page itself, so the next request gets the
+// same page again, and "cycled" alternates between the empty pages
+// brokenFrom and brokenFrom+2, which must be even, so the listing never
+// ends, and "endless" answers every page from brokenFrom on with an
+// empty truncated page and a new token. HeadObject finds no object, DeleteObject records the key, other
+// requests fail.
+type shortPageStore struct {
+	keys        []string // sorted
+	modified    time.Time
+	brokenToken string
+	brokenFrom  int
+
+	mtx      sync.Mutex
+	lists    int
+	listKeys []string // "max-keys" of every listing, prefixed with "+" for a follow-up page
+	deleted  []string
+	writes   int
+}
+
+// maxListRequests limits the ListObjectsV2 requests of a shortPageStore,
+// so that a listing that doesn't end fails instead of hanging the test.
+// It is above the limit of findObject for a test with a few listings.
+const maxListRequests = 4 * maxListingPages
+
+func (st *shortPageStore) handler(w http.ResponseWriter, r *http.Request) {
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+	query := r.URL.Query()
+	switch {
+	case r.Method == http.MethodGet && query.Has("list-type"):
+		// Listing below
+	case r.Method == http.MethodHead:
+		w.WriteHeader(http.StatusNotFound)
+		return
+	case r.Method == http.MethodDelete:
+		st.deleted = append(st.deleted, strings.TrimPrefix(r.URL.Path, "/bucket/"))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	default:
+		if r.Method == http.MethodPut || r.Method == http.MethodPost {
+			st.writes++
+		}
+		w.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+	st.lists++
+	if st.lists > maxListRequests {
+		w.WriteHeader(http.StatusTooManyRequests)
+		return
+	}
+
+	prefix := query.Get("prefix")
+	var keys []string
+	for _, k := range st.keys {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	token := query.Get("continuation-token")
+	if token != "" {
+		st.listKeys = append(st.listKeys, "+"+query.Get("max-keys"))
+	} else {
+		st.listKeys = append(st.listKeys, query.Get("max-keys"))
+	}
+	n := 0
+	if token != "" {
+		var err error
+		if n, err = strconv.Atoi(token); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
+	result := listBucketResult{
+		Name:              "bucket",
+		Prefix:            prefix,
+		MaxKeys:           query.Get("max-keys"),
+		ContinuationToken: token,
+		IsTruncated:       n < 2*len(keys),
+	}
+	// The odd pages n have the key with index n/2
+	if n%2 == 1 && n/2 < len(keys) {
+		result.Contents = []listedObject{{Key: keys[n/2], LastModified: st.modified.Format(time.RFC3339)}}
+		result.KeyCount = 1
+	}
+	switch {
+	case st.brokenToken == "endless" && n >= st.brokenFrom:
+		result.Contents, result.KeyCount = nil, 0
+		result.IsTruncated = true
+		result.NextContinuationToken = strconv.Itoa(n + 2)
+	case st.brokenToken == "cycled" && n >= st.brokenFrom:
+		result.IsTruncated = true
+		next := st.brokenFrom + 2
+		if n == next {
+			next = st.brokenFrom
+		}
+		result.NextContinuationToken = strconv.Itoa(next)
+	case st.brokenToken != "" && n >= st.brokenFrom:
+		result.IsTruncated = true
+		if st.brokenToken == "repeated" {
+			result.NextContinuationToken = strconv.Itoa(n)
+		}
+	case result.IsTruncated:
+		result.NextContinuationToken = strconv.Itoa(n + 1)
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	_, _ = io.WriteString(w, xml.Header)
+	_ = xml.NewEncoder(w).Encode(result)
+}
+
+// TestShortTruncatedListingPages checks the directory checks of Stat,
+// the writes and Remove against a store that answers ListObjectsV2 with
+// truncated pages of fewer keys than MaxKeys, even none: deciding from
+// the first page reported directories as missing, so writes created
+// objects onto them, and let Remove delete the marker of a directory
+// with content. A truncated page without a new continuation token is an
+// error instead of an endless or incomplete listing, also a token of an
+// earlier page, which used to repeat the listing until the store failed.
+func TestShortTruncatedListingPages(t *testing.T) {
+	modified := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	newStore := func(t *testing.T, brokenToken string, brokenFrom int) (*shortPageStore, *fileSystem) {
+		t.Helper()
+		st := &shortPageStore{
+			keys: []string{
+				"dir/",
+				"dir/file.txt",
+				"empty/",
+				"implicit/sub/file.txt",
+			},
+			modified:    modified,
+			brokenToken: brokenToken,
+			brokenFrom:  brokenFrom,
+		}
+		f, err := New(httptestClient(t, st.handler), "bucket", nil)
+		require.NoError(t, err)
+		return st, f.(*fileSystem)
+	}
+
+	t.Run("Stat", func(t *testing.T) {
+		_, f := newStore(t, "", 0)
+		info, err := f.Stat("/dir")
+		require.NoError(t, err)
+		assert.True(t, info.IsDir, "marker directory")
+		assert.True(t, info.Modified.Equal(modified), "Modified of the marker, got %s", info.Modified)
+		info, err = f.Stat("/implicit")
+		require.NoError(t, err)
+		assert.True(t, info.IsDir, "implicit directory")
+		assert.True(t, info.Modified.IsZero(), "an implicit directory has no Modified")
+		info, err = f.Stat("/empty")
+		require.NoError(t, err)
+		assert.True(t, info.IsDir, "empty marker directory")
+		_, err = f.Stat("/missing")
+		assert.ErrorIs(t, err, os.ErrNotExist)
+	})
+
+	t.Run("WriteOntoDirectory", func(t *testing.T) {
+		st, f := newStore(t, "", 0)
+		ctx := t.Context()
+		assert.ErrorIs(t, f.WriteAll(ctx, "/implicit", []byte("x"), 0), fs.ErrIsDirectory{}, "WriteAll")
+		_, err := f.OpenWriter("/dir", 0)
+		assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenWriter")
+		assert.NoError(t, f.Touch("/implicit", 0), "Touch of a directory does nothing")
+		st.mtx.Lock()
+		defer st.mtx.Unlock()
+		assert.Zero(t, st.writes, "no object must be written onto a directory")
+	})
+
+	t.Run("Remove", func(t *testing.T) {
+		st, f := newStore(t, "", 0)
+		assert.ErrorIs(t, f.Remove("/dir"), fs.ErrDirectoryNotEmpty{}, "marker directory with content")
+		assert.ErrorIs(t, f.Remove("/implicit"), fs.ErrDirectoryNotEmpty{}, "implicit directory")
+		st.mtx.Lock()
+		assert.Empty(t, st.deleted, "the marker of a directory with content must not be deleted")
+		st.mtx.Unlock()
+
+		require.NoError(t, f.Remove("/empty"), "empty marker directory")
+		st.mtx.Lock()
+		assert.Equal(t, []string{"empty/"}, st.deleted)
+		st.mtx.Unlock()
+	})
+
+	// The first page asks for the keys the check needs, the pages after a
+	// truncated page without a match for the most keys a page returns
+	t.Run("FollowUpPagesAskForMaxKeys", func(t *testing.T) {
+		st, f := newStore(t, "", 0)
+		_, err := f.Stat("/dir")
+		require.NoError(t, err)
+		st.mtx.Lock()
+		defer st.mtx.Unlock()
+		require.Equal(t, []string{"1", "+1000"}, st.listKeys, "max-keys of the listings of Stat")
+	})
+
+	// Empty truncated pages with new tokens without end
+	t.Run("EndlessPages", func(t *testing.T) {
+		st, f := newStore(t, "endless", 0)
+		_, err := f.Stat("/dir")
+		assert.ErrorIs(t, err, errListingTooLong, "Stat")
+		assert.ErrorIs(t, f.Remove("/dir"), errListingTooLong, "Remove")
+		st.mtx.Lock()
+		defer st.mtx.Unlock()
+		assert.Empty(t, st.deleted, "nothing must be deleted")
+		assert.LessOrEqual(t, st.lists, 2*maxListingPages+1, "every listing stops at maxListingPages")
+	})
+
+	for _, brokenToken := range []string{"missing", "repeated", "cycled"} {
+		// The first page is broken, so the directory checks can't decide
+		t.Run("BrokenToken/"+brokenToken+"/FirstPage", func(t *testing.T) {
+			st, f := newStore(t, brokenToken, 0)
+			_, err := f.Stat("/dir")
+			assert.ErrorIs(t, err, errTruncatedWithoutToken, "Stat")
+			assert.ErrorIs(t, f.WriteAll(t.Context(), "/dir", []byte("x"), 0), errTruncatedWithoutToken, "WriteAll")
+			assert.ErrorIs(t, f.Remove("/dir"), errTruncatedWithoutToken, "Remove")
+			st.mtx.Lock()
+			defer st.mtx.Unlock()
+			assert.Empty(t, st.deleted, "nothing must be deleted")
+			assert.Zero(t, st.writes, "nothing must be written")
+		})
+
+		// Page 1 has the marker, so Stat decides before the broken page 2,
+		// but the not-empty check of Remove needs the key after the marker
+		t.Run("BrokenToken/"+brokenToken+"/AfterMarker", func(t *testing.T) {
+			st, f := newStore(t, brokenToken, 2)
+			info, err := f.Stat("/dir")
+			require.NoError(t, err)
+			assert.True(t, info.IsDir)
+			assert.ErrorIs(t, f.Remove("/dir"), errTruncatedWithoutToken, "Remove")
+			st.mtx.Lock()
+			defer st.mtx.Unlock()
+			assert.Empty(t, st.deleted, "the marker must not be deleted")
+		})
+	}
 }
 
 // TestCopySource checks the escaping of the CopySource

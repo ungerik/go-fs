@@ -2,6 +2,7 @@ package fsimpl
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -163,7 +164,7 @@ func TestMatchAnyPattern(t *testing.T) {
 
 func TestEscapeURIPath(t *testing.T) {
 	// Every path has to survive the round trip through a URI,
-	// especially paths that already look URL escaped.
+	// especially paths that already look percent-encoded.
 	for _, filePath := range []string{
 		"",
 		"/",
@@ -185,4 +186,12 @@ func TestEscapeURIPath(t *testing.T) {
 	assert.Equal(t, "/100%2525 a b.txt", EscapeURIPath("/100%25 a b.txt"), "only the escape character is escaped")
 	assert.Equal(t, "/a b/c", UnescapeURIPath("/a%20b%2Fc"))
 	assert.Equal(t, "/50% off", UnescapeURIPath("/50% off"), "a path with an invalid escape is returned unchanged")
+}
+
+func TestCheckNoBackslash(t *testing.T) {
+	assert.NoError(t, CheckNoBackslash("testfs", "/dir/file.txt", "reason"))
+	assert.NoError(t, CheckNoBackslash("testfs", "", "reason"))
+	err := CheckNoBackslash("testfs", `/dir/..\victim.txt`, "which test servers take for a separator")
+	assert.ErrorIs(t, err, os.ErrInvalid)
+	assert.EqualError(t, err, `invalid argument: testfs path "/dir/..\\victim.txt" contains a backslash, which test servers take for a separator`)
 }

@@ -228,9 +228,12 @@ object onto itself without user metadata (AWS accepts it with the `REPLACE`
 directive that `Touch` uses), and `AbortMultipartUpload` deletes an existing
 object with the key of the upload (AWS keeps it).
 
-Docker is required for most tests; if it is not installed they are skipped,
-if it is installed but the container can't be started the tests fail. The
-offline tests (constructors, escaping, writers) always run.
+Docker is required for most tests. They are skipped when Docker is
+unavailable, meaning the `docker` command is not installed or its daemon
+doesn't answer `docker info`. When Docker is available but the container
+can't be started, the test run fails instead of skipping, except on Windows,
+where Docker usually can't run the Linux image and the tests are skipped.
+The offline tests (constructors, escaping, writers) always run.
 
 ```bash
 go test ./...

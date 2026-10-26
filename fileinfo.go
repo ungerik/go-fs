@@ -21,17 +21,57 @@ import (
 // ListDirRecursive describes its entries like ListDir, but it never
 // follows a link and IsDir is false also for a link to a directory.
 type FileInfo struct {
-	File        File
-	Name        string
-	Exists      bool
-	IsDir       bool
-	IsRegular   bool
-	IsSymlink   bool // The path itself is a symbolic link, see the FileInfo documentation
-	IsHidden    bool
-	Size        int64
-	Modified    time.Time
+	// File is the described file: a URI with the prefix of its file
+	// system, or a plain path for the local file system, whose Files
+	// have no prefix. The fs package joins it from the directory and Name
+	// when a FileSystem implementation leaves it empty.
+	File File
+
+	// Name is the base name of File.
+	// The fs package takes it from File
+	// when a FileSystem implementation leaves it empty.
+	Name string
+
+	// Exists is true for an existing file or directory.
+	// It is false for the FileInfo of NewNonExistingFileInfo,
+	// which File.Info returns when the file can't be stat'ed.
+	Exists bool
+
+	// IsDir is true for a directory.
+	IsDir bool
+
+	// IsRegular is true for a regular file, false for a directory
+	// and for other file types like devices, pipes and sockets.
+	IsRegular bool
+
+	// IsSymlink is true if the path itself is a symbolic link,
+	// see the FileInfo documentation.
+	IsSymlink bool
+
+	// IsHidden is true for a hidden file: one whose name starts with
+	// a dot, for the local file system on Windows also one with the
+	// hidden attribute. When a FileSystem implementation leaves it
+	// false for a name starting with a dot, the fs package completes
+	// it with HiddenFileSystem.IsHidden if implemented, else sets it.
+	IsHidden bool
+
+	// Size is the size of a file in bytes, or -1 if the file system
+	// can't tell, like httpfs for a server that reports no size.
+	// For a directory the value depends on the file system,
+	// File.Size reports 0 for it.
+	Size int64
+
+	// Modified is the time of the last modification,
+	// the zero time if the file system doesn't know it.
+	Modified time.Time
+
+	// Permissions are the Unix permission bits of the file,
+	// file systems without permissions report a fixed default.
 	Permissions Permissions
-	Sys         any // Underlying data source (can return nil)
+
+	// Sys is the underlying data source of the file system
+	// like the Sys method of io/fs.FileInfo, it may be nil.
+	Sys any
 }
 
 // Validate returns an error if the FileInfo is invalid.

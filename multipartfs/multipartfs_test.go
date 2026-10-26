@@ -559,7 +559,7 @@ func checkFormFile(t *testing.T, formFS *MultipartFileSystem, file fs.File, u up
 
 func TestFormFiles_fileNames(t *testing.T) {
 	// Every name mime/multipart can yield has to address exactly its upload,
-	// especially names that look URL escaped, which must not be decoded.
+	// especially names that look percent-encoded, which must not be decoded.
 	names := []string{
 		"report 1.pdf",
 		"50% off.pdf",
@@ -663,7 +663,7 @@ func TestFormFiles_crossField(t *testing.T) {
 }
 
 func TestFormFiles_similarNames(t *testing.T) {
-	// Field and file names that are the same after URL decoding
+	// Field and file names that are the same after percent-decoding
 	// or path cleaning must still address their own uploads.
 	uploads := []upload{
 		{field: "doc", name: "report 1.pdf"},

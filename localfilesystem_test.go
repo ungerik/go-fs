@@ -76,7 +76,7 @@ func setupLocalMove(t *testing.T) string {
 // requireLocalContent checks that the file at filePath has the content want.
 func requireLocalContent(t *testing.T, filePath, want string) {
 	t.Helper()
-	data, err := os.ReadFile(filePath) //#nosec G304
+	data, err := os.ReadFile(filePath) //#nosec G304 -- the tests pass files they created in a temp directory
 	require.NoError(t, err, "reading %s", filePath)
 	require.Equal(t, want, string(data), "content of %s", filePath)
 }
@@ -594,7 +594,7 @@ func TestLocalFileSystem_ZeroValue(t *testing.T) {
 		if runtime.GOOS != "windows" {
 			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm()&0o600, "%s must create a file the user can read and write", name)
 		}
-		_, err = os.ReadFile(filePath) //#nosec G304
+		_, err = os.ReadFile(filePath) //#nosec G304 -- a file the test created in t.TempDir()
 		assert.NoError(t, err, "%s must create a readable file", name)
 	}
 
@@ -813,20 +813,353 @@ func TestLocalFileSystem_CleanPathTilde(t *testing.T) {
 	assert.Equal(t, []File{File(subFS.Prefix() + "/~/private.txt")}, subListed)
 }
 
-func TestLocalFileSystem_URL(t *testing.T) {
-	// ParseRawURI decodes the URL escapes of a file:// URI,
+func TestLocalFileSystem_URI(t *testing.T) {
+	// ParseRawURI decodes the percent-encoded characters of a file:// URI,
 	// but never those of a local path without the prefix.
 	localPath := filepath.Join(t.TempDir(), "100%25 a%20b.txt")
 	file := File(localPath)
 	assert.Equal(t, localPath, file.Path(), "a local path is not decoded")
 	assert.Equal(t, "100%25 a%20b.txt", file.Name())
 
-	uri := file.URL()
-	assert.True(t, strings.HasPrefix(uri, LocalPrefix), "URL %q has the local prefix", uri)
+	uri := file.URI()
+	assert.True(t, strings.HasPrefix(uri, LocalPrefix), "URI %q has the local prefix", uri)
 	assert.True(t, strings.HasSuffix(uri, "/100%2525 a%2520b.txt"),
-		"URL %q escapes every %%", uri)
-	assert.Equal(t, localPath, File(uri).Path(), "the URL resolves to the path")
+		"URI %q escapes every %%", uri)
+	assert.Equal(t, localPath, File(uri).Path(), "the URI resolves to the path")
 	assert.Equal(t, "100%25 a%20b.txt", File(uri).Name())
+}
+
+// TestFileURILocalPath checks the RFC 8089 rules for the rules
+// of both platforms, so they run on every platform.
+func TestFileURILocalPath(t *testing.T) {
+	for _, tc := range []struct {
+		rest        string // URI after "file://"
+		windows     bool
+		wantPath    string
+		wantIsLocal bool
+	}{
+		{"/etc/hosts", false, "/etc/hosts", true},
+		{"localhost/etc/hosts", false, "/etc/hosts", true},
+		{"LocalHost/etc/hosts", false, "/etc/hosts", true},
+		{"/", false, "/", true},
+		{"", false, "", true},          // RFC 8089 requires an absolute path
+		{"localhost", false, "", true}, // it used to be the working directory
+		{"", true, "", true},
+		{"localhost", true, "", true},
+		{"//?/C:/x", true, "//?/C:/x", true}, // long path, written by beta.3 too
+		{"//?/C:", true, "//?/C:/", true},    // the root, not the volume device
+		{"?/C:", true, "//?/C:/", true},
+		{"//?/UNC/server/share/x", true, "//?/UNC/server/share/x", true}, // long UNC path
+		{"/??/PhysicalDrive0", true, "/??/PhysicalDrive0", false},        // NT object namespace
+		{`/??\C:\x`, true, `/??\C:\x`, false},
+		{"/??/x", false, "/??/x", true}, // a directory named "??" on other platforms
+		{"/~/x", false, "/~/x", true},
+		{"/C:/x", false, "/C:/x", true},
+		{"server/share/x", false, "/server/share/x", false},
+		{"C:/x", false, "/C:/x", false},
+		{"~/x", false, "~/x", true},
+		{"~", false, "~", true},
+		{`~\x`, true, `~\x`, true},
+
+		{"/C:/dir/file", true, "C:/dir/file", true},
+		{"/c:/dir", true, "c:/dir", true},
+		{"/C:", true, "C:/", true},
+		{"/C:/", true, "C:/", true},
+		{"localhost/C:/x", true, "C:/x", true},
+		{"C:/x", true, "C:/x", true}, // written by go-fs before v1.0.0
+		{"C:", true, "C:/", true},
+		{`C:\x`, true, `C:\x`, true},
+		{"server/share/x", true, "//server/share/x", true},
+		{"//server/share/x", true, "//server/share/x", true},
+		{"/x", true, "/x", true},
+		{"/CD:/x", true, "/CD:/x", true},
+
+		// No hosts: go-fs before v1.0.0 resolved "file://./x" relative to the
+		// working directory, on Windows they would be device namespace paths
+		{"./x", false, "/./x", false},
+		{"../x", false, "/../x", false},
+		{"?/x", false, "/?/x", false},
+		{"./PhysicalDrive0", true, "/./PhysicalDrive0", false},
+		{`.\x`, true, `/.\x`, false},
+		{"../x", true, "/../x", false},
+		{"?/C:/x", true, "//?/C:/x", true},               // the long path of a drive is local
+		{"?/Volume{1}/x", true, "/?/Volume{1}/x", false}, // other paths of the file namespace
+		{"//./PhysicalDrive0", true, "/./PhysicalDrive0", false},
+		{`\\?\C:\x`, true, `\\?\C:\x`, true},
+		{"//./x", false, "//./x", true}, // only a path on other platforms
+		{"//.x/share", true, "//.x/share", true},
+	} {
+		gotPath, gotIsLocal := fileURILocalPath(tc.rest, tc.windows)
+		assert.Equal(t, tc.wantPath, gotPath, "fileURILocalPath(%q, windows=%t) path", tc.rest, tc.windows)
+		assert.Equal(t, tc.wantIsLocal, gotIsLocal, "fileURILocalPath(%q, windows=%t) isLocal", tc.rest, tc.windows)
+	}
+}
+
+// TestFileURIWithoutPath checks that a local file URI without a path names
+// no file: it resolves to the local file system with the empty path, whose
+// operations fail, not to the working directory like before v1.0.0, nor to
+// the root. The Files derived from it have the empty path too: a joined
+// part is not read as a path, a URI or a tilde of its own.
+func TestFileURIWithoutPath(t *testing.T) {
+	for _, uri := range []string{"file://", "file://localhost"} {
+		fileSystem, filePath := ParseRawURI(uri)
+		assert.Equal(t, Local, fileSystem, "ParseRawURI(%q) file system", uri)
+		assert.Equal(t, "", filePath, "ParseRawURI(%q) path", uri)
+		assert.Equal(t, "", Local.CleanPath(uri), "CleanPath(%q)", uri)
+		assert.Equal(t, "", Local.CleanPath(uri, "x"), "CleanPath(%q, x) doesn't join to the empty path", uri)
+		assert.Nil(t, Local.SplitPath(uri), "SplitPath(%q)", uri)
+		assert.Equal(t, "", Local.AbsPath(""), "AbsPath of the empty path")
+		assert.Equal(t, LocalPrefix, Local.URI(""), "URI of the empty path")
+
+		file := File(uri)
+		assert.False(t, file.Exists(), "%q exists", uri)
+		_, err := file.ReadAll(t.Context())
+		assert.ErrorIs(t, err, ErrEmptyPath, "ReadAll of %q", uri)
+		err = file.WriteAll(t.Context(), []byte("x"))
+		assert.ErrorIs(t, err, ErrEmptyPath, "WriteAll of %q", uri)
+		assert.ErrorIs(t, file.CheckExists(), ErrEmptyPath, "CheckExists of %q", uri)
+		_, err = file.Stat()
+		assert.ErrorIs(t, err, ErrEmptyPath, "Stat of %q", uri)
+		_, err = Local.Stat("")
+		assert.ErrorIs(t, err, ErrEmptyPath, "LocalFileSystem.Stat of the empty path")
+		assert.False(t, file.IsHidden(), "IsHidden of %q", uri)
+		_, err = file.RelPathOf(File("a/b"))
+		assert.ErrorIs(t, err, ErrEmptyPath, "RelPathOf from %q", uri)
+		_, err = File("x").RelPathOf(file)
+		assert.ErrorIs(t, err, ErrEmptyPath, "RelPathOf to %q", uri)
+		assert.Equal(t, file, file.TrimExt(), "TrimExt of %q", uri)
+		assert.Equal(t, File(LocalPrefix), CleanFilePath(uri), "CleanFilePath(%q)", uri)
+		assert.Equal(t, File(LocalPrefix), JoinCleanFilePath(uri, "x"), "JoinCleanFilePath(%q, x)", uri)
+
+		assert.Equal(t, LocalPrefix, file.URI(), "URI of %q", uri)
+		assert.Equal(t, LocalPrefix, file.String(), "String of %q", uri)
+		assert.Equal(t, File(LocalPrefix), file.ToAbsPath(), "ToAbsPath of %q", uri)
+		assert.Equal(t, file, file.Dir(), "Dir of %q", uri)
+		dir, name := file.DirAndName()
+		assert.Equal(t, file, dir, "DirAndName of %q", uri)
+		assert.Equal(t, "", name, "DirAndName of %q", uri)
+		for _, part := range []string{"x", "", ".", "~/x", "file://localhost/etc/passwd", "file://server/share/x", "../x", "/etc/passwd"} {
+			joined := file.Join(part)
+			assert.Equal(t, "", joined.Path(), "%q.Join(%q) has the empty path", uri, part)
+			assert.Equal(t, Local, joined.FileSystem(), "%q.Join(%q) file system", uri, part)
+			assert.Equal(t, "", file.Joinf("%s", part).Path(), "%q.Joinf(%q) has the empty path", uri, part)
+		}
+	}
+}
+
+// TestLocalErrorsOfTildeDirectory checks that the errors of Move and
+// CopyFile name a destination below a directory named "~" in the current
+// directory with its "./", so that acting on the File of the error doesn't
+// reach the home directory.
+func TestLocalErrorsOfTildeDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Join("~", "x"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join("~", "y"), []byte("y"), 0o600))
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	err = Local.Move(t.Context(), "."+Separator+filepath.Join("~", "y"), "."+Separator+filepath.Join("~", "x"))
+	var exists ErrAlreadyExists
+	require.ErrorAs(t, err, &exists)
+	existing, _ := exists.File()
+	assert.NotContains(t, existing.LocalPath(), home, "Move error")
+	assert.FileExists(t, filepath.Join("~", "y"), "the source is kept")
+
+	err = Local.CopyFile(t.Context(), "."+Separator+filepath.Join("~", "y"), "."+Separator+filepath.Join("~", "x"))
+	var isDir ErrIsDirectory
+	require.ErrorAs(t, err, &isDir)
+	directory, _ := isDir.File()
+	assert.NotContains(t, directory.LocalPath(), home, "CopyFile error")
+}
+
+// TestCleanPathOfNonLocalFileURI checks that CleanPath and SplitPath of
+// a file URI that names no local file return the empty path, like
+// ParseRawURI returns the InvalidFileSystem for it, instead of the
+// absolute path of another file: "file://./etc" isn't "/etc".
+func TestCleanPathOfNonLocalFileURI(t *testing.T) {
+	uris := []string{"file://./etc", "file://../tmp", "file://?/x"}
+	if Separator != `\` {
+		uris = append(uris, "file://host/share/x") // a UNC path on Windows
+	}
+	for _, uri := range uris {
+		fileSystem, _ := ParseRawURI(uri)
+		require.Equal(t, Invalid, fileSystem, "ParseRawURI(%q)", uri)
+		assert.Equal(t, "", Local.CleanPath(uri), "CleanPath(%q)", uri)
+		assert.Equal(t, "", Local.CleanPath(uri, "x"), "CleanPath(%q, x)", uri)
+		assert.Nil(t, Local.SplitPath(uri), "SplitPath(%q)", uri)
+	}
+}
+
+// TestFileURIDecoding checks that the local file system decodes the
+// percent-encoded characters of a file URI in CleanPath and SplitPath,
+// and so CleanFilePath and JoinCleanFilePath, like ParseRawURI and File,
+// and uses a local path verbatim.
+func TestFileURIDecoding(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "a%b c")
+	uri := Local.URI(filePath) // escapes the % as %25
+	require.Contains(t, uri, "a%25b c")
+
+	assert.Equal(t, filePath, File(uri).Path(), "File(%q).Path()", uri)
+	assert.Equal(t, filePath, Local.CleanPath(uri), "CleanPath(%q)", uri)
+	assert.Equal(t, File(filePath), CleanFilePath(uri), "CleanFilePath(%q)", uri)
+	assert.Equal(t, File(filepath.Join(filePath, "d%20e")), JoinCleanFilePath(uri, "d%20e"), "the joined parts are names, used verbatim")
+	assert.Equal(t, "a%b c", Local.SplitPath(uri)[len(Local.SplitPath(uri))-1], "SplitPath(%q)", uri)
+	assert.Equal(t, filePath, Local.CleanPath(filePath), "a local path is used verbatim")
+
+	// TrimExt trims the decoded path: the "." before the encoded
+	// separator "%2F" is in a directory name, b has no extension
+	dirURI := Local.URI(filepath.Join(filepath.Dir(filePath), "a.x")) + "%2Fb"
+	assert.Equal(t, filepath.Join(filepath.Dir(filePath), "a.x", "b"), File(dirURI).TrimExt().Path(), "TrimExt of %q", dirURI)
+}
+
+func TestFileURIPathOf(t *testing.T) {
+	for slashPath, want := range map[string]string{
+		"/etc/hosts":       "/etc/hosts",
+		"/":                "/",
+		"C:/dir/file":      "/C:/dir/file",
+		"C:/":              "/C:/",
+		"//server/share/x": "server/share/x",
+	} {
+		assert.Equal(t, want, fileURIPathOf(slashPath, true), "fileURIPathOf(%q)", slashPath)
+		rest := fileURIPathOf(slashPath, true)
+		gotPath, isLocal := fileURILocalPath(rest, true)
+		assert.True(t, isLocal, "the URI of %q is local on Windows", slashPath)
+		assert.Equal(t, slashPath, gotPath, "the Windows path of the URI of %q", slashPath)
+	}
+
+	// A relative path, which AbsPath returns if the working directory can't
+	// be determined, gets the authority "." that names no file. It used to
+	// get a leading slash, the URI of another file below the root.
+	for _, tc := range []struct {
+		slashPath string
+		windows   bool
+		want      string
+	}{
+		{"data/x", false, "./data/x"},
+		{"data/x", true, "./data/x"},
+		{"../x", false, "./../x"},
+		{"C:/x", false, "./C:/x"}, // a directory named "C:" on other platforms
+		{"C:x", true, "./C:x"},    // relative to the working directory of drive C:
+	} {
+		rest := fileURIPathOf(tc.slashPath, tc.windows)
+		assert.Equal(t, tc.want, rest, "fileURIPathOf(%q, windows=%t)", tc.slashPath, tc.windows)
+		_, isLocal := fileURILocalPath(rest, tc.windows)
+		assert.False(t, isLocal, "the URI of the relative path %q names no file", tc.slashPath)
+	}
+
+	// Regression test: a Windows long path like `\\?\C:\x` got the URI
+	// "file://?/C:/x" in a commit before v1.0.0, which the betas didn't
+	// accept, while they round-tripped it as "file:////?/C:/x". The URI
+	// keeps the long path, whose prefix turns off the normalization of
+	// names like "name." and "aux". Device paths like `\\.\COM1` and
+	// other paths of the file namespace get a URI that names no file.
+	for slashPath, wantPath := range map[string]string{
+		"//?/C:/dir/name.":          "//?/C:/dir/name.",
+		"//?/c:/":                   "//?/c:/",
+		"//?/UNC/server/share/x":    "//?/UNC/server/share/x",
+		"//?/unc/server/share/aux":  "//?/unc/server/share/aux",
+		"//?/Volume{1234}/dir/file": "",
+		"//./COM1":                  "",
+		"//?/UNCx/server/share":     "", // no long UNC path without the slash after UNC
+		"//?/UNC/":                  "", // nor without a server
+	} {
+		rest := fileURIPathOf(slashPath, true)
+		gotPath, isLocal := fileURILocalPath(rest, true)
+		if wantPath == "" {
+			assert.False(t, isLocal, "the URI %q of the device or volume path %q names no file", rest, slashPath)
+			continue
+		}
+		assert.True(t, isLocal, "the URI %q of the long path %q is local", rest, slashPath)
+		assert.Equal(t, wantPath, gotPath, "the Windows path of the URI %q of %q", rest, slashPath)
+	}
+
+	// The UNC paths of the servers "localhost" and "~" and of servers
+	// like "C:" keep the empty authority: "file://localhost/share/x" would
+	// be "/share/x", "file://~/share/x" the home directory and
+	// "file://C:/x" the drive C:
+	for slashPath, wantRest := range map[string]string{
+		"//localhost/share/x": "//localhost/share/x",
+		"//LocalHost/c$/x":    "//LocalHost/c$/x",
+		"//~/share/x":         "//~/share/x",
+		"//localhostx/share":  "localhostx/share",
+		"//C:/x":              "//C:/x",
+		"//x:/share":          "//x:/share",
+		"//C:x/share":         "C:x/share",
+	} {
+		rest := fileURIPathOf(slashPath, true)
+		assert.Equal(t, wantRest, rest, "fileURIPathOf(%q)", slashPath)
+		gotPath, isLocal := fileURILocalPath(rest, true)
+		assert.True(t, isLocal, "the URI %q of the UNC path %q is local on Windows", rest, slashPath)
+		assert.Equal(t, slashPath, gotPath, "the Windows path of the URI %q", rest)
+	}
+
+	// `\\?\C:` without a separator is no long path but the volume device
+	// of drive C:, its URI has the authority "?", which names no host,
+	// and resolves to the root of the drive like "file:///C:"
+	rest := fileURIPathOf("//?/C:", true)
+	assert.Equal(t, "?/C:", rest, `fileURIPathOf("//?/C:")`)
+	gotPath, isLocal := fileURILocalPath(rest, true)
+	assert.True(t, isLocal, "the URI %q is local", rest)
+	assert.Equal(t, "//?/C:/", gotPath, "the Windows path of the URI %q", rest)
+}
+
+// TestLocalFileSystem_SplitPath checks that SplitPath converts a file URI
+// like CleanPath before it splits the path into its elements.
+func TestLocalFileSystem_SplitPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a b", "c")
+	want := strings.Split(strings.Trim(dir, Separator), Separator)
+	assert.Equal(t, want, Local.SplitPath(dir), "SplitPath of a path")
+	assert.Equal(t, want, Local.SplitPath(Local.URI(dir)), "SplitPath of the file URI of the path")
+	assert.Nil(t, Local.SplitPath(Separator), "SplitPath of the root")
+	assert.Nil(t, Local.SplitPath(""), "SplitPath of an empty path")
+}
+
+// TestLocalFileSystem_URIWithoutWorkingDirectory checks the URI of a relative
+// path while the working directory is deleted, so the path can't be made
+// absolute: the URI has the authority "." and names no file. It used to be
+// the URI of the absolute path with the same elements below the root.
+func TestLocalFileSystem_URIWithoutWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the working directory can't be deleted on Windows")
+	}
+	cwd := filepath.Join(t.TempDir(), "cwd")
+	require.NoError(t, os.Mkdir(cwd, 0o700))
+	t.Chdir(cwd)
+	require.NoError(t, os.Remove(cwd))
+	if _, err := os.Getwd(); err == nil {
+		t.Skip("os.Getwd works without the working directory on this platform")
+	}
+
+	uri := File(filepath.Join("data", "x")).URI()
+	assert.Equal(t, LocalPrefix+"./data/x", uri)
+	fileSystem, _ := ParseRawURI(uri)
+	assert.Equal(t, Invalid, fileSystem, "the URI of a relative path names no file")
+}
+
+func TestLocalFileSystem_FileURI(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "a b.txt")
+	uri := File(filePath).URI()
+	assert.True(t, strings.HasPrefix(uri, LocalPrefix+"/"), "the URI %q has an empty authority", uri)
+	assert.False(t, strings.HasPrefix(uri, LocalPrefix+"//"), "the URI %q has no empty path element", uri)
+	assert.Equal(t, filePath, File(uri).LocalPath())
+
+	withHost := LocalPrefix + "localhost" + strings.TrimPrefix(uri, LocalPrefix)
+	fileSystem, gotPath := ParseRawURI(withHost)
+	assert.Equal(t, Local, fileSystem, "%q is local", withHost)
+	assert.Equal(t, filePath, gotPath, "the path of %q", withHost)
+
+	remote := LocalPrefix + "server/share/x.txt"
+	fileSystem, gotPath = ParseRawURI(remote)
+	if filepath.Separator == '\\' {
+		assert.Equal(t, Local, fileSystem, "%q is a UNC path on Windows", remote)
+		assert.Equal(t, `\\server\share\x.txt`, gotPath)
+		assert.Equal(t, remote, File(gotPath).URI(), "the URI of a UNC path")
+	} else {
+		assert.Equal(t, Invalid, fileSystem, "%q names a file on another host", remote)
+		assert.Equal(t, Invalid, File(remote).FileSystem())
+		assert.Empty(t, File(remote).LocalPath())
+	}
 }
 
 func TestLocalFileSystem_ID(t *testing.T) {

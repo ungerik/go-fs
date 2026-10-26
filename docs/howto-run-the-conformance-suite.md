@@ -83,7 +83,7 @@ sub/deeper/leaf.md "# leaf"
 ```
 
 The file `100%25 a%20b.txt` is named exactly like that: a backend that decodes
-URL escapes in names would turn it into `100% a b.txt`, which is another file.
+percent-encoded characters in names would turn it into `100% a b.txt`, which is another file.
 
 Any other seed works too, the suite derives the names it reads from the seed.
 
@@ -245,14 +245,22 @@ external server.
 `ReadableWritable` reports `writable == true` but the type does not implement
 `OpenWriter`, `MakeDir` and `Remove`. Fix one or the other.
 
-**`WriteSeed` fails immediately** and the suite stops after it — `TestDir` is not empty, is not writable,
+**`WriteSeed` fails immediately** and the suite stops after it — `TestDir` is not writable,
 or its parent directories are missing. The suite creates `TestDir` itself with
 one `MakeDir`, not recursively, and it requires a missing-path `Stat` to return
 an error wrapping `os.ErrNotExist`. If `TestDir` exists but is a file, the
 message says so.
 
-**`ReadSeed` fails on a read-only file system** — the contents of `TestDir` do
-not match `Config.Seed` exactly. The suite compares content, not just names.
+**`ListDir` lists unexpected entries on a writable file system** — `TestDir`
+was not empty. The suite does not check that before it starts: `WriteSeed`
+writes the seed over what is there and `ReadSeed` only reads the seed files,
+so the extra entries first fail `ListDir`, which expects exactly the seed
+tree. `Cleanup` then deletes everything below `TestDir`, the extra entries
+included, so point `TestDir` at a directory the suite may own.
+
+**`ReadSeed` fails on a read-only file system** — a seed file or directory in
+`TestDir` is missing or differs from `Config.Seed`. The suite compares content,
+not just names. Extra entries don't fail `ReadSeed`, they fail `ListDir`.
 
 **`ListDir` fails on a file system without directories** — set
 `NoDirectories: true`.
@@ -266,9 +274,12 @@ writing a directory must fail with an error matching
 `errors.Is(err, fs.ErrIsDirectory{})`; the error may come from opening, from
 `Read`/`Write` or from `Close`, and the directory must survive.
 
-**`OptionalWrite/Touch` fails on an existing file** — the emulation returns
-`ErrUnsupported` for touching an existing file, by design. Implement
-`fs.TouchFileSystem` if your backend can update a modification time.
+**`OptionalWrite/Touch` fails** — the sub-test only runs when the type
+implements `fs.TouchFileSystem` natively and is skipped otherwise. `Touch` of
+a missing file must create an empty file. `Touch` of an existing file may
+return an error wrapping `errors.ErrUnsupported` when the backend can't
+update a modification time; any other error fails the sub-test, and so does a
+`Touch` that changes the content of the existing file.
 
 **`OptionalWrite/Permissions` fails on bits you do not store** — set
 `PermissionMask` to the bits that actually survive a round trip.
@@ -287,7 +298,7 @@ message of the context error have to be wrapped.
 wrapping `fs.ErrFileSystemClosed`, and calling `Close` again must return nil.
 The sub-test names the method that didn't.
 
-**Everything passes locally, CI fails** — CI has no Docker daemon and no
+**Everything passes locally, CI fails** — CI may have no Docker daemon or no
 credentials. Check your `TestMain` gate and the environment variables.
 
 ## Related

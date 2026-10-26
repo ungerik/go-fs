@@ -113,7 +113,7 @@ type MockFileSystem struct {
 //
 // fs.URIFileSystem is deliberately not implemented: a file system that
 // implements it maps its URIs to paths itself and the package stops
-// decoding URL escapes, which would give the mock another path model
+// decoding percent-encoded characters, which would give the mock another path model
 // than every other file system. Embed the mock in a type with the three
 // methods of fs.URIFileSystem to test that path model.
 type MockFullyFeaturedFileSystem struct {
@@ -162,7 +162,7 @@ func (m *MockFileSystem) pathHelper() fsimpl.PathHelper {
 
 // file returns the File of a clean path of the mock.
 func (m *MockFileSystem) file(filePath string) fs.File {
-	return fs.File(m.pathHelper().URL(filePath))
+	return fs.File(m.pathHelper().URI(filePath))
 }
 
 // ID implements fs.FileSystem

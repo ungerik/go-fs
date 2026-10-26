@@ -10,8 +10,8 @@ go-fs: A unified file system for Go
 The package is built around a `File` type that is a string underneath
 and interprets its value as a local file system path or as a URI.
 
-Version 1.0 is in beta; the v1 API is being iterated in beta releases
-before it is frozen. Upgrading from v0.x is mechanical, see
+Version 1.0 is a release candidate (v1.0.0-rc.1); the v1 API freezes with
+the v1.0.0 release. Upgrading from v0.x is mechanical, see
 [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md).
 
 Documentation
@@ -135,8 +135,8 @@ readFile("https://example.com/file-via-uri.txt")
 As a string type `File` naturally marshals/unmarshals as string path/URI
 without having to implement marshaling interfaces.
 
-But it implements `fmt.Stringer` to add the name of the path/URI filesystem
-as debug information.
+Its `fmt.Stringer` method `String` returns `URI()`: the prefix of the file
+system followed by the clean path, like `file:///tmp/file.txt` for a local file.
 
 Path related methods:
 
@@ -146,7 +146,7 @@ file := fs.TempDir().Join("file.txt")
 dir := file.Dir()   // "/tmp" == fs.TempDir()
 name := file.Name() // "file.txt"
 path := file.Path() // "/tmp/file.txt"
-url := file.URL()   // "file:///tmp/file.txt"
+uri := file.URI()   // "file:///tmp/file.txt"
 ext := file.Ext()   // ".txt"
 lower := file.ExtLower() // ".txt"
 trimmed := file.TrimExt() // "/tmp/file"
@@ -407,7 +407,7 @@ files, err = dir.ListDirMax(ctx, 100, "*.jpg", "*.jpeg")
 files, err = dir.ListDirRecursiveMax(ctx, 1000, "*.go")
 ```
 
-Go 1.23+ iterator methods (`iter.Seq2[fs.File, error]`):
+Iterator methods (`iter.Seq2[fs.File, error]`):
 
 ```go
 // Range directly over directory entries
@@ -687,7 +687,7 @@ Only `httpfs` registers file systems when it is imported.
 | `s3fs`        | `s3://<bucket>`         | `s3fs.New`, `s3fs.NewLoadDefaultConfig`, `s3fs.NewAndRegister` | yes  | yes/ro |
 | `sftpfs`      | `sftp://<user>@<host>`  | `sftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes  |
 | `ftpfs`       | `ftp://[<user>@]<host>`, `ftps://[<user>@]<host>` | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
-| `dropboxfs`   | `dropbox://<account id>` | `dropboxfs.New`, `dropboxfs.NewAndRegister`       | yes  | yes    |
+| `dropboxfs`   | `dropbox://<account id without "dbid:">` | `dropboxfs.New`, `dropboxfs.NewAndRegister`       | yes  | yes    |
 | `webdavfs`    | `webdav://[<user>@]<host><base path>` | `webdavfs.New`, `webdavfs.NewAndRegister` | yes  | yes    |
 | `smbfs`       | `smb://[<user>@]<host>/<share>` | `smbfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes  | yes    |
 | `azureblobfs` | `azblob://<host>/<container>` | `azureblobfs.New`, `NewFromConnectionString`, `NewAndRegister` | yes | yes/ro |
@@ -730,7 +730,7 @@ expose one, so those use the coordinates that identify the store instead.
 
 | File system                                        | `ID()`                                             |
 | -------------------------------------------------- | -------------------------------------------------- |
-| `fs.Local`                                         | File system id of the root volume: the `statfs` `f_fsid` on Unix, the volume serial number on Windows, `local` on js and wasip1 |
+| `fs.Local`                                         | File system id of the root volume: the `statfs` `f_fsid` on Unix (`statvfs` on NetBSD, Solaris and illumos), the volume serial number on Windows, `local` on js and wasip1 |
 | `MemFileSystem`                                    | `MemFileSystemOptions.ID`, random if empty         |
 | `StdFileSystem`, `SubFileSystem`, `OverlayFileSystem` | The id part of the prefix, random if none was passed |
 | `httpfs`                                           | The prefix without a trailing `://`: `http` / `https` for `httpfs.Default` / `httpfs.DefaultTLS` |
@@ -740,7 +740,7 @@ expose one, so those use the coordinates that identify the store instead.
 | `sftpfs`, `ftpfs`                                  | The connection prefix, `sftp://user@host` / `ftp://[user@]host` |
 | `smbfs`                                            | `[<user>@]<host>/<share>`                          |
 | `webdavfs`                                         | `[<user>@]<host><base path>`                       |
-| `dropboxfs`                                        | Dropbox account id                                 |
+| `dropboxfs`                                        | Dropbox account id with its `dbid:` part, which the prefix omits |
 
 The format is specific to the implementation and promises nothing beyond
 uniqueness and stability. Use it to tell two file systems apart, to key a
@@ -766,7 +766,7 @@ absolute path methods, whose defaults fit it. For the remote backends:
 | Capability             | s3  | azblob | sftp | ftp | smb | dropbox | webdav | http |
 | ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
 | CopyFile (server-side) | ✓   | ✓      | –    | –   | –   | ✓       | ✓      | –    |
-| Move                   | –   | –      | ✓    | ✓   | ✓   | ✓       | ✓      | –    |
+| Move                   | –   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | –    |
 | Exists                 | –   | –      | –    | –   | –   | –       | –      | ✓    |
 | ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | –       | ✓      | ✓    |
 | WriteAll               | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | r/o  |
@@ -933,7 +933,8 @@ if err != nil {
 defer dbxFS.Close()
 err = fs.Register(dbxFS)
 
-// The prefix is dropbox://<account id>, so it is stable per account
+// The prefix is dropbox://<account id without "dbid:">,
+// so it is stable per account
 err = dbxFS.RootDir().Join("Apps", "MyApp", "notes.md").WriteAllString(ctx, "...")
 ```
 

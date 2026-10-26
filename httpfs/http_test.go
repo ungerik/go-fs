@@ -182,7 +182,7 @@ func (s *recordingServer) host() string {
 }
 
 // TestURLsVerbatim verifies that URLs are requested exactly as passed.
-// The path of a URI used to be URL decoded and cleaned as a whole, so
+// The path of a URI used to be percent-decoded and cleaned as a whole, so
 // "?q=a%26b" arrived as "q=a&b", "?to=https://x" as "to=https:/x",
 // "/file%3Fname" as path "/file" with the query "name", "/a%2Fb" as
 // "/a/b", and the trailing slash of "/dir/" was lost. Name included
@@ -197,7 +197,7 @@ func TestURLsVerbatim(t *testing.T) {
 	tests := []struct {
 		target   string // appended to the server URL
 		received string // request target the server must receive
-		uri      string // File.URL, the cleaned target
+		uri      string // File.URI, the cleaned target
 		name     string
 	}{
 		{"/search?q=a%26b", "/search?q=a%26b", "", "search"},
@@ -219,7 +219,7 @@ func TestURLsVerbatim(t *testing.T) {
 			}
 			file := fs.File(uri)
 			assert.Same(t, Default, file.FileSystem())
-			assert.Equal(t, wantURI, file.URL(), "URL")
+			assert.Equal(t, wantURI, file.URI(), "URI")
 			assert.Equal(t, strings.TrimPrefix(wantURI, Prefix), file.Path(), "Path")
 			assert.Equal(t, tt.name, file.Name(), "Name without query")
 			assert.False(t, file.IsHidden())
@@ -272,7 +272,7 @@ func TestHostOnly(t *testing.T) {
 		assert.Equal(t, "", file.Name(), "Name of %s", uri)
 		assert.False(t, file.IsHidden(), "IsHidden of %s", uri)
 		assert.Equal(t, file, file.Dir(), "the host is its own parent")
-		assert.Equal(t, uri, file.URL(), "the trailing slash is kept")
+		assert.Equal(t, uri, file.URI(), "the trailing slash is kept")
 
 		info, err := file.Stat()
 		require.NoError(t, err)
@@ -647,6 +647,17 @@ func TestFile_ExtTrimExt_query(t *testing.T) {
 	assert.Equal(t, ".pdf", file.Ext())
 	assert.Equal(t, fs.File("https://example.com/dir/report?token=a.b"), file.TrimExt())
 	assert.Equal(t, fs.File("https://example.com/dir/report"), fs.File("https://example.com/dir/report").TrimExt())
+
+	// A name that is only an extension isn't trimmed to its directory
+	for _, file := range []fs.File{
+		"https://example.com/dir/.env?token=a.b",
+		"https://example.com/dir/..zip",
+		"https://example.com/dir/...zip",
+		"https://example.com/dir/%2E%2E.zip",
+		"https://example.com/dir/%2e.zip",
+	} {
+		assert.Equal(t, file, file.TrimExt(), "TrimExt doesn't name the directory or its parent")
+	}
 }
 
 // TestErrorMessage_noQuery checks that error messages of HTTP files

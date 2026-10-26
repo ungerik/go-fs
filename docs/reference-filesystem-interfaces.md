@@ -113,7 +113,7 @@ are only called on file systems that report themselves as writable.
 | `VolumeNameFileSystem`       | `VolumeName`                      | `""`, the path has no volume.                      |
 | `PrefixAliasFileSystem`      | `PrefixAliases`                   | No aliases; only `Prefix()` resolves to this file system. |
 | `AbsPathFileSystem`          | `IsAbsPath`, `AbsPath`, `RelPath` | Every path counts as absolute, `AbsPath` returns the path unchanged, and `RelPath` is computed by the package from the split path elements. |
-| `URIFileSystem`              | `PathFromURI`, `URIFromPath`, `SplitDirAndName` | The package decodes the URL escapes after the prefix and cleans the rest with `CleanPath`; the URI of a path is the prefix followed by the path with `%` escaped. For file systems whose paths are URIs in escaped form, like `httpfs`. |
+| `URIFileSystem`              | `PathFromURI`, `URIFromPath`, `SplitDirAndName` | The package decodes the percent-encoded characters after the prefix and cleans the rest with `CleanPath`; the URI of a path is the prefix followed by the path with `%` escaped. For file systems whose paths are URIs in escaped form, like `httpfs`. |
 
 ### Writing
 
@@ -145,9 +145,44 @@ fallbacks, and the conformance suite checks them:
 A destination equal to the source is a no-op returning nil, like `os.Rename`.
 Moving a directory into itself or one of its sub-directories is an error
 wrapping `os.ErrInvalid`; the package checks it before it calls a native
-`Move`. The package functions `fs.Move`, `File.MoveTo` and `fs.CopyFile`
+`Move`. The package functions also compare source and destination through
+`SubFileSystem`s to their parent and through an `OverlayFileSystem` to its
+layers, on every file system by path and on the local file system also by
+file identity: a copy or move onto the same file is a no-op, and copying or
+moving a directory into one of its sub-directories that way, also into
+a sub-directory of either layer of an overlay directory, is an error wrapping
+`os.ErrInvalid`. So is moving an entry of an overlay's base layer to its path
+in the upper layer. The package functions `fs.Move`, `File.MoveTo` and `fs.CopyFile`
 resolve a destination that is an existing directory to "into the directory"
 before these rules apply.
+
+Below the root of a directory copy, an entry that the copy already wrote for
+another source name is not replaced in a move, in a directory that
+`CopyRecursive` creates and in an existing local directory (also through a
+`SubFileSystem` or as the upper layer of an `OverlayFileSystem`); other file
+systems replace it in an existing directory. This happens when the destination
+doesn't tell two names apart, like another case or Unicode normalization. In
+a move, and in any directory that `CopyRecursive` creates, every existing
+entry is an error wrapping `os.ErrExist`, also one that another process
+creates during the move; in an existing local directory the entries are told
+apart by file identity. Two hard links of one file are two entries there:
+both are written into the one file, which keeps the data written last, like
+`cp`.
+
+A destination file that the copy would write into (named pipe, device,
+socket) is an error wrapping `os.ErrExist`, not written into. Local
+destinations are told by their file mode, so the placeholders of OneDrive
+files, which Windows reports as irregular, are replaced like regular files;
+writing over other reparse points, like AppExecLinks, fails with the error of
+the write. Other file systems refuse every entry that `FileInfo.IsRegular`
+doesn't describe as regular. An `OverlayFileSystem` destination is checked
+at its upper layer, so a special file of the base layer is no error. For
+local destinations, names that `filepath.Localize` rejects, and on Windows
+names ending in a dot or space or containing `< > " | ? *` or a control
+character, are errors wrapping `os.ErrInvalid`. Between file systems these names are
+checked for every entry of the source, also empty directories and entries
+the patterns don't select, before anything is written. A malformed pattern
+fails before anything is written too.
 
 ### Capabilities with no fallback
 
@@ -188,7 +223,7 @@ specialized), `r/o` read-only backend so the write operation does not apply.
 | Capability             |  s3 | azblob | sftp | ftp | smb | dropbox | webdav | http |
 | ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
 | CopyFile (server-side) |  ✓  |   ✓    |  –   |  –  |  –  |    ✓    |   ✓    |  –   |
-| Move                   |  –  |   –    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |
+| Move                   |  –  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |
 | Exists                 |  –  |   –    |  –   |  –  |  –  |    –    |   –    |  ✓   |
 | ReadAll                |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    –    |   ✓    |  ✓   |
 | WriteAll               |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |

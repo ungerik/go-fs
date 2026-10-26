@@ -70,8 +70,9 @@ var pastDeadline = time.Unix(1, 0)
 
 // dial dials and logs in a new control connection. The context and
 // Options.Timeout limit the TCP connect, the TLS handshake, the
-// greeting and the login.
-func dial(ctx context.Context, cfg *dialConfig, username, password string) (*conn, error) {
+// greeting and the login. The extra options are passed on to the
+// FTP client library.
+func dial(ctx context.Context, cfg *dialConfig, username, password string, extra ...ftp.DialOption) (*conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.timeout())
 	defer cancel()
 
@@ -81,6 +82,7 @@ func dial(ctx context.Context, cfg *dialConfig, username, password string) (*con
 		ftp.DialWithDialFunc(c.dialFunc),
 		ftp.DialWithDisabledEPSV(cfg.opts.DisableEPSV),
 	}
+	options = append(options, extra...)
 	if cfg.opts.DebugOut != nil {
 		options = append(options, ftp.DialWithDebugOutput(&debugWriter{w: cfg.opts.DebugOut}))
 	}
@@ -227,6 +229,12 @@ func (c *conn) begin(ctx context.Context) {
 	c.mtx.Unlock()
 	c.sent = false
 	c.reads = c.ctrl.reads.Load()
+}
+
+// hasMLST reports whether the server supports MLST:
+// IsTimePreciseInList tells that the connection uses MLSD and MLST.
+func (c *conn) hasMLST() bool {
+	return c.IsTimePreciseInList()
 }
 
 // run runs op on the connection. If ctx is done while op is running,

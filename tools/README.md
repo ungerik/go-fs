@@ -8,9 +8,10 @@ every contributor and the CI run the same linters and checks:
 - [gosec](https://github.com/securego/gosec) (`github.com/securego/gosec/v2/cmd/gosec`)
 - [govulncheck](https://go.dev/doc/tutorial/govulncheck) (`golang.org/x/vuln/cmd/govulncheck`)
 
-They are declared in a `tool` directive in `go.mod` and installed as a
-side effect of the module's dependencies, so no separate `go install` step
-is needed.
+They are declared in a `tool` directive in `go.mod`, with their
+dependencies pinned in `go.mod` and `go.sum`. `go tool` builds a tool at
+the pinned version on first use and caches the executable in the build
+cache, so no separate `go install` step is needed.
 
 ## Usage
 

@@ -100,7 +100,10 @@ jobs:
           - freebsd/amd64
           - netbsd/amd64
           - openbsd/amd64
+          - dragonfly/amd64
           - solaris/amd64
+          - illumos/amd64
+          - aix/ppc64
           - wasip1/wasm
           - js/wasm
           - linux/arm64

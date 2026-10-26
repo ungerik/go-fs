@@ -101,7 +101,7 @@ func seeksLocally(reader io.Reader) bool {
 		reader = r.ReadSeekCloser
 	}
 	switch reader.(type) {
-	case *os.File, *bytes.Reader, *strings.Reader, *fsimpl.ReadonlyFileBuffer, *fsimpl.FileBuffer:
+	case *os.File, *bytes.Reader, *strings.Reader, *fsimpl.ReadOnlyFileBuffer, *fsimpl.FileBuffer:
 		return true
 	}
 	return false

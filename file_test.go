@@ -1334,3 +1334,49 @@ func Test_xmlMarshalIndent(t *testing.T) {
 	_, err = xmlMarshalIndent(make(chan int), "")
 	require.Error(t, err)
 }
+
+// TestNewFileReadWriteAllSeekCloser checks that the reads see the content
+// of the file and that the changes are written back with Close.
+func TestNewFileReadWriteAllSeekCloser(t *testing.T) {
+	ctx := t.Context()
+	file := File(t.TempDir()).Join("rw.txt")
+	require.NoError(t, file.WriteAllString(ctx, "hello world"))
+
+	rw := NewFileReadWriteAllSeekCloser(file)
+	buf := make([]byte, 5)
+	_, err := io.ReadFull(rw, buf)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(buf))
+	_, err = rw.Seek(0, io.SeekEnd)
+	require.NoError(t, err)
+	_, err = rw.Write([]byte("!"))
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", mustReadString(t, file), "the changes are buffered until Close")
+	require.NoError(t, rw.Close())
+	assert.Equal(t, "hello world!", mustReadString(t, file))
+}
+
+// TestFile_TrimExtOfTildeAndDotfiles checks that TrimExt of "~.zip" is the
+// local file "./~", not the home directory that "~" names, and that a name
+// that is only an extension, like ".bashrc", is not trimmed to its
+// directory.
+func TestFile_TrimExtOfTildeAndDotfiles(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	for _, file := range []File{"~.zip", "./~.zip"} {
+		trimmed := file.TrimExt()
+		assert.Equal(t, File("."+Separator+"~"), trimmed, "%q.TrimExt()", file)
+		assert.NotEqual(t, home, trimmed.LocalPath(), "%q.TrimExt() names the home directory", file)
+	}
+
+	dir := t.TempDir()
+	dotfile := File(filepath.Join(dir, ".bashrc"))
+	assert.Equal(t, dotfile, dotfile.TrimExt(), "TrimExt of a dotfile")
+	// "..zip" and "...zip" would become ".", the directory, and "..", its parent
+	for _, name := range []string{"..zip", "...zip", "."} {
+		file := File(filepath.Join(dir, name))
+		assert.Equal(t, file, file.TrimExt(), "TrimExt of %q", name)
+	}
+	config := File(filepath.Join(t.TempDir(), ".config.json"))
+	assert.Equal(t, File(strings.TrimSuffix(string(config), ".json")), config.TrimExt(), "TrimExt of a dotfile with an extension")
+}

@@ -54,8 +54,10 @@ before the volume: the prefix is `mem://id/` and a URI is `mem://id/C:\dir`.
 After prefixes and aliases, resolution reaches a fork that is worth stating
 explicitly:
 
-> A URI that contains `://` but matched nothing resolves to the **`Invalid`
-> file system**. A string with no scheme resolves to the **local** file system.
+> A URI with a scheme, a `://` with no slash or backslash before it, that
+> matched nothing resolves to the **`Invalid` file system**. A string with no
+> scheme resolves to the **local** file system, also a path with a `://`
+> after a separator, like `/cache/https://x`.
 
 The only scheme that maps to local is `file://`, and that matches earlier
 because `Local` is registered with it. Anything else — `s3://`, `http://`,
@@ -101,12 +103,19 @@ if _, ok := f.FileSystem().(fs.InvalidFileSystem); ok {
 }
 ```
 
-## URL escapes: decoded for URIs, verbatim for local paths
+## Percent-encoding: decoded for URIs, verbatim for local paths
 
-A URI that carries a scheme has its URL escapes decoded, so
+A URI that carries a scheme has its percent-encoded characters decoded, so
 `s3://bucket/a%20b` addresses the key `a b`. A scheme-less local path is used
 **verbatim**, so a local file literally named `a%20b` is reachable by that
 name.
+
+`CleanFilePath` and `JoinCleanFilePath` resolve a URI the same way, and
+`LocalFileSystem.CleanPath` decodes a file URI; the parts joined to it are
+names, used verbatim. For a file URI that names no local file, like
+`file://./x`, `CleanPath` returns the empty path, and `NewSubFileSystem`
+fails with `os.ErrInvalid` for it and for URIs of other file systems. Only the form `file://` is a file URI: the RFC 8089
+short forms `file:/path` and `file:path` are relative local paths.
 
 This asymmetry is deliberate. Percent-encoding is part of URI syntax and not
 part of local path syntax, so decoding a local path would make some real
@@ -133,6 +142,13 @@ as `%25` (`fsimpl.EscapeURIPath`). That is what lets `File` round-trip: parse
 to `(fileSystem, path)`, decoding the escapes, and rebuild with the prefix and
 the escaped path, so a file literally named `a%20b` keeps its name.
 
+Such a go-fs URI is not an RFC 3986 URL. Only `%` is percent-encoded; spaces,
+`?`, `#` and non-ASCII characters of names stay as they are, so
+`file:///tmp/a#b.txt` is the file `a#b.txt`, where `net/url` would read
+`#b.txt` as a fragment. Store, log and parse go-fs URIs with go-fs (`File`,
+`ParseRawURI`), but don't hand them to an HTTP client or a browser. That is why
+the method is `File.URI()`, not `URL()`.
+
 File systems whose paths are URIs in escaped form, like the URLs of `httpfs`
 with their query strings, implement `URIFileSystem` instead. The package then
 decodes nothing and lets the file system convert between URIs and paths with
@@ -150,14 +166,58 @@ path, not as `file:///etc/hosts`.
 f := fs.File("/etc/hosts")
 f.Path()    // "/etc/hosts"
 f.RawURI()  // "/etc/hosts"          the string as stored
-f.URL()     // "file:///etc/hosts"
-f.String()  // "file:///etc/hosts"   String() returns URL()
+f.URI()     // "file:///etc/hosts"
+f.String()  // "file:///etc/hosts"   String() returns URI()
 ```
 
 This is what makes `readFile("../my-local-file.txt")` work with a plain string
-literal, which is the whole reason `File` is a string. `URL()` produces the
+literal, which is the whole reason `File` is a string. `URI()` produces the
 `file://` form when you need a real URI; `Path()` gives the file system path;
 `RawURI()` gives the string as stored.
+
+File URIs follow RFC 8089 in both directions. The authority is empty, so a
+Windows path keeps a slash before its drive letter, and a UNC path puts its
+server in the authority:
+
+| Local path              | `URI()`                       |
+| ----------------------- | ----------------------------- |
+| `/etc/hosts`            | `file:///etc/hosts`           |
+| `C:\dir\file.txt`       | `file:///C:/dir/file.txt`     |
+| `\\server\share\x.txt`  | `file://server/share/x.txt`   |
+| `\\localhost\share\x`   | `file:////localhost/share/x`  |
+
+Parsing accepts `file://localhost/...` as a local path too, and on Windows
+the form `file://C:/dir/file.txt` written before v1.0.0. A URI with another
+host, like `file://server/share/x.txt`, is a UNC path on Windows; on other
+platforms there is no local path for it, so it resolves to the `Invalid` file
+system instead of a path relative to the working directory. `file://~/x` is
+the go-fs shorthand for `~/x` in the home directory. The hosts `.`, `..` and
+`?` name no host on any platform, `file://./x` resolves to the `Invalid` file
+system, also on Windows, where it would be the device path `\\.\x`. A relative
+path that can't be made absolute, because the working directory can't be
+determined, has such a URI: `file://./data/x` names no file. `file://` and
+`file://localhost` without a path resolve to the local file system with the
+empty path, which names no file: its operations fail with `ErrEmptyPath`, and
+the Files derived from it, like by `Join` or `Dir`, have the empty path and
+the URI `file://` too. The UNC paths of the servers `localhost` and `~` keep
+the empty authority, `\\localhost\share\x` has the URI
+`file:////localhost/share/x`, because `file://localhost/share/x` is the
+local path `/share/x` and `file://~/x` is in the home directory.
+
+On Windows the long paths of a drive or a UNC path keep their prefix:
+`\\?\C:\dir\name.` has the URI `file:////?/C:/dir/name.`, because the prefix
+keeps names that Windows would normalize, like a trailing dot or `aux`. Other
+paths of the device and file namespaces, `\\.\COM1`, `\\?\Volume{…}\x` and
+`\??\PhysicalDrive0`, have no file URI that names a file.
+
+Because a file URI with a host is a UNC path on Windows, a file operation on
+a `File` from an untrusted file URI can connect to any host over SMB, with
+the automatic NTLM login of Windows, just like one on an untrusted UNC path.
+Some forms reach a server without a host that `url.Parse` would report:
+`file:////server/share/x` and `file:////?/UNC/server/share/x`. So check the
+resolved path, not the host of the URI: a local path whose volume
+(`filepath.VolumeName(File(uri).LocalPath())`) begins with `\\` and is no
+`\\?\` path of a drive is on another host.
 
 ## Registration
 
@@ -194,7 +254,7 @@ defer free()
 | Chosen                              | Given up                                           |
 | ----------------------------------- | -------------------------------------------------- |
 | Longest-prefix match                | Constant-time lookup; resolution scans the sorted registry under a read lock |
-| Unmatched scheme → `Invalid`        | Being able to write a local file whose name contains `://` |
+| Unmatched scheme → `Invalid`        | Being able to write a local path that begins with a name like `x://` |
 | Local files stored without a prefix | One uniform representation for all files           |
 | `Register` rejects a held prefix    | Replacing a registered file system without closing it first |
 | Reference counts in `EnsureRegistered` only | Sharing an instance by registering it twice |

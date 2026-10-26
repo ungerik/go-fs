@@ -68,7 +68,7 @@ The root package also has `fs.ParseRequestMultipartFormMemFiles` and
   uploaded under an already used name get a unique name (`a.txt`,
   `a (2).txt`, ...), and names that are not usable as a path element (`.`,
   `..`) become `unnamed`. All other names are kept as uploaded, including
-  names that look URL escaped like `report%201.pdf`.
+  names that look percent-encoded like `report%201.pdf`.
 - **Escaped field names.** Form field names can contain anything, so the
   directory name of a field escapes `%` as `%25` and `/` as `%2F`, and the
   fields `.` and `..` become `%2E` and `%2E%2E`. Ordinary field names like

@@ -84,11 +84,69 @@ func (s *SubFileSystem) CleanPath(uriParts ...string) string {
 // whose root is the directory dirPath of the parent file system.
 // A random id is used if id is empty. dirPath is a parent path or URI
 // and must be an existing directory. The file system is not registered.
+// A URI is resolved like by [File], decoding its percent-encoded
+// characters, and must be one of the parent: the URI of another file
+// system, or a file URI that names no local file, like "file://./x", is
+// an error wrapping [os.ErrInvalid] instead of a root somewhere else.
+// An empty dirPath is [ErrEmptyPath]; "." is the current directory.
+// A relative local root is made absolute, so it doesn't follow later
+// changes of the working directory: on Unix with the working directory
+// without symbolic links, from which the system resolves "..", on Windows
+// like [filepath.Abs], from the path of the current directory.
 func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSystem, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("nil parent file system")
 	}
-	dir := parent.CleanPath(dirPath)
+	var dir string
+	_, local := parent.(*LocalFileSystem)
+	switch {
+	case dirPath == "":
+		// Not the working directory or the root of the parent
+		return nil, ErrEmptyPath
+	case !hasURIScheme(dirPath):
+		// Also a path with a "://" after a "/", like "/cache/https://x"
+		dir = parent.CleanPath(dirPath)
+	case local && strings.HasPrefix(dirPath, LocalPrefix):
+		// Decoded once, uriPath would decode again in CleanPath
+		resolved, resolvedPath := parseLocalFileURI(parent, dirPath)
+		if resolved != parent || resolvedPath == "" {
+			return nil, fmt.Errorf("%w: the file URI %s names no local directory", os.ErrInvalid, fsimpl.RedactURI(dirPath))
+		}
+		dir = resolvedPath
+	case fsPrefixMatchLen(parent, dirPath) >= 0:
+		dir = uriPath(parent, dirPath)
+	default:
+		return nil, fmt.Errorf("%w: %s is no URI of the parent file system %s", os.ErrInvalid, fsimpl.RedactURI(dirPath), fsimpl.RedactURI(parent.Prefix()))
+	}
+	// A relative root would follow the working directory, cut the dot
+	// of a name like ".env" from a parent path below the root ".",
+	// and turn the absolute target of a link into a relative one,
+	// which the link's directory resolves outside of a root ".."
+	switch {
+	case local && windowsPaths && !isLongPath(dir):
+		// Windows resolves ".." from the path of the current directory,
+		// like filepath.Abs, which also gives `\x` and "/" without
+		// a drive, for which filepath.IsAbs is false, the current drive.
+		// A long path is absolute and keeps the trailing dots and spaces
+		// of its names, which filepath.Abs would remove
+		absDir, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, err
+		}
+		dir = absDir
+	case local && !filepath.IsAbs(dir):
+		// Unix resolves ".." from the real working directory, not from
+		// a path through a symbolic link to it that os.Getwd can return
+		// from $PWD
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		if cwd, err = filepath.EvalSymlinks(cwd); err != nil {
+			return nil, err
+		}
+		dir = filepath.Join(cwd, dir)
+	}
 	info, err := fsStat(parent, dir)
 	if err != nil {
 		return nil, err

@@ -3,8 +3,10 @@ package fs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -97,14 +99,14 @@ func TestParseRawURI_escapes(t *testing.T) {
 
 	fs, fsPath := ParseRawURI(escapedFS.Prefix() + "a%20b/100%2525.txt")
 	assert.Equal(t, escapedFS, fs)
-	assert.Equal(t, "a b/100%25.txt", fsPath, "URL escapes after the prefix are decoded once")
+	assert.Equal(t, "a b/100%25.txt", fsPath, "percent-encoded characters after the prefix are decoded once")
 
 	fs, fsPath = ParseRawURI(escapedFS.Prefix() + "50% off.txt")
 	assert.Equal(t, escapedFS, fs)
 	assert.Equal(t, "50% off.txt", fsPath, "a path with an invalid escape is used as it is")
 
 	// The URI of a path is its inverse, so a name that looks
-	// URL escaped keeps its name through File methods.
+	// percent-encoded keeps its name through File methods.
 	file := fsFile(escapedFS, "a b/100%25.txt")
 	assert.Equal(t, escapedFS.Prefix()+"a b/100%2525.txt", string(file))
 	fs, fsPath = file.ParseRawURI()
@@ -466,5 +468,63 @@ func TestRedactURI_Errors(t *testing.T) {
 		})
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), "hunter2", "EnsureRegistered error for %q", uri)
+	}
+}
+
+// TestParseRawURI_LocalUnregistered is a regression test: with Local
+// unregistered, ParseRawURI converted a file URI without decoding its
+// path, so "file:///tmp/a%20b" was "/tmp/a%20b", another file than with
+// Local registered. The root package has no parallel tests that could
+// see the registry without Local.
+func TestParseRawURI_LocalUnregistered(t *testing.T) {
+	dir := t.TempDir()
+	withLocal := map[string]string{}
+	uris := []string{
+		Local.URI(filepath.Join(dir, "a%b")), // "…/a%25b", decoded "…/a%b"
+		LocalPrefix + "localhost" + strings.TrimPrefix(Local.URI(dir), LocalPrefix),
+		LocalPrefix + "server/share/x",
+		LocalPrefix + "./x",
+	}
+	for _, uri := range uris {
+		fileSystem, fsPath := ParseRawURI(uri)
+		withLocal[uri] = fmt.Sprint(fileSystem == Local, fsPath)
+	}
+
+	require.True(t, Unregister(Local))
+	t.Cleanup(func() { _ = Register(Local) })
+	for _, uri := range uris {
+		fileSystem, fsPath := ParseRawURI(uri)
+		assert.Equal(t, withLocal[uri], fmt.Sprint(fileSystem == Local, fsPath), "ParseRawURI(%q) like with Local registered", uri)
+	}
+	fileSystem, fsPath := ParseRawURI(uris[0])
+	assert.Equal(t, Local, fileSystem)
+	assert.Equal(t, filepath.Join(dir, "a%b"), fsPath, "the path is decoded")
+}
+
+// TestParseRawURI_PathWithSchemeSeparator checks that only a "://" with no
+// "/" before it is the scheme of a URI: a URI of an unregistered scheme is
+// the Invalid file system, a path with a "://" after a "/" is a local path.
+func TestParseRawURI_PathWithSchemeSeparator(t *testing.T) {
+	for _, uri := range []string{"s3://bucket/key", "x://y", "://x"} {
+		fileSystem, _ := ParseRawURI(uri)
+		assert.Equal(t, Invalid, fileSystem, "ParseRawURI(%q)", uri)
+	}
+	for _, path := range []string{"/cache/https://x", "cache/https://x", "./x://y", `cache\https://x`} {
+		fileSystem, cleanPath := ParseRawURI(path)
+		assert.Equal(t, Local, fileSystem, "ParseRawURI(%q)", path)
+		assert.Equal(t, Local.CleanPath(path), cleanPath, "ParseRawURI(%q)", path)
+	}
+}
+
+// TestRegister_PrefixWithSeparatorBeforeScheme checks that Register refuses
+// a prefix with a slash or backslash before "://": while the file system is
+// registered its prefix would match, but after Unregister its URIs would be
+// local paths, see hasURIScheme, and writes would go to local files.
+func TestRegister_PrefixWithSeparatorBeforeScheme(t *testing.T) {
+	for _, prefix := range []string{"backup/s3://bucket", `backup\s3://bucket`} {
+		stdFS := NewStdFileSystemWithPrefix(stdfstest.MapFS{}, prefix, "std")
+		err := Register(stdFS)
+		require.ErrorIs(t, err, os.ErrInvalid, "Register with the prefix %q", prefix)
+		require.False(t, IsRegistered(stdFS))
 	}
 }

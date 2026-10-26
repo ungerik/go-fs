@@ -3,11 +3,18 @@
 v1.0 changes the consumer-facing `File`, `FileReader` and `MemFile` API in a
 mechanical way, and redesigns the implementer-facing `FileSystem` interface.
 Nobody outside this repository implements `FileSystem`, so this guide covers
-the consumer side; implementers read `docs/V1_ROADMAP.md`.
+the consumer side; implementers read
+[reference-filesystem-interfaces.md](reference-filesystem-interfaces.md) and
+[tutorial-implement-a-filesystem.md](tutorial-implement-a-filesystem.md).
 
-Code that already uses v1.0.0-beta.1 reads
-[Upgrading from v1.0.0-beta.1](#upgrading-from-v100-beta1); the rest of the
-guide describes the way from v0.1 to the final v1 API.
+Code that already uses a v1.0.0 beta reads
+[Upgrading from v1.0.0-beta.1](#upgrading-from-v100-beta1), and for the
+v1.0.0-rc.1 behaviour changes that the compiler doesn't find (RFC 8089 file
+URIs, name collisions, special files and invalid names in copies and moves,
+backslashes in sftpfs, ftpfs and webdavfs paths) the four bullets of
+[Behaviour changes](#behaviour-changes) from "File URIs follow RFC 8089" to the
+backslash rule; the rest of the guide describes the way from v0.1 to the
+final v1 API.
 
 ## Upgrading from v1.0.0-beta.1
 
@@ -31,7 +38,7 @@ if err := fs.Register(memFS); err != nil {
 defer memFS.Close() // unregisters
 ```
 
-| beta.1 | beta.2 |
+| beta.1 | rc.1 |
 | ------ | ------ |
 | `fs.NewMemFileSystem(sep, files...)` (registered) | `fs.NewMemFileSystem(&fs.MemFileSystemOptions{Separator: sep}, files...)` + `fs.Register`; nil options = `/` and a random ID |
 | `memFS.WithID(id)`, `memFS.WithVolume(v)` | `MemFileSystemOptions.ID`, `.Volume`; `fs.NewMemFileSystemAndRegister(opts, files...) error` needs an ID |
@@ -119,7 +126,7 @@ Behaviour changes:
 
 ### File, FileReader, MemFile and package functions
 
-| beta.1 | beta.2 |
+| beta.1 | rc.1 |
 | ------ | ------ |
 | `f.Rename(name)`, `f.Renamef(format, …)` | `f.Rename(ctx, name)`, `f.Renamef(ctx, format, …)` |
 | `f.ReadSymbolicLink() (fs.File, error)` | `(string, error)`, the raw target |
@@ -131,6 +138,8 @@ Behaviour changes:
 | `fs.CopyFileBuf(ctx, src, dest, &buf)` | `fs.CopyFileBuf(ctx, src, dest, buf)` with a `[]byte` (nil allocates) |
 | `fs.ReadAllContext(ctx, r)`, `fs.WriteAllContext(ctx, w, data)` | `fs.ReadAll(ctx, r)`, `fs.WriteAll(ctx, w, data)` |
 | `fs.Remove(uris...)`, `fs.RemoveFile(f)` | `fs.RemoveFiles(files...)`, `fs.File.Remove` as callback |
+| `fs.ReadHeader(fr, n)`, `fs.ReadHeaderString(fr, n)` | `fs.ReadHeader(ctx, fr, n)`, `fs.ReadHeaderString(ctx, fr, n)` |
+| `f.URL()`, `fs.FileURLs(files)` | `f.URI()`, `fs.FileURIs(files)`: a go-fs URI escapes only `%`, it is no URL for `net/url` or HTTP clients |
 | `fs.ReadSeekCloser` | `fs.ReadAtSeekCloser` |
 | `f.SetXAttr(name, data, xattr.XATTR_CREATE)` | `f.SetXAttr(name, data, fs.XAttrCreate)` |
 | `perm.CanUserRead()` and the other `Can…` methods | `perm.Can(fs.UserRead)` |
@@ -211,7 +220,9 @@ Behaviour changes:
 `MoveFileSystem.Move` and `TruncateFileSystem.Truncate` take a ctx,
 `SymbolicLinkFileSystem.Lstat` replaces `IsSymbolicLink`, `SetXAttr` takes
 `fs.XAttrFlags`, `RenameFileSystem` and `ListDirMaxFileSystem` are removed,
-`fsimpl.PathHelper` has no `IsAbsPath`/`AbsPath`/`IsHidden`, and
+`fsimpl.PathHelper` has no `IsAbsPath`/`AbsPath`/`IsHidden`,
+`fsimpl.PathHelper.URL` and `LocalFileSystem.URL` are `URI`,
+`fsimpl.ReadonlyFileBuffer` and its constructors are spelled `ReadOnly…`, and
 `fstest.DockerAvailable`/`DockerSetupFailed` are internal. Writers that commit
 on `Close` should implement `fs.WriteAborter`. Run `fstest.RunConformance`,
 which checks the new contracts. Its XAttr check requires `XAttrCreate` errors
@@ -283,8 +294,8 @@ signatures. Changes compared to v0.1:
   `Options.InsecureSkipVerify` is set. `ftps://host` connects with explicit
   TLS on port 21; use `ftps://host:990` for implicit TLS.
 - `dropboxfs`: `New(ctx, token, opts)` fetches the account; the prefix is
-  `dropbox://<account id>` instead of a random string, so URIs can be
-  persisted.
+  `dropbox://<account id without "dbid:">` instead of a random string, so
+  URIs can be persisted. `ID()` returns the account id with `dbid:`.
 - `s3fs`, `azureblobfs`: `New(...)` with `Options.ReadOnly`; s3fs objects
   written by v0 have keys with a leading `/`, see "Migrating from v0" in
   `s3fs/README.md`.
@@ -313,8 +324,8 @@ signatures. Changes compared to v0.1:
 - `fs.MemDir`: a `MemFile` with a `FileName` ending in `/` is a directory.
 - `fs.FileInfoCache`: it was only used by dropboxfs and is internal there now.
 - `fs.ReadOnlyBase`, `fs.FullyFeaturedFileSystem`, `fs.RelPathFileSystem`,
-  `fs.RunFileSystemTests`, the `tests` package: implementer-facing, see the
-  roadmap.
+  `fs.RunFileSystemTests`, the `tests` package: implementer-facing, see
+  [reference-filesystem-interfaces.md](reference-filesystem-interfaces.md).
 
 ## Behaviour changes
 
@@ -329,12 +340,65 @@ signatures. Changes compared to v0.1:
   merging into it.
 - `File.IsSymbolicLink` is `false` on file systems without symbolic link
   support instead of calling the backend.
-- A `File` with a scheme is URL-decoded once when parsed; a scheme-less local
+- A `File` with a scheme is percent-decoded once when parsed; a scheme-less local
   path is used verbatim, so a local file literally named `a%20b` is reachable.
   The URIs the package builds escape every `%` of the path as `%25`, so
   `dir.Join("a%20b")` addresses a file named `a%20b` on every file system.
   Code that builds a URI by concatenation (`fs.File(prefix + path)`) has to
   escape the path with `fsimpl.EscapeURIPath`, or use `File.Join`.
+- File URIs follow RFC 8089. `File.URI()` (was `File.URL()`) of a Windows path is
+  `file:///C:/dir/file` instead of `file://C:/dir/file`, and of a UNC path
+  `file://server/share/file`; the old Windows form is still parsed, and so is
+  `file://localhost/…`. A file URI with another host than `localhost`
+  resolves to the `Invalid` file system on platforms other than Windows
+  instead of a path relative to the working directory. That includes
+  relative URIs that v0 wrote or accepted for relative paths:
+  `file://data/uploads` names the host `data`, on Windows the UNC path
+  `\\data\uploads` (which connects to that host), and `file://./x`,
+  `file://../x` and `file://?/x` name no host and resolve to the `Invalid`
+  file system on every platform (on Windows they would be the device paths
+  `\\.\x` and `\\?\x`). Convert stored relative file URIs to paths, or to
+  absolute file URIs, before upgrading. `file://` and `file://localhost`
+  without a path name no file (the empty path, `fs.ErrEmptyPath`), not the
+  working directory, and neither do the Files derived from them:
+  `File("file://").Join("x")` has the empty path too. `fs.CleanFilePath`
+  and `fs.JoinCleanFilePath` decode the percent-encoding of a URI with
+  a scheme like `File`, and `LocalFileSystem.CleanPath` that of a file URI,
+  also `%2F` and `%2E%2E`, which become a separator and `..`: build URIs
+  with `File.URI()` or `fsimpl.EscapeURIPath`, not with `"file://" + path`.
+  `File.TrimExt` of a file URI returns the local path without the
+  extension, and leaves a name like `.bashrc` unchanged.
+  `fs.NewSubFileSystem` fails with `os.ErrInvalid` for the URI of another
+  file system or a file URI that names no local file, like `file://./x`,
+  and with `ErrEmptyPath` for an empty directory (pass `"."` for the current
+  one, which is made absolute); `fs.Register` refuses a prefix with a slash
+  or backslash before its `://`, and `CopyFile` and `Move` into a directory
+  refuse a source name that is not one valid name there (`os.ErrInvalid`);
+  `LocalFileSystem.CleanPath` returns the empty path for such a file URI. Windows long paths keep their URI `file:////?/C:/x`;
+  `file:///??/…` names no file, and the short forms `file:/path` and
+  `file:path` are relative local paths.
+- Moves and `CopyRecursive` fail with `os.ErrExist` where two source names
+  collide at the destination (case or Unicode normalization) instead of
+  silently keeping one. Moves always detect it; `CopyRecursive` does in new
+  directories and in existing local ones. They also fail on an existing named
+  pipe, device or socket at the destination (OneDrive placeholders, which
+  Windows reports as irregular files, are replaced). To the local file
+  system, they fail with `os.ErrInvalid` on names like `NUL`, `COM1`, `a:b`,
+  `name.`, `report?.pdf` (Windows) or names with a NUL byte, before writing
+  anything, also for empty directories. `CopyRecursive` returns an error wrapping
+  `path.ErrBadPattern` for a malformed pattern before writing anything, also
+  for a file source.
+- Copies and moves through a `SubFileSystem` or the layers of an
+  `OverlayFileSystem` are checked for the same file and for a directory moved
+  into itself on every file system, by path: onto itself is a no-op, into
+  itself an error wrapping `os.ErrInvalid`, and so is moving an entry of an
+  overlay's base layer to its path in the upper layer.
+- `sftpfs`, `ftpfs` and `webdavfs` reject paths with a backslash
+  (`os.ErrInvalid`), because a server on Windows takes it for a separator.
+  For a server on Unix that has files with backslashes in their names, set
+  `Options.AllowBackslashInNames`. A copy or move from another file system
+  with such names fails at the first of them and leaves the files copied
+  until then at the destination; the source of a move is kept.
 - `WriteJSON`, `WriteXML`, `MemFile.WriteJSON`/`WriteXML` and
   `NewMemFileWriteJSON`/`NewMemFileWriteXML` don't take an indent any more,
   the `…Indent` variants do. `WriteXMLIndent` with an empty indent puts every
@@ -377,8 +441,14 @@ find . -name '*.go' -exec perl -pi \
   {} +
 ```
 
+`File.URL()` is `File.URI()` and `fs.FileURLs` is `fs.FileURIs`. The
+compiler lists the call sites; don't rewrite every `.URL()` with a regex,
+`*http.Request`, `*url.URL` and SDK clients have methods or fields with
+that name too.
+
 `WriteAll`, `WriteAllString`, `ListDirMax`, `ListDirIter`, `Glob`, `Truncate`,
-`MoveTo`, `Rename` and `RemoveDirContents` take other arguments before, so their
+`MoveTo`, `Rename`, `RemoveDirContents` and the package functions `ReadHeader`
+and `ReadHeaderString` take other arguments before, so their
 call sites are easiest to fix from the compiler errors: insert `ctx, ` as the
 first argument. Callers of `FileSystem` implementation methods with the same
 names (`fileSystem.WriteAll(ctx, path, ...)`) already pass a context and must

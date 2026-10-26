@@ -41,9 +41,10 @@ The rules for the destination:
 When source and destination are on the same file system and it implements
 `CopyFileSystem`, the copy is server-side — S3, Azure, Dropbox and WebDAV never
 move the bytes through your process. Copying a file onto itself is a no-op,
-for a local file also through another path to it, like a symbolic link, a hard
-link, a `SubFileSystem` or the local layer of an `OverlayFileSystem`, which
-would otherwise truncate the file while it is read. Like the other checks of
+on every file system also through a `SubFileSystem` or the layer of an
+`OverlayFileSystem` that holds the file, compared by path, and for a local
+file also through another path to it, like a symbolic link or a hard link,
+which would otherwise truncate the file while it is read. Like the other checks of
 the destination it is done by path before the destination is opened, so it
 assumes that nobody else changes the destination during the copy.
 
@@ -99,10 +100,11 @@ checked by path before a file or directory is written, so this holds as long
 as nobody else changes the destination during the copy: a link that another
 process creates between the check and the write is written through. Copying
 a directory into one of its own sub-directories is an error wrapping
-`os.ErrInvalid`, for a local directory also through a symbolic link to
-a parent directory or a `SubFileSystem`. One buffer is used for all files,
-which get permissions like with `CopyFile`; directories get the
-destination's defaults.
+`os.ErrInvalid`, on every file system also through a `SubFileSystem` or into
+either layer of an `OverlayFileSystem` directory, and for a local directory
+also through a symbolic link to a parent directory or a bind mount. One
+buffer is used for all files, which get permissions like with `CopyFile`;
+directories get the destination's defaults.
 
 A symbolic link to a file is followed: the copy is a file with the content
 and permissions of the target. A symbolic link to a directory is never
@@ -187,8 +189,11 @@ More behaviours to rely on:
 
 - **Moving a file onto itself is a no-op** returning nil. This matters: it is
   what stops the copy-then-delete fallback from destroying a file when source
-  and destination resolve to the same place. The fallback also compares local
-  paths as files, so two paths of the same file through bind mounts (like
+  and destination resolve to the same place, on every file system also
+  through `SubFileSystem`s of one parent, compared by path. Moving an entry of
+  an overlay's base layer to its path in the upper layer is an error wrapping
+  `os.ErrInvalid`, because removing the source would remove the copy. The
+  fallback also compares local paths as files, so two paths of the same file through bind mounts (like
   `docker run -v /data:/a -v /data:/b`), a symbolic link to a parent
   directory, a `SubFileSystem` or the local layer of an `OverlayFileSystem`
   are a no-op too, unless the name in the same directory only differs in
@@ -213,8 +218,10 @@ More behaviours to rely on:
   is always refused, and so it is over SFTP and SMB, which report no link
   count either.
 - **Moving a directory into itself** or one of its sub-directories is an error
-  wrapping `os.ErrInvalid`, like `os.Rename`, for a local directory also
-  through such another path to it.
+  wrapping `os.ErrInvalid`, like `os.Rename`, on every file system also
+  through a `SubFileSystem` or into either layer of an `OverlayFileSystem`
+  directory, and for a local directory also through such another path to it.
+  The same holds for `CopyRecursive`.
 - **Symbolic links are moved, not what they point to.** Within one file system
   that implements `fs.SymbolicLinkFileSystem` a link stays a link and replaces
   an existing file or link at the destination; an `OverlayFileSystem`, which
@@ -311,9 +318,10 @@ hash, err := file.ContentHash(ctx)
 data, hash, err := file.ReadAllContentHash(ctx) // one pass
 ```
 
-The default is the Dropbox content hash algorithm, chosen so `dropboxfs` can
-answer from metadata instead of downloading. To use a standard hash, replace it
-once at startup:
+The default is the Dropbox content hash algorithm, the value Dropbox stores as
+`content_hash` in its file metadata. The hash is always computed from the
+content, on every file system. To use a standard hash, replace it once at
+startup:
 
 ```go
 fs.DefaultContentHash = fs.ContentHashFuncFrom(sha256.New)
@@ -360,8 +368,8 @@ retry move the source into it.
 `CopyRecursive` is sequential by design; parallelise at your call site if the
 backend tolerates it.
 
-**`ContentHash` downloads the whole file** — expected, unless the backend can
-answer from metadata. Compare sizes first, which is what
+**`ContentHash` downloads the whole file** — expected, the hash is computed
+from the content on every backend. Compare sizes first, which is what
 `IdenticalFileContents` already does.
 
 **Two files hash differently after a copy** — you changed

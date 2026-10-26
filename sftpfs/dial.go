@@ -612,7 +612,14 @@ func (f *fileSystem) reconnectConn() (*conn, error) {
 // Errors of a canceled ctx, errors returned by callbacks (wrapped in
 // callbackError) and status replies of the server are never taken for
 // a lost connection, see isConnectionError and lost.
-func (f *fileSystem) run(ctx context.Context, op func(c *conn, noRetry func()) error) error {
+//
+// The paths of the operation are checked with checkPath first,
+// so a path that the server could resolve to another file
+// never reaches the server.
+func (f *fileSystem) run(ctx context.Context, op func(c *conn, noRetry func()) error, paths ...string) error {
+	if err := f.checkPath(paths...); err != nil {
+		return err
+	}
 	for retried := false; ; retried = true {
 		c, err := f.getConn(ctx)
 		if err != nil {

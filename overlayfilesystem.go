@@ -387,7 +387,7 @@ func (o *OverlayFileSystem) pathLayer(filePath string) (layer FileSystem, layerP
 // path, read from the layer that has the link, with an absolute target
 // translated to the overlay. It implements linkTargetReader, so that a move
 // within the overlay can tell if a link of a layer points to the destination,
-// see isLinkOntoTarget. The overlay can't create links,
+// see moveByCopy. The overlay can't create links,
 // so it doesn't implement SymbolicLinkFileSystem.
 func (o *OverlayFileSystem) readSymbolicLink(linkPath string) (string, error) {
 	if err := o.checkPath(linkPath); err != nil {

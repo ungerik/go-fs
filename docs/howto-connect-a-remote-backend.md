@@ -361,8 +361,9 @@ files. Dropbox access tokens are short-lived, so a long running program
 passes `Options.HTTPClient`, a client that refreshes them, like the client of
 a `golang.org/x/oauth2` config; the access token argument is ignored then.
 
-The prefix is `dropbox://<account id>`, which is discovered at construction —
-so build paths from `RootDir()` rather than hardcoding the URI. That is also
+The prefix is discovered at construction: `dropbox://` followed by the
+account id without its `dbid:` part (`ID()` returns the account id with
+`dbid:`) — so build paths from `RootDir()` rather than hardcoding the URI. That is also
 why `New` and `fs.Register` are the usual pair; `dropboxfs.NewAndRegister` is
 for callers that know the account id.
 
@@ -427,17 +428,22 @@ backend has an option for it (`s3fs.Options.Prefix`), or share the first one
 with `EnsureRegistered`.
 
 **A file lands on local disk instead of the remote** — only possible for a
-scheme-less path. Any string containing `://` that matches no registered file
-system resolves to `Invalid`, never to local.
+scheme-less path, also one with a `://` after a slash or backslash, like
+`/cache/s3://bucket/x`. Any string with a scheme, a `://` with no slash or
+backslash before it, that matches no registered file system resolves to
+`Invalid`, never to local.
 
 **`errors.Is(err, errors.ErrUnsupported)`** — the backend cannot do that
 operation and there is no emulation for it. Check the support matrix in
 [FileSystem interfaces](reference-filesystem-interfaces.md).
 
-**Random access on an object store is slow** — `OpenReadWriter` on a backend
-without native support buffers the whole object in memory and writes it back on
-`Close`. That is the documented fallback; use `ReadAll`/`WriteAll` instead if
-the object is large.
+**Random access on an object store is slow** — `OpenReadWriter` buffers the
+whole object in memory and writes it back on `Close`. That is the documented
+fallback for backends without native support, and the native `OpenReadWriter`
+of `s3fs`, `azureblobfs` and `dropboxfs` does the same: it downloads the whole
+object when opened and uploads it again on `Close`, because these stores can't
+change an object in place. Use `ReadAll`/`WriteAll` instead if the object is
+large.
 
 **SFTP host key errors** — the server key is not in your `known_hosts`. Add it,
 or supply the callback you actually want. Do not reach for

@@ -2,6 +2,7 @@ package ftpfs
 
 import (
 	"bufio"
+	"cmp"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +33,15 @@ import (
 // self-signed certificate. It exercises the ftpfs client without Docker
 // or a real server on every platform.
 //
+// Symbolic links, seeded with symlink, are followed like the kernel
+// follows them for vsftpd: in every element of the path of CWD, RETR,
+// SIZE, MDTM, MFMT, STOR, APPE, MLST and of the directory that LIST and
+// MLSD list, while DELE, RMD, MKD and RNFR/RNTO follow the links of the
+// parent directories and act on a link itself in the last element.
+// LIST lists a link like "ls -l" with its target. MLSD and MLST describe
+// a link with the facts of its target like ProFTPD by default, MLSD
+// a dangling link with the RFC 3659 type "OS.unix=slink:<target>".
+//
 // The hook fields simulate failures and server variants for the
 // regression tests; set them with configure.
 type testFTPServer struct {
@@ -43,28 +54,42 @@ type testFTPServer struct {
 	mu       sync.Mutex
 	nodes    map[string]*testFTPNode // clean paths, "/" is the root
 	commands map[string]int          // number of received commands per verb
+	args     map[string][]string     // arguments of the received commands per verb, except PASS
 	lastUser string
 	lastPass string
 
 	// Hooks, guarded by mu
-	failListContains string         // LIST and MLSD of a path containing it fail with 550
-	dropBefore       map[string]int // the next commands with the verb close the connection without executing them
-	dropReplyOf      map[string]int // the next commands with the verb are executed, then the connection closes instead of the final reply
-	hang             string         // commands with this verb are never answered
-	silent           bool           // new connections get no greeting
-	noMLST           bool           // MLST and MLSD are not supported, listings use LIST
-	noEPSV           bool           // EPSV is not implemented
-	pasvHost         string         // host part of PASV replies like "10,1,2,3" instead of the real address
-	rntoNoReplace    bool           // RNTO onto an existing path fails like on servers that don't replace files
-	refuse           map[string]int // the next RNFR, RNTO or RMD commands like "RNFR /path" are refused with 550
-	deleteOnRNFR     string         // RNFR of this path deletes it first, like another client right before
-	dotEntries       bool           // LIST and MLSD list the entries "." and ".." first like most servers
-	maxListings      int            // LIST and MLSD fail with 550 after this many listings if not 0
-	requireTLSReuse  bool           // TLS data connections must resume the TLS session of the control connection
+	failListContains string            // LIST and MLSD of a path containing it fail with 550
+	listOmits        string            // LIST, not MLSD, of the parent directory leaves out the entry at this path
+	listForged       map[string]int    // LIST, not MLSD, of the parent directory adds this many lines that list the entry at the path as a directory, like a file whose name contains a line feed followed by such a line
+	listForgedFirst  bool              // the lines of listForged come before the lines of the entries, like for a file whose name sorts first
+	globArgs         bool              // LIST expands glob characters in its path argument like ProFTPD with UseGlobbing and lists the first directory that matches
+	listArgPaths     bool              // LIST takes its argument for a path without parsing options like "-a", like ftpserverlib with DisableLISTArgs
+	pwdReply         string            // PWD is answered with this reply if not empty, like a 550 or a 257 with a relative path
+	mlstReplies      map[string]string // MLST of the clean absolute path is answered with this failure reply
+	dropBefore       map[string]int    // the next commands with the verb close the connection without executing them
+	dropAt           map[string]int    // the command with the verb that the server receives as the nth one, counted in commands, closes the connection without executing it
+	dropReplyOf      map[string]int    // the next commands with the verb are executed, then the connection closes instead of the final reply
+	hang             string            // commands with this verb are never answered
+	silent           bool              // new connections get no greeting
+	home             string            // the working directory after the login if not empty, else "/"
+	noMLST           bool              // MLST and MLSD are not supported, listings use LIST
+	noEPSV           bool              // EPSV is not implemented
+	pasvHost         string            // host part of PASV replies like "10,1,2,3" instead of the real address
+	rntoNoReplace    bool              // RNTO onto an existing path fails like on servers that don't replace files
+	refuse           map[string]int    // the next RNFR, RNTO, RMD or DELE commands like "RNFR /path" are refused with 550
+	deleteOnRNFR     string            // RNFR of this path deletes it first, like another client right before
+	linkBefore       map[string]string // the next command like "DELE /path" first replaces the path and the entries below it with a symbolic link to the value, like another client right before
+	dotEntries       bool              // LIST and MLSD list the entries "." and ".." first like most servers
+	lsArgs           bool              // LIST of a file or a symbolic link lists it itself like "ls -l" instead of failing or following the link
+	statArgs         bool              // LIST of a file or a link to a file lists the file under the name of the argument, following links like "ls -lL"
+	maxListings      int               // LIST and MLSD fail with 550 after this many listings if not 0
+	requireTLSReuse  bool              // TLS data connections must resume the TLS session of the control connection
 }
 
 type testFTPNode struct {
 	isDir    bool
+	link     string // target of a symbolic link as stored, empty for files and directories
 	data     []byte
 	modified time.Time
 }
@@ -89,10 +114,15 @@ func newTestFTPServerOn(t *testing.T, address string) *testFTPServer {
 		tlsCfg:   testTLSConfig(t),
 		nodes:    map[string]*testFTPNode{"/": {isDir: true, modified: time.Now()}},
 		commands: make(map[string]int),
+		args:     make(map[string][]string),
 
+		listForged:  make(map[string]int),
 		dropBefore:  make(map[string]int),
+		dropAt:      make(map[string]int),
 		dropReplyOf: make(map[string]int),
 		refuse:      make(map[string]int),
+		mlstReplies: make(map[string]string),
+		linkBefore:  make(map[string]string),
 	}
 	go srv.acceptLoop()
 	t.Cleanup(func() { ln.Close() })
@@ -141,6 +171,13 @@ func (s *testFTPServer) count(verb string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.commands[verb]
+}
+
+// argsOf returns the arguments of the received commands with verb.
+func (s *testFTPServer) argsOf(verb string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.args[verb])
 }
 
 // credentials returns the arguments of the last USER and PASS commands.
@@ -205,6 +242,62 @@ func (s *testFTPServer) writeFile(p, content string) {
 	s.nodes[path.Clean(p)] = &testFTPNode{data: []byte(content), modified: time.Now()}
 }
 
+// symlink stores a symbolic link at p to target for seeding tests,
+// creating its parents. The target is stored as given.
+func (s *testFTPServer) symlink(target, p string) {
+	s.mkdirAll(path.Dir(p))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodes[path.Clean(p)] = &testFTPNode{link: target, modified: time.Now()}
+}
+
+// maxTestLinkHops is the number of symbolic links that follow
+// resolves for one path, the limit of Linux.
+const maxTestLinkHops = 40
+
+// follow returns the path that the clean absolute path p refers to with
+// the symbolic links of all its elements followed, like the kernel resolves
+// the paths of a server: a relative target from the directory of the link,
+// whose ".." goes up from the directory that the path of the link resolved
+// to. The path of a cycle of links is "", which is no node.
+// The caller must hold s.mu.
+func (s *testFTPServer) follow(p string) string {
+	resolved := "/"
+	rest := strings.Split(p, "/")
+	for hops := 0; len(rest) > 0; {
+		name := rest[0]
+		rest = rest[1:]
+		if name == "" || name == "." {
+			continue
+		}
+		next := path.Join(resolved, name)
+		node, ok := s.nodes[next]
+		if !ok || node.link == "" {
+			resolved = next
+			continue
+		}
+		if hops++; hops > maxTestLinkHops {
+			return ""
+		}
+		if path.IsAbs(node.link) {
+			resolved = "/"
+		}
+		rest = append(strings.Split(node.link, "/"), rest...)
+	}
+	return resolved
+}
+
+// followDir returns the clean absolute path p with the symbolic links of
+// its parent directories followed like by follow, the last element is
+// not followed, like the kernel resolves the path for unlink and rmdir.
+// The caller must hold s.mu.
+func (s *testFTPServer) followDir(p string) string {
+	if p == "/" {
+		return p
+	}
+	return path.Join(s.follow(path.Dir(p)), path.Base(p))
+}
+
 func (s *testFTPServer) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
@@ -226,6 +319,33 @@ func (s *testFTPServer) refused(verb, p string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return takeHook(s.refuse, verb+" "+p)
+}
+
+// replaceWithLink replaces the node at the clean absolute path p and the
+// nodes below it with a symbolic link to target. The caller must hold s.mu.
+func (s *testFTPServer) replaceWithLink(p, target string) {
+	for q := range s.nodes {
+		if q == p || strings.HasPrefix(q, p+"/") {
+			delete(s.nodes, q)
+		}
+	}
+	s.nodes[p] = &testFTPNode{link: target, modified: time.Now()}
+}
+
+// globDir returns the first of the sorted paths that match the glob
+// pattern p and are a directory, or "" if none does.
+// The caller must hold s.mu.
+func (s *testFTPServer) globDir(p string) string {
+	var matches []string
+	for name, node := range s.nodes {
+		if ok, _ := path.Match(p, name); ok && node.isDir {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) == 0 {
+		return ""
+	}
+	return slices.Min(matches)
 }
 
 // children returns the sorted names of the entries of the directory dir.
@@ -255,13 +375,29 @@ func dirFact(typ string, node *testFTPNode) string {
 	return fmt.Sprintf("type=%s;modify=%s;", typ, node.modified.UTC().Format("20060102150405"))
 }
 
-// listLine formats a node like ls -l for the LIST command.
+// listLine formats a node like ls -l for the LIST command,
+// a symbolic link with its target.
 func listLine(node *testFTPNode, name string) string {
-	mode := "-rw-r--r--"
-	if node.isDir {
-		mode = "drwxr-xr-x"
+	switch {
+	case node.link != "":
+		return fmt.Sprintf("lrwxrwxrwx 1 owner group %d %s %s -> %s", len(node.link), node.modified.UTC().Format("Jan _2 15:04"), name, node.link)
+	case node.isDir:
+		return fmt.Sprintf("drwxr-xr-x 1 owner group 0 %s %s", node.modified.UTC().Format("Jan _2 15:04"), name)
 	}
-	return fmt.Sprintf("%s 1 owner group %d %s %s", mode, len(node.data), node.modified.UTC().Format("Jan _2 15:04"), name)
+	return fmt.Sprintf("-rw-r--r-- 1 owner group %d %s %s", len(node.data), node.modified.UTC().Format("Jan _2 15:04"), name)
+}
+
+// mlsdFact formats the RFC 3659 facts of the entry p of MLSD: the facts of
+// the target of a symbolic link and the type "OS.unix=slink:<target>"
+// of a dangling one. The caller must hold s.mu.
+func (s *testFTPServer) mlsdFact(p string, node *testFTPNode) string {
+	if node.link == "" {
+		return mlstFact(node)
+	}
+	if target, ok := s.nodes[s.follow(p)]; ok {
+		return mlstFact(target)
+	}
+	return fmt.Sprintf("type=OS.unix=slink:%s;modify=%s;", node.link, node.modified.UTC().Format("20060102150405"))
 }
 
 // takeHook returns true and decrements the count of verb if it is positive.
@@ -279,7 +415,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 	defer func() { conn.Close() }()
 
 	s.mu.Lock()
-	silent := s.silent
+	silent, home := s.silent, cmp.Or(s.home, "/")
 	s.mu.Unlock()
 	if silent {
 		_, _ = io.Copy(io.Discard, conn)
@@ -308,7 +444,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		dataLn     net.Listener
 		dataTLS    bool
 		renameFrom string
-		cwd        = "/"
+		cwd        = home
 	)
 	localHost, _, _ := net.SplitHostPort(rawConn.LocalAddr().String())
 	// abs resolves a command argument against the working directory.
@@ -420,13 +556,22 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 
 		s.mu.Lock()
 		s.commands[verb]++
-		dropBefore := takeHook(s.dropBefore, verb)
+		if verb != "PASS" {
+			s.args[verb] = append(s.args[verb], arg)
+		}
+		dropBefore := takeHook(s.dropBefore, verb) || s.dropAt[verb] == s.commands[verb]
 		dropReply = takeHook(s.dropReplyOf, verb)
 		hang := s.hang == verb
 		noMLST, noEPSV, pasvHost := s.noMLST, s.noEPSV, s.pasvHost
 		failList := s.failListContains
 		rntoNoReplace := s.rntoNoReplace
-		dotEntries := s.dotEntries
+		dotEntries, lsArgs, statArgs := s.dotEntries, s.lsArgs, s.statArgs
+		listOmits, globArgs, listArgPaths := s.listOmits, s.globArgs, s.listArgPaths
+		pwdReply := s.pwdReply
+		if target, ok := s.linkBefore[verb+" "+abs(arg)]; ok {
+			delete(s.linkBefore, verb+" "+abs(arg))
+			s.replaceWithLink(abs(arg), target)
+		}
 		tooManyListings := (verb == "LIST" || verb == "MLSD") && s.maxListings > 0 && s.commands["LIST"]+s.commands["MLSD"] > s.maxListings
 		s.mu.Unlock()
 
@@ -476,13 +621,17 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		case "SYST":
 			reply("215 UNIX Type: L8")
 		case "PWD":
+			if pwdReply != "" {
+				reply("%s", pwdReply)
+				continue
+			}
 			reply(`257 "%s"`, cwd)
 		case "CDUP":
 			cwd = path.Dir(cwd)
 			reply("250 ok")
 		case "CWD":
-			p := abs(arg)
 			s.mu.Lock()
+			p := s.follow(abs(arg))
 			node, ok := s.nodes[p]
 			s.mu.Unlock()
 			if !ok || !node.isDir {
@@ -514,8 +663,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			}
 			reply("227 Entering Passive Mode (%s,%d,%d)", host, port/256, port%256)
 		case "STOR", "APPE":
-			p := abs(arg)
 			s.mu.Lock()
+			p := s.follow(abs(arg))
 			parent, parentOK := s.nodes[path.Dir(p)]
 			existing, exists := s.nodes[p]
 			s.mu.Unlock()
@@ -547,7 +696,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply("226 Transfer complete")
 		case "RETR":
 			s.mu.Lock()
-			node, ok := s.nodes[abs(arg)]
+			node, ok := s.nodes[s.follow(abs(arg))]
 			var content []byte
 			if ok {
 				content = append([]byte(nil), node.data...)
@@ -560,7 +709,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			sendData(content)
 		case "SIZE":
 			s.mu.Lock()
-			node, ok := s.nodes[abs(arg)]
+			node, ok := s.nodes[s.follow(abs(arg))]
 			s.mu.Unlock()
 			if !ok || node.isDir {
 				reply("550 file not found")
@@ -569,7 +718,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply("213 %d", len(node.data))
 		case "MDTM":
 			s.mu.Lock()
-			node, ok := s.nodes[abs(arg)]
+			node, ok := s.nodes[s.follow(abs(arg))]
 			s.mu.Unlock()
 			if !ok {
 				reply("550 file not found")
@@ -580,7 +729,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			timeval, p, _ := strings.Cut(arg, " ")
 			modified, err := time.Parse("20060102150405", timeval)
 			s.mu.Lock()
-			node, ok := s.nodes[abs(p)]
+			node, ok := s.nodes[s.follow(abs(p))]
 			if ok && err == nil {
 				node.modified = modified
 			}
@@ -593,14 +742,19 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		case "MLST":
 			p := abs(arg)
 			s.mu.Lock()
-			node, ok := s.nodes[p]
+			node, ok := s.nodes[s.follow(p)]
 			var fact string
 			if ok {
 				fact = mlstFact(node)
 			}
+			failure := s.mlstReplies[p]
 			s.mu.Unlock()
 			if noMLST {
 				reply("500 unknown command")
+				continue
+			}
+			if failure != "" {
+				reply("%s", failure)
 				continue
 			}
 			if !ok {
@@ -610,7 +764,11 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply("250-Listing\r\n %s %s\r\n250 End", fact, p)
 		case "MLSD", "LIST":
 			p := abs(strings.TrimPrefix(arg, "-a "))
-			if arg == "" || arg == "-a" {
+			pathArg := arg != "" && arg != "-a"
+			if verb == "LIST" && listArgPaths {
+				p, pathArg = abs(arg), arg != ""
+			}
+			if !pathArg {
 				p = cwd
 			}
 			if verb == "MLSD" && noMLST {
@@ -626,6 +784,30 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				continue
 			}
 			s.mu.Lock()
+			if verb == "LIST" && globArgs && pathArg && strings.ContainsAny(p, "*?[") {
+				if p = s.globDir(p); p == "" {
+					s.mu.Unlock()
+					reply("550 no match")
+					continue
+				}
+			}
+			if verb == "LIST" && lsArgs {
+				if node, ok := s.nodes[s.followDir(p)]; ok && !node.isDir {
+					line := listLine(node, path.Base(p))
+					s.mu.Unlock()
+					sendData(fmt.Appendf(nil, "%s\r\n", line))
+					continue
+				}
+			}
+			if verb == "LIST" && statArgs {
+				if node, ok := s.nodes[s.follow(p)]; ok && !node.isDir {
+					line := listLine(node, path.Base(p))
+					s.mu.Unlock()
+					sendData(fmt.Appendf(nil, "%s\r\n", line))
+					continue
+				}
+			}
+			p = s.follow(p)
 			node, ok := s.nodes[p]
 			var lines []string
 			if ok && node.isDir && dotEntries {
@@ -639,10 +821,25 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			if ok && node.isDir {
 				for _, name := range s.children(p) {
 					child := s.nodes[path.Join(p, name)]
+					if verb == "LIST" && path.Join(p, name) == listOmits {
+						continue
+					}
 					if verb == "MLSD" {
-						lines = append(lines, fmt.Sprintf("%s %s", mlstFact(child), name))
+						lines = append(lines, fmt.Sprintf("%s %s", s.mlsdFact(path.Join(p, name), child), name))
 					} else {
 						lines = append(lines, listLine(child, name))
+					}
+				}
+				for forged, n := range s.listForged {
+					if verb == "LIST" && path.Dir(forged) == p {
+						for range n {
+							line := listLine(&testFTPNode{isDir: true, modified: time.Now()}, path.Base(forged))
+							if s.listForgedFirst {
+								lines = append([]string{line}, lines...)
+							} else {
+								lines = append(lines, line)
+							}
+						}
 					}
 				}
 			}
@@ -657,8 +854,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			}
 			sendData(data)
 		case "MKD":
-			p := abs(arg)
 			s.mu.Lock()
+			p := s.followDir(abs(arg))
 			parent, parentOK := s.nodes[path.Dir(p)]
 			_, exists := s.nodes[p]
 			if parentOK && parent.isDir && !exists {
@@ -669,7 +866,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				reply("550 cannot create directory")
 				continue
 			}
-			reply(`257 "%s" created`, p)
+			reply(`257 "%s" created`, abs(arg))
 		case "RMD":
 			p := abs(arg)
 			if s.refused(verb, p) {
@@ -677,6 +874,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				continue
 			}
 			s.mu.Lock()
+			p = s.followDir(p)
 			node, ok := s.nodes[p]
 			empty := ok && node.isDir && len(s.children(p)) == 0
 			if empty {
@@ -690,7 +888,12 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			reply("250 removed")
 		case "DELE":
 			p := abs(arg)
+			if s.refused(verb, p) {
+				reply("550 permission denied")
+				continue
+			}
 			s.mu.Lock()
+			p = s.followDir(p)
 			node, ok := s.nodes[p]
 			if ok && !node.isDir {
 				delete(s.nodes, p)
@@ -712,6 +915,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			if s.deleteOnRNFR == renameFrom {
 				delete(s.nodes, renameFrom)
 			}
+			renameFrom = s.followDir(renameFrom)
 			_, ok := s.nodes[renameFrom]
 			s.mu.Unlock()
 			if !ok {
@@ -732,6 +936,7 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				continue
 			}
 			s.mu.Lock()
+			to = s.followDir(to)
 			_, destExists := s.nodes[to]
 			if !destExists || !rntoNoReplace {
 				// Like rename(2) on Unix: replaces a file and merges into

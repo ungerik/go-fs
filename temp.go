@@ -11,9 +11,12 @@ import (
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
-// TempDir returns the temp directory of the operating system
+// TempDir returns the temp directory of the operating system.
+// A $TMPDIR that begins with a literal "~", which the environment didn't
+// expand, is a directory below the current one like for [os.CreateTemp],
+// not the home directory.
 func TempDir() File {
-	return File(os.TempDir())
+	return localFile(os.TempDir())
 }
 
 // TempFile returns a randomly named File with the extension ext,
@@ -40,7 +43,7 @@ func CreateTempFile(ext string) (File, error) {
 	if err != nil {
 		return InvalidFile, err
 	}
-	return File(f.Name()), f.Close()
+	return localFile(f.Name()), f.Close()
 }
 
 // MakeTempDir makes and returns a new randomly named sub directory in TempDir()
@@ -58,7 +61,7 @@ func MakeTempDir() (File, error) {
 	if err != nil {
 		return "", err
 	}
-	return File(dir), nil
+	return localFile(dir), nil
 }
 
 // MustMakeTempDir makes and returns a new randomly named sub directory in TempDir().

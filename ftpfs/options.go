@@ -67,8 +67,12 @@ type Options struct {
 	// instead of using Username, Password and the user info of the address.
 	// It is called by every Dial, DialAndRegister and EnsureRegistered call,
 	// because the username is part of the URI prefix, for every reconnect
-	// after a connection loss, and for the dedicated connection of every
-	// OpenReader, so it should be cheap or cache its result.
+	// after a connection loss, for the dedicated connection of every
+	// OpenReader and for the connections that Remove and RemoveAll dial for
+	// LIST on servers with MLST support, so it should be cheap or cache its
+	// result, and return the same user every time: the connections for LIST
+	// resolve relative paths against the login directory of their user and
+	// must see the same files as the connection of the operation.
 	Credentials CredentialsCallback
 
 	// TLSConfig is used for FTPS connections. If nil, a configuration
@@ -100,6 +104,16 @@ type Options struct {
 	// the host of the control connection, never to the address of a
 	// PASV reply, which could point to another or an internal host.
 	DisableEPSV bool
+
+	// AllowBackslashInNames lets paths contain backslashes, which are
+	// an error wrapping os.ErrInvalid by default, also in the target of
+	// a listed symbolic link that Stat follows. For the separator "/"
+	// of FTP a backslash is part of a name, but an FTP server on Windows
+	// takes it for a separator: a name like `..\x` would reach a file
+	// outside of the directory that it is meant to be in, also for
+	// fs.SubFileSystem and fs.CopyRecursive. Set it only for servers
+	// that store backslashes in names, like servers on Unix.
+	AllowBackslashInNames bool
 
 	// DebugOut receives the FTP protocol log if not nil.
 	// The argument of the PASS command is replaced with "****".

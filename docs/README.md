@@ -89,7 +89,7 @@ useful when something surprises you.
 | [README](../README.md)       | Overview and API tour                   |
 | [CHANGELOG](../CHANGELOG.md) | Release history                         |
 | [SECURITY](../SECURITY.md)   | Supported versions, reporting a vulnerability|
-| [V1 roadmap](V1_ROADMAP.md)  | Plan of record for the v1.0 work        |
+| [TODOS](../TODOS.md)         | Open work for v1.0.0 and after          |
 | [AGENTS.md](../AGENTS.md)    | Repository conventions for contributors |
 
 ## Finding your way
