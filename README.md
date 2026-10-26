@@ -10,8 +10,8 @@ go-fs: A unified file system for Go
 The package is built around a `File` type that is a string underneath
 and interprets its value as a local file system path or as a URI.
 
-Version 1.0 is in beta; the v1 API is being iterated in beta releases
-before it is frozen. Upgrading from v0.x is mechanical, see
+Version 1.0 is a release candidate (v1.0.0-rc.1); the v1 API freezes with
+the v1.0.0 release. Upgrading from v0.x is mechanical, see
 [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md).
 
 Documentation
@@ -766,7 +766,7 @@ absolute path methods, whose defaults fit it. For the remote backends:
 | Capability             | s3  | azblob | sftp | ftp | smb | dropbox | webdav | http |
 | ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
 | CopyFile (server-side) | ✓   | ✓      | –    | –   | –   | ✓       | ✓      | –    |
-| Move                   | –   | –      | ✓    | ✓   | ✓   | ✓       | ✓      | –    |
+| Move                   | –   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | –    |
 | Exists                 | –   | –      | –    | –   | –   | –       | –      | ✓    |
 | ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | –       | ✓      | ✓    |
 | WriteAll               | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | r/o  |

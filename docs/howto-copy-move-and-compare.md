@@ -100,10 +100,11 @@ checked by path before a file or directory is written, so this holds as long
 as nobody else changes the destination during the copy: a link that another
 process creates between the check and the write is written through. Copying
 a directory into one of its own sub-directories is an error wrapping
-`os.ErrInvalid`, for a local directory also through a symbolic link to
-a parent directory or a `SubFileSystem`. One buffer is used for all files,
-which get permissions like with `CopyFile`; directories get the
-destination's defaults.
+`os.ErrInvalid`, on every file system also through a `SubFileSystem` or into
+either layer of an `OverlayFileSystem` directory, and for a local directory
+also through a symbolic link to a parent directory or a bind mount. One
+buffer is used for all files, which get permissions like with `CopyFile`;
+directories get the destination's defaults.
 
 A symbolic link to a file is followed: the copy is a file with the content
 and permissions of the target. A symbolic link to a directory is never

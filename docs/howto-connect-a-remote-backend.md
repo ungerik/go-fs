@@ -428,8 +428,10 @@ backend has an option for it (`s3fs.Options.Prefix`), or share the first one
 with `EnsureRegistered`.
 
 **A file lands on local disk instead of the remote** — only possible for a
-scheme-less path. Any string containing `://` that matches no registered file
-system resolves to `Invalid`, never to local.
+scheme-less path, also one with a `://` after a slash or backslash, like
+`/cache/s3://bucket/x`. Any string with a scheme, a `://` with no slash or
+backslash before it, that matches no registered file system resolves to
+`Invalid`, never to local.
 
 **`errors.Is(err, errors.ErrUnsupported)`** — the backend cannot do that
 operation and there is no emulation for it. Check the support matrix in

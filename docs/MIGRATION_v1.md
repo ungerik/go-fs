@@ -7,9 +7,13 @@ the consumer side; implementers read
 [reference-filesystem-interfaces.md](reference-filesystem-interfaces.md) and
 [tutorial-implement-a-filesystem.md](tutorial-implement-a-filesystem.md).
 
-Code that already uses v1.0.0-beta.1 reads
-[Upgrading from v1.0.0-beta.1](#upgrading-from-v100-beta1); the rest of the
-guide describes the way from v0.1 to the final v1 API.
+Code that already uses a v1.0.0 beta reads
+[Upgrading from v1.0.0-beta.1](#upgrading-from-v100-beta1), and for the
+v1.0.0-rc.1 behaviour changes that the compiler doesn't find (RFC 8089 file
+URIs, name collisions, special files and invalid names in copies and moves,
+backslashes in sftpfs, ftpfs and webdavfs paths) the last bullets of
+[Behaviour changes](#behaviour-changes); the rest of the guide describes the
+way from v0.1 to the final v1 API.
 
 ## Upgrading from v1.0.0-beta.1
 
@@ -33,7 +37,7 @@ if err := fs.Register(memFS); err != nil {
 defer memFS.Close() // unregisters
 ```
 
-| beta.1 | beta.2 |
+| beta.1 | rc.1 |
 | ------ | ------ |
 | `fs.NewMemFileSystem(sep, files...)` (registered) | `fs.NewMemFileSystem(&fs.MemFileSystemOptions{Separator: sep}, files...)` + `fs.Register`; nil options = `/` and a random ID |
 | `memFS.WithID(id)`, `memFS.WithVolume(v)` | `MemFileSystemOptions.ID`, `.Volume`; `fs.NewMemFileSystemAndRegister(opts, files...) error` needs an ID |
@@ -121,7 +125,7 @@ Behaviour changes:
 
 ### File, FileReader, MemFile and package functions
 
-| beta.1 | beta.2 |
+| beta.1 | rc.1 |
 | ------ | ------ |
 | `f.Rename(name)`, `f.Renamef(format, …)` | `f.Rename(ctx, name)`, `f.Renamef(ctx, format, …)` |
 | `f.ReadSymbolicLink() (fs.File, error)` | `(string, error)`, the raw target |

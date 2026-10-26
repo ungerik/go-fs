@@ -133,6 +133,33 @@ the reference docs for the details and the documented limits.
 **Priority:** P1
 **Depends on:** None
 
+### Close the how-to gaps of the v1.0 features
+
+**What:** Several v1.0 behaviours are documented only in the reference docs,
+the module READMEs and `docs/MIGRATION_v1.md`, not in the how-tos:
+`ReadHeader(ctx, …)`, `fsimpl.CheckNoBackslash` (the tutorial for
+implementing a file system), `Options.AllowBackslashInNames` of sftpfs,
+ftpfs and webdavfs (the connect-a-backend how-to), the native azureblobfs
+`Move`, `Options.DeleteSnapshots` and `ErrSnapshotsPresent` (the Azure
+section of that how-to and of the README), the `os.ErrInvalid` of `CopyFile`
+and `Move` for a source name that is invalid in the destination directory,
+troubleshooting for the collision, special-file and invalid-name errors of
+copies and moves, and the refusal of `Register` for a separator before
+`://` (the Registration section of the path explanation).
+
+**Why:** Readers of the how-tos don't learn them where they need them.
+
+**Context:** Found by the documentation audit of v1.0.0-rc.1. Also fix two
+older docs problems: `docs/reference-filesystem-interfaces.md` says only
+sftpfs and ftpfs return a default-port prefix alias, but smbfs returns the
+`:445` alias too, and the `multipartfs/README.md` example registers before
+`defer formFS.Close()`, so a failed `Register` leaks the temporary files
+(`docs/howto-handle-form-uploads.md` has the right order).
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
 ### Update the dependents
 
 **What:** Update the repositories that use go-fs to v1.0.0.

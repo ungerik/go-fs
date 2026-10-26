@@ -93,7 +93,9 @@ func sameFileSystem(a, b FileSystem) (same bool) {
 // Registering the same file system again is a no-op.
 // An error wrapping ErrAlreadyRegistered is returned
 // if another file system is registered with the same
-// prefix or one of the prefix aliases.
+// prefix or one of the prefix aliases. A prefix with a slash or
+// backslash before its "://" is an error wrapping os.ErrInvalid:
+// after Unregister its URIs would be local paths, see ParseRawURI.
 func Register(fileSystem FileSystem) error {
 	if fileSystem == nil {
 		return fmt.Errorf("can't register nil file system")

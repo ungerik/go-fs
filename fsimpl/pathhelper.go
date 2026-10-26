@@ -14,7 +14,7 @@ import (
 // the separator of the file system, without the URI prefix, and
 // absolute for the file system (starting with the separator or a
 // volume) if Rooted is true. The URI of a path is Prefix() followed
-// by the path escaped with EscapeURIPath, see URL.
+// by the path escaped with EscapeURIPath, see URI.
 //
 // The zero value is not usable, at least URIPrefix must be set.
 //
