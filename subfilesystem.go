@@ -89,9 +89,10 @@ func (s *SubFileSystem) CleanPath(uriParts ...string) string {
 // system, or a file URI that names no local file, like "file://./x", is
 // an error wrapping [os.ErrInvalid] instead of a root somewhere else.
 // An empty dirPath is [ErrEmptyPath]; "." is the current directory.
-// A relative local root is made absolute with the working directory
-// without symbolic links, so it doesn't follow later changes of the
-// working directory.
+// A relative local root is made absolute, so it doesn't follow later
+// changes of the working directory: on Unix with the working directory
+// without symbolic links, from which the system resolves "..", on Windows
+// like [filepath.Abs], from the path of the current directory.
 func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSystem, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("nil parent file system")
@@ -117,14 +118,24 @@ func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSys
 	default:
 		return nil, fmt.Errorf("%w: %s is no URI of the parent file system %s", os.ErrInvalid, fsimpl.RedactURI(dirPath), fsimpl.RedactURI(parent.Prefix()))
 	}
-	if _, ok := parent.(*LocalFileSystem); ok && !filepath.IsAbs(dir) {
-		// A relative root would follow the working directory, cut the dot
-		// of a name like ".env" from a parent path below the root ".",
-		// and turn the absolute target of a link into a relative one,
-		// which the link's directory resolves outside of a root "..".
-		// The real working directory, because the operating system
-		// resolves ".." from it, not from a path through a symbolic link
-		// to it that os.Getwd can return from $PWD.
+	// A relative root would follow the working directory, cut the dot
+	// of a name like ".env" from a parent path below the root ".",
+	// and turn the absolute target of a link into a relative one,
+	// which the link's directory resolves outside of a root ".."
+	switch {
+	case local && windowsPaths:
+		// Windows resolves ".." from the path of the current directory,
+		// like filepath.Abs, which also gives `\x` and "/" without
+		// a drive, for which filepath.IsAbs is false, the current drive
+		absDir, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, err
+		}
+		dir = absDir
+	case local && !filepath.IsAbs(dir):
+		// Unix resolves ".." from the real working directory, not from
+		// a path through a symbolic link to it that os.Getwd can return
+		// from $PWD
 		cwd, err := os.Getwd()
 		if err != nil {
 			return nil, err

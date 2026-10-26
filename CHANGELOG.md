@@ -166,8 +166,8 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   `file://./uploads`, which was the root `/uploads`, is an error wrapping
   `os.ErrInvalid`. An empty `dirPath` is `ErrEmptyPath` instead of the
   working directory or the root of the parent. A relative local root is made
-  absolute with the working directory without symbolic links, which is
-  where the operating system resolves `..`: below a relative root like `.` a name like `.env` lost its dot,
+  absolute, on Unix with the working directory without symbolic links,
+  from which the system resolves `..`, on Windows like `filepath.Abs`: below a relative root like `.` a name like `.env` lost its dot,
   so `fs.Move` of a top-level `.cfg` copied `cfg` and removed `.cfg`, and
   through a root like `..` the absolute target of a new link was stored as
   a relative path that the link's directory resolved outside of the view. `LocalFileSystem.CleanPath`

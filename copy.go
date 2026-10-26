@@ -20,7 +20,10 @@ const copyBufferSize = 1024 * 1024 * 4
 // CopyFile copies a single file to dest, which can be on another file system.
 //
 // If dest is an existing directory, then a file with the name of src
-// is created in it, else dest is the path of the copy.
+// is created in it, else dest is the path of the copy. A name of src that
+// is not one valid name in that directory, like `..\x` on a file system
+// with the separator `\`, or "NUL" in a local directory on Windows, is an
+// error wrapping [os.ErrInvalid].
 // An existing file at that path is replaced, an existing directory
 // is an [ErrIsDirectory]. Missing parent directories of the copy are created.
 // Copying a file onto itself is a no-op, on every file system also through
@@ -68,12 +71,12 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf []byte, per
 	if dest == "" {
 		return ErrEmptyPath
 	}
-	// If dest is no directory, copyFileTo doesn't have to check it again,
-	// every Stat is a round trip on a remote file system
 	srcPerm, err := checkCopySource(src)
 	if err != nil {
 		return err
 	}
+	// If dest is no directory, copyFileTo doesn't have to check it again,
+	// every Stat is a round trip on a remote file system
 	destIsDir := dest.IsDir()
 	if destIsDir {
 		// A name like `..\x` of a source with another separator,

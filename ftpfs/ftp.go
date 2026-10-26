@@ -48,7 +48,10 @@
 // by a forged line. Servers among them that hide the names that begin with
 // a dot from LIST, like vsftpd with force_dot_files=NO, its default, hide
 // them from ftpfs too: Stat reports such a file as missing, ListDir,
-// ListDirRecursive and copies skip it, and RemoveAll of its directory fails.
+// ListDirRecursive and copies skip it, and RemoveAll of its directory fails,
+// and a link hidden that way doesn't count against a forged line with its
+// name, so RemoveAll can delete the files it points to: set
+// force_dot_files=YES on such servers.
 // Servers with MLST support describe a link with the facts of its target
 // or with a type that the FTP client library reads as a file, so ftpfs
 // can't tell their links from files and directories: ListDir describes

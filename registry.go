@@ -406,8 +406,8 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 
 	// No registered file system matched.
 	//
-	// A URI that carries a scheme (the PrefixSeparator "://" with no "/"
-	// before it, see hasURIScheme) but did not match any registered file
+	// A URI that carries a scheme (the PrefixSeparator "://" with no slash
+	// or backslash before it, see hasURIScheme) but did not match any registered file
 	// system must not be treated as a local path: silently resolving e.g.
 	// "s3://bucket/key" or "http://host/file" against the local file system
 	// would read or write a bogus local path.

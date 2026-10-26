@@ -695,6 +695,9 @@ func TestNewSubFileSystem_RelativeLocalRoot(t *testing.T) {
 // like the operating system resolves "..", not against a path through
 // a symbolic link to it that os.Getwd returns from $PWD.
 func TestNewSubFileSystem_RelativeRootBelowLinkedWorkDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(`Windows resolves ".." from the path of the current directory`)
+	}
 	base := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(base, "b", "c"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(base, "a"), 0o700))

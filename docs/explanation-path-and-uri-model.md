@@ -54,10 +54,10 @@ before the volume: the prefix is `mem://id/` and a URI is `mem://id/C:\dir`.
 After prefixes and aliases, resolution reaches a fork that is worth stating
 explicitly:
 
-> A URI with a scheme, a `://` with no `/` before it, that matched nothing
-> resolves to the **`Invalid` file system**. A string with no scheme resolves
-> to the **local** file system, also a path with a `://` after a `/`, like
-> `/cache/https://x`.
+> A URI with a scheme, a `://` with no slash or backslash before it, that
+> matched nothing resolves to the **`Invalid` file system**. A string with no
+> scheme resolves to the **local** file system, also a path with a `://`
+> after a separator, like `/cache/https://x`.
 
 The only scheme that maps to local is `file://`, and that matches earlier
 because `Local` is registered with it. Anything else — `s3://`, `http://`,

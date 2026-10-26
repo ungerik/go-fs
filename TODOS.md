@@ -187,6 +187,57 @@ names before a copy or move between file systems".
 **Priority:** P3
 **Depends on:** None
 
+### Check the prefix of EnsureRegistered like Register
+
+**What:** `fs.Register` refuses a prefix with a slash or backslash before
+its `://`, but `fs.EnsureRegistered` registers through `registerLocked`
+without that check.
+
+**Why:** `EnsureRegistered(ctx, "backup/s3://bucket", …)` registers it, and
+after the last `free` its URIs are local paths, the silent local writes the
+check exists to prevent (reproduced).
+
+**Context:** Check the prefixes in `registerLocked` or in one function that
+`Register` and the creation of `EnsureRegistered` both call, and the
+`prefix` argument of `EnsureRegistered` before it creates anything.
+
+**Effort:** S
+**Priority:** P1, before v1.0.0
+**Depends on:** None
+
+### Decide whether a prefix must have a scheme
+
+**What:** `fs.Register` accepts a prefix without `://`, like `/mnt/data`.
+
+**Why:** After `Unregister` its URIs are local paths, like the prefixes with
+a separator before `://` that `Register` refuses. The conformance suite
+requires a scheme, so no file system of this repository is affected.
+
+**Context:** Requiring `hasURIScheme` for every prefix breaks third-party
+file systems with such prefixes; else document the limit on `Register`.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### Keep Windows names with trailing dots in TrimExt through SubFileSystem and OverlayFileSystem
+
+**What:** `File.TrimExt` on Windows keeps a local name that would end with
+a dot or space only for the local file system itself, not through
+a `SubFileSystem` or `OverlayFileSystem` that writes to the local disk.
+It also keeps names with `<>"|?*`, which `isValidWindowsName` rejects, so
+`C:\logs\*.log` isn't trimmed on Windows, while `/logs/*.log` is on Unix.
+
+**Why:** `report..zip` trims to `report.` there, which Windows writes as
+`report`.
+
+**Context:** Use `localWritePath` instead of the type assertion, check only
+the trailing dot and space, and document the rule.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ### Make CleanPath idempotent on the empty path
 
 **What:** `LocalFileSystem.CleanPath` returns the empty path, which names no
@@ -524,13 +575,35 @@ server's `listOmits` and `listForged` hooks). Documented in the package doc.
 
 **Context:** Count the raw lines on the data connections of the listing
 connection (ftpfs dials them with its own `dialFunc`), and make the listing
-an error if the parser dropped any line other than `total N`. Add the test
+an error if the parser dropped any line other than `total N`. Do the same for
+the `LIST` of the operation's connection on servers without MLST support:
+there a link that the server hides from `LIST`, like a dotfile on vsftpd
+with `force_dot_files=NO`, or whose line the parser drops, like the first
+line of a FIFO named with a line feed, doesn't count against one forged
+directory line with its name, and `RemoveAll` deletes through it (reproduced
+with `listOmits` and `listForged`; documented in the package doc). Add the test
 case of an omitted link line with one forged line. While there, run the `-a`
 check (in `remover.list`) for every listing instead of once per directory,
 so it is as fresh as the listing.
 
 **Effort:** S
 **Priority:** P1, before v1.0.0
+**Depends on:** None
+
+### Count names of a listing in one pass
+
+**What:** The duplicate-name check of `remover.removeFolder` calls
+`listsName` for every pair of a directory and an entry of the listing.
+
+**Why:** 30,000 directories in one listing take about 1.7 s of CPU before
+the first `DELE`, 100,000 about 19 s, at every level of the tree.
+
+**Context:** One pass into a `map[string]int`: a non-link entry counts its
+`Name`, a link counts every `full[:i]` of `full = Name + " -> " + Target`
+where `full[i:]` begins with `" -> "`, the names `listsName` matches.
+
+**Effort:** S
+**Priority:** P2
 **Depends on:** None
 
 ### List without a path argument on servers without MLST that glob LIST arguments

@@ -47,7 +47,10 @@ func JoinCleanFilePath(uriParts ...string) File {
 // a directory is moved with all its contents.
 //
 // If destination is an existing directory, then source is moved into it
-// keeping its name, else destination is the new path of source.
+// keeping its name, else destination is the new path of source. A name of
+// source that is not one valid name in that directory, like `..\x` on
+// a file system with the separator `\`, is an error wrapping [os.ErrInvalid],
+// also for a move within one file system.
 // A local destination that is the directory entry of source under another
 // spelling of its name, like a name that only differs in case on
 // a case-insensitive file system, is no directory to move into,

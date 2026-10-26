@@ -190,7 +190,10 @@ and open readers, and afterwards every method returns
   hide the names that begin with a dot from `LIST`, like vsftpd with
   `force_dot_files=NO` (its default), hide them from `ftpfs` too: `Stat`
   reports such a file as missing, `ListDir`, `ListDirRecursive` and copies
-  skip it, and `RemoveAll` of its directory fails. A server
+  skip it, and `RemoveAll` of its directory fails, and a link hidden that way
+  doesn't count against a forged line with its name, so `RemoveAll` can
+  delete the files it points to: set `force_dot_files=YES` on such servers.
+  A server
   whose LIST lists a link itself like `ls -l` instead of the directory it
   points to is supported: `ListDir` and `ListDirRecursive` of a link to a
   directory list the directory. Servers with MLST support describe a link
