@@ -269,10 +269,11 @@ func TestDecode(t *testing.T) {
 			`a\b.txt`,
 		},
 		{
-			// The second byte of "表" in Shift-JIS is a backslash
+			// The second byte of "表" in Shift-JIS is a backslash,
+			// which readers of other code pages take for a separator
 			"Unicode Path field of a double-byte character with a backslash",
 			zip.FileHeader{Name: "\x95\\.txt", NonUTF8: true, Extra: unicodePathExtra("\x95\\.txt", "表.txt")},
-			"表.txt",
+			"ò\\.txt",
 		},
 		{
 			// Regression guard: the ASCII end of the field overlaps

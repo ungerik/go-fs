@@ -54,6 +54,14 @@ func (c *conformance) testValidateName(t *testing.T) {
 	for _, name := range validNames {
 		checkNoError(t, v.ValidateName(name), "ValidateName(%q) of a name that every file system writes", name)
 	}
+	// The errors of copies, moves and renames wrap the error of ValidateName,
+	// so it quotes only the start of a long name
+	long := strings.Repeat("a", 70000)
+	for _, name := range nameProbes {
+		if err := v.ValidateName(long + name); err != nil {
+			checkTrue(t, len(err.Error()) < 1000, "the error of ValidateName for a name of %d bytes must quote only its start, it has %d bytes", len(long)+len(name), len(err.Error()))
+		}
+	}
 	var valid, invalid []string
 	for _, name := range slices.Concat(validNames, nameProbes) {
 		// ValidateName gets the name of one directory entry

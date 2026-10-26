@@ -459,8 +459,10 @@ func validateNameIn(dirFS FileSystem, dirPath, name string, held bool) error {
 		return err
 	}
 	if target, _, _, ok := writeTarget(dirFS, dirPath); ok {
-		if err := validate(target, name); err != nil {
-			return err
+		if target != dirFS {
+			if err := validate(target, name); err != nil {
+				return err
+			}
 		}
 		if _, local := target.(*LocalFileSystem); local && !isValidLocalName(name) {
 			return os.ErrInvalid

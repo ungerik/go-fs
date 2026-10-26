@@ -477,11 +477,24 @@ func fsMakeAllDirs(fileSystem FileSystem, dirPath string, perm Permissions) erro
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
-	w, err := fsWritable(fileSystem)
-	if err != nil {
+	if _, err := fsWritable(fileSystem); err != nil {
 		return err
 	}
-	if err := validateNewDirs(w, dirPath); err != nil {
+	if err := validateNewDirs(fileSystem, dirPath); err != nil {
+		return err
+	}
+	return fsMakeAllDirsUnvalidated(fileSystem, dirPath, perm)
+}
+
+// fsMakeAllDirsUnvalidated makes dirPath and its missing parent directories
+// like fsMakeAllDirs, but doesn't check their names with ValidateName, for
+// callers that checked them, like a copy, see treeCopier.copyDir.
+func fsMakeAllDirsUnvalidated(fileSystem FileSystem, dirPath string, perm Permissions) error {
+	if dirPath == "" {
+		return ErrEmptyPath
+	}
+	w, err := fsWritable(fileSystem)
+	if err != nil {
 		return err
 	}
 	if m, ok := w.(MakeAllDirsFileSystem); ok {
@@ -656,8 +669,8 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // treeCopier.validName, is an error wrapping [os.ErrInvalid], below
 // a directory, also of an empty directory, before anything is copied, see
 // treeCopier.checkSource. So is a name of destPath that the ValidateName
-// method of a [ValidateNameFileSystem] rejects, see
-// treeCopier.validateWriteName, and one that the local file system would
+// method of a [ValidateNameFileSystem] rejects, see validateWritePathName
+// and isHeldName, and one that the local file system would
 // not write to an entry of that name or that Windows refuses, see
 // isValidLocalName, checked before the parent directories of destPath
 // are made.
@@ -726,10 +739,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
 	// Like the name of a device, which the move would write to, the name is
 	// checked before the source is listed and a link at destPath is removed
-	_, srcName := fsSplitDirAndName(srcFS, srcPath)
-	_, destName := fsSplitDirAndName(destFS, destPath)
-	held := isHeldName(srcFS, srcName, destFS, destPath, destName)
-	if name, err := validateWritePathName(destFS, destPath, held); err != nil {
+	if name, err := validateWritePathName(destFS, destPath, isHeldName(srcFS, srcPath, destFS, destPath)); err != nil {
 		return errInvalidName(src, name, dest, err)
 	}
 
@@ -981,18 +991,26 @@ func validateWritePathName(fileSystem FileSystem, filePath string, held bool) (n
 	return name, validateNameIn(fileSystem, dir, name, held)
 }
 
-// isHeldName reports if a copy or move of the entry srcName of srcFS to
-// destPath of destFS, whose name is name, writes a name that destFS holds
-// already: both are the same file system, not through an OverlayFileSystem,
-// whose entries can come from its base layer, and the name stays the same.
+// isHeldName reports if a copy or move of srcPath of srcFS to destPath of
+// destFS writes a name that the file system that gets the writes holds
+// already: the name stays the same, and both paths go to the same file
+// system, see writeTarget, also through SubFileSystems, but not through an
+// OverlayFileSystem, whose entries can come from its base layer.
 // ValidateName doesn't check such a name, because the file system stores
 // it already, like a key with a backslash in S3, which s3fs doesn't write.
-func isHeldName(srcFS FileSystem, srcName string, destFS FileSystem, destPath, name string) bool {
-	if srcFS != destFS || srcName != name {
+// A nil srcFS, of a source that is no File, holds no name.
+func isHeldName(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
+	if srcFS == nil {
 		return false
 	}
-	_, _, viaOverlay, ok := writeTarget(destFS, destPath)
-	return ok && !viaOverlay
+	_, srcName := fsSplitDirAndName(srcFS, srcPath)
+	_, destName := fsSplitDirAndName(destFS, destPath)
+	if srcName == "" || srcName != destName {
+		return false
+	}
+	srcTarget, _, srcViaOverlay, srcOK := writeTarget(srcFS, srcPath)
+	destTarget, _, destViaOverlay, destOK := writeTarget(destFS, destPath)
+	return srcOK && destOK && !srcViaOverlay && !destViaOverlay && srcTarget == destTarget
 }
 
 func fsListDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {

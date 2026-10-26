@@ -50,7 +50,9 @@ func JoinCleanFilePath(uriParts ...string) File {
 // keeping its name, else destination is the new path of source. A name of
 // source that is not one valid name in that directory, like `..\x` on
 // a file system with the separator `\`, is an error wrapping [os.ErrInvalid],
-// also for a move within one file system.
+// also for a move within one file system. So is a new name, also of a missing
+// parent directory, that a [ValidateNameFileSystem] rejects, checked before
+// anything is moved, see [ValidateNameFileSystem].
 // A local destination that is the directory entry of source under another
 // spelling of its name, like a name that only differs in case on
 // a case-insensitive file system, is no directory to move into,
@@ -161,18 +163,18 @@ func Move(ctx context.Context, source, destination File) error {
 			// A name like `..\x` of a source with another separator,
 			// or "NUL" on Windows, would be moved outside of destination
 			name := source.Name()
-			if err := validateNameIn(destFS, destPath, name, isHeldName(srcFS, name, destFS, destPath, name)); err != nil {
+			joined := destination.Join(name)
+			joinedFS, joinedPath := joined.ParseRawURI()
+			if err := validateNameIn(destFS, destPath, name, isHeldName(srcFS, srcPath, joinedFS, joinedPath)); err != nil {
 				return withNameCause(fmt.Errorf("%w: can't move %.200q into %.200q, the name %.200q is not valid there", os.ErrInvalid, errSubject(source), errSubject(destination), name), err)
 			}
-			destination = destination.Join(source.Name())
-			destFS, destPath = destination.ParseRawURI()
+			destination, destFS, destPath = joined, joinedFS, joinedPath
 		}
 	}
 	if srcFS == destFS {
 		// moveByCopy checks destPath itself. A native move can make the
 		// missing parent directories, like the one of a blob store
-		_, destName := fsSplitDirAndName(destFS, destPath)
-		if name, err := validateWritePathName(destFS, destPath, isHeldName(srcFS, source.Name(), destFS, destPath, destName)); err != nil {
+		if name, err := validateWritePathName(destFS, destPath, isHeldName(srcFS, srcPath, destFS, destPath)); err != nil {
 			return withNameCause(fmt.Errorf("%w: can't move %.200q to %.200q, the name %.200q is not valid there", os.ErrInvalid, errSubject(source), errSubject(destination), name), err)
 		}
 		if dir, _ := fsSplitDirAndName(destFS, destPath); dir != "" {

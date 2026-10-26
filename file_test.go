@@ -1442,3 +1442,44 @@ func TestFile_Rename_HeldNames(t *testing.T) {
 	_, err = renamed.Rename(ctx, `new\name`)
 	require.ErrorIs(t, err, os.ErrInvalid, "a new name is checked")
 }
+
+// TestFile_HeldNamesWithoutNativeMove verifies that CopyFile into
+// a directory, a Move by copy and the copy of directories within a file
+// system without native Move keep the names it holds, like the keys and
+// prefixes with a backslash of S3, see isHeldName.
+// Regression: the directories of the copy were checked with ValidateName,
+// so a copy or rename failed after it wrote a part.
+func TestFile_HeldNamesWithoutNativeMove(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	Unregister(memFS)
+	wrapped := backslashRejectingFS{&noRenameMoveFS{WriteFileSystem: memFS}}
+	require.NoError(t, Register(wrapped))
+	t.Cleanup(func() {
+		Unregister(wrapped)
+		_ = memFS.Close()
+	})
+	dir := wrapped.RootDir().Join("dir")
+	require.NoError(t, dir.MakeDir())
+	held := wrapped.RootDir().Join(`legacy\key.txt`)
+	require.NoError(t, held.WriteAllString(ctx, "x"))
+
+	require.NoError(t, CopyFile(ctx, held, dir), "CopyFile of a held name into a directory")
+	require.NoError(t, dir.Join(`legacy\key.txt`).Remove())
+	require.NoError(t, Move(ctx, held, dir.Join(`legacy\key.txt`)), "Move of a held name without native Move")
+	require.True(t, dir.Join(`legacy\key.txt`).Exists())
+
+	// A held directory name below a copied or renamed directory
+	tree := wrapped.RootDir().Join("tree")
+	require.NoError(t, memFS.MakeAllDirs(`/tree/legacy\sub`, NoPermissions))
+	require.NoError(t, tree.Join("a.txt").WriteAllString(ctx, "a"))
+	require.NoError(t, tree.Join(`legacy\sub`, "key.txt").WriteAllString(ctx, "x"))
+	require.NoError(t, CopyRecursive(ctx, tree, wrapped.RootDir().Join("copy")))
+	require.True(t, wrapped.RootDir().Join("copy", `legacy\sub`, "key.txt").Exists())
+	renamed, err := tree.Rename(ctx, "renamed")
+	require.NoError(t, err)
+	require.True(t, renamed.Join(`legacy\sub`, "key.txt").Exists())
+	require.NoError(t, Move(ctx, renamed.Join(`legacy\sub`), dir), "Move of a held directory name into a directory")
+	require.True(t, dir.Join(`legacy\sub`, "key.txt").Exists())
+}

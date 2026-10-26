@@ -1085,6 +1085,8 @@ func (file File) MakeDir(perm ...Permissions) error {
 
 // MakeAllDirs creates all directories up to this one.
 // It does not return an error if the directories already exist.
+// The name of a missing directory that a [ValidateNameFileSystem] rejects
+// is an error wrapping os.ErrInvalid, before the first one is created.
 func (file File) MakeAllDirs(perm ...Permissions) error {
 	fileSystem, path := file.ParseRawURI()
 	return fsMakeAllDirs(fileSystem, path, JoinPermissions(perm, NoPermissions))
@@ -1292,6 +1294,9 @@ func (file File) Truncate(ctx context.Context, newSize int64) error {
 //
 // An existing file with newName is replaced, an existing directory
 // with newName is an error wrapping os.ErrExist.
+// A newName that is not one valid name in the directory, also for the
+// local file system, like "a." on Windows, or that a [ValidateNameFileSystem]
+// rejects, is an error wrapping os.ErrInvalid.
 // The ctx is used for file systems without native move support
 // where the file is copied and the original removed.
 func (file File) Rename(ctx context.Context, newName string) (renamedFile File, err error) {
@@ -1301,8 +1306,8 @@ func (file File) Rename(ctx context.Context, newName string) (renamedFile File, 
 	}
 	// Like a name that Windows writes to another entry, "a." to "a",
 	// which the rename would replace
-	dir, _ := fsSplitDirAndName(fileSystem, path)
-	if err := validateNameIn(fileSystem, dir, newName, false); err != nil {
+	dir, name := fsSplitDirAndName(fileSystem, path)
+	if err := validateNameIn(fileSystem, dir, newName, newName == name); err != nil {
 		return "", withNameCause(fmt.Errorf("%w: invalid new name %.200q for Rename", os.ErrInvalid, newName), err)
 	}
 	newPath := fileSystem.CleanPath(dir, newName)

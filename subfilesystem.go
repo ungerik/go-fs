@@ -558,7 +558,8 @@ func (s *SubFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
 	if err != nil {
 		return err
 	}
-	return s.subErr(fsMakeAllDirs(s.parent, parentPath, perm))
+	// File.MakeAllDirs checked the names, see fsMakeAllDirs
+	return s.subErr(fsMakeAllDirsUnvalidated(s.parent, parentPath, perm))
 }
 
 // RemoveAll removes the file or directory with all its content

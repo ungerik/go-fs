@@ -159,23 +159,15 @@ func Decode(header *zip.FileHeader) string {
 // the ones of stored in the same order, and every run of other characters
 // stands for at least one byte of stored that is no slash, no dot and no
 // backslash, which zip readers take for a separator, like a character of
-// another code page or a substitute like "_". A backslash can only be the
-// second byte of a double-byte character, after a byte from 0x80, like in
-// "表" of Shift-JIS. So a run can't hide a directory or an extension.
+// another code page or a substitute like "_". So a run can't hide
+// a directory or an extension. A backslash can also be the second byte of
+// a character of Shift-JIS, like in "表", but readers of other code pages
+// take it for a separator, so these names keep the stored name.
+// It is a function of its own for FuzzKeepsASCII.
 func keepsASCII(stored, unicodeName string) bool {
 	isASCII := func(r rune) bool { return r < utf8.RuneSelf }
 	isOther := func(r rune) bool { return r >= utf8.RuneSelf }
-	isRunBytes := func(b string) bool {
-		if b == "" || strings.ContainsAny(b, "/.") {
-			return false
-		}
-		for i := range len(b) {
-			if b[i] == '\\' && (i == 0 || b[i-1] < utf8.RuneSelf) {
-				return false
-			}
-		}
-		return true
-	}
+	isRunBytes := func(b string) bool { return b != "" && !strings.ContainsAny(b, `/.\`) }
 	i := strings.IndexFunc(unicodeName, isOther)
 	if i < 0 {
 		return unicodeName == stored

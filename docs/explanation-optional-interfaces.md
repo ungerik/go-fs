@@ -155,7 +155,7 @@ implementations against the same checks as the emulation.
 
 | Chosen                                    | Given up                                      |
 | ----------------------------------------- | --------------------------------------------- |
-| 24 small optional interfaces              | A single interface you can read in one screen |
+| 25 small optional interfaces              | A single interface you can read in one screen |
 | Backends implement only what they improve | Knowing a backend's cost from its type        |
 | Emulation means every op works everywhere | Failing loudly when an op will be slow        |
 | Type assertion per operation              | Zero-cost dispatch                            |

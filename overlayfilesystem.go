@@ -515,7 +515,8 @@ func (o *OverlayFileSystem) prepareUpper(filePath string) error {
 	if !info.IsDir {
 		return NewErrIsNotDirectory(info.File)
 	}
-	err = fsMakeAllDirs(o.upper, o.upperPath(parent), 0)
+	// The write methods of the overlay are not checked with ValidateName
+	err = fsMakeAllDirsUnvalidated(o.upper, o.upperPath(parent), 0)
 	if err != nil {
 		return o.overlayErr(o.upper, err)
 	}
@@ -695,13 +696,7 @@ func (o *OverlayFileSystem) MakeAllDirs(dirPath string, perm Permissions) error 
 	if err := o.checkPath(dirPath); err != nil {
 		return err
 	}
-	dirPath = o.CleanPath(dirPath)
-	// The upper layer can be a file system like a zip writer,
-	// which can't remove the directories it made
-	if err := validateNewDirs(o, dirPath); err != nil {
-		return err
-	}
-	return o.makeAllDirs(dirPath, perm)
+	return o.makeAllDirs(o.CleanPath(dirPath), perm)
 }
 
 // makeAllDirs creates the clean dirPath and its missing parent

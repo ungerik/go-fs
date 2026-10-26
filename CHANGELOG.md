@@ -27,10 +27,11 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   can't write, see the READMEs: a backslash (unless
   `Options.AllowBackslashInNames` for sftpfs, ftpfs and webdavfs), a NUL
   character, at which an SFTP server would end a path, CR and LF, which
-  would inject an FTP command, the characters and device names that SMB
-  and Windows servers refuse, invalid UTF-8, which go-fs doesn't write,
-  control characters, which the XML listings of S3 and Azure Blob
-  Storage can't hold, and trailing dots, which Azure removes.
+  would inject an FTP command, the characters that SMB refuses, the device
+  names and trailing dots that Windows servers refuse, invalid UTF-8, which
+  the remote backends don't write, control characters, which the XML
+  listings of S3 and Azure Blob Storage can't hold, and trailing dots,
+  which Azure removes.
 - `fstest.RunConformance` checks the `ValidateName` of a file system that
   implements `fs.ValidateNameFileSystem`: names that every file system
   writes are valid, errors wrap `os.ErrInvalid`, a copy to a rejected name
@@ -68,9 +69,10 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 - Copies and moves from another file system into a backend fail before
   they write anything at a name that `ValidateName` of the backend rejects,
   also where the server wrote it before: a name that is not valid UTF-8
-  into sftpfs, ftpfs and webdavfs on Linux servers, and a backslash into
-  s3fs, which AWS S3 stores but S3-compatible servers reject. Copies and
-  moves within one of them keep these names.
+  into sftpfs, ftpfs and webdavfs on Linux servers, a backslash into s3fs,
+  which AWS S3 stores but S3-compatible servers reject, and Windows device
+  names and trailing dots or spaces into smbfs, which Samba writes. Copies
+  and moves within one of them keep these names.
 - `tarfs.Writer` rejects paths with a NUL character, which `archive/tar`
   failed to write without `os.ErrInvalid`, and paths that are not valid
   UTF-8, which the PAX format requires, with an error wrapping
