@@ -184,7 +184,13 @@ and open readers, and afterwards every method returns
   (which provides MLST), can list another directory for a path with `*`,
   `?` or `[`: then `ftpfs` describes the entries of that directory, and
   `RemoveAll` can take a link to a directory for a directory in it and
-  delete the files that the link points to. A server
+  delete the files that the link points to. `RemoveAll` refuses a directory
+  whose name its listing lists more than once, like for a file whose name
+  contains a line feed followed by a forged line. Servers among them that
+  hide the names that begin with a dot from `LIST`, like vsftpd with
+  `force_dot_files=NO` (its default), hide them from `ftpfs` too: `Stat`
+  reports such a file as missing, `ListDir`, `ListDirRecursive` and copies
+  skip it, and `RemoveAll` of its directory fails. A server
   whose LIST lists a link itself like `ls -l` instead of the directory it
   points to is supported: `ListDir` and `ListDirRecursive` of a link to a
   directory list the directory. Servers with MLST support describe a link

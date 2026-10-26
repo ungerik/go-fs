@@ -185,8 +185,9 @@ func New(client *s3.Client, bucketName string, opts *Options) (fs.FileSystem, er
 	}
 	prefix, id := Prefix+bucketName, bucketName
 	if opts.Prefix != "" {
-		if !strings.Contains(opts.Prefix, fs.PrefixSeparator) || strings.HasSuffix(opts.Prefix, Separator) {
-			return nil, fmt.Errorf("s3fs: Options.Prefix %q must contain %q and must not end with %q", fsimpl.RedactAddress(opts.Prefix), fs.PrefixSeparator, Separator)
+		// A separator before the "://" makes it a path, see fs.ParseRawURI
+		if i := strings.Index(opts.Prefix, fs.PrefixSeparator); i <= 0 || strings.ContainsAny(opts.Prefix[:i], `/\`) || strings.HasSuffix(opts.Prefix, Separator) {
+			return nil, fmt.Errorf("s3fs: Options.Prefix %q must begin with a scheme followed by %q and must not end with %q", fsimpl.RedactAddress(opts.Prefix), fs.PrefixSeparator, Separator)
 		}
 		// The prefix is unique among the registered file systems,
 		// the bucket name is not if Prefix distinguishes endpoints

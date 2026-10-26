@@ -363,6 +363,8 @@ func TestNew(t *testing.T) {
 	assert.Error(t, err, "Prefix without ://")
 	_, err = New(client, "bucket", &Options{Prefix: "s3://host/bucket/"})
 	assert.Error(t, err, "Prefix with a trailing slash")
+	_, err = New(client, "bucket", &Options{Prefix: "backup/s3://bucket"})
+	assert.Error(t, err, "Prefix with a slash before ://, a local path when unregistered")
 
 	f, err := New(client, "bucket", nil)
 	require.NoError(t, err)

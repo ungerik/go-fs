@@ -689,3 +689,26 @@ func TestNewSubFileSystem_RelativeLocalRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "inside", string(data), "the link to /secret of the view")
 }
+
+// TestNewSubFileSystem_RelativeRootBelowLinkedWorkDir checks that the
+// relative local root ".." is resolved against the real working directory
+// like the operating system resolves "..", not against a path through
+// a symbolic link to it that os.Getwd returns from $PWD.
+func TestNewSubFileSystem_RelativeRootBelowLinkedWorkDir(t *testing.T) {
+	base := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "b", "c"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "a"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "b", "in-b.txt"), []byte("b"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "a", "in-a.txt"), []byte("a"), 0o600))
+	if err := os.Symlink(filepath.Join(base, "b", "c"), filepath.Join(base, "a", "link")); err != nil {
+		t.Skipf("can't create symbolic links: %v", err)
+	}
+	t.Chdir(filepath.Join(base, "a", "link"))
+	t.Setenv("PWD", filepath.Join(base, "a", "link")) // like a shell that entered through the link
+
+	view, err := fs.NewSubFileSystem(fs.Local, "..", "")
+	require.NoError(t, err)
+	data, err := view.ReadAll(t.Context(), "/in-b.txt")
+	require.NoError(t, err, "the view of .. is the parent of the real working directory")
+	require.Equal(t, "b", string(data))
+}

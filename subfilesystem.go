@@ -89,8 +89,9 @@ func (s *SubFileSystem) CleanPath(uriParts ...string) string {
 // system, or a file URI that names no local file, like "file://./x", is
 // an error wrapping [os.ErrInvalid] instead of a root somewhere else.
 // An empty dirPath is [ErrEmptyPath]; "." is the current directory.
-// A local root is made absolute, so it doesn't follow later changes of
-// the working directory.
+// A relative local root is made absolute with the working directory
+// without symbolic links, so it doesn't follow later changes of the
+// working directory.
 func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSystem, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("nil parent file system")
@@ -116,12 +117,22 @@ func NewSubFileSystem(parent FileSystem, dirPath string, id string) (*SubFileSys
 	default:
 		return nil, fmt.Errorf("%w: %s is no URI of the parent file system %s", os.ErrInvalid, fsimpl.RedactURI(dirPath), fsimpl.RedactURI(parent.Prefix()))
 	}
-	if localParent, ok := parent.(*LocalFileSystem); ok {
+	if _, ok := parent.(*LocalFileSystem); ok && !filepath.IsAbs(dir) {
 		// A relative root would follow the working directory, cut the dot
 		// of a name like ".env" from a parent path below the root ".",
 		// and turn the absolute target of a link into a relative one,
-		// which the link's directory resolves outside of a root ".."
-		dir = localParent.AbsPath(dir)
+		// which the link's directory resolves outside of a root "..".
+		// The real working directory, because the operating system
+		// resolves ".." from it, not from a path through a symbolic link
+		// to it that os.Getwd can return from $PWD.
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		if cwd, err = filepath.EvalSymlinks(cwd); err != nil {
+			return nil, err
+		}
+		dir = filepath.Join(cwd, dir)
 	}
 	info, err := fsStat(parent, dir)
 	if err != nil {

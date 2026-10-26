@@ -155,6 +155,11 @@ func Move(ctx context.Context, source, destination File) error {
 			}
 		}
 		if !renamesSource {
+			// A name like `..\x` of a source with another separator,
+			// or "NUL" on Windows, would be moved outside of destination
+			if name := source.Name(); !isValidNameIn(destination, name) {
+				return fmt.Errorf("%w: can't move %s into %s, the name %q is not valid there", os.ErrInvalid, errSubject(source), errSubject(destination), name)
+			}
 			destination = destination.Join(source.Name())
 			destFS, destPath = destination.ParseRawURI()
 		}

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -100,6 +101,12 @@ func Register(fileSystem FileSystem) error {
 	prefixes := fsPrefixes(fileSystem)
 	if prefixes[0] == "" {
 		return fmt.Errorf("can't register file system with empty prefix: %s", fileSystem)
+	}
+	for _, prefix := range prefixes {
+		if strings.Contains(prefix, PrefixSeparator) && !hasURIScheme(prefix) {
+			// After Unregister its URIs would be local paths, see hasURIScheme
+			return fmt.Errorf("%w: can't register the prefix %s with a separator before %q", os.ErrInvalid, fsimpl.RedactURI(prefix), PrefixSeparator)
+		}
 	}
 
 	registryMtx.Lock()
@@ -423,11 +430,28 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 }
 
 // hasURIScheme reports if s begins with the scheme of a URI: s contains
-// the [PrefixSeparator] "://" and no "/" before it, like "s3://bucket".
-// A "://" after a "/", like in "/cache/https://x", is part of a path.
+// the [PrefixSeparator] "://" and no slash or backslash before it, like
+// "s3://bucket", a scheme can't contain them. A "://" after a separator,
+// like in "/cache/https://x" or `C:\cache\https://x`, is part of a path.
 func hasURIScheme(s string) bool {
 	i := strings.Index(s, PrefixSeparator)
-	return i >= 0 && !strings.Contains(s[:i], "/")
+	return i >= 0 && !strings.ContainsAny(s[:i], `/\`)
+}
+
+// isValidNameIn reports if name is valid for an entry of the directory dir,
+// see isValidName, and also for the local file system, see
+// isValidLocalName, if the writes to dir go to the local file system.
+func isValidNameIn(dir File, name string) bool {
+	dirFS, dirPath := dir.ParseRawURI()
+	if !isValidName(dirFS, name) {
+		return false
+	}
+	if target, _, _, ok := writeTarget(dirFS, dirPath); ok {
+		if _, local := target.(*LocalFileSystem); local {
+			return isValidLocalName(name)
+		}
+	}
+	return true
 }
 
 // parseLocalFileURI returns local and the clean local path of uri, a URI with

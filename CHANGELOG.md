@@ -9,10 +9,13 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Changed
 
-- Only a `://` with no `/` before it is the scheme of a URI: a string like
-  `/cache/https://x` is the local path `/cache/https:/x` instead of the
-  `Invalid` file system. `s3://bucket/key` without a registered s3fs stays
-  `Invalid`, like every URI of an unregistered scheme.
+- Only a `://` with no slash or backslash before it is the scheme of a URI:
+  a string like `/cache/https://x` is the local path `/cache/https:/x`
+  instead of the `Invalid` file system. `s3://bucket/key` without
+  a registered s3fs stays `Invalid`, like every URI of an unregistered
+  scheme. `fs.Register` refuses a prefix with a separator before its `://`,
+  whose URIs would be local paths after `Unregister`, and so do the s3fs
+  `Options.Prefix` check and the conformance suite.
 
 - `File.URL()` is renamed to `File.URI()`, `fs.FileURLs` to `fs.FileURIs`,
   and `fsimpl.PathHelper.URL` and `LocalFileSystem.URL` to `URI`. The value
@@ -112,6 +115,21 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Fixed
 
+- `fs.CopyFile` and `fs.Move` into an existing directory joined the name of
+  the source unchecked: a name like `..\evil.txt` of a source on a file
+  system with the separator `/` was written outside of the directory on
+  a file system with the separator `\`, and `Move` removed the source. On
+  Windows `NUL` or `a:b` went to a device or an alternate data stream. A name
+  that is not one valid name in the directory is now an error wrapping
+  `os.ErrInvalid`, like for `CopyRecursive`.
+- `ftpfs` `RemoveAll` refuses a directory whose name its listing lists more
+  than once, like for a file whose name contains a line feed followed by
+  a forged line that lists a directory with the name of a link. On servers
+  without MLST support the listing is all that tells a directory from
+  a link, so it deleted the files that such a link points to. Servers that
+  hide dotfiles from `LIST`, like vsftpd by default, hide them from `ftpfs`
+  too; this is documented.
+
 - `CopyRecursive` and `Move` fail with `ErrEmptyPath` when the source or the
   destination has the empty path, like a file URI without a path (`file://`,
   `file://localhost`). Their same-file checks took that path for the working
@@ -147,8 +165,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   another file system or a file URI that names no local file, like
   `file://./uploads`, which was the root `/uploads`, is an error wrapping
   `os.ErrInvalid`. An empty `dirPath` is `ErrEmptyPath` instead of the
-  working directory or the root of the parent. A local root is made
-  absolute: below a relative root like `.` a name like `.env` lost its dot,
+  working directory or the root of the parent. A relative local root is made
+  absolute with the working directory without symbolic links, which is
+  where the operating system resolves `..`: below a relative root like `.` a name like `.env` lost its dot,
   so `fs.Move` of a top-level `.cfg` copied `cfg` and removed `.cfg`, and
   through a root like `..` the absolute target of a new link was stored as
   a relative path that the link's directory resolved outside of the view. `LocalFileSystem.CleanPath`

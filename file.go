@@ -203,6 +203,8 @@ func (file File) ExtLower() string {
 // A name that is only an extension, like ".bashrc", has none to remove,
 // and neither has a name like "..zip" or "...zip" that would become "." or
 // "..": the File is returned unchanged instead of its directory or parent.
+// On Windows a local name that would end with a dot or a space, like
+// "report..zip", is returned unchanged too, Windows would remove them.
 func (file File) TrimExt() File {
 	fileSystem, path := file.ParseRawURI()
 	if _, ok := fileSystem.(URIFileSystem); ok {
@@ -225,7 +227,14 @@ func (file File) TrimExt() File {
 	// a file URI has slashes where the separator is a backslash.
 	// fsimpl.TrimExt would trim a name like ".bashrc" to its directory
 	// and "...zip" to "..", the parent directory.
-	if _, name := fsSplitDirAndName(fileSystem, path); isEmptyOrDotName(strings.TrimSuffix(name, fsimpl.Ext(name, ""))) {
+	_, name := fsSplitDirAndName(fileSystem, path)
+	trimmedName := strings.TrimSuffix(name, fsimpl.Ext(name, ""))
+	if isEmptyOrDotName(trimmedName) {
+		return file
+	}
+	if _, local := fileSystem.(*LocalFileSystem); local && windowsPaths && !isValidWindowsName(trimmedName) {
+		// Windows removes a trailing dot or space: "report..zip" would
+		// become "report.", which is the file "report"
 		return file
 	}
 	return fsFile(fileSystem, fsimpl.TrimExt(path, fileSystem.Separator()))

@@ -196,11 +196,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				// MakeDir stats first and is a no-op for an existing directory
 				// (or an error for an existing file), so the path must not exist
@@ -226,11 +226,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				// MockFullyFeaturedFileSystem implements MakeAllDirsFileSystem,
 				// so the permissions are passed to the native MakeAllDirs
@@ -253,11 +253,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				var capturedPerm Permissions
 				mockFS.MockOpenWriter = func(filePath string, perm Permissions) (WriteCloser, error) {
@@ -278,11 +278,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				// Mock ReadAll to return existing content
 				mockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -311,11 +311,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				var capturedPerm Permissions
 				mockFS.MockOpenReadWriter = func(filePath string, perm Permissions) (ReadWriteSeekCloser, error) {
@@ -336,11 +336,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testData := []byte("test content")
 				var capturedPerm Permissions
@@ -362,11 +362,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testData := []byte("test content")
 				var capturedPerm Permissions
@@ -388,11 +388,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testStr := "test content"
 				var capturedPerm Permissions
@@ -414,11 +414,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testStr := "test content"
 				var capturedPerm Permissions
@@ -440,11 +440,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testData := []byte("appended content")
 				var capturedPerm Permissions
@@ -466,11 +466,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testStr := "appended content"
 				var capturedPerm Permissions
@@ -492,11 +492,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testData := map[string]any{"name": "test", "value": 123}
 				capturedPerm := Permissions(07777) // Sentinel that must be overwritten
@@ -526,11 +526,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testData := struct {
 					XMLName struct{} `xml:"root"`
@@ -566,11 +566,11 @@ func TestFile(t *testing.T) {
 		for _, permTest := range permissionTests {
 			t.Run(permTest.name, func(t *testing.T) {
 				// Create mock file system for this test with only needed functions
-				mockFS := createMockFS("mock" + t.Name() + "://")
-				Register(mockFS)
+				mockFS := createMockFS(mockPrefix(t))
+				require.NoError(t, Register(mockFS))
 				t.Cleanup(func() { Unregister(mockFS) })
 
-				file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+				file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 				testReader := strings.NewReader("test content")
 
@@ -604,11 +604,11 @@ func TestFile(t *testing.T) {
 	// Test methods that don't take permissions but should still work
 	t.Run("NonPermissionMethods", func(t *testing.T) {
 		// Create a shared mock file system for all NonPermissionMethods subtests
-		mockFS := createMockFS("mock" + t.Name() + "://")
+		mockFS := createMockFS(mockPrefix(t))
 		Register(mockFS)
 		t.Cleanup(func() { Unregister(mockFS) })
 
-		file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+		file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 		t.Run("FileSystem", func(t *testing.T) {
 			fs := file.FileSystem()
@@ -707,12 +707,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("IsReadable", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Mock Stat to return a readable file
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -731,12 +731,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("IsWritable", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Mock Stat to return a writable file
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -755,12 +755,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("Stat", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			expectedInfo := &FileInfo{
 				Name:        "file.txt",
@@ -785,12 +785,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("Info", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			expectedInfo := &FileInfo{
 				Name:        "file.txt",
@@ -811,12 +811,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("Exists", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Mock Stat to return no error (file exists)
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -829,11 +829,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("CheckExists", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Test with existing file
 			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -918,12 +918,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("IsRegular", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Create file with matching prefix
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Mock Stat to return a regular file
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -941,12 +941,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("IsEmptyDir", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Create file with matching prefix
-			file := File("mock" + t.Name() + ":///test/path/to/dir")
+			file := File(mockPrefix(t) + "/test/path/to/dir")
 
 			// Mock ListDir to return an empty directory
 			mockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -959,25 +959,25 @@ func TestFile(t *testing.T) {
 
 		t.Run("IsHidden", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// MockFullyFeaturedFileSystem implements HiddenFileSystem,
 			// MockIsHidden uses the dot rule
-			hiddenFile := File("mock" + t.Name() + ":///test/path/to/.hidden")
+			hiddenFile := File(mockPrefix(t) + "/test/path/to/.hidden")
 			hidden := hiddenFile.IsHidden()
 			assert.True(t, hidden)
 		})
 
 		t.Run("IsSymbolicLink", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			symlink := file.IsSymbolicLink()
 			assert.False(t, symlink) // MockIsSymbolicLink returns false
@@ -985,11 +985,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("Size", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Mock Stat to return a file with size
 			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -1006,12 +1006,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("ContentHash", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Mock OpenReader to return a reader with content
 			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
@@ -1025,12 +1025,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("ContentHashContext", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Mock OpenReader to return a reader with content
 			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
@@ -1044,11 +1044,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("Modified", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			expectedTime := time.Now()
 			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
@@ -1065,12 +1065,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("Permissions", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			mockFS.MockStat = func(filePath string) (*FileInfo, error) {
 				return &FileInfo{
@@ -1086,11 +1086,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("SetPermissions", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements SetPermissions
 			err := testFile.SetPermissions(0644)
@@ -1099,15 +1099,15 @@ func TestFile(t *testing.T) {
 
 		t.Run("ListDir", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/dir")
+			testFile := File(mockPrefix(t) + "/test/path/to/dir")
 
 			expectedFiles := []File{
-				File("mock" + t.Name() + ":///test/path/to/dir/file1.txt"),
-				File("mock" + t.Name() + ":///test/path/to/dir/file2.txt"),
+				File(mockPrefix(t) + "/test/path/to/dir/file1.txt"),
+				File(mockPrefix(t) + "/test/path/to/dir/file2.txt"),
 			}
 
 			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1133,15 +1133,15 @@ func TestFile(t *testing.T) {
 
 		t.Run("ListDirContext", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/dir")
+			testFile := File(mockPrefix(t) + "/test/path/to/dir")
 
 			expectedFiles := []File{
-				File("mock" + t.Name() + ":///test/path/to/dir/file1.txt"),
-				File("mock" + t.Name() + ":///test/path/to/dir/file2.txt"),
+				File(mockPrefix(t) + "/test/path/to/dir/file1.txt"),
+				File(mockPrefix(t) + "/test/path/to/dir/file2.txt"),
 			}
 
 			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1166,15 +1166,15 @@ func TestFile(t *testing.T) {
 
 		t.Run("ListDirIter", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/dir")
+			testFile := File(mockPrefix(t) + "/test/path/to/dir")
 
 			expectedFiles := []File{
-				File("mock" + t.Name() + ":///test/path/to/dir/file1.txt"),
-				File("mock" + t.Name() + ":///test/path/to/dir/file2.txt"),
+				File(mockPrefix(t) + "/test/path/to/dir/file1.txt"),
+				File(mockPrefix(t) + "/test/path/to/dir/file2.txt"),
 			}
 
 			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1198,15 +1198,15 @@ func TestFile(t *testing.T) {
 
 		t.Run("ListDirMax", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/dir")
+			testFile := File(mockPrefix(t) + "/test/path/to/dir")
 
 			expectedFiles := []File{
-				File("mock" + t.Name() + ":///test/path/to/dir/file1.txt"),
-				File("mock" + t.Name() + ":///test/path/to/dir/file2.txt"),
+				File(mockPrefix(t) + "/test/path/to/dir/file1.txt"),
+				File(mockPrefix(t) + "/test/path/to/dir/file2.txt"),
 			}
 
 			testMockFS.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1225,11 +1225,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("User", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements User methods
 			user, err := testFile.User()
@@ -1239,11 +1239,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("SetUser", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements SetUser
 			err := testFile.SetUser("testuser")
@@ -1252,11 +1252,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("Group", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Group
 			group, err := testFile.Group()
@@ -1266,11 +1266,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("SetGroup", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements SetGroup
 			err := testFile.SetGroup("testgroup")
@@ -1279,11 +1279,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("Touch", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Touch
 			err := testFile.Touch()
@@ -1292,11 +1292,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("WriteTo", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			testMockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
 				return io.NopCloser(strings.NewReader("test content")), nil
@@ -1311,11 +1311,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("OpenReader", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			testMockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
 				assert.Equal(t, "/test/path/to/file.txt", filePath)
@@ -1338,12 +1338,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("OpenReadSeeker", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			mockFS.MockOpenReader = func(filePath string) (io.ReadCloser, error) {
 				return io.NopCloser(strings.NewReader("test content")), nil
@@ -1364,11 +1364,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("ReadAll", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1382,11 +1382,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("ReadAllContext", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1400,11 +1400,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("ReadAllContentHash", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1419,11 +1419,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("ReadAllString", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1437,11 +1437,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("ReadAllStringContext", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			expectedData := []byte("test content")
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1455,11 +1455,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("ReadJSON", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			jsonData := []byte(`{"name": "test", "value": 123}`)
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1475,11 +1475,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("ReadXML", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			xmlData := []byte(`<root><name>test</name><value>123</value></root>`)
 			testMockFS.MockReadAll = func(ctx context.Context, filePath string) ([]byte, error) {
@@ -1498,11 +1498,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("Watch", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Watch
 			cancel, err := testFile.Watch(func(f File, e Event) {})
@@ -1516,11 +1516,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("Truncate", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Truncate
 			err := testFile.Truncate(t.Context(), 100)
@@ -1529,11 +1529,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("Rename", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Rename uses the Move of fstest.MockFullyFeaturedFileSystem
 			renamedFile, err := testFile.Rename(t.Context(), "newfile.txt")
@@ -1543,11 +1543,11 @@ func TestFile(t *testing.T) {
 
 		t.Run("Renamef", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// Rename uses the Move of fstest.MockFullyFeaturedFileSystem
 			renamedFile, err := testFile.Renamef(t.Context(), "newfile_%d.txt", 123)
@@ -1557,12 +1557,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("MoveTo", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
-			dest := File("mock" + t.Name() + ":///test/path/to/destination.txt")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
+			dest := File(mockPrefix(t) + "/test/path/to/destination.txt")
 
 			// fstest.MockFullyFeaturedFileSystem implements Move,
 			// the destination is a file (default MockStat) so it is the final path
@@ -1580,12 +1580,12 @@ func TestFile(t *testing.T) {
 		t.Run("MoveTo_IntoDir", func(t *testing.T) {
 			// An existing directory as destination means "move into":
 			// MoveFileSystem.Move always receives the final path.
-			testMockFS := createMockFS("mock" + t.Name() + "://")
+			testMockFS := createMockFS(mockPrefix(t))
 			Register(testMockFS)
 			t.Cleanup(func() { Unregister(testMockFS) })
 
-			testFile := File("mock" + t.Name() + ":///test/path/to/file.txt")
-			destDir := File("mock" + t.Name() + ":///test/other")
+			testFile := File(mockPrefix(t) + "/test/path/to/file.txt")
+			destDir := File(mockPrefix(t) + "/test/other")
 
 			testMockFS.MockStat = func(filePath string) (*FileInfo, error) {
 				return &FileInfo{Name: path.Base(filePath), Exists: true, IsDir: filePath == "/test/other"}, nil
@@ -1624,12 +1624,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("Remove", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			mockFS.MockRemove = func(filePath string) error {
 				assert.Equal(t, "/test/path/to/file.txt", filePath)
@@ -1642,12 +1642,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("RemoveRecursive", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			// RemoveRecursive uses the native RemoveAll of
 			// fstest.MockFullyFeaturedFileSystem instead of
@@ -1665,12 +1665,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("StdFS", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			stdFS := file.StdFS()
 			assert.NotNil(t, stdFS)
@@ -1679,12 +1679,12 @@ func TestFile(t *testing.T) {
 
 		t.Run("StdDirEntry", func(t *testing.T) {
 			// Create mock file system for this test with only needed functions
-			mockFS := createMockFS("mock" + t.Name() + "://")
+			mockFS := createMockFS(mockPrefix(t))
 			Register(mockFS)
 			t.Cleanup(func() { Unregister(mockFS) })
 
 			// Use a file with the prefix of this mock file system
-			file := File("mock" + t.Name() + ":///test/path/to/file.txt")
+			file := File(mockPrefix(t) + "/test/path/to/file.txt")
 
 			stdDirEntry := file.StdDirEntry()
 			assert.NotNil(t, stdDirEntry)
@@ -1754,4 +1754,11 @@ func TestFile_WriteAllContext_FallbackTruncates(t *testing.T) {
 
 	// The fallback must truncate: no stale trailing bytes from the larger file.
 	require.Equal(t, small, stored)
+}
+
+// mockPrefix returns a URI prefix for the mock file system of the test t,
+// whose scheme is the test name without the slashes of subtests, which
+// a scheme can't contain, see hasURIScheme.
+func mockPrefix(t *testing.T) string {
+	return "mock" + strings.ReplaceAll(t.Name(), "/", "-") + "://"
 }

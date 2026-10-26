@@ -561,7 +561,9 @@ func (c *conformance) testMetadata(t *testing.T) {
 	}
 	prefix := c.fs.Prefix()
 	checkTrue(t, prefix != "", "Prefix() must not be empty")
-	checkTrue(t, strings.Contains(prefix, fs.PrefixSeparator), "Prefix() %q must contain %q", prefix, fs.PrefixSeparator)
+	// A separator before the "://" makes the prefix a path, see fs.ParseRawURI
+	schemeEnd := strings.Index(prefix, fs.PrefixSeparator)
+	checkTrue(t, schemeEnd > 0 && !strings.ContainsAny(prefix[:schemeEnd], `/\`), "Prefix() %q must begin with a scheme followed by %q", prefix, fs.PrefixSeparator)
 	checkTrue(t, c.fs.String() != "", "String() must not be empty")
 	checkTrue(t, c.fs.Separator() != "", "Separator() must not be empty")
 	checkTrue(t, c.readable || c.writable, "the file system must be readable or writable")

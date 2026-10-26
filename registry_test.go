@@ -509,9 +509,22 @@ func TestParseRawURI_PathWithSchemeSeparator(t *testing.T) {
 		fileSystem, _ := ParseRawURI(uri)
 		assert.Equal(t, Invalid, fileSystem, "ParseRawURI(%q)", uri)
 	}
-	for _, path := range []string{"/cache/https://x", "cache/https://x", "./x://y"} {
+	for _, path := range []string{"/cache/https://x", "cache/https://x", "./x://y", `cache\https://x`} {
 		fileSystem, cleanPath := ParseRawURI(path)
 		assert.Equal(t, Local, fileSystem, "ParseRawURI(%q)", path)
 		assert.Equal(t, Local.CleanPath(path), cleanPath, "ParseRawURI(%q)", path)
+	}
+}
+
+// TestRegister_PrefixWithSeparatorBeforeScheme checks that Register refuses
+// a prefix with a slash or backslash before "://": while the file system is
+// registered its prefix would match, but after Unregister its URIs would be
+// local paths, see hasURIScheme, and writes would go to local files.
+func TestRegister_PrefixWithSeparatorBeforeScheme(t *testing.T) {
+	for _, prefix := range []string{"backup/s3://bucket", `backup\s3://bucket`} {
+		stdFS := NewStdFileSystemWithPrefix(stdfstest.MapFS{}, prefix, "std")
+		err := Register(stdFS)
+		require.ErrorIs(t, err, os.ErrInvalid, "Register with the prefix %q", prefix)
+		require.False(t, IsRegistered(stdFS))
 	}
 }

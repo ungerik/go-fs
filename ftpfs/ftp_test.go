@@ -1667,6 +1667,35 @@ func TestRemoveAll_GlobbedLISTKnownLimitation(t *testing.T) {
 	assert.True(t, srv.exists("/tree/a[b]/L"), "the link is kept")
 }
 
+// TestRemoveAll_ForgedDirectoryWithoutMLST checks RemoveAll on a server
+// without MLST support, where LIST is all that tells a directory from
+// a link: a forged line that lists a directory with the name of a link to
+// a directory outside of the tree, before the link's own line, makes
+// RemoveAll refuse the directory instead of deleting the files below the
+// link's target. Also for a link whose name contains " -> ", which the
+// client library lists by the part before the arrow.
+func TestRemoveAll_ForgedDirectoryWithoutMLST(t *testing.T) {
+	for _, linkName := range []string{"L", "a -> b"} {
+		t.Run(linkName, func(t *testing.T) {
+			srv := newTestFTPServer(t)
+			srv.writeFile("/outside/keep.txt", "keep")
+			srv.writeFile("/tree/file.txt", "data")
+			srv.symlink("/outside", "/tree/"+linkName)
+			srv.configure(func(s *testFTPServer) {
+				s.noMLST = true
+				s.listForged["/tree/"+linkName] = 1
+				s.listForgedFirst = true
+			})
+			ftpFS := dialInProcess(t, srv)
+
+			err := ftpFS.RemoveAll(t.Context(), "/tree")
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "entries named", "the listing has two entries with the name")
+			assert.True(t, srv.exists("/outside/keep.txt"), "the file below the link's target is kept")
+		})
+	}
+}
+
 // TestRemoveAll_RelativePath checks RemoveAll of a relative path on a
 // server with MLST support, which resolves it against the working
 // directory after the login: the connection for LIST changes to the

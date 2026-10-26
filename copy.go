@@ -70,13 +70,18 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf []byte, per
 	}
 	// If dest is no directory, copyFileTo doesn't have to check it again,
 	// every Stat is a round trip on a remote file system
-	destIsDir := dest.IsDir()
-	if destIsDir {
-		dest = dest.Join(src.Name())
-	}
 	srcPerm, err := checkCopySource(src)
 	if err != nil {
 		return err
+	}
+	destIsDir := dest.IsDir()
+	if destIsDir {
+		// A name like `..\x` of a source with another separator,
+		// or "NUL" on Windows, would be written outside of dest
+		if name := src.Name(); !isValidNameIn(dest, name) {
+			return fmt.Errorf("%w: can't copy %s into %s, the name %q is not valid there", os.ErrInvalid, errSubject(src), errSubject(dest), name)
+		}
+		dest = dest.Join(src.Name())
 	}
 	return copyFileTo(ctx, src, srcPerm, dest, &buf, perm, true, !destIsDir)
 }

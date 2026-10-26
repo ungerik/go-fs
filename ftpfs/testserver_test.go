@@ -62,6 +62,7 @@ type testFTPServer struct {
 	failListContains string            // LIST and MLSD of a path containing it fail with 550
 	listOmits        string            // LIST, not MLSD, of the parent directory leaves out the entry at this path
 	listForged       map[string]int    // LIST, not MLSD, of the parent directory adds this many lines that list the entry at the path as a directory, like a file whose name contains a line feed followed by such a line
+	listForgedFirst  bool              // the lines of listForged come before the lines of the entries, like for a file whose name sorts first
 	globArgs         bool              // LIST expands glob characters in its path argument like ProFTPD with UseGlobbing and lists the first directory that matches
 	listArgPaths     bool              // LIST takes its argument for a path without parsing options like "-a", like ftpserverlib with DisableLISTArgs
 	pwdReply         string            // PWD is answered with this reply if not empty, like a 550 or a 257 with a relative path
@@ -832,7 +833,12 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 				for forged, n := range s.listForged {
 					if verb == "LIST" && path.Dir(forged) == p {
 						for range n {
-							lines = append(lines, listLine(&testFTPNode{isDir: true, modified: time.Now()}, path.Base(forged)))
+							line := listLine(&testFTPNode{isDir: true, modified: time.Now()}, path.Base(forged))
+							if s.listForgedFirst {
+								lines = append([]string{line}, lines...)
+							} else {
+								lines = append(lines, line)
+							}
 						}
 					}
 				}

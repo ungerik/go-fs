@@ -43,7 +43,12 @@
 // list another directory for a path with '*', '?' or '[': then ftpfs
 // describes the entries of that directory, and RemoveAll can take a link to
 // a directory for a directory in it and delete the files that the link
-// points to.
+// points to. RemoveAll refuses a directory whose name its listing lists
+// more than once, like for a file whose name contains a line feed followed
+// by a forged line. Servers among them that hide the names that begin with
+// a dot from LIST, like vsftpd with force_dot_files=NO, its default, hide
+// them from ftpfs too: Stat reports such a file as missing, ListDir,
+// ListDirRecursive and copies skip it, and RemoveAll of its directory fails.
 // Servers with MLST support describe a link with the facts of its target
 // or with a type that the FTP client library reads as a file, so ftpfs
 // can't tell their links from files and directories: ListDir describes
@@ -1357,6 +1362,28 @@ func (r *remover) removeFolder(dirPath string) error {
 	entries, err := r.c.List(dirPath)
 	if err != nil {
 		return err
+	}
+	// The FTP client library splits a listing into lines at every line
+	// feed, so a file whose name contains a line feed followed by a line
+	// that lists a directory adds a directory entry with any name, like
+	// the one of a symbolic link next to it, which the listing describes
+	// as a link. A directory entry whose name another entry lists too,
+	// see listsName, is not removed with its content, which could be the
+	// content of the link's target: on servers without MLST support the
+	// listing is all that tells a directory from a link.
+	for _, entry := range entries {
+		if entry.Type != ftp.EntryTypeFolder {
+			continue
+		}
+		listed := 0
+		for _, other := range entries {
+			if listsName(other, entry.Name) {
+				listed++
+			}
+		}
+		if listed > 1 {
+			return fmt.Errorf("ftpfs: not removing %s: its listing has %d entries named %q, like for a file whose name contains a line feed", r.f.JoinCleanFile(dirPath), listed, entry.Name)
+		}
 	}
 	for _, entry := range entries {
 		if entry.Name == "." || entry.Name == ".." {

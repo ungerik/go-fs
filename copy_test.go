@@ -1870,3 +1870,29 @@ func TestCopyAndMove_EmptyLocalPath(t *testing.T) {
 	}
 	requireContent(t, other.RootDir().Join("d", "f.txt"), "f")
 }
+
+// TestCopyFileAndMove_IntoDirectoryInvalidName checks that CopyFile and
+// Move into an existing directory refuse a source name that the directory's
+// file system doesn't take as one name: a name like `..\x` of a file system
+// with "/" as separator would leave the directory of a file system with
+// "\" as separator. The source is kept and nothing is written.
+func TestCopyFileAndMove_IntoDirectoryInvalidName(t *testing.T) {
+	srcFS, err := fs.NewMemFileSystem(nil, fs.NewMemFile(`/src/..\evil.txt`, []byte("evil")))
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(srcFS))
+	t.Cleanup(func() { fs.Unregister(srcFS) })
+	destFS, err := fs.NewMemFileSystem(&fs.MemFileSystemOptions{Separator: `\`})
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(destFS))
+	t.Cleanup(func() { fs.Unregister(destFS) })
+	require.NoError(t, destFS.MakeAllDirs(`\top\uploads`, 0))
+
+	src := srcFS.RootDir().Join("src", `..\evil.txt`)
+	destDir := destFS.RootDir().Join("top", "uploads")
+	err = fs.CopyFile(t.Context(), src, destDir)
+	require.ErrorIs(t, err, os.ErrInvalid, "CopyFile")
+	err = fs.Move(t.Context(), src, destDir)
+	require.ErrorIs(t, err, os.ErrInvalid, "Move")
+	require.True(t, src.Exists(), "the source is kept")
+	require.False(t, destFS.RootDir().Join("top", "evil.txt").Exists(), "nothing is written outside of the directory")
+}
