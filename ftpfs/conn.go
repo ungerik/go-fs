@@ -231,17 +231,6 @@ func (c *conn) begin(ctx context.Context) {
 	c.reads = c.ctrl.reads.Load()
 }
 
-// operationContext returns the context of the running operation,
-// which Close of the file system cancels.
-func (c *conn) operationContext() context.Context {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-	if c.ctx == nil {
-		return context.Background()
-	}
-	return c.ctx
-}
-
 // hasMLST reports whether the server supports MLST:
 // IsTimePreciseInList tells that the connection uses MLSD and MLST.
 func (c *conn) hasMLST() bool {
