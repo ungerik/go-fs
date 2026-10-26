@@ -7,6 +7,16 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ## [Unreleased]
 
+### Added
+
+- `fs.ValidNameFileSystem`, an optional interface with `ValidName(name)`
+  for file systems that can't write some names that their separator allows.
+  `fs.CopyRecursive`, `fs.Move` and `fs.CopyFile` into a directory check
+  the names of the source with it, also through a `SubFileSystem` or
+  `OverlayFileSystem` to the file system that gets the writes, so they fail
+  before they write anything instead of at the first such name.
+  `zipfs.Writer` implements it with its name rules.
+
 ### Changed
 
 - `fs.Zip` and `ZipMemFiles` reject the names that are not valid in a zip
@@ -19,15 +29,18 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   65535 bytes of a zip header. The name of a `FileReader` that is not a
   `MemFile` has to be a clean, slash separated path (`io/fs.ValidPath`, not
   `a//b.txt` or `dir/` for a file); the `FileName` of a `MemFile` is cleaned
-  as before. `archive/zip` writes all of these names. `zipfs.Writer` rejects
-  the same characters and lengths in its cleaned paths. Names that only
-  Windows can't extract, like `what?.txt`, are not checked.
-- `fs.UnzipToMemFiles` and `zipfs.Reader` convert an entry name without the
-  UTF-8 flag that is not valid UTF-8, like the umlauts of old Windows tools,
-  to UTF-8: from its Info-ZIP Unicode Path extra field if it has one, else
-  from CP-437, the encoding of such names. `archive/zip` returns the stored
-  bytes, which `ZipMemFiles` and `zipfs.Writer` now reject, so the MemFiles
-  and files of such an archive couldn't be zipped again.
+  as before. `archive/zip` writes all of these names, except a name that is
+  too long, which it rejects after adding it to the central directory.
+  `zipfs.Writer` rejects the same characters and lengths in its cleaned
+  paths. Names that only Windows can't extract, like `what?.txt`, are not
+  checked.
+- `fs.UnzipToMemFiles` and `zipfs.Reader` return entry names as UTF-8: a
+  name without the UTF-8 flag is taken from its Info-ZIP Unicode Path extra
+  field if it has one, else a name that is not valid UTF-8, like the umlauts
+  of old Windows tools, is converted from CP-437, the encoding of names
+  without the flag. `archive/zip` returns the stored bytes, which
+  `ZipMemFiles` and `zipfs.Writer` now reject, so the MemFiles and files of
+  such an archive couldn't be zipped again.
 
 ### Fixed
 
@@ -390,7 +403,8 @@ modules are tagged in lockstep, the `tools` module is not tagged.
 Second beta. It fixes the bugs of a full review of beta.1 (data loss,
 security, crashes) and settles the API decisions that freeze with v1.0.0.
 Most breaking changes fail to compile, so the compiler finds the call sites;
-`docs/MIGRATION_v1.md` lists them in "Upgrading from v1.0.0-beta.1". All
+`docs/MIGRATION_v1.md` of this release lists them in "Upgrading from
+v1.0.0-beta.1". All
 modules are tagged in lockstep, the `tools` module is not tagged.
 
 ### Changed

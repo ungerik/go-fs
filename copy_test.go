@@ -1896,3 +1896,45 @@ func TestCopyFileAndMove_IntoDirectoryInvalidName(t *testing.T) {
 	require.True(t, src.Exists(), "the source is kept")
 	require.False(t, destFS.RootDir().Join("top", "evil.txt").Exists(), "nothing is written outside of the directory")
 }
+
+// validNameFS is a MemFileSystem that can't write names starting with "bad".
+type validNameFS struct{ *fs.MemFileSystem }
+
+func (f validNameFS) ValidName(name string) error {
+	if strings.HasPrefix(name, "bad") {
+		return fmt.Errorf("%w: %q", os.ErrInvalid, name)
+	}
+	return nil
+}
+
+// TestCopyRecursive_ValidName verifies that a copy checks the names of the
+// source with the ValidName method of the destination before it writes
+// anything, also of the parent of a SubFileSystem, which gets the writes.
+func TestCopyRecursive_ValidName(t *testing.T) {
+	ctx := t.Context()
+	srcFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(srcFS))
+	t.Cleanup(func() { _ = srcFS.Close() })
+	src := srcFS.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	require.NoError(t, src.Join("ok.txt").WriteAllString(ctx, "ok"))
+	require.NoError(t, src.Join("bad.txt").WriteAllString(ctx, "bad"))
+
+	memFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	destFS := validNameFS{memFS}
+	require.NoError(t, fs.Register(destFS))
+	t.Cleanup(func() { fs.Unregister(destFS) })
+	view := destFS.RootDir().Join("view")
+	require.NoError(t, view.MakeDir())
+	sub, err := fs.NewSubFileSystem(destFS, "/view", "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(sub))
+	t.Cleanup(func() { _ = sub.Close() })
+
+	require.ErrorIs(t, fs.CopyRecursive(ctx, src, destFS.RootDir().Join("copy")), os.ErrInvalid)
+	require.ErrorIs(t, fs.CopyRecursive(ctx, src, sub.RootDir().Join("copy")), os.ErrInvalid)
+	require.False(t, destFS.RootDir().Join("copy").Exists(), "nothing was written")
+	require.False(t, view.Join("copy").Exists(), "nothing was written through the SubFileSystem")
+}

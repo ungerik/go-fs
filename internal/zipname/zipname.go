@@ -14,9 +14,15 @@ import (
 	"unicode/utf8"
 )
 
-// unicodePathExtraID is the ID of the Info-ZIP Unicode Path extra field,
-// which holds the UTF-8 version of a name that is stored in another encoding.
-const unicodePathExtraID = 0x7075
+const (
+	// unicodePathExtraID is the ID of the Info-ZIP Unicode Path extra field,
+	// which holds the UTF-8 version of a name that is stored in another encoding.
+	unicodePathExtraID = 0x7075
+
+	// utf8Flag is the bit of zip.FileHeader.Flags
+	// that marks the name and comment as UTF-8.
+	utf8Flag = 0x800
+)
 
 // cp437 holds the characters of the bytes 0x80 to 0xFF of code page 437,
 // the encoding of zip entry names without the UTF-8 flag.
@@ -25,8 +31,9 @@ var cp437 = []rune("ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥
 
 // Check returns an error wrapping os.ErrInvalid if name,
 // the slash separated name of a zip entry without the trailing slash
-// of a directory, is one that archive/zip writes although zip tools
-// read it wrong or the archive gets corrupt:
+// of a directory, is one that zip tools read wrong or that corrupts
+// the archive. archive/zip writes all of them, except a name that is
+// too long, which it rejects after adding it to the central directory:
 //   - a name longer than the 65535 bytes of a zip header,
 //     which also corrupts the central directory of the archive
 //   - a name that is not valid UTF-8, which zip readers decode as CP-437
@@ -52,7 +59,7 @@ func Check(name string, isDir bool) error {
 	case !utf8.ValidString(name):
 		// archive/zip writes it without the UTF-8 flag
 		return fmt.Errorf("%w: zip entry name %.200q is not valid UTF-8", os.ErrInvalid, name)
-	case strings.ContainsFunc(name, isFormatRune):
+	case strings.ContainsFunc(name, isDisguisingRune):
 		return fmt.Errorf("%w: zip entry name %.200q contains a control or formatting character", os.ErrInvalid, name)
 	case strings.Contains(name, ":"):
 		// fs.UnzipToMemFiles rejects it on Windows
@@ -61,11 +68,11 @@ func Check(name string, isDir bool) error {
 	return nil
 }
 
-// isFormatRune reports if r is a control character, a line or paragraph
-// separator, or a bidirectional embedding, override or isolate.
-// The left-to-right and right-to-left marks are not, they are part
-// of names in right-to-left scripts.
-func isFormatRune(r rune) bool {
+// isDisguisingRune reports if r can disguise a name when it is shown:
+// a control character, a line or paragraph separator, or a bidirectional
+// embedding, override or isolate. The left-to-right and right-to-left
+// marks are not, they are part of names in right-to-left scripts.
+func isDisguisingRune(r rune) bool {
 	switch {
 	case unicode.IsControl(r):
 		return true
@@ -80,15 +87,18 @@ func isFormatRune(r rune) bool {
 // Decode returns the name of the zip entry of header as UTF-8.
 // archive/zip returns the stored bytes of a name without converting them.
 //
-// A name that is not marked as UTF-8 (see zip.FileHeader.NonUTF8)
-// is taken from its Info-ZIP Unicode Path extra field, if it has one
-// for the stored name. Else a name that is valid UTF-8 is returned as it
-// is, because many zip tools write UTF-8 without the UTF-8 flag, and
-// any other name is decoded from CP-437, the encoding of the zip format
-// for names without the UTF-8 flag.
+// A name without the UTF-8 flag of the zip format, or that is not
+// valid UTF-8, is taken from its Info-ZIP Unicode Path extra field
+// if it has one for the stored name that agrees on being a directory,
+// like zip tools do. The field can name the entry differently than
+// the stored name, which header.Name keeps.
+// Else a name that is valid UTF-8 is returned as it is, because many
+// zip tools write UTF-8 without the UTF-8 flag, and any other name
+// is decoded from CP-437, the encoding of the zip format for names
+// without the UTF-8 flag.
 func Decode(header *zip.FileHeader) string {
 	name := header.Name
-	if header.NonUTF8 {
+	if header.Flags&utf8Flag == 0 || !utf8.ValidString(name) {
 		// Fields of a 2 byte ID and a 2 byte size,
 		// a Unicode Path field holds the version 1,
 		// the CRC-32 of the stored name and the UTF-8 name
@@ -101,11 +111,18 @@ func Decode(header *zip.FileHeader) string {
 			}
 			field := extra[4 : 4+size]
 			extra = extra[4+size:]
-			if id == unicodePathExtraID && len(field) > 5 && field[0] == 1 &&
-				binary.LittleEndian.Uint32(field[1:]) == crc32.ChecksumIEEE([]byte(name)) &&
-				utf8.Valid(field[5:]) {
+			if id != unicodePathExtraID {
+				continue
+			}
+			if len(field) > 5 && field[0] == 1 && utf8.Valid(field[5:]) &&
+				(field[len(field)-1] == '/') == strings.HasSuffix(name, "/") &&
+				binary.LittleEndian.Uint32(field[1:]) == crc32.ChecksumIEEE([]byte(name)) {
 				return string(field[5:])
 			}
+			// Zip tools write one Unicode Path field per entry.
+			// Only the first counts, so a long name is hashed once
+			// and not for each of thousands of fields
+			break
 		}
 	}
 	if utf8.ValidString(name) {

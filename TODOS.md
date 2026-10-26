@@ -180,23 +180,23 @@ empty" while the conformance suite requires the scheme.
 
 ## fs (core)
 
-### Check destination names before a copy or move between file systems
+### Implement ValidName in sftpfs, ftpfs, webdavfs and tarfs
 
-**What:** A copy or move into a file system that rejects some names, like
-the backslash rule of sftpfs, ftpfs and webdavfs, fails at the first such
-name, after the files before it were copied.
+**What:** A copy or move into sftpfs, ftpfs, webdavfs or a `tarfs.Writer`
+with a name that contains a backslash fails at the first such name, after
+the files before it were copied.
 
 **Why:** Moving from S3 or mem into sftpfs, ftpfs or webdavfs with a name
 containing a backslash leaves a partial copy that a retry trips over.
 
-**Context:** `treeCopier.checkSource` already checks the name of every entry
-of the source, also of empty directories and of files the patterns don't
-select, before the first write, with `treeCopier.validName` for separators
-and the local name rules. An optional backend interface like
-`ValidName(name string) error` would plug into `validName`; adding it is not
-breaking. The partial copy is documented in `docs/MIGRATION_v1.md`.
+**Context:** `fs.ValidNameFileSystem` exists since v1.0.0-rc.2:
+`treeCopier.checkSource` checks every name of the source with its
+`ValidName` before the first write, and `zipfs.Writer` implements it. The
+four backends reject a backslash (sftpfs, ftpfs and webdavfs unless
+`Options.AllowBackslashInNames`) and only need a `ValidName` that says so.
+The partial copy is documented in `docs/MIGRATION_v1.md`.
 
-**Effort:** M
+**Effort:** S
 **Priority:** P3
 **Depends on:** None
 

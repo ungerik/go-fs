@@ -4,10 +4,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	iofs "io/fs"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +146,7 @@ func TestZip_InvalidNames(t *testing.T) {
 		{"FileReader with trailing slash", FileReaderWithName(data, "dir/")},
 		{"FileReader with empty element", FileReaderWithName(data, "a//b.txt")},
 		{"FileReader with dot element", FileReaderWithName(data, "a/./b.txt")},
+		{"FileReader with long unclean name", FileReaderWithName(data, strings.Repeat("a/", 30000))},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
 			_, err := Zip(t.Context(), tc.file)
@@ -167,6 +171,19 @@ func TestZip_InvalidNames(t *testing.T) {
 	unzipped, err := UnzipToMemFiles(t.Context(), NewMemFile("x.zip", zipped))
 	require.NoError(t, err)
 	require.Equal(t, files[:2], unzipped)
+}
+
+// TestZip_WindowsDeviceNames verifies that Zip rejects device names
+// like CON only on Windows, where UnzipToMemFiles rejects them too.
+func TestZip_WindowsDeviceNames(t *testing.T) {
+	for _, name := range []string{"CON", "dir/nul"} {
+		_, err := ZipMemFiles(NewMemFile(name, []byte("x")))
+		if runtime.GOOS == "windows" {
+			require.ErrorIs(t, err, os.ErrInvalid, name)
+		} else {
+			require.NoError(t, err, name)
+		}
+	}
 }
 
 // TestZip_Modified checks that Zip takes the modification time from Stat.
@@ -317,6 +334,36 @@ func TestUnzipToMemFiles_CP437Names(t *testing.T) {
 	files, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", zipped))
 	require.NoError(t, err)
 	require.Equal(t, []MemFile{NewMemFile("dir/Müller.pdf", []byte("pdf"))}, files)
+}
+
+// TestUnzipToMemFiles_InsecureUnicodePath verifies that the names that
+// UnzipToMemFiles takes from the Info-ZIP Unicode Path extra field of an
+// entry are checked like stored names, so they can't escape a directory either.
+func TestUnzipToMemFiles_InsecureUnicodePath(t *testing.T) {
+	for _, name := range []string{"../evil.txt", "/abs.txt", `dir\evil.txt`} {
+		t.Run(name, func(t *testing.T) {
+			// Info-ZIP Unicode Path extra field of ID 0x7075 with the version 1,
+			// the CRC-32 of the stored name and the UTF-8 name
+			stored := "\x93vil.txt"
+			field := []byte{1}
+			field = binary.LittleEndian.AppendUint32(field, crc32.ChecksumIEEE([]byte(stored)))
+			field = append(field, name...)
+			extra := binary.LittleEndian.AppendUint16(nil, 0x7075)
+			extra = binary.LittleEndian.AppendUint16(extra, uint16(len(field))) //#nosec G115 -- short test names
+			extra = append(extra, field...)
+
+			var buf bytes.Buffer
+			zw := zip.NewWriter(&buf)
+			w, err := zw.CreateHeader(&zip.FileHeader{Name: stored, NonUTF8: true, Extra: extra})
+			require.NoError(t, err)
+			_, err = w.Write([]byte("evil"))
+			require.NoError(t, err)
+			require.NoError(t, zw.Close())
+
+			_, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
+			require.ErrorIs(t, err, zip.ErrInsecurePath)
+		})
+	}
 }
 
 // TestUnzipToMemFiles_MaxSize is a regression test: UnzipToMemFiles had

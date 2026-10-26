@@ -371,7 +371,11 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // them and writes to another entry, and neither is a name with one of the
 // characters < > " | ? * or a control character, which Windows refuses, so
 // the copy of an S3 key like "report?.pdf" fails before it writes anything
-// instead of at that file. The names of all entries below src, also
+// instead of at that file. A name that the ValidName method of a
+// [ValidNameFileSystem] rejects is not valid either, for the file system
+// of dest and for the one that gets the writes through a [SubFileSystem]
+// or [OverlayFileSystem], like a name with a colon for a zipfs.Writer.
+// The names of all entries below src, also
 // of empty directories and of files that don't match the patterns, are checked
 // while src is listed for the links to directories, which happens for every
 // copy to another file system, so the copy fails before it writes anything,
@@ -444,7 +448,8 @@ type treeCopier struct {
 	links     SymbolicLinkFileSystem // if not nil, every symbolic link is copied as link within it
 	dirLinks  SymbolicLinkFileSystem // the destination if it can create the copies of links to directories
 	sameFS    bool                   // the source and the destination are the same file system
-	localDest bool                   // the destination writes to the local file system, see newTreeCopier
+	writeFS   FileSystem             // the file system that the writes to the destination go to, see newTreeCopier
+	localDest bool                   // writeFS is the local file system
 	move      bool                   // the copy of a move, whose destination didn't exist, see destDir
 	buf       []byte                 // copy buffer for all files, allocated on first use
 }
@@ -472,15 +477,16 @@ func newTreeCopier(ctx context.Context, srcFS, destFS FileSystem, patterns []str
 		patterns:  patterns,
 		dirLinks:  fsLinks(destFS),
 		sameFS:    srcFS == destFS,
+		writeFS:   writeFS,
 		localDest: localDest,
 	}
 }
 
 // validName reports if an entry of the source with name can be written
-// to destFS as one entry with that name: see isValidName,
-// and for a local destination isValidLocalName.
+// to destFS as one entry with that name: see isValidName, also for the
+// file system that the writes go to, and for a local one isValidLocalName.
 func (c *treeCopier) validName(destFS FileSystem, name string) bool {
-	return isValidName(destFS, name) && (!c.localDest || isValidLocalName(name))
+	return isValidName(destFS, name) && isValidName(c.writeFS, name) && (!c.localDest || isValidLocalName(name))
 }
 
 // writeTarget returns the file system and the path that a write to filePath

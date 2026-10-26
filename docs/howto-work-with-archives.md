@@ -157,9 +157,9 @@ Both packages read and write entries with the same rules:
   `archive/zip` does for its `io/fs` view, so an entry `..\..\evil.txt` is
   read as `evil.txt` and `fs.CopyRecursive` can't write outside of the
   destination. One unusual entry never makes the whole archive unreadable.
-  zipfs converts a name without the UTF-8 flag that is not valid UTF-8,
-  like the umlauts of old Windows tools, from CP-437 or takes it from its
-  Info-ZIP Unicode Path extra field.
+  zipfs takes a name without the UTF-8 flag from its Info-ZIP Unicode Path
+  extra field if it has one, else it converts a name that is not valid
+  UTF-8, like the umlauts of old Windows tools, from CP-437.
 - **A later entry replaces an earlier one** with the same path, like
   extracting the archive would, also when one is a file and the other a
   directory.
@@ -226,7 +226,8 @@ data, err := fs.ZipMemFiles(
 
 Both use `flate.BestCompression` and build the whole archive in memory.
 An entry name that is not valid in a zip archive is an error wrapping
-`os.ErrInvalid`, so every archive they write can be unzipped again: an empty
+`os.ErrInvalid`, so `fs.UnzipToMemFiles` can unzip every archive they write
+on the same operating system: an empty
 name, a name that `fs.UnzipToMemFiles` would reject because it is absolute,
 escapes with `..` or contains a backslash, a name that is not valid UTF-8 or
 contains a control character, a bidirectional formatting character that
@@ -234,9 +235,11 @@ can disguise an extension (`evil\u202etxt.exe`) or a colon (a drive letter
 on Windows), and a name longer than 65535 bytes. The `FileName` of a
 `MemFile` is cleaned first; the name of another `FileReader` has to be a
 clean slash separated path (`io/fs.ValidPath`). `archive/zip` itself writes
-all of them. Names that only Windows can't extract, like `what?.txt`,
-`name.` or names that differ only in case, are not checked, and device names
-like `NUL` only on Windows.
+all of them, except a name that is too long, which it rejects after adding it
+to the central directory. Names that only Windows can't extract, like
+`what?.txt`, `name.` or names that differ only in case, are not checked, and
+device names like `NUL` only on Windows, where `fs.UnzipToMemFiles` rejects
+an archive with such a name.
 
 ## Unzip in memory
 
@@ -252,8 +255,9 @@ for _, mf := range memFiles {
 
 Directory entries are skipped. `FileName` keeps the full path from the archive,
 so it may contain slashes. A name that the archive stores in CP-437, like the
-umlauts of old Windows tools, is converted to UTF-8, so the `MemFile`s can be
-zipped again.
+umlauts of old Windows tools, is converted to UTF-8, or taken from its Info-ZIP
+Unicode Path extra field. Names are not checked like the names `fs.Zip`
+writes, so a name with a colon or a control character can't be zipped again.
 
 This reads every entry into memory at once. For a large archive use
 `zipfs.NewReader` and pull out only what you need.

@@ -342,6 +342,34 @@ func TestZipReader_CP437Names(t *testing.T) {
 	assert.Equal(t, []string{"dir/", "dir/Müller.pdf"}, zipEntryNames(t, copied))
 }
 
+// TestZipWriter_ValidName is a regression test: a copy or move into a
+// zipfs.Writer failed at the first name that the writer rejects, like a
+// name with a colon, and left the files copied until then in the archive.
+func TestZipWriter_ValidName(t *testing.T) {
+	ctx := t.Context()
+	memFS := newMemFS(t)
+	src := memFS.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	for _, name := range []string{"a.txt", "b:c.txt", "z.txt"} {
+		require.NoError(t, src.Join(name).WriteAll(ctx, []byte(name)))
+	}
+	zipFile := memFS.RootDir().Join("copy.zip")
+	zipWriter, err := NewWriter(zipFile, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(zipWriter))
+
+	assert.NoError(t, zipWriter.ValidName("a.txt"))
+	for _, name := range []string{"b:c.txt", `a\b.txt`, "a\x00b", "evil\u202etxt.exe", "\xff.txt"} {
+		assert.ErrorIs(t, zipWriter.ValidName(name), os.ErrInvalid, "%q", name)
+	}
+
+	assert.ErrorIs(t, fs.CopyRecursive(ctx, src, zipWriter.RootDir().Join("copy")), os.ErrInvalid)
+	assert.ErrorIs(t, fs.Move(ctx, src, zipWriter.RootDir().Join("moved")), os.ErrInvalid)
+	assert.True(t, src.Join("a.txt").Exists(), "the source of a failed move is kept")
+	require.NoError(t, zipWriter.Close())
+	assert.Empty(t, zipEntryNames(t, zipFile), "nothing was written before the failures")
+}
+
 // TestZipWriter_Abort verifies that an aborted entry writer writes no entry.
 func TestZipWriter_Abort(t *testing.T) {
 	zipFile := newMemFS(t).RootDir().Join("abort.zip")

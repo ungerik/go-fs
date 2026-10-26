@@ -129,6 +129,7 @@ are only called on file systems that report themselves as writable.
 | `RemoveAllFileSystem`    | `RemoveAll`        | Recursive listing plus `Remove`. A path that does not exist is not an error, and entries removed concurrently are ignored. |
 | `CopyFileSystem`         | `CopyFile`         | `OpenReader` streamed into `OpenWriter` through a 4 MiB buffer. `destFile` is always the final path, never a directory to copy into. |
 | `MoveFileSystem`         | `Move(ctx, filePath, destPath)` | A copy of the file or directory tree, then the removal of the source after the copy succeeded. `destPath` is always the final path, never a directory to move into. |
+| `ValidNameFileSystem`    | `ValidName`        | Every name without a separator that is not empty, `.` or `..` counts as valid. `CopyRecursive`, `Move` and `CopyFile` into a directory check the names of the source with `ValidName` before they write anything, also through a `SubFileSystem` or `OverlayFileSystem` to the file system that gets the writes; without it a name that the backend rejects fails the copy at that file. |
 
 There is no rename interface: `File.Rename` is a `Move` within the directory,
 so it uses the native `Move` where the backend has one.
@@ -263,7 +264,8 @@ and `ListDirRecursive`.
 The archive and request-scoped backends implement a mode-dependent subset:
 `zipfs.Reader` and `tarfs.Reader` provide `Exists`, `ReadAll` and
 `ListDirRecursive`; the writers provide `Touch` and `MakeAllDirs`
-(`tarfs.Writer` also `WriteAll`); `multipartfs` is read-only and provides
+(`tarfs.Writer` also `WriteAll`, `zipfs.Writer` also `ValidName`);
+`multipartfs` is read-only and provides
 `Exists` and `ReadAll`.
 
 ## The path contract

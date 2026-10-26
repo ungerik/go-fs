@@ -86,10 +86,10 @@ set of files into a byte slice without a file system.
   leave the archive are removed when reading, like `archive/zip` does for its
   `io/fs` view, so no entry can be extracted outside of the destination. A
   later entry replaces an earlier one with the same path. A name without the
-  UTF-8 flag of the zip format that is not valid UTF-8, like the umlauts
-  of old Windows tools, is converted from CP-437, the encoding of such
-  names, or taken from its Info-ZIP Unicode Path extra field; `archive/zip`
-  returns the stored bytes.
+  UTF-8 flag of the zip format is taken from its Info-ZIP Unicode Path extra
+  field if it has one, else a name that is not valid UTF-8, like the umlauts
+  of old Windows tools, is converted from CP-437, the encoding of names
+  without the flag; `archive/zip` returns the stored bytes.
 - **Writer.** Each file is buffered in memory until its writer is closed,
   then it is compressed into the archive, so several files can be written at
   the same time. The writers implement `fs.WriteAborter`, `Abort` discards
@@ -97,11 +97,14 @@ set of files into a byte slice without a file system.
   returns an error wrapping `os.ErrExist`, so an archive never gets duplicate
   entries. `MakeDir` writes a directory entry, so empty directories are kept.
   A path that is not valid in a zip archive returns an error wrapping
-  `os.ErrInvalid`, like in `fs.Zip`: a backslash, invalid UTF-8, a control
-  character like NUL, a bidirectional formatting character that can
-  disguise an extension, a colon, which marks a drive letter on Windows, or
-  more than 65535 bytes. Paths are cleaned first, and names that only
-  Windows can't extract, like `NUL` or `what?.txt`, are not checked.
+  `os.ErrInvalid`: a backslash, invalid UTF-8, a control character like
+  NUL, a bidirectional formatting character that can disguise an extension,
+  a colon, which marks a drive letter on Windows, or more than 65535 bytes.
+  Paths are cleaned first, and names that only Windows can't extract, like
+  `NUL` or `what?.txt`, are not checked, also not on Windows like by
+  `fs.Zip`. The writer implements `fs.ValidNameFileSystem`, so a copy or
+  move into it checks every name of the source first and fails before it
+  writes anything.
   `Close` writes the central directory — an archive whose writer was not
   closed is incomplete.
 - **Permissions and times.** Written entries get the current time and the

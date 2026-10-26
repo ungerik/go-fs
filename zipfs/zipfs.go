@@ -14,9 +14,11 @@
 //     and ".." elements that would leave the root are removed, so
 //     `..\..\evil.txt` is read as "evil.txt". No entry can address
 //     a path outside of the archive when it is extracted.
-//   - A name without the UTF-8 flag of the zip format that is not
-//     valid UTF-8 is converted to UTF-8 from CP-437, the encoding of
-//     such names, or taken from its Info-ZIP Unicode Path extra field.
+//   - A name without the UTF-8 flag of the zip format is taken from
+//     its Info-ZIP Unicode Path extra field if it has one, else a name
+//     that is not valid UTF-8 is converted to UTF-8 from CP-437,
+//     the encoding of names without the flag. The *zip.FileHeader
+//     of FileInfo.Sys keeps the stored name.
 //   - A later entry replaces an earlier one with the same path, like
 //     extracting the archive would, also when one of them is a file and
 //     the other a directory. Directories that are only implied by the
@@ -39,6 +41,8 @@
 //     bidirectional formatting character or a colon, and names longer
 //     than 65535 bytes. All of them are errors wrapping os.ErrInvalid.
 //     Names that only Windows can't extract are not checked.
+//     The Writer implements fs.ValidNameFileSystem, so fs.CopyRecursive
+//     and fs.Move into the archive fail before they write anything.
 //   - Entries get the current time and the passed permissions,
 //     or DefaultPermissions and DefaultDirPermissions if none are passed.
 //   - A file is buffered in memory until its writer is closed, then it is
@@ -90,6 +94,7 @@ var (
 	_ fs.WriteFileSystem            = new(Writer)
 	_ fs.TouchFileSystem            = new(Writer)
 	_ fs.MakeAllDirsFileSystem      = new(Writer)
+	_ fs.ValidNameFileSystem        = new(Writer)
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -491,6 +496,22 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	default:
 		return fs.NewErrAlreadyExists(f.file(filePath))
 	}
+}
+
+// ValidName returns an error wrapping os.ErrInvalid if name, the name
+// of a directory entry, can't be written to the archive: if it contains
+// a backslash or is not valid in a zip archive, see fs.Zip.
+// fs.CopyRecursive and fs.Move check the names of their source with it,
+// so a copy into the archive fails before it writes anything.
+// The length of a whole path is checked when it is written.
+func (f *Writer) ValidName(name string) error {
+	if _, err := dirtree.Elements(name); err != nil {
+		return fmt.Errorf("zipfs: %w", err)
+	}
+	if err := zipname.Check(name, false); err != nil {
+		return fmt.Errorf("zipfs: %w", err)
+	}
+	return nil
 }
 
 // Stat is not possible for an archive that is being written.

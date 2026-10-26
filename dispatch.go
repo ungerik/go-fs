@@ -903,7 +903,8 @@ func isSubPath(fileSystem FileSystem, dirPath, filePath string) bool {
 }
 
 // isValidName reports if name can be the name of a directory entry
-// of fileSystem: not empty, not "." or ".." and without a separator.
+// of fileSystem: not empty, not "." or ".." and without a separator,
+// and accepted by the ValidName method of a ValidNameFileSystem.
 // A slash is a separator for every file system,
 // because CleanPath treats it as one.
 func isValidName(fileSystem FileSystem, name string) bool {
@@ -912,6 +913,9 @@ func isValidName(fileSystem FileSystem, name string) bool {
 		return false
 	case strings.Contains(name, "/"), strings.Contains(name, fileSystem.Separator()):
 		return false
+	}
+	if v, ok := fileSystem.(ValidNameFileSystem); ok {
+		return v.ValidName(name) == nil
 	}
 	return true
 }

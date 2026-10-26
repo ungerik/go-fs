@@ -441,14 +441,17 @@ func hasURIScheme(s string) bool {
 }
 
 // isValidNameIn reports if name is valid for an entry of the directory dir,
-// see isValidName, and also for the local file system, see
-// isValidLocalName, if the writes to dir go to the local file system.
+// see isValidName, also for the file system that the writes to dir go to,
+// and for the local file system also isValidLocalName.
 func isValidNameIn(dir File, name string) bool {
 	dirFS, dirPath := dir.ParseRawURI()
 	if !isValidName(dirFS, name) {
 		return false
 	}
 	if target, _, _, ok := writeTarget(dirFS, dirPath); ok {
+		if !isValidName(target, name) {
+			return false
+		}
 		if _, local := target.(*LocalFileSystem); local {
 			return isValidLocalName(name)
 		}

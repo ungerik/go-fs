@@ -296,15 +296,17 @@ exact signatures. Changes compared to v0.1:
   `os.ErrInvalid`, where v0.1 wrote every name: empty names, names that
   escape with `..`, absolute names, names with a backslash, a colon (a drive
   letter on Windows), a control character like NUL or a bidirectional
-  formatting character, names that are not valid UTF-8, names longer than
-  65535 bytes, and names of other `FileReader`s that are not a clean slash
-  separated path. The zipfs writer rejects the same characters and lengths
-  in its cleaned paths. `UnzipToMemFiles` returns no empty `MemFile`s for
+  formatting character, names that are not valid UTF-8, and names of other
+  `FileReader`s that are not a clean slash separated path; the error of a
+  name longer than 65535 bytes wraps `os.ErrInvalid` too. The zipfs writer
+  rejects the same characters and lengths in its cleaned paths, also before
+  a copy or move into it writes anything. `UnzipToMemFiles` returns no empty
+  `MemFile`s for
   directory entries, skips symbolic links, rejects names that would leave
   the directory they are extracted to with `zip.ErrInsecurePath` and reads
-  at most `UnzipToMemFilesMaxSize` (1 GiB). It and the zipfs reader convert
-  a name without the UTF-8 flag that is not valid UTF-8 from CP-437 (or its
-  Info-ZIP Unicode Path extra field) to UTF-8, where v0.1 returned the
+  at most `UnzipToMemFilesMaxSize` (1 GiB). It and the zipfs reader return
+  names as UTF-8, from the Info-ZIP Unicode Path extra field of a name
+  without the UTF-8 flag or converted from CP-437, where v0.1 returned the
   stored bytes.
 - `zipfs.Reader` skips symbolic links, devices and FIFOs, which v0.1 listed
   as regular files with the stored data (the target of a link) as content.

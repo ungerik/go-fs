@@ -383,6 +383,20 @@ type WatchFileSystem interface {
 	Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error)
 }
 
+// ValidNameFileSystem can be implemented by file systems that can't
+// write some names of entries that their separator allows, like the
+// names that are not valid in a zip archive. A copy or move into them
+// checks the names of the source with ValidName and fails before it
+// writes anything instead of at the first such name.
+type ValidNameFileSystem interface {
+	FileSystem
+
+	// ValidName returns an error wrapping os.ErrInvalid if name,
+	// the name of a directory entry without a separator,
+	// can't be written to the file system.
+	ValidName(name string) error
+}
+
 // HiddenFileSystem can be implemented by file systems
 // with a definition of hidden files that differs from
 // the default of names beginning with a dot.
