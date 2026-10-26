@@ -940,6 +940,12 @@ func TestBackslashInNames(t *testing.T) {
 	}
 	assert.Equal(t, before, listRoot(), "nothing may be created on the server")
 
+	if runtime.GOOS == "windows" {
+		// The in-process server runs on Windows here, where pkg/sftp takes
+		// a backslash for a separator like the servers on Windows that the
+		// default rule protects against; the opt-out is for servers on Unix
+		return
+	}
 	// Servers on Unix store a backslash as part of a name
 	opts := s.testOptions()
 	opts.AllowBackslashInNames = true
