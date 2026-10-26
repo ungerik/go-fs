@@ -26,7 +26,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   every other read-only identifier.
 - File URIs follow RFC 8089. `File.URI()` (was `File.URL()`) of a Windows path is
   `file:///C:/dir/file` instead of `file://C:/dir/file`, and of a UNC path
-  `file://server/share/file`. Parsing accepts `file://localhost/…`, on
+  `file://server/share/file`, of the servers `localhost` and `~`
+  `file:////localhost/share/file`, because `file://localhost/…` is a local
+  path and `file://~/…` the home directory. Parsing accepts `file://localhost/…`, on
   Windows also the old `file://C:/…` form, and maps `file://server/share/…`
   to the UNC path `\\server\share\…`. On other platforms a file URI with a
   host other than `localhost` resolves to the `Invalid` file system instead
@@ -39,7 +41,9 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   working directory can't be determined, is `file://./…`, which names no
   file. `file://` and `file://localhost` without a path have the empty path
   instead of the working directory: they resolve to the local file system,
-  whose operations fail for the empty path with `fs.ErrEmptyPath`. A Windows long path of a drive or a UNC
+  whose operations fail for the empty path with `fs.ErrEmptyPath`, and the
+  Files derived from them, like by `Join` or `Dir`, have the empty path too,
+  with the URI `file://`. A Windows long path of a drive or a UNC
   path keeps its prefix, `\\?\C:\x` has the URI `file:////?/C:/x` like in
   beta.3, because the prefix keeps names that Windows would normalize, like
   a trailing dot. Other paths of the device and file namespaces, like

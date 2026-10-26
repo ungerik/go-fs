@@ -44,6 +44,11 @@ func fsURI(fileSystem FileSystem, cleanPath string) string {
 // Files of the local file system have no prefix.
 func fsFile(fileSystem FileSystem, cleanPath string) File {
 	if _, ok := fileSystem.(*LocalFileSystem); ok {
+		if cleanPath == "" {
+			// The empty path of a file URI without a path, which names no
+			// file, see fileURILocalPath, File("") would be InvalidFile
+			return File(LocalPrefix)
+		}
 		return File(cleanPath)
 	}
 	if _, ok := fileSystem.(InvalidFileSystem); ok && cleanPath == "" {

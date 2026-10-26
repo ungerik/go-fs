@@ -355,7 +355,12 @@ signatures. Changes compared to v0.1:
   `\\.\x` and `\\?\x`). Convert stored relative file URIs to paths, or to
   absolute file URIs, before upgrading. `file://` and `file://localhost`
   without a path name no file (the empty path, `fs.ErrEmptyPath`), not the
-  working directory; `File("file://").Join("x")` is the relative path `x`. Windows long
+  working directory, and neither do the Files derived from them:
+  `File("file://").Join("x")` has the empty path too. `fs.CleanFilePath`,
+  `fs.JoinCleanFilePath` and `LocalFileSystem.CleanPath` decode the
+  percent-encoding of a file URI like `File`, also `%2F` and `%2E%2E`, which
+  become a separator and `..`: build file URIs with `File.URI()` or
+  `fsimpl.EscapeURIPath`, not with `"file://" + path`. Windows long
   paths keep their URI `file:////?/C:/x`; `file:///??/…` names no file.
 - Moves and `CopyRecursive` fail with `os.ErrExist` where two source names
   collide at the destination (case or Unicode normalization) instead of

@@ -898,15 +898,18 @@ func TestFileURILocalPath(t *testing.T) {
 // TestFileURIWithoutPath checks that a local file URI without a path names
 // no file: it resolves to the local file system with the empty path, whose
 // operations fail, not to the working directory like before v1.0.0, nor to
-// the root.
+// the root. The Files derived from it have the empty path too: a joined
+// part is not read as a path, a URI or a tilde of its own.
 func TestFileURIWithoutPath(t *testing.T) {
 	for _, uri := range []string{"file://", "file://localhost"} {
 		fileSystem, filePath := ParseRawURI(uri)
 		assert.Equal(t, Local, fileSystem, "ParseRawURI(%q) file system", uri)
 		assert.Equal(t, "", filePath, "ParseRawURI(%q) path", uri)
 		assert.Equal(t, "", Local.CleanPath(uri), "CleanPath(%q)", uri)
-		assert.Equal(t, "x", Local.CleanPath(uri, "x"), "CleanPath(%q, x) joins to the empty path", uri)
+		assert.Equal(t, "", Local.CleanPath(uri, "x"), "CleanPath(%q, x) doesn't join to the empty path", uri)
 		assert.Nil(t, Local.SplitPath(uri), "SplitPath(%q)", uri)
+		assert.Equal(t, "", Local.AbsPath(""), "AbsPath of the empty path")
+		assert.Equal(t, LocalPrefix, Local.URI(""), "URI of the empty path")
 
 		file := File(uri)
 		assert.False(t, file.Exists(), "%q exists", uri)
@@ -914,7 +917,22 @@ func TestFileURIWithoutPath(t *testing.T) {
 		assert.ErrorIs(t, err, ErrEmptyPath, "ReadAll of %q", uri)
 		err = file.WriteAll(t.Context(), []byte("x"))
 		assert.ErrorIs(t, err, ErrEmptyPath, "WriteAll of %q", uri)
-		assert.Equal(t, InvalidFile, CleanFilePath(uri), "CleanFilePath(%q)", uri)
+		assert.Equal(t, File(LocalPrefix), CleanFilePath(uri), "CleanFilePath(%q)", uri)
+		assert.Equal(t, File(LocalPrefix), JoinCleanFilePath(uri, "x"), "JoinCleanFilePath(%q, x)", uri)
+
+		assert.Equal(t, LocalPrefix, file.URI(), "URI of %q", uri)
+		assert.Equal(t, LocalPrefix, file.String(), "String of %q", uri)
+		assert.Equal(t, File(LocalPrefix), file.ToAbsPath(), "ToAbsPath of %q", uri)
+		assert.Equal(t, file, file.Dir(), "Dir of %q", uri)
+		dir, name := file.DirAndName()
+		assert.Equal(t, file, dir, "DirAndName of %q", uri)
+		assert.Equal(t, "", name, "DirAndName of %q", uri)
+		for _, part := range []string{"x", "", ".", "~/x", "file://localhost/etc/passwd", "file://server/share/x", "../x", "/etc/passwd"} {
+			joined := file.Join(part)
+			assert.Equal(t, "", joined.Path(), "%q.Join(%q) has the empty path", uri, part)
+			assert.Equal(t, Local, joined.FileSystem(), "%q.Join(%q) file system", uri, part)
+			assert.Equal(t, "", file.Joinf("%s", part).Path(), "%q.Joinf(%q) has the empty path", uri, part)
+		}
 	}
 }
 
@@ -994,6 +1012,22 @@ func TestFileURIPathOf(t *testing.T) {
 		}
 		assert.True(t, isLocal, "the URI %q of the long path %q is local", rest, slashPath)
 		assert.Equal(t, wantPath, gotPath, "the Windows path of the URI %q of %q", rest, slashPath)
+	}
+
+	// The UNC paths of the servers "localhost" and "~" keep the empty
+	// authority: "file://localhost/share/x" would be "/share/x" and
+	// "file://~/share/x" the home directory
+	for slashPath, wantRest := range map[string]string{
+		"//localhost/share/x": "//localhost/share/x",
+		"//LocalHost/c$/x":    "//LocalHost/c$/x",
+		"//~/share/x":         "//~/share/x",
+		"//localhostx/share":  "localhostx/share",
+	} {
+		rest := fileURIPathOf(slashPath, true)
+		assert.Equal(t, wantRest, rest, "fileURIPathOf(%q)", slashPath)
+		gotPath, isLocal := fileURILocalPath(rest, true)
+		assert.True(t, isLocal, "the URI %q of the UNC path %q is local on Windows", rest, slashPath)
+		assert.Equal(t, slashPath, gotPath, "the Windows path of the URI %q", rest)
 	}
 
 	// `\\?\C:` without a separator is no long path but the volume device

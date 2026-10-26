@@ -178,6 +178,7 @@ server in the authority:
 | `/etc/hosts`            | `file:///etc/hosts`           |
 | `C:\dir\file.txt`       | `file:///C:/dir/file.txt`     |
 | `\\server\share\x.txt`  | `file://server/share/x.txt`   |
+| `\\localhost\share\x`   | `file:////localhost/share/x`  |
 
 Parsing accepts `file://localhost/...` as a local path too, and on Windows
 the form `file://C:/dir/file.txt` written before v1.0.0. A URI with another
@@ -190,7 +191,12 @@ system, also on Windows, where it would be the device path `\\.\x`. A relative
 path that can't be made absolute, because the working directory can't be
 determined, has such a URI: `file://./data/x` names no file. `file://` and
 `file://localhost` without a path resolve to the local file system with the
-empty path, which names no file: its operations fail with `ErrEmptyPath`.
+empty path, which names no file: its operations fail with `ErrEmptyPath`, and
+the Files derived from it, like by `Join` or `Dir`, have the empty path and
+the URI `file://` too. The UNC paths of the servers `localhost` and `~` keep
+the empty authority, `\\localhost\share\x` has the URI
+`file:////localhost/share/x`, because `file://localhost/share/x` is the
+local path `/share/x` and `file://~/x` is in the home directory.
 
 On Windows the long paths of a drive or a UNC path keep their prefix:
 `\\?\C:\dir\name.` has the URI `file:////?/C:/dir/name.`, because the prefix

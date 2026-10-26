@@ -145,8 +145,21 @@ func (file File) Dir() File {
 // If filePath is the root of the file system, then an empty string will be returned for name.
 func (file File) DirAndName() (dir File, name string) {
 	fileSystem, path := file.ParseRawURI()
+	if isEmptyLocalPath(fileSystem, path) {
+		return file, ""
+	}
 	dirPath, name := fsSplitDirAndName(fileSystem, path)
 	return fsJoinCleanFile(fileSystem, dirPath), name
+}
+
+// isEmptyLocalPath reports if path of fileSystem is the empty path of the
+// local file system, the one of a file URI without a path like "file://",
+// which names no file, see [LocalFileSystem.CleanPath]: the Files derived
+// from it, like by Join or Dir, have the empty path too, else an empty path
+// would be the working directory and a joined part a path of its own.
+func isEmptyLocalPath(fileSystem FileSystem, path string) bool {
+	_, local := fileSystem.(*LocalFileSystem)
+	return local && path == ""
 }
 
 // VolumeName returns the name of the volume at the beginning of the file path,
@@ -216,6 +229,9 @@ func (file File) Join(pathParts ...string) File {
 		return file
 	}
 	fileSystem, path := file.ParseRawURI()
+	if isEmptyLocalPath(fileSystem, path) {
+		return file
+	}
 	if path != "" {
 		pathParts = append([]string{path}, pathParts...)
 	}
@@ -226,6 +242,9 @@ func (file File) Join(pathParts ...string) File {
 // The resulting URI path will be cleaned, removing relative directory names like "..".
 func (file File) Joinf(format string, args ...any) File {
 	fileSystem, path := file.ParseRawURI()
+	if isEmptyLocalPath(fileSystem, path) {
+		return file
+	}
 	return fsJoinCleanFile(fileSystem, path, fmt.Sprintf(format, args...))
 }
 
