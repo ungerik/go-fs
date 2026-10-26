@@ -690,7 +690,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	}
 	srcIsDir := srcInfo.IsDir && !srcInfo.IsSymlink
 	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
-	if _, name := fsSplitDirAndName(destFS, destPath); c.localDest && name != "" && !isValidLocalName(name) {
+	if _, name := fsSplitDirAndName(destFS, destPath); name != "" && (!c.validWriteName(destFS, name) || c.localDest && !isValidLocalName(name)) {
 		// Like the name of a device, the move would write to it
 		return errInvalidName(src, name, dest)
 	}

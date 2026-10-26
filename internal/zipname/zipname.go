@@ -98,7 +98,8 @@ func isDisguisingRune(r rune) bool {
 // without the UTF-8 flag.
 func Decode(header *zip.FileHeader) string {
 	name := header.Name
-	if header.Flags&utf8Flag == 0 || !utf8.ValidString(name) {
+	validUTF8 := utf8.ValidString(name)
+	if header.Flags&utf8Flag == 0 || !validUTF8 {
 		// Fields of a 2 byte ID and a 2 byte size,
 		// a Unicode Path field holds the version 1,
 		// the CRC-32 of the stored name and the UTF-8 name
@@ -125,7 +126,7 @@ func Decode(header *zip.FileHeader) string {
 			break
 		}
 	}
-	if utf8.ValidString(name) {
+	if validUTF8 {
 		return name
 	}
 	var decoded strings.Builder

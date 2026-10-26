@@ -11,10 +11,12 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 - `fs.ValidNameFileSystem`, an optional interface with `ValidName(name)`
   for file systems that can't write some names that their separator allows.
-  `fs.CopyRecursive`, `fs.Move` and `fs.CopyFile` into a directory check
-  the names of the source with it, also through a `SubFileSystem` or
-  `OverlayFileSystem` to the file system that gets the writes, so they fail
-  before they write anything instead of at the first such name.
+  `fs.CopyFile`, `fs.CopyRecursive`, `fs.Move`, `File.MoveTo` and
+  `File.Rename` check the names they write with it, also through a
+  `SubFileSystem` or `OverlayFileSystem` to the file system that gets the
+  writes, so they fail before they write anything instead of at the first
+  such name. `CopyRecursive` checks the files and links that match its
+  patterns, and every directory. Existing entries are read with every name.
   `zipfs.Writer` implements it with its name rules.
 
 ### Changed

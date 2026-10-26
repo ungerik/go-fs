@@ -41,8 +41,9 @@
 //     bidirectional formatting character or a colon, and names longer
 //     than 65535 bytes. All of them are errors wrapping os.ErrInvalid.
 //     Names that only Windows can't extract are not checked.
-//     The Writer implements fs.ValidNameFileSystem, so fs.CopyRecursive
-//     and fs.Move into the archive fail before they write anything.
+//     The Writer implements fs.ValidNameFileSystem, so fs.CopyFile,
+//     fs.CopyRecursive, fs.Move and File.Rename into the archive
+//     fail before they write anything.
 //   - Entries get the current time and the passed permissions,
 //     or DefaultPermissions and DefaultDirPermissions if none are passed.
 //   - A file is buffered in memory until its writer is closed, then it is
@@ -501,8 +502,9 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 // ValidName returns an error wrapping os.ErrInvalid if name, the name
 // of a directory entry, can't be written to the archive: if it contains
 // a backslash or is not valid in a zip archive, see fs.Zip.
-// fs.CopyRecursive and fs.Move check the names of their source with it,
-// so a copy into the archive fails before it writes anything.
+// fs.CopyFile, fs.CopyRecursive, fs.Move and File.Rename check the
+// names they write with it, so they fail before they write anything,
+// also for the parent directories of a new path.
 // The length of a whole path is checked when it is written.
 func (f *Writer) ValidName(name string) error {
 	if _, err := dirtree.Elements(name); err != nil {

@@ -366,6 +366,9 @@ func TestZipWriter_ValidName(t *testing.T) {
 	assert.ErrorIs(t, fs.CopyRecursive(ctx, src, zipWriter.RootDir().Join("copy")), os.ErrInvalid)
 	assert.ErrorIs(t, fs.Move(ctx, src, zipWriter.RootDir().Join("moved")), os.ErrInvalid)
 	assert.True(t, src.Join("a.txt").Exists(), "the source of a failed move is kept")
+	// A new path is checked before its parent directories are written
+	assert.ErrorIs(t, fs.CopyFile(ctx, src.Join("a.txt"), zipWriter.RootDir().Join("newdir", "x:y.txt")), os.ErrInvalid)
+	assert.ErrorIs(t, fs.Move(ctx, src.Join("a.txt"), zipWriter.RootDir().Join("moved", "c:d.txt")), os.ErrInvalid)
 	require.NoError(t, zipWriter.Close())
 	assert.Empty(t, zipEntryNames(t, zipFile), "nothing was written before the failures")
 }

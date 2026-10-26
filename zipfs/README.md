@@ -101,10 +101,10 @@ set of files into a byte slice without a file system.
   NUL, a bidirectional formatting character that can disguise an extension,
   a colon, which marks a drive letter on Windows, or more than 65535 bytes.
   Paths are cleaned first, and names that only Windows can't extract, like
-  `NUL` or `what?.txt`, are not checked, also not on Windows like by
-  `fs.Zip`. The writer implements `fs.ValidNameFileSystem`, so a copy or
-  move into it checks every name of the source first and fails before it
-  writes anything.
+  `NUL` or `what?.txt`, are not checked, also not on Windows, unlike by
+  `fs.Zip`, which rejects device names there. The writer implements
+  `fs.ValidNameFileSystem`, so a copy or move into it checks the names it
+  writes first and fails before it writes anything.
   `Close` writes the central directory — an archive whose writer was not
   closed is incomplete.
 - **Permissions and times.** Written entries get the current time and the

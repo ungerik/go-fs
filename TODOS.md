@@ -171,7 +171,8 @@ empty" while the conformance suite requires the scheme.
 **Why:** They are on betas, v0.1.0 or older pseudo-versions.
 
 **Context:** The list of dependents is tracked outside this repository.
-`docs/MIGRATION_v1.md` lists the changes; most of them fail to compile, so
+`docs/MIGRATION_v1.md` lists the changes from v0.1.0, `CHANGELOG.md` those
+of each beta and release candidate; most of them fail to compile, so
 `go build ./...` finds the call sites.
 
 **Effort:** L
@@ -211,8 +212,9 @@ after the files before it were copied, because `checkSource` only checks
 the names against the destination.
 
 **Context:** Check the names of the source with the same rule in
-`checkSource`, through the optional `ValidName` hook of "Check destination
-names before a copy or move between file systems".
+`checkSource`. `fs.ValidNameFileSystem` doesn't cover it: `ValidName` only
+checks the names that get written, existing entries are read with every
+name, so the source needs a read-side rule of its own.
 
 **Effort:** S
 **Priority:** P3

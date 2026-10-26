@@ -1304,6 +1304,9 @@ func (file File) Rename(ctx context.Context, newName string) (renamedFile File, 
 	}
 	dir, _ := fsSplitDirAndName(fileSystem, path)
 	newPath := fileSystem.CleanPath(dir, newName)
+	if target, _, _, ok := writeTarget(fileSystem, newPath); ok && !isValidWriteName(target, newName) {
+		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
+	}
 	err = fsMove(ctx, fileSystem, path, newPath)
 	if err != nil {
 		return "", err

@@ -191,6 +191,14 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 		return NewErrIsDirectory(dest)
 	}
 	if makeParentDirs {
+		// A file system like a zip writer can't remove directories,
+		// so the name of dest is checked before they are made
+		if _, name := fsSplitDirAndName(destFS, destPath); name != "" {
+			target, _, _, ok := writeTarget(destFS, destPath)
+			if !isValidWriteName(destFS, name) || ok && !isValidWriteName(target, name) {
+				return fmt.Errorf("%w: can't copy %q to %q, the name %q is not valid there", os.ErrInvalid, errSubject(src), errSubject(dest), name)
+			}
+		}
 		destDir := dest.Dir()
 		if err := destDir.MakeAllDirs(); err != nil {
 			return fmt.Errorf("CopyFile: can't make directory %q: %w", errSubject(destDir), err)
@@ -372,10 +380,11 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // characters < > " | ? * or a control character, which Windows refuses, so
 // the copy of an S3 key like "report?.pdf" fails before it writes anything
 // instead of at that file. A name that the ValidName method of a
-// [ValidNameFileSystem] rejects is not valid either, for the file system
-// of dest and for the one that gets the writes through a [SubFileSystem]
-// or [OverlayFileSystem], like a name with a colon for a zipfs.Writer.
-// The names of all entries below src, also
+// [ValidNameFileSystem] rejects is not valid either, like a name with a colon
+// for a zipfs.Writer, also for the file system that gets the writes through
+// a [SubFileSystem] or [OverlayFileSystem]. It is only checked for the
+// entries that the copy writes: directories and the files and links that
+// match the patterns. The names of all entries below src, also
 // of empty directories and of files that don't match the patterns, are checked
 // while src is listed for the links to directories, which happens for every
 // copy to another file system, so the copy fails before it writes anything,
@@ -483,11 +492,17 @@ func newTreeCopier(ctx context.Context, srcFS, destFS FileSystem, patterns []str
 }
 
 // validName reports if an entry of the source with name can be written
-// to destFS as one entry with that name: see isValidWriteName, also for
-// the file system that the writes go to, and for a local one
-// isValidLocalName.
+// to destFS as one entry with that name: see isValidName,
+// and for a local destination isValidLocalName.
 func (c *treeCopier) validName(destFS FileSystem, name string) bool {
-	return isValidWriteName(destFS, name) && isValidWriteName(c.writeFS, name) && (!c.localDest || isValidLocalName(name))
+	return isValidName(destFS, name) && (!c.localDest || isValidLocalName(name))
+}
+
+// validWriteName reports if the ValidName method of destFS and of the
+// file system that the writes go to accepts name, see isValidWriteName,
+// for an entry that the copy writes.
+func (c *treeCopier) validWriteName(destFS FileSystem, name string) bool {
+	return isValidWriteName(destFS, name) && (c.writeFS == destFS || isValidWriteName(c.writeFS, name))
 }
 
 // writeTarget returns the file system and the path that a write to filePath
@@ -630,7 +645,7 @@ func isValidWindowsName(name string) bool {
 // of the source that can't be copied to dest, because name, the name of src
 // or of dest, is not valid there.
 func errInvalidName(src File, name string, dest File) error {
-	return fmt.Errorf("%w: can't copy %s to %s, the name %q is not valid there", os.ErrInvalid, errSubject(src), errSubject(dest), name)
+	return fmt.Errorf("%w: can't copy %q to %q, the name %q is not valid there", os.ErrInvalid, errSubject(src), errSubject(dest), name)
 }
 
 // canCopyDirLinks reports if links to directories can be copied as links:
@@ -657,11 +672,15 @@ func (c *treeCopier) errDirLink(link, dest File) error {
 // copied to dest. Like copyDir, it checks the name of every entry, also of
 // an empty directory and of a file that doesn't match the patterns.
 // The tree is only listed if links to directories can't be copied, which
-// includes every copy to another file system. Within one file system that
-// copies them the names come from the destination itself, and copyDir
-// checks every name again before it writes the entry.
+// includes every copy to another file system, or if the destination is a
+// ValidNameFileSystem. Within one file system that copies links and
+// accepts every name it has the names come from the destination itself,
+// and copyDir checks every name again before it writes the entry.
 func (c *treeCopier) checkSource(src, dest File) error {
-	if c.links != nil || c.canCopyDirLinks() {
+	destFS, _ := dest.ParseRawURI()
+	_, destValidates := destFS.(ValidNameFileSystem)
+	_, writeValidates := c.writeFS.(ValidNameFileSystem)
+	if (c.links != nil || c.canCopyDirLinks()) && !destValidates && !writeValidates {
 		return nil
 	}
 	srcFS, srcPath := src.ParseRawURI()
@@ -687,16 +706,23 @@ func (c *treeCopier) checkSourceDir(srcFS FileSystem, dirPath string, dest File)
 		if !c.validName(destFS, info.Name) {
 			return errInvalidName(info.File, info.Name, dest)
 		}
+		// Directories and links copied as links are always written,
+		// files and other links only if they match the patterns
+		if (!info.IsDir || info.IsSymlink) && (!info.IsSymlink || c.links == nil) {
+			// CopyRecursive rejected malformed patterns before
+			match, err := fsimpl.MatchAnyPattern(info.Name, c.patterns)
+			if err != nil || !match {
+				return err
+			}
+		}
+		if !c.validWriteName(destFS, info.Name) {
+			return errInvalidName(info.File, info.Name, dest)
+		}
 		if info.IsDir && !info.IsSymlink {
 			return c.checkSourceDir(srcFS, info.File.Path(), dest)
 		}
-		if !info.IsSymlink {
+		if !info.IsSymlink || c.links != nil || c.canCopyDirLinks() {
 			return nil
-		}
-		// CopyRecursive rejected malformed patterns before
-		match, err := fsimpl.MatchAnyPattern(info.Name, c.patterns)
-		if err != nil || !match {
-			return err
 		}
 		// A link that can't be followed is an error of copyDir
 		target, err := fsStat(srcFS, info.File.Path())
@@ -756,15 +782,20 @@ func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 			return errInvalidName(info.File, info.Name, dest)
 		}
 		file, fileDest := info.File, dest.Join(info.Name)
+		if (!info.IsDir || info.IsSymlink) && (!info.IsSymlink || c.links == nil) {
+			match, err := fsimpl.MatchAnyPattern(info.Name, c.patterns)
+			if err != nil || !match {
+				return err
+			}
+		}
+		if !c.validWriteName(destFS, info.Name) {
+			return errInvalidName(info.File, info.Name, dest)
+		}
 		if info.IsSymlink && c.links != nil {
 			return dir.recordWrite(fileDest, c.copyLink(file, fileDest))
 		}
 		if info.IsDir && !info.IsSymlink {
 			return dir.recordWrite(fileDest, c.copyDir(file, fileDest, dir))
-		}
-		match, err := fsimpl.MatchAnyPattern(info.Name, c.patterns)
-		if err != nil || !match {
-			return err
 		}
 		perm := info.Permissions
 		if info.IsSymlink {

@@ -2001,3 +2001,53 @@ func TestValidName_WritesOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "bad", data)
 }
+
+// TestValidName_CopyPaths verifies the ValidName checks of the copy paths
+// that review found unchecked: a copy within one ValidNameFileSystem that
+// copies links, CopyFile, Move and Rename through a SubFileSystem, which
+// must check the parent that gets the writes, and CopyRecursive with
+// patterns, which must not reject a file that it doesn't copy.
+func TestValidName_CopyPaths(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	base := validNameFS{memFS}
+	require.NoError(t, fs.Register(base))
+	t.Cleanup(func() { fs.Unregister(base) })
+	src := base.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	for _, name := range []string{"ok.pdf", "bad.txt"} {
+		require.NoError(t, src.Join(name).WriteAllString(ctx, name))
+	}
+
+	// Within one file system that copies links
+	require.ErrorIs(t, fs.CopyRecursive(ctx, src, base.RootDir().Join("dst")), os.ErrInvalid)
+	require.False(t, base.RootDir().Join("dst").Exists(), "nothing was written")
+
+	// Patterns: the file that isn't copied isn't checked
+	require.NoError(t, fs.CopyRecursive(ctx, src, base.RootDir().Join("pdfs"), "*.pdf"))
+	require.True(t, base.RootDir().Join("pdfs", "ok.pdf").Exists())
+	require.False(t, base.RootDir().Join("pdfs", "bad.txt").Exists())
+
+	// Through a SubFileSystem, whose parent gets the writes
+	require.NoError(t, base.RootDir().Join("view").MakeDir())
+	require.NoError(t, base.RootDir().Join("view", "x.txt").WriteAllString(ctx, "x"))
+	sub, err := fs.NewSubFileSystem(base, "/view", "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(sub))
+	t.Cleanup(func() { _ = sub.Close() })
+	otherFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(otherFS))
+	t.Cleanup(func() { _ = otherFS.Close() })
+	badSrc := otherFS.RootDir().Join("bad.txt")
+	require.NoError(t, badSrc.WriteAllString(ctx, "bad"))
+	require.ErrorIs(t, fs.CopyFile(ctx, badSrc, sub.RootDir()), os.ErrInvalid)
+	require.ErrorIs(t, fs.Move(ctx, badSrc, sub.RootDir()), os.ErrInvalid)
+	require.ErrorIs(t, fs.CopyFile(ctx, badSrc, sub.RootDir().Join("new", "bad.txt")), os.ErrInvalid)
+	require.True(t, badSrc.Exists(), "the source of a failed move is kept")
+	require.False(t, base.RootDir().Join("view", "bad.txt").Exists(), "nothing was written")
+	require.False(t, base.RootDir().Join("view", "new").Exists(), "no parent directory was made")
+	_, err = sub.RootDir().Join("x.txt").Rename(ctx, "bad.txt")
+	require.ErrorIs(t, err, os.ErrInvalid)
+}

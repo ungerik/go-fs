@@ -91,9 +91,10 @@ func addZipEntry(ctx context.Context, zipWriter *zip.Writer, file FileReader, co
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Error messages quote at most 200 characters of a name
 	info, err := file.Stat()
 	if err != nil {
-		return fmt.Errorf("failed to stat %s: %w", file.Name(), err)
+		return fmt.Errorf("failed to stat %.200q: %w", file.Name(), err)
 	}
 	var name string
 	switch f := file.(type) {
@@ -104,7 +105,6 @@ func addZipEntry(ctx context.Context, zipWriter *zip.Writer, file FileReader, co
 	default:
 		name = file.Name()
 	}
-	// Error messages quote at most 200 characters of a name
 	if name == "" {
 		return fmt.Errorf("can't zip %.200q: %w: zip entry name is empty", errSubject(file), os.ErrInvalid)
 	}
@@ -125,22 +125,22 @@ func addZipEntry(ctx context.Context, zipWriter *zip.Writer, file FileReader, co
 		header.Method = zip.Store
 		_, err = zipWriter.CreateHeader(header)
 		if err != nil {
-			return fmt.Errorf("failed to create zip header for %s: %w", name, err)
+			return fmt.Errorf("failed to create zip header for %.200q: %w", name, err)
 		}
 		return nil
 	}
 	w, err := zipWriter.CreateHeader(header)
 	if err != nil {
-		return fmt.Errorf("failed to create zip header for %s: %w", name, err)
+		return fmt.Errorf("failed to create zip header for %.200q: %w", name, err)
 	}
 	r, err := file.OpenReader()
 	if err != nil {
-		return fmt.Errorf("failed to open reader for %s: %w", name, err)
+		return fmt.Errorf("failed to open reader for %.200q: %w", name, err)
 	}
 	err = copyBuffer(ctx, w, r, copyBuf)
 	err = errors.Join(err, r.Close())
 	if err != nil {
-		return fmt.Errorf("failed to zip file %s: %w", name, err)
+		return fmt.Errorf("failed to zip file %.200q: %w", name, err)
 	}
 	return nil
 }
