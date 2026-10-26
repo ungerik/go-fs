@@ -38,10 +38,6 @@ func hasStatus(err error, code int) bool {
 // isPermissionDenied reports whether err is a 403 Forbidden response.
 func isPermissionDenied(err error) bool { return hasStatus(err, http.StatusForbidden) }
 
-// isPreconditionFailed reports whether err is a 412 Precondition Failed
-// response, like the ConditionNotMet answer to a failed If-Match.
-func isPreconditionFailed(err error) bool { return hasStatus(err, http.StatusPreconditionFailed) }
-
 var (
 	// urlQuery matches URLs with a query in error messages,
 	// the query can carry the signature of a SAS token.

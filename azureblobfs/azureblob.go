@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -699,14 +700,6 @@ func (f *fileSystem) changedError(name, action string, err error) error {
 	return fmt.Errorf("azureblobfs: %s changed while it was being %s: %w", f.file(name), action, err)
 }
 
-// destChangedError is returned by Move for the blob dest that another client
-// created, replaced or deleted after Move checked it, so that the copy of
-// src to it failed its destination condition with err. The error wraps an
-// fs.ErrAlreadyExists for dest, and with it os.ErrExist, and err.
-func (f *fileSystem) destChangedError(src, dest string, err error) error {
-	return fmt.Errorf("azureblobfs: can't move %s, its destination was created or changed during the move: %w: %w", f.file(src), fs.NewErrAlreadyExists(f.file(dest)), err)
-}
-
 // OpenWriter returns a writer that streams the written data to an upload
 // started by the first Write: blocks of 4 MiB are staged while the data
 // is written and committed on Close, smaller data is uploaded with a single
@@ -1028,7 +1021,14 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		return err
 	}
 	if listed {
-		return f.deleteBlobs(ctx, below)
+		// The listed blobs are deleted whatever version they have now,
+		// a missing one is no error
+		for _, b := range below {
+			if err = f.deleteBlob(ctx, b.name, nil); err != nil && !isNotFound(err) {
+				return err
+			}
+		}
+		return nil
 	}
 	pager := f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: new(name + Separator)})
 	for pager.More() {
@@ -1044,18 +1044,6 @@ func (f *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 			if err != nil && !isNotFound(err) {
 				return err
 			}
-		}
-	}
-	return nil
-}
-
-// deleteBlobs deletes the listed blobs, whatever version they have now,
-// a missing one is no error.
-func (f *fileSystem) deleteBlobs(ctx context.Context, blobs []listedBlob) error {
-	for _, b := range blobs {
-		err := f.deleteBlob(ctx, b.name, nil)
-		if err != nil && !isNotFound(err) {
-			return err
 		}
 	}
 	return nil
@@ -1196,14 +1184,14 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 // changed since is an error telling that it changed while it was being
 // moved: before its copy Move copies and deletes nothing more, after its
 // copy it keeps the blob and those not deleted yet. A destination that
-// fails destCond is an error wrapping os.ErrExist (destChangedError), a blob
-// that was deleted before its copy one wrapping os.ErrNotExist, both copy
-// and delete nothing more. A blob that was deleted after its copy is no error:
-// after a 412 answer to its delete moveBlobs looks the blob up and goes on
-// if it is gone. Else a 412 ConditionNotMet answer means that the blob
-// changed, other 412 answers, like LeaseIdMissing, are returned as they are.
-// A destination that failed destCond but is the completed copy of the blob
-// (isCopyOf) counts as copied: the SDK retried a copy whose answer was lost.
+// fails destCond is an error wrapping fs.ErrAlreadyExists (os.ErrExist),
+// a blob that was deleted before its copy one wrapping os.ErrNotExist,
+// both copy and delete nothing more. A blob that was deleted after its copy
+// is no error: after a 412 answer to its delete moveBlobs looks the blob up
+// and goes on if it is gone. Else a 412 ConditionNotMet answer means that
+// the blob changed, other 412 answers, like LeaseIdMissing, are returned as
+// they are. A destination that failed destCond but is the completed copy of
+// the blob counts as copied: the SDK retried a copy whose answer was lost.
 func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, dest string, destCond *blob.ModifiedAccessConditions) error {
 	for _, b := range blobs {
 		target := dest + strings.TrimPrefix(b.name, src)
@@ -1219,8 +1207,16 @@ func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, des
 		case (b.etag != nil || destCond != nil) && bloberror.HasCode(err, bloberror.ConditionNotMet):
 			// A failed destination condition is answered with ConditionNotMet,
 			// by Azurite also a failed source condition, which Azure answers
-			// with SourceConditionNotMet. Then the source tells which failed.
-			if destCond == nil || (b.etag != nil && f.blobChanged(ctx, b.name, b.etag)) {
+			// with SourceConditionNotMet. Then the source tells which failed:
+			// without destCond it is the source condition, else the source
+			// failed if it no longer has its ETag: it was replaced or deleted,
+			// or its properties can't be requested.
+			srcChanged := destCond == nil
+			if !srcChanged && b.etag != nil {
+				srcProps, srcErr := f.client.NewBlobClient(b.name).GetProperties(ctx, nil)
+				srcChanged = srcErr != nil || srcProps.ETag == nil || !srcProps.ETag.Equals(*b.etag)
+			}
+			if srcChanged {
 				return f.changedError(b.name, "moved", err)
 			}
 		default:
@@ -1228,9 +1224,47 @@ func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, des
 		}
 		// The destination condition failed. After a lost answer the SDK
 		// retries the copy, and the retry fails against the copy that
-		// Azure made for the first try.
-		if !f.isCopyOf(ctx, target, b) {
-			return f.destChangedError(b.name, target, err)
+		// Azure made for the first try. So target counts as copied if it is
+		// the completed copy of the version of b that Move found: a
+		// successful copy from the URL of b, completed after b was last
+		// modified, with the size of b and its Content-MD5 if both have one.
+		// The copy properties survive a change of the metadata of target,
+		// so an older copy of b, from before it was last modified, doesn't
+		// count. A copy of a snapshot or a version of b doesn't count either,
+		// its content can be older than that of b with the same size, and a
+		// large block blob has no Content-MD5 to tell them apart. A target
+		// whose properties can't be requested isn't the copy.
+		props, propsErr := f.client.NewBlobClient(target).GetProperties(ctx, nil)
+		copySource := deref(props.CopySource)
+		copied := propsErr == nil &&
+			deref(props.CopyStatus) == blob.CopyStatusTypeSuccess &&
+			props.CopyCompletionTime != nil &&
+			sameBlobURL(copySource, f.client.NewBlobClient(b.name).URL())
+		if copied {
+			// The URL of a snapshot or a version has a snapshot or versionid
+			// parameter in its query, whose name is compared in any case.
+			// A URL or query that can't be parsed counts as one.
+			sourceURL, parseErr := url.Parse(copySource)
+			var query url.Values
+			if parseErr == nil {
+				query, parseErr = url.ParseQuery(sourceURL.RawQuery)
+			}
+			copied = parseErr == nil
+			for key := range query {
+				if strings.EqualFold(key, "snapshot") || strings.EqualFold(key, "versionid") {
+					copied = false
+				}
+			}
+		}
+		copied = copied &&
+			deref(props.ContentLength) == b.size &&
+			(len(props.ContentMD5) == 0 || len(b.md5) == 0 || bytes.Equal(props.ContentMD5, b.md5)) &&
+			!props.CopyCompletionTime.Before(b.modified)
+		if !copied {
+			// Another client created, replaced or deleted target after Move
+			// checked it. The error wraps an fs.ErrAlreadyExists for target,
+			// and with it os.ErrExist, and err.
+			return fmt.Errorf("azureblobfs: can't move %s, its destination was created or changed during the move: %w: %w", f.file(b.name), fs.NewErrAlreadyExists(f.file(target)), err)
 		}
 	}
 	for _, b := range blobs {
@@ -1238,7 +1272,7 @@ func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, des
 		if err == nil || isNotFound(err) {
 			continue
 		}
-		if b.etag != nil && isPreconditionFailed(err) {
+		if b.etag != nil && hasStatus(err, http.StatusPreconditionFailed) {
 			// Azurite answers the pinned delete of a missing blob with 412
 			// ConditionNotMet like that of a changed one, also the retry of
 			// a delete whose answer was lost. A blob that is gone was deleted.
@@ -1289,43 +1323,10 @@ func (f *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 	return f.copyBlob(ctx, src, nil, dest, nil)
 }
 
-// blobChanged reports if the blob name no longer has etag:
-// it was replaced or deleted, or its properties can't be requested.
-func (f *fileSystem) blobChanged(ctx context.Context, name string, etag *azcore.ETag) bool {
-	props, err := f.client.NewBlobClient(name).GetProperties(ctx, nil)
-	return err != nil || props.ETag == nil || !props.ETag.Equals(*etag)
-}
-
-// isCopyOf reports if the blob dest is the completed copy of the version
-// of the source blob src that Move found: a successful copy from the URL
-// of src, completed after src was last modified, with the size of src and
-// its Content-MD5 if both have one. The copy properties survive a change
-// of the metadata of dest, so an older copy of src, from before it was
-// last modified, doesn't count. A copy of a snapshot or a version of src
-// doesn't count either, its content can be older than that of src with
-// the same size, and a large block blob has no Content-MD5 to tell them
-// apart. A dest whose properties can't be requested isn't the copy.
-func (f *fileSystem) isCopyOf(ctx context.Context, dest string, src listedBlob) bool {
-	props, err := f.client.NewBlobClient(dest).GetProperties(ctx, nil)
-	if err != nil || deref(props.CopyStatus) != blob.CopyStatusTypeSuccess || props.CopyCompletionTime == nil {
-		return false
-	}
-	copySource := deref(props.CopySource)
-	if !sameBlobURL(copySource, f.client.NewBlobClient(src.name).URL()) || isSnapshotOrVersionURL(copySource) {
-		return false
-	}
-	if deref(props.ContentLength) != src.size {
-		return false
-	}
-	if len(props.ContentMD5) > 0 && len(src.md5) > 0 && !bytes.Equal(props.ContentMD5, src.md5) {
-		return false
-	}
-	return !props.CopyCompletionTime.Before(src.modified)
-}
-
 // sameBlobURL reports if the URLs a and b address the same blob: they have
 // the same host and unescaped path. Their queries don't matter, a query
-// can carry a SAS token, but see isSnapshotOrVersionURL.
+// can carry a SAS token, but moveBlobs rejects a copy source whose query
+// addresses a snapshot or a version.
 func sameBlobURL(a, b string) bool {
 	urlA, err := url.Parse(a)
 	if err != nil {
@@ -1336,27 +1337,6 @@ func sameBlobURL(a, b string) bool {
 		return false
 	}
 	return strings.EqualFold(urlA.Host, urlB.Host) && urlA.Path == urlB.Path
-}
-
-// isSnapshotOrVersionURL reports if the blob URL u addresses a snapshot or
-// a version of the blob: its query has a snapshot or versionid parameter,
-// whose name is compared in any case. A URL or query that can't be parsed
-// counts as one, so that isCopyOf rejects it.
-func isSnapshotOrVersionURL(u string) bool {
-	parsed, err := url.Parse(u)
-	if err != nil {
-		return true
-	}
-	query, err := url.ParseQuery(parsed.RawQuery)
-	if err != nil {
-		return true
-	}
-	for key := range query {
-		if strings.EqualFold(key, "snapshot") || strings.EqualFold(key, "versionid") {
-			return true
-		}
-	}
-	return false
 }
 
 // copyBlob copies the blob src server-side to the blob dest
