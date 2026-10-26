@@ -396,3 +396,20 @@ func TestRemoveFiles(t *testing.T) {
 	require.False(t, root.Join("b.tmp").Exists())
 	requireContent(t, root.Join("c.txt"), "c")
 }
+
+// TestCleanFilePath_DecodesURIs checks that CleanFilePath and
+// JoinCleanFilePath resolve the first part like File and ParseRawURI, also
+// for other schemes than file://: the percent-encoded characters of a URI
+// are decoded, the joined parts are names, used verbatim.
+func TestCleanFilePath_DecodesURIs(t *testing.T) {
+	mem, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(mem))
+	t.Cleanup(func() { fs.Unregister(mem) })
+
+	uri := mem.Prefix() + "/dir/a%20b"
+	require.Equal(t, "/dir/a b", fs.File(uri).Path())
+	require.Equal(t, "/dir/a b", fs.CleanFilePath(uri).Path(), "CleanFilePath(%q)", uri)
+	require.Equal(t, fs.File(uri).Join("c%20d"), fs.JoinCleanFilePath(uri, "c%20d"), "JoinCleanFilePath(%q, c%%20d)", uri)
+	require.Equal(t, "/dir/a b/c%20d", fs.JoinCleanFilePath(uri, "c%20d").Path())
+}

@@ -356,12 +356,15 @@ signatures. Changes compared to v0.1:
   absolute file URIs, before upgrading. `file://` and `file://localhost`
   without a path name no file (the empty path, `fs.ErrEmptyPath`), not the
   working directory, and neither do the Files derived from them:
-  `File("file://").Join("x")` has the empty path too. `fs.CleanFilePath`,
-  `fs.JoinCleanFilePath` and `LocalFileSystem.CleanPath` decode the
-  percent-encoding of a file URI like `File`, also `%2F` and `%2E%2E`, which
-  become a separator and `..`: build file URIs with `File.URI()` or
-  `fsimpl.EscapeURIPath`, not with `"file://" + path`. Windows long
-  paths keep their URI `file:////?/C:/x`; `file:///??/…` names no file.
+  `File("file://").Join("x")` has the empty path too. `fs.CleanFilePath`
+  and `fs.JoinCleanFilePath` decode the percent-encoding of a URI with
+  a scheme like `File`, and `LocalFileSystem.CleanPath` that of a file URI,
+  also `%2F` and `%2E%2E`, which become a separator and `..`: build URIs
+  with `File.URI()` or `fsimpl.EscapeURIPath`, not with `"file://" + path`.
+  `File.TrimExt` of a file URI returns the local path without the
+  extension. Windows long paths keep their URI `file:////?/C:/x`;
+  `file:///??/…` names no file, and the short forms `file:/path` and
+  `file:path` are relative local paths.
 - Moves and `CopyRecursive` fail with `os.ErrExist` where two source names
   collide at the destination (case or Unicode normalization) instead of
   silently keeping one. Moves always detect it; `CopyRecursive` does in new

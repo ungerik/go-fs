@@ -217,7 +217,13 @@ func (file File) TrimExt() File {
 		}
 		return fsFile(fileSystem, path[:end-len(ext)]+path[end:])
 	}
-	return File(fsimpl.TrimExt(string(file), fileSystem.Separator()))
+	if _, ok := fileSystem.(InvalidFileSystem); ok {
+		return File(fsimpl.TrimExt(string(file), fileSystem.Separator()))
+	}
+	// The parsed path, not the string of the File: its percent-encoded
+	// characters are decoded, a "%2F" is a separator, and on Windows
+	// a file URI has slashes where the separator is a backslash
+	return fsFile(fileSystem, fsimpl.TrimExt(path, fileSystem.Separator()))
 }
 
 // Join returns a new File with pathParts cleaned and joined to the current File's URI.
@@ -338,6 +344,9 @@ func (file File) CheckExists() error {
 		return ErrEmptyPath
 	}
 	fileSystem, path := file.ParseRawURI()
+	if isEmptyLocalPath(fileSystem, path) {
+		return ErrEmptyPath
+	}
 	exists, err := fsExists(fileSystem, path)
 	if err != nil {
 		return err
@@ -414,6 +423,9 @@ func (file File) RelPathOf(target File) (string, error) {
 	targetFileSystem, targetPath := target.ParseRawURI()
 	if targetFileSystem != fileSystem {
 		return "", fmt.Errorf("%w: %s and %s", ErrFileSystemsDoNotMatch, fileSystem, targetFileSystem)
+	}
+	if isEmptyLocalPath(fileSystem, basePath) || isEmptyLocalPath(fileSystem, targetPath) {
+		return "", ErrEmptyPath
 	}
 	return fsRelPath(fileSystem, basePath, targetPath)
 }

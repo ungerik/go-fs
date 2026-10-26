@@ -26,10 +26,13 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   every other read-only identifier.
 - File URIs follow RFC 8089. `File.URI()` (was `File.URL()`) of a Windows path is
   `file:///C:/dir/file` instead of `file://C:/dir/file`, and of a UNC path
-  `file://server/share/file`, of the servers `localhost` and `~`
-  `file:////localhost/share/file`, because `file://localhost/…` is a local
-  path and `file://~/…` the home directory. Parsing accepts `file://localhost/…`, on
-  Windows also the old `file://C:/…` form, and maps `file://server/share/…`
+  `file://server/share/file`, of the servers `localhost` and `~` and of
+  a server like `C:` `file:////localhost/share/file`, because as host
+  `localhost` is a local path, `~` the home directory and `C:` the drive.
+  Only the form `file://` is recognized, the short forms `file:/path` and
+  `file:path` of RFC 8089 are relative local paths. Parsing accepts
+  `file://localhost/…`, on Windows also the old `file://C:/…` form, and
+  maps `file://server/share/…`
   to the UNC path `\\server\share\…`. On other platforms a file URI with a
   host other than `localhost` resolves to the `Invalid` file system instead
   of a path relative to the working directory. So does a relative URI that
@@ -104,10 +107,18 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Fixed
 
-- `fs.CleanFilePath`, `fs.JoinCleanFilePath` and `LocalFileSystem.CleanPath`
-  and `SplitPath` didn't decode the percent-encoded characters of a file
-  URI, unlike `File` and `fs.ParseRawURI`: `file:///tmp/a%25b` was the path
-  `/tmp/a%25b` instead of `/tmp/a%b`.
+- `fs.CleanFilePath` and `fs.JoinCleanFilePath` didn't decode the
+  percent-encoded characters of a URI, unlike `File` and `fs.ParseRawURI`:
+  `file:///tmp/a%25b` was the path `/tmp/a%25b` instead of `/tmp/a%b`, and
+  `s3://bucket/a%20b` the key `a%20b` instead of `a b`. They resolve the
+  first part like `File` now, the other parts are names, used verbatim.
+  `LocalFileSystem.CleanPath` and `SplitPath` decode a file URI too.
+- `File.TrimExt` trimmed the string of the File instead of its path, so it
+  could cut at a dot before an encoded separator `%2F` of a URI, or on
+  Windows at a dot in a directory or host name of a file URI, like
+  `file://fileserver.corp/share/README`, which became another host. It
+  trims the decoded path now and returns the File of the trimmed path,
+  a local path instead of a file URI for a local file.
 
 - `azureblobfs` `RemoveAll` stopped with a 409 `SnapshotsPresent` error at
   the first blob with snapshots, after it had already deleted the blobs

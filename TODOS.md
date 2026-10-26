@@ -156,6 +156,57 @@ names before a copy or move between file systems".
 **Priority:** P3
 **Depends on:** None
 
+### Recognize the RFC 8089 short forms of file URIs
+
+**What:** `File("file:/etc/hosts")`, and on Windows `file:c:/x`, are
+relative local paths, because only the form `file://` is recognized.
+
+**Why:** RFC 8089 allows these forms, and URIs from other tools can use
+them. Documented in the CHANGELOG and `docs/explanation-path-and-uri-model.md`.
+
+**Context:** Recognizing `file:` without `//` changes which strings are local
+paths: a local file literally named `file:x` would become a URI. Decide
+together with a parser of the whole RFC 8089 grammar.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### One type walk for the SubFileSystem and OverlayFileSystem path mapping
+
+**What:** `writesToLocal`, `writeTarget`, `isInsideDirView`, `fsReadTarget`
+and `fsLinks` each switch on `*SubFileSystem` and `*OverlayFileSystem` and
+reach into their private fields; "an overlay write goes to its upper layer"
+is written in two of them.
+
+**Why:** A change of the semantics of one wrapper has to be repeated in every
+walk, and they drift apart.
+
+**Context:** An unexported interface that both wrappers implement, with
+`writeTarget(path)`, `readTarget(path)` and `viewTargets(path)`, keeps the
+semantics next to each wrapper (the /simplify finding B3 of the v1.0 branch).
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** None
+
+### State each copy and move contract once in the docs
+
+**What:** The Windows reparse points, the "A.txt"/"a.txt" collision and other
+contracts are explained in four to five doc comments (`CopyRecursive`,
+`checkFileDest`, `moveByCopy`, `fs.Move`, azureblobfs `Move` and
+`moveBlobs`), and the ftpfs package doc is one paragraph of about 70 lines.
+
+**Why:** The copies drift apart with every change.
+
+**Context:** Keep each contract on its public owner and write "see
+[CopyRecursive]" elsewhere, and split the ftpfs package doc into `#`
+sections (the /simplify finding B5 of the v1.0 branch).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ### Bound the memory of the collision check of copies
 
 **What:** When `CopyRecursive` copies into an existing local directory, it

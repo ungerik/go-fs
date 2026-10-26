@@ -392,13 +392,7 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	}
 	if bestFS != nil {
 		if _, ok := bestFS.(*LocalFileSystem); ok && strings.HasPrefix(uri, LocalPrefix) {
-			cleanPath, isLocal := cleanFileURI(uri)
-			if !isLocal {
-				// A file URI with a host like "file://server/share/x"
-				// has no local path on platforms without UNC paths
-				return Invalid, uri
-			}
-			return bestFS, cleanPath
+			return parseLocalFileURI(bestFS, uri)
 		}
 		return bestFS, uriPath(bestFS, uri)
 	}
@@ -416,10 +410,7 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 	if strings.HasPrefix(uri, LocalPrefix) {
 		// A file URI while Local is not registered is converted
 		// like with Local registered, decoding its path once
-		if cleanPath, isLocal := cleanFileURI(uri); isLocal {
-			return Local, cleanPath
-		}
-		return Invalid, uri
+		return parseLocalFileURI(Local, uri)
 	}
 	if strings.Contains(uri, PrefixSeparator) {
 		return Invalid, uri
@@ -427,6 +418,18 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 
 	// No scheme: assume uri is a path for the local file system
 	return Local, Local.CleanPath(uri)
+}
+
+// parseLocalFileURI returns local and the clean local path of uri, a URI with
+// the [LocalPrefix], or the [InvalidFileSystem] and uri for a file URI with
+// a host like "file://server/share/x", which has no local path on
+// platforms without UNC paths, see cleanLocalFileURI.
+func parseLocalFileURI(local FileSystem, uri string) (FileSystem, string) {
+	cleanPath, isLocal := cleanLocalFileURI(uri)
+	if !isLocal {
+		return Invalid, uri
+	}
+	return local, cleanPath
 }
 
 // uriPath returns the clean path of uri within fileSystem,

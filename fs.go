@@ -10,14 +10,34 @@ func Filef(format string, args ...any) File {
 	return File(fmt.Sprintf(format, args...))
 }
 
-// CleanFilePath returns a File from uri with cleaned path and a file system prefix
+// CleanFilePath returns a File from uri with cleaned path and a file system
+// prefix. uri is resolved like by [File] and [ParseRawURI]: the
+// percent-encoded characters of a URI with a scheme are decoded, a local
+// path is used verbatim.
 func CleanFilePath(uri string) File {
-	return fsJoinCleanFile(GetFileSystem(uri), uri)
+	return JoinCleanFilePath(uri)
 }
 
-// JoinCleanFilePath returns a File from joined and cleaned uriParts with a file system prefix
+// JoinCleanFilePath returns a File from joined and cleaned uriParts with
+// a file system prefix, like File(uriParts[0]).Join(uriParts[1:]...)
+// with a cleaned result: the first part is resolved like by [File] and
+// [ParseRawURI], decoding the percent-encoded characters of a URI with
+// a scheme, the other parts are names, used verbatim. A file URI without
+// a path like "file://" has the empty path, which names no file, the
+// other parts are not joined to it.
 func JoinCleanFilePath(uriParts ...string) File {
-	return fsJoinCleanFile(GetFileSystem(uriParts...), uriParts...)
+	if len(uriParts) == 0 {
+		return fsJoinCleanFile(Invalid)
+	}
+	fileSystem, path := ParseRawURI(uriParts[0])
+	if isEmptyLocalPath(fileSystem, path) {
+		return fsFile(fileSystem, "")
+	}
+	parts := uriParts[1:]
+	if path != "" {
+		parts = append([]string{path}, parts...)
+	}
+	return fsJoinCleanFile(fileSystem, parts...)
 }
 
 // Move moves and/or renames source to destination.

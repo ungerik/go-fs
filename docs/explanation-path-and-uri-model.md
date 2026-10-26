@@ -108,8 +108,10 @@ A URI that carries a scheme has its percent-encoded characters decoded, so
 **verbatim**, so a local file literally named `a%20b` is reachable by that
 name.
 
-`CleanFilePath`, `JoinCleanFilePath` and `LocalFileSystem.CleanPath` decode
-a file URI the same way; the parts joined to it are names, used verbatim.
+`CleanFilePath` and `JoinCleanFilePath` resolve a URI the same way, and
+`LocalFileSystem.CleanPath` decodes a file URI; the parts joined to it are
+names, used verbatim. Only the form `file://` is a file URI: the RFC 8089
+short forms `file:/path` and `file:path` are relative local paths.
 
 This asymmetry is deliberate. Percent-encoding is part of URI syntax and not
 part of local path syntax, so decoding a local path would make some real

@@ -917,6 +917,17 @@ func TestFileURIWithoutPath(t *testing.T) {
 		assert.ErrorIs(t, err, ErrEmptyPath, "ReadAll of %q", uri)
 		err = file.WriteAll(t.Context(), []byte("x"))
 		assert.ErrorIs(t, err, ErrEmptyPath, "WriteAll of %q", uri)
+		assert.ErrorIs(t, file.CheckExists(), ErrEmptyPath, "CheckExists of %q", uri)
+		_, err = file.Stat()
+		assert.ErrorIs(t, err, ErrEmptyPath, "Stat of %q", uri)
+		_, err = Local.Stat("")
+		assert.ErrorIs(t, err, ErrEmptyPath, "LocalFileSystem.Stat of the empty path")
+		assert.False(t, file.IsHidden(), "IsHidden of %q", uri)
+		_, err = file.RelPathOf(File("a/b"))
+		assert.ErrorIs(t, err, ErrEmptyPath, "RelPathOf from %q", uri)
+		_, err = File("x").RelPathOf(file)
+		assert.ErrorIs(t, err, ErrEmptyPath, "RelPathOf to %q", uri)
+		assert.Equal(t, File(LocalPrefix), file.TrimExt(), "TrimExt of %q", uri)
 		assert.Equal(t, File(LocalPrefix), CleanFilePath(uri), "CleanFilePath(%q)", uri)
 		assert.Equal(t, File(LocalPrefix), JoinCleanFilePath(uri, "x"), "JoinCleanFilePath(%q, x)", uri)
 
@@ -951,6 +962,11 @@ func TestFileURIDecoding(t *testing.T) {
 	assert.Equal(t, File(filepath.Join(filePath, "d%20e")), JoinCleanFilePath(uri, "d%20e"), "the joined parts are names, used verbatim")
 	assert.Equal(t, "a%b c", Local.SplitPath(uri)[len(Local.SplitPath(uri))-1], "SplitPath(%q)", uri)
 	assert.Equal(t, filePath, Local.CleanPath(filePath), "a local path is used verbatim")
+
+	// TrimExt trims the decoded path: the "." before the encoded
+	// separator "%2F" is in a directory name, b has no extension
+	dirURI := Local.URI(filepath.Join(filepath.Dir(filePath), "a.x")) + "%2Fb"
+	assert.Equal(t, filepath.Join(filepath.Dir(filePath), "a.x", "b"), File(dirURI).TrimExt().Path(), "TrimExt of %q", dirURI)
 }
 
 func TestFileURIPathOf(t *testing.T) {
@@ -1014,14 +1030,18 @@ func TestFileURIPathOf(t *testing.T) {
 		assert.Equal(t, wantPath, gotPath, "the Windows path of the URI %q of %q", rest, slashPath)
 	}
 
-	// The UNC paths of the servers "localhost" and "~" keep the empty
-	// authority: "file://localhost/share/x" would be "/share/x" and
-	// "file://~/share/x" the home directory
+	// The UNC paths of the servers "localhost" and "~" and of servers
+	// like "C:" keep the empty authority: "file://localhost/share/x" would
+	// be "/share/x", "file://~/share/x" the home directory and
+	// "file://C:/x" the drive C:
 	for slashPath, wantRest := range map[string]string{
 		"//localhost/share/x": "//localhost/share/x",
 		"//LocalHost/c$/x":    "//LocalHost/c$/x",
 		"//~/share/x":         "//~/share/x",
 		"//localhostx/share":  "localhostx/share",
+		"//C:/x":              "//C:/x",
+		"//x:/share":          "//x:/share",
+		"//C:x/share":         "C:x/share",
 	} {
 		rest := fileURIPathOf(slashPath, true)
 		assert.Equal(t, wantRest, rest, "fileURIPathOf(%q)", slashPath)
