@@ -130,7 +130,8 @@ type Options struct {
 	// Prefix is the URI prefix of the file system, Prefix + bucket if empty.
 	// Use another prefix to register file systems for buckets with the
 	// same name at different endpoints, like "s3://minio.example.com/backup".
-	// It must contain "://" and must not end with a slash.
+	// It must begin with a scheme followed by "://", with no slash or
+	// backslash before the "://", and must not end with a slash.
 	Prefix string
 }
 

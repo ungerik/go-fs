@@ -154,7 +154,11 @@ older docs problems: `docs/reference-filesystem-interfaces.md` says only
 sftpfs and ftpfs return a default-port prefix alias, but smbfs returns the
 `:445` alias too, and the `multipartfs/README.md` example registers before
 `defer formFS.Close()`, so a failed `Register` leaks the temporary files
-(`docs/howto-handle-form-uploads.md` has the right order).
+(`docs/howto-handle-form-uploads.md` has the right order). And state the
+prefix rule, a scheme followed by `://` with no separator before it, in the
+Options section of `s3fs/README.md` and in the `Prefix` row of
+`docs/reference-filesystem-interfaces.md`, which says only "Must not be
+empty" while the conformance suite requires the scheme.
 
 **Effort:** M
 **Priority:** P2

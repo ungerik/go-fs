@@ -11,9 +11,10 @@ Code that already uses a v1.0.0 beta reads
 [Upgrading from v1.0.0-beta.1](#upgrading-from-v100-beta1), and for the
 v1.0.0-rc.1 behaviour changes that the compiler doesn't find (RFC 8089 file
 URIs, name collisions, special files and invalid names in copies and moves,
-backslashes in sftpfs, ftpfs and webdavfs paths) the last bullets of
-[Behaviour changes](#behaviour-changes); the rest of the guide describes the
-way from v0.1 to the final v1 API.
+backslashes in sftpfs, ftpfs and webdavfs paths) the four bullets of
+[Behaviour changes](#behaviour-changes) from "File URIs follow RFC 8089" to the
+backslash rule; the rest of the guide describes the way from v0.1 to the
+final v1 API.
 
 ## Upgrading from v1.0.0-beta.1
 
