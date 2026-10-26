@@ -107,6 +107,14 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Fixed
 
+- `ftpfs` on servers without MLST support: `Stat`, `Remove`, `RemoveAll`,
+  `Move` and `MakeDir` find a symbolic link whose name contains ` -> `, and
+  `ListDir` and `ListDirRecursive` of such a link to a directory list the
+  directory. The FTP client library cuts the `LIST` line of a link at the
+  first ` -> `, so ftpfs reported such a link as missing, and `RemoveAll`
+  returned nil and kept it. `ListDir` still names the link by the part
+  before the first ` -> `.
+
 - `fs.CleanFilePath` and `fs.JoinCleanFilePath` didn't decode the
   percent-encoded characters of a URI, unlike `File` and `fs.ParseRawURI`:
   `file:///tmp/a%25b` was the path `/tmp/a%25b` instead of `/tmp/a%b`, and

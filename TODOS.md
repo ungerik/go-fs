@@ -511,6 +511,25 @@ literal path is no directory.
 **Priority:** P2
 **Depends on:** None
 
+### Links with " -> " in their names on servers without MLST
+
+**What:** On servers without MLST support, `ListDir` and `ListDirRecursive`
+name a link `a -> b` `a`, and `RemoveAll` of a directory that contains one
+fails with the 550 of `DELE dir/a`. A link `a` to `b -> c` and a link
+`a -> b` to `c` have the same `LIST` line.
+
+**Why:** The FTP client library cuts the `LIST` line of a link at the first
+` -> `. Nothing outside the tree is deleted, but the names are wrong.
+Documented in the package doc and `ftpfs/README.md`.
+
+**Context:** `lstat` and `listedItself` already match the longer names with
+`listsName`. `ListDir` could report the ambiguous names, and `RemoveAll` could
+retry `DELE` with the longer names that the line allows.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ### Separate TLS sessions for the extra FTPS connections
 
 **What:** The LIST connection of `Remove` and `RemoveAll` and the dedicated
