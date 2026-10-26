@@ -9,15 +9,25 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Changed
 
-- `fs.Zip` and `ZipMemFiles` reject every name that is not valid in a zip
+- `fs.Zip` and `ZipMemFiles` reject the names that are not valid in a zip
   archive with an error wrapping `os.ErrInvalid`, not only the names that
-  `UnzipToMemFiles` rejects: names that are not a clean, slash separated
-  path (`io/fs.ValidPath`, like `a//b.txt`, or `dir/` for a file), that are
-  not valid UTF-8, which zip readers decode as CP-437, that contain a
-  control character like NUL or a colon, which marks a drive letter on
-  Windows, and names longer than the 65535 bytes of a zip header.
-  `archive/zip` writes all of them. The `zipfs.Writer` rejects the same
-  names (its paths are cleaned already).
+  `UnzipToMemFiles` rejects: names that are not valid UTF-8, which zip
+  readers decode as CP-437, that contain a control character like NUL, a
+  line or paragraph separator, a bidirectional embedding, override or
+  isolate, which can disguise an extension (`evil\u202etxt.exe`), or a
+  colon, which marks a drive letter on Windows, and names longer than the
+  65535 bytes of a zip header. The name of a `FileReader` that is not a
+  `MemFile` has to be a clean, slash separated path (`io/fs.ValidPath`, not
+  `a//b.txt` or `dir/` for a file); the `FileName` of a `MemFile` is cleaned
+  as before. `archive/zip` writes all of these names. `zipfs.Writer` rejects
+  the same characters and lengths in its cleaned paths. Names that only
+  Windows can't extract, like `what?.txt`, are not checked.
+- `fs.UnzipToMemFiles` and `zipfs.Reader` convert an entry name without the
+  UTF-8 flag that is not valid UTF-8, like the umlauts of old Windows tools,
+  to UTF-8: from its Info-ZIP Unicode Path extra field if it has one, else
+  from CP-437, the encoding of such names. `archive/zip` returns the stored
+  bytes, which `ZipMemFiles` and `zipfs.Writer` now reject, so the MemFiles
+  and files of such an archive couldn't be zipped again.
 
 ### Fixed
 

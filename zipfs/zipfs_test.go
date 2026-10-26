@@ -300,7 +300,7 @@ func TestZipWriter_InvalidNames(t *testing.T) {
 	require.NoError(t, zipWriter.Touch("/before.txt", 0))
 
 	longName := "/" + strings.Repeat("a", math.MaxUint16)
-	for _, name := range []string{"/a\x00b.txt", "/a\nb.txt", "/dir/\xff.txt", "/C:x.txt", longName + "a"} {
+	for _, name := range []string{"/a\x00b.txt", "/a\nb.txt", "/evil\u202etxt.exe", "/dir/\xff.txt", "/C:x.txt", longName + "a"} {
 		assert.ErrorIs(t, zipWriter.Touch(name, 0), os.ErrInvalid, "Touch %.20q", name)
 		_, err := zipWriter.OpenWriter(name, 0)
 		assert.ErrorIs(t, err, os.ErrInvalid, "OpenWriter %.20q", name)
@@ -308,12 +308,38 @@ func TestZipWriter_InvalidNames(t *testing.T) {
 		assert.ErrorIs(t, zipWriter.MakeAllDirs(name+"/sub", 0), os.ErrInvalid, "MakeAllDirs %.20q", name)
 	}
 	assert.ErrorIs(t, zipWriter.MakeDir(longName, 0), os.ErrInvalid, "the slash of a directory entry is too much")
+	assert.ErrorIs(t, zipWriter.MakeAllDirs(longName, 0), os.ErrInvalid, "MakeAllDirs counts the slash too")
 	require.NoError(t, zipWriter.Touch(longName, 0), "a file name of the maximum length")
 	require.NoError(t, zipWriter.Touch("/after.txt", 0))
 	require.NoError(t, zipWriter.Close())
 
 	assert.Equal(t, []string{"before.txt", longName[1:], "after.txt"}, zipEntryNames(t, zipFile))
 	assert.True(t, openReader(t, zipFile).RootDir().Join("after.txt").Exists(), "the archive is readable")
+}
+
+// TestZipReader_CP437Names is a regression test: the reader used the CP-437
+// bytes of an entry name without the UTF-8 flag, like old Windows tools write
+// umlauts, as path, so the file couldn't be copied into a zipfs.Writer,
+// which rejects names that are not valid UTF-8.
+func TestZipReader_CP437Names(t *testing.T) {
+	ctx := t.Context()
+	memFS := newMemFS(t)
+	archive := memFS.RootDir().Join("legacy.zip")
+	require.NoError(t, archive.WriteAll(ctx, makeZip(t, [2]string{"dir/M\x81ller.pdf", "pdf"})))
+	reader := openReader(t, archive)
+
+	file := reader.RootDir().Join("dir", "Müller.pdf")
+	data, err := file.ReadAllString(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "pdf", data)
+
+	copied := memFS.RootDir().Join("copied.zip")
+	zipWriter, err := NewWriter(copied, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(zipWriter))
+	require.NoError(t, fs.CopyRecursive(ctx, reader.RootDir(), zipWriter.RootDir()))
+	require.NoError(t, zipWriter.Close())
+	assert.Equal(t, []string{"dir/", "dir/Müller.pdf"}, zipEntryNames(t, copied))
 }
 
 // TestZipWriter_Abort verifies that an aborted entry writer writes no entry.

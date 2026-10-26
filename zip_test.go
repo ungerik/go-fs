@@ -131,6 +131,7 @@ func TestZip_InvalidNames(t *testing.T) {
 		{"root", NewMemFile("/", nil)},
 		{"NUL", NewMemFile("a\x00b.txt", []byte("x"))},
 		{"newline", NewMemFile("a\nb.txt", []byte("x"))},
+		{"right-to-left override", NewMemFile("evil\u202etxt.exe", []byte("x"))},
 		{"DEL", NewMemFile("a\x7fb.txt", []byte("x"))},
 		{"invalid UTF-8", NewMemFile("dir/\xff.txt", []byte("x"))},
 		{"drive letter", NewMemFile("C:x.txt", []byte("x"))},
@@ -146,6 +147,7 @@ func TestZip_InvalidNames(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			_, err := Zip(t.Context(), tc.file)
 			require.ErrorIs(t, err, os.ErrInvalid)
+			require.Less(t, len(err.Error()), 2000, "the error quotes at most 200 characters of a name")
 			if memFile, ok := tc.file.(MemFile); ok {
 				_, err = ZipMemFiles(memFile)
 				require.ErrorIs(t, err, os.ErrInvalid, "ZipMemFiles")
@@ -215,6 +217,17 @@ func TestZip_ReaderErrors(t *testing.T) {
 		require.True(t, reader.closed, "reader must be closed after a failed copy")
 	})
 
+	// The name check needs the FileInfo of Stat to know
+	// if the entry is a directory, so a Stat error comes first,
+	// also for a file whose name is invalid too
+	t.Run("stat error", func(t *testing.T) {
+		missing := File(t.TempDir()).Join("missing.txt")
+		zipped, err := Zip(t.Context(), NewMemFile("a.txt", []byte("a")), FileReaderWithName(missing, "a:b.txt"))
+		require.ErrorIs(t, err, os.ErrNotExist)
+		require.NotErrorIs(t, err, os.ErrInvalid)
+		require.Nil(t, zipped)
+	})
+
 	t.Run("canceled while copying", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -280,6 +293,30 @@ func TestUnzipToMemFiles_InsecureNames(t *testing.T) {
 			require.ErrorIs(t, err, zip.ErrInsecurePath)
 		})
 	}
+}
+
+// TestUnzipToMemFiles_CP437Names is a regression test: UnzipToMemFiles
+// returned the CP-437 bytes of a name without the UTF-8 flag, like old
+// Windows tools write umlauts, as FileName, and ZipMemFiles rejected
+// that FileName as not valid UTF-8, so the MemFiles couldn't be zipped again.
+func TestUnzipToMemFiles_CP437Names(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "dir/M\x81ller.pdf", NonUTF8: true})
+	require.NoError(t, err)
+	_, err = w.Write([]byte("pdf"))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	files, err := UnzipToMemFiles(t.Context(), NewMemFile("legacy.zip", buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, []MemFile{NewMemFile("dir/Müller.pdf", []byte("pdf"))}, files)
+
+	zipped, err := ZipMemFiles(files...)
+	require.NoError(t, err, "the decoded name can be zipped again")
+	files, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", zipped))
+	require.NoError(t, err)
+	require.Equal(t, []MemFile{NewMemFile("dir/Müller.pdf", []byte("pdf"))}, files)
 }
 
 // TestUnzipToMemFiles_MaxSize is a regression test: UnzipToMemFiles had

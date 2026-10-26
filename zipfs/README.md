@@ -5,7 +5,9 @@ A [go-fs](https://github.com/ungerik/go-fs) file system for ZIP archives:
 Both work on any `fs.File`, so the archive itself can live on the local
 disk, in memory, on S3 or on any other backend. The package mirrors
 [tarfs](../tarfs/README.md): both use the same rules for entry names,
-duplicates and permissions.
+duplicates and permissions, only zipfs converts entry names that are not
+UTF-8 and `zipfs.Writer` rejects the names that are not valid in a zip
+archive.
 
 This package is part of the `github.com/ungerik/go-fs` module, no separate
 `go get` is needed.
@@ -83,7 +85,11 @@ set of files into a byte slice without a file system.
 - **Entry names.** Backslashes become slashes and `..` elements that would
   leave the archive are removed when reading, like `archive/zip` does for its
   `io/fs` view, so no entry can be extracted outside of the destination. A
-  later entry replaces an earlier one with the same path.
+  later entry replaces an earlier one with the same path. A name without the
+  UTF-8 flag of the zip format that is not valid UTF-8, like the umlauts
+  of old Windows tools, is converted from CP-437, the encoding of such
+  names, or taken from its Info-ZIP Unicode Path extra field; `archive/zip`
+  returns the stored bytes.
 - **Writer.** Each file is buffered in memory until its writer is closed,
   then it is compressed into the archive, so several files can be written at
   the same time. The writers implement `fs.WriteAborter`, `Abort` discards
@@ -92,8 +98,10 @@ set of files into a byte slice without a file system.
   entries. `MakeDir` writes a directory entry, so empty directories are kept.
   A path that is not valid in a zip archive returns an error wrapping
   `os.ErrInvalid`, like in `fs.Zip`: a backslash, invalid UTF-8, a control
-  character like NUL, a colon, which marks a drive letter on Windows, or
-  more than 65535 bytes.
+  character like NUL, a bidirectional formatting character that can
+  disguise an extension, a colon, which marks a drive letter on Windows, or
+  more than 65535 bytes. Paths are cleaned first, and names that only
+  Windows can't extract, like `NUL` or `what?.txt`, are not checked.
   `Close` writes the central directory — an archive whose writer was not
   closed is incomplete.
 - **Permissions and times.** Written entries get the current time and the

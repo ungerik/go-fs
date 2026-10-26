@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ungerik/go-fs/internal/dirtree"
+	"github.com/ungerik/go-fs/internal/zipname"
 )
 
 // UnzipToMemFilesMaxSize is the maximum total uncompressed size
@@ -28,22 +28,29 @@ const zipCopyBufferSize = 32 * 1024
 
 // Zip the passed files using flate.BestCompression.
 //
-// The entry of a MemFile is named after its FileName without a leading
-// slash, which can be a slash separated relative path like "dir/file.txt",
-// the entry of every other FileReader after its Name.
+// The entry of a MemFile is named after its cleaned FileName without
+// a leading slash, which can be a slash separated relative path like
+// "dir/file.txt", the entry of every other FileReader after its Name.
 // So ZipMemFiles and Zip name the entries of MemFiles the same way and
 // UnzipToMemFiles returns them with the same FileName.
 //
 // A name that is not valid in a zip archive is an error wrapping
 // os.ErrInvalid, so every archive of Zip can be unzipped:
-//   - an empty name or one that is not a clean, slash separated,
-//     relative path (see io/fs.ValidPath), like an absolute name
-//     or one that escapes with ".."
+//   - an empty name, a name that escapes with "..", and the name of
+//     another FileReader than a MemFile that is not a clean, slash
+//     separated, relative path (see io/fs.ValidPath), like "/abs.txt"
 //   - a name with a backslash, which UnzipToMemFiles rejects
 //   - a name that is not valid UTF-8, which zip readers decode as CP-437
-//   - a name with a control character like NUL
+//   - a name with a control character like NUL, a line or paragraph
+//     separator, or a bidirectional embedding, override or isolate,
+//     which can disguise the extension of a name
 //   - a name with a colon, which marks a drive letter on Windows
 //   - a name longer than the 65535 bytes of a zip header
+//
+// Names that only Windows can't extract are not checked, like names
+// ending in a dot or a space, names with one of the characters
+// < > " | ? * and names that differ only in case. Device names like
+// CON or NUL are only rejected on Windows, like by UnzipToMemFiles.
 //
 // Directories are added as directory entries without content.
 //
@@ -86,9 +93,25 @@ func addZipEntry(ctx context.Context, zipWriter *zip.Writer, file FileReader, co
 	if err != nil {
 		return fmt.Errorf("failed to stat %s: %w", file.Name(), err)
 	}
-	name, err := zipEntryName(file, info.IsDir())
+	var name string
+	switch f := file.(type) {
+	case MemFile:
+		name = strings.TrimLeft(f.CleanPath(), "/")
+	case *MemFile:
+		name = strings.TrimLeft(f.CleanPath(), "/")
+	default:
+		name = file.Name()
+	}
+	// Error messages quote at most 200 characters of a name
+	if name == "" {
+		return fmt.Errorf("can't zip %.200q: %w: zip entry name is empty", errSubject(file), os.ErrInvalid)
+	}
+	err = zipname.Check(name, info.IsDir())
 	if err != nil {
-		return err
+		return fmt.Errorf("can't zip %.200q: %w", errSubject(file), err)
+	}
+	if name == "." || !iofs.ValidPath(name) || !isLocalZipName(name) {
+		return fmt.Errorf("can't zip %.200q: %w: zip entry name %.200q is not a clean, local, slash separated path", errSubject(file), os.ErrInvalid, name)
 	}
 	header := &zip.FileHeader{
 		Name:     name,
@@ -96,6 +119,7 @@ func addZipEntry(ctx context.Context, zipWriter *zip.Writer, file FileReader, co
 		Method:   zip.Deflate,
 	}
 	if info.IsDir() {
+		header.Name += "/"
 		header.Method = zip.Store
 		_, err = zipWriter.CreateHeader(header)
 		if err != nil {
@@ -119,33 +143,6 @@ func addZipEntry(ctx context.Context, zipWriter *zip.Writer, file FileReader, co
 	return nil
 }
 
-// zipEntryName returns the name of the zip entry for file,
-// with a trailing slash if isDir, see Zip.
-func zipEntryName(file FileReader, isDir bool) (string, error) {
-	var name string
-	switch f := file.(type) {
-	case MemFile:
-		name = strings.TrimLeft(f.CleanPath(), "/")
-	case *MemFile:
-		name = strings.TrimLeft(f.CleanPath(), "/")
-	default:
-		name = file.Name()
-	}
-	if name == "" {
-		return "", fmt.Errorf("can't zip %q: %w: zip entry name is empty", errSubject(file), os.ErrInvalid)
-	}
-	if err := dirtree.CheckZipName(name, isDir); err != nil {
-		return "", fmt.Errorf("can't zip %q: %w", errSubject(file), err)
-	}
-	if name == "." || !iofs.ValidPath(name) || !isLocalZipName(name) {
-		return "", fmt.Errorf("can't zip %q: %w: zip entry name %q is not a clean, local, slash separated path", errSubject(file), os.ErrInvalid, name)
-	}
-	if isDir {
-		name += "/"
-	}
-	return name, nil
-}
-
 // isLocalZipName reports if the zip entry name is a relative,
 // slash separated path that stays within the directory
 // it is extracted to, see archive/zip.ErrInsecurePath.
@@ -159,6 +156,9 @@ func isLocalZipName(name string) bool {
 //
 // The FileName of a MemFile is the name of its zip entry,
 // which is a slash separated relative path like "dir/file.txt".
+// A name without the UTF-8 flag of the zip format that is not valid
+// UTF-8 is converted to UTF-8 from CP-437, the encoding of such names,
+// or taken from the Info-ZIP Unicode Path extra field of the entry.
 // Only regular files are returned, directory entries
 // and symbolic links are skipped.
 //
@@ -191,17 +191,18 @@ func unzipToMemFiles(ctx context.Context, zipFile FileReader, maxSize int64) ([]
 		if !entry.Mode().IsRegular() {
 			continue
 		}
-		if !isLocalZipName(entry.Name) {
-			return nil, fmt.Errorf("%w: zip entry %q of %s", zip.ErrInsecurePath, entry.Name, zipFile.Name())
+		name := zipname.Decode(&entry.FileHeader)
+		if !isLocalZipName(name) {
+			return nil, fmt.Errorf("%w: zip entry %q of %s", zip.ErrInsecurePath, name, zipFile.Name())
 		}
 		if entry.UncompressedSize64 > uint64(remaining) { //#nosec G115 -- remaining is never negative
 			return nil, errUnzipTooBig(zipFile, maxSize)
 		}
 		// Don't trust the uncompressed size of the header,
 		// read one byte more than remaining to detect a bigger file
-		memFile, err := unzipMemFile(ctx, entry, remaining+1)
+		memFile, err := unzipMemFile(ctx, entry, name, remaining+1)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read zip file %s: %w", entry.Name, err)
+			return nil, fmt.Errorf("failed to read zip file %s: %w", name, err)
 		}
 		remaining -= memFile.Size()
 		if remaining < 0 {
@@ -216,8 +217,9 @@ func errUnzipTooBig(zipFile FileReader, maxSize int64) error {
 	return fmt.Errorf("zip file %s has more than %d uncompressed bytes", zipFile.Name(), maxSize)
 }
 
-// unzipMemFile reads up to limit bytes of a zip entry as MemFile.
-func unzipMemFile(ctx context.Context, entry *zip.File, limit int64) (MemFile, error) {
+// unzipMemFile reads up to limit bytes of a zip entry
+// as MemFile with the passed name.
+func unzipMemFile(ctx context.Context, entry *zip.File, name string, limit int64) (MemFile, error) {
 	r, err := entry.Open()
 	if err != nil {
 		return MemFile{}, err
@@ -227,5 +229,5 @@ func unzipMemFile(ctx context.Context, entry *zip.File, limit int64) (MemFile, e
 	if err != nil {
 		return MemFile{}, err
 	}
-	return MemFile{FileName: entry.Name, FileData: data}, nil
+	return MemFile{FileName: name, FileData: data}, nil
 }

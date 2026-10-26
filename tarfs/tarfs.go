@@ -4,7 +4,9 @@
 // NewReader indexes an existing archive for reading,
 // NewWriter creates a new archive that receives files
 // until it is closed. The package mirrors zipfs: both use
-// the same rules for entry names, duplicates and permissions.
+// the same rules for entry names, duplicates and permissions,
+// only zipfs converts entry names that are not UTF-8 and its writer
+// rejects the names that are not valid in a zip archive.
 //
 // Reading:
 //   - Entry names are made valid paths inside the archive like

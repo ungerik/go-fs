@@ -5,8 +5,8 @@
 // NewWriter creates a new archive that receives files
 // until it is closed. The package mirrors tarfs: both use
 // the same rules for entry names, duplicates and permissions,
-// only the writer of zipfs rejects the names that are not valid
-// in a zip archive.
+// only zipfs converts entry names that are not UTF-8 and its writer
+// rejects the names that are not valid in a zip archive.
 //
 // Reading:
 //   - Entry names are made valid paths inside the archive like
@@ -14,6 +14,9 @@
 //     and ".." elements that would leave the root are removed, so
 //     `..\..\evil.txt` is read as "evil.txt". No entry can address
 //     a path outside of the archive when it is extracted.
+//   - A name without the UTF-8 flag of the zip format that is not
+//     valid UTF-8 is converted to UTF-8 from CP-437, the encoding of
+//     such names, or taken from its Info-ZIP Unicode Path extra field.
 //   - A later entry replaces an earlier one with the same path, like
 //     extracting the archive would, also when one of them is a file and
 //     the other a directory. Directories that are only implied by the
@@ -31,10 +34,11 @@
 //     fs.ErrIsDirectory. That way a written archive never has duplicate or
 //     conflicting entries.
 //   - Paths with a backslash are rejected, so archives stay portable.
-//     So are paths that are not valid in a zip archive, see fs.Zip:
-//     names that are not valid UTF-8 or contain a control character
-//     like NUL or a colon, and names longer than 65535 bytes.
-//     All of them are errors wrapping os.ErrInvalid.
+//     So are cleaned paths that are not valid in a zip archive, see
+//     fs.Zip: names that are not valid UTF-8, contain a control or
+//     bidirectional formatting character or a colon, and names longer
+//     than 65535 bytes. All of them are errors wrapping os.ErrInvalid.
+//     Names that only Windows can't extract are not checked.
 //   - Entries get the current time and the passed permissions,
 //     or DefaultPermissions and DefaultDirPermissions if none are passed.
 //   - A file is buffered in memory until its writer is closed, then it is
@@ -58,6 +62,7 @@ import (
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 	"github.com/ungerik/go-fs/internal/dirtree"
+	"github.com/ungerik/go-fs/internal/zipname"
 )
 
 const (
@@ -134,7 +139,8 @@ func NewReader(file fs.FileReader, id string) (*Reader, error) {
 		// Add only fails for unusable entries, like a file named after
 		// the root, which are skipped, so that one bad entry doesn't
 		// make the whole archive unreadable.
-		isDir := strings.HasSuffix(zipFile.Name, "/")
+		name := zipname.Decode(&zipFile.FileHeader)
+		isDir := strings.HasSuffix(name, "/")
 		if !isDir && !zipFile.Mode().IsRegular() {
 			// Symbolic links, devices and other entries are not exposed
 			continue
@@ -143,7 +149,7 @@ func NewReader(file fs.FileReader, id string) (*Reader, error) {
 		if isDir {
 			size = 0
 		}
-		_, _ = zipfs.tree.Add(dirtree.CleanName(zipFile.Name), isDir, size, zipFile.Modified, zipFile)
+		_, _ = zipfs.tree.Add(dirtree.CleanName(name), isDir, size, zipFile.Modified, zipFile)
 	}
 	return zipfs, nil
 }
@@ -469,7 +475,7 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	}
 	// archive/zip adds a name that is too long to the central
 	// directory before it rejects it, so it must never get one
-	if err := dirtree.CheckZipName(dirtree.CleanName(filePath), isDir); err != nil {
+	if err := zipname.Check(dirtree.CleanName(filePath), isDir); err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}
 	node, isAncestor, err := f.tree.Conflict(filePath)
@@ -540,8 +546,9 @@ func (f *Writer) writeFile(filePath string, data []byte, perm fs.Permissions) er
 }
 
 // writeDirLocked writes a directory entry. f.mtx must be held.
-// dirPath must be validated with checkNewLocked or dirtree.Elements,
-// then dirtree.CleanName returns its elements joined with slashes.
+// dirPath must be validated with checkNewLocked, or with dirtree.Elements
+// and zipname.Check like in MakeAllDirs, then dirtree.CleanName
+// returns its elements joined with slashes.
 func (f *Writer) writeDirLocked(dirPath string, perm fs.Permissions) error {
 	header := &zip.FileHeader{
 		Name:     dirtree.CleanName(dirPath) + Separator,
@@ -589,7 +596,7 @@ func (f *Writer) MakeAllDirs(dirPath string, perm fs.Permissions) error {
 		return fmt.Errorf("zipfs: %w", err)
 	}
 	// The parent directories are shorter and have no other characters
-	err = dirtree.CheckZipName(strings.Join(elements, Separator), true)
+	err = zipname.Check(strings.Join(elements, Separator), true)
 	if err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}
