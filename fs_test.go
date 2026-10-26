@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -433,4 +434,26 @@ func TestCleanFilePath_DecodesURIs(t *testing.T) {
 	require.Equal(t, fs.File(uri).Join("c%20d"), fs.JoinCleanFilePath(uri, "c%20d"), "JoinCleanFilePath(%q, c%%20d)", uri)
 	require.Equal(t, "/dir/a b/c%20d", fs.JoinCleanFilePath(uri, "c%20d").Path())
 	require.Equal(t, fs.InvalidFile, fs.JoinCleanFilePath(), "JoinCleanFilePath without parts")
+}
+
+// TestMove_WindowsName is a regression test: a move within the local file
+// system didn't check the new name like Windows writes it, so on Windows
+// a move to "report." was written to "report" and replaced that file.
+func TestMove_WindowsName(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows writes a name like report. to another entry")
+	}
+	ctx := t.Context()
+	dir := fs.File(t.TempDir())
+	keep := dir.Join("report")
+	require.NoError(t, keep.WriteAllString(ctx, "keep"))
+	draft := dir.Join("draft.txt")
+	require.NoError(t, draft.WriteAllString(ctx, "draft"))
+	for _, name := range []string{"report.", "report ", "what?.txt"} {
+		require.ErrorIs(t, fs.Move(ctx, draft, dir.Join(name)), os.ErrInvalid, name)
+	}
+	data, err := keep.ReadAllString(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "keep", data, "the unrelated file is kept")
+	require.True(t, draft.Exists(), "the file is not moved")
 }

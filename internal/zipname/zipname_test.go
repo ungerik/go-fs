@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestCheck verifies the names that are not valid in a zip archive,
+// TestValidateName verifies the names that are not valid in a zip archive,
 // up to the length limit that counts the trailing slash of a directory.
-func TestCheck(t *testing.T) {
+func TestValidateName(t *testing.T) {
 	maxName := strings.Repeat("a", math.MaxUint16)
 	for _, name := range []string{
 		"a.txt",
@@ -24,9 +24,9 @@ func TestCheck(t *testing.T) {
 		"dir/\u200fname.txt", // right-to-left mark
 		maxName,
 	} {
-		assert.NoError(t, Check(name, false), "%.20q", name)
+		assert.NoError(t, ValidateName(name, false), "%.20q", name)
 	}
-	assert.NoError(t, Check(maxName[1:], true), "a directory of the maximum length")
+	assert.NoError(t, ValidateName(maxName[1:], true), "a directory of the maximum length")
 
 	for _, name := range []string{
 		"\xff.txt",
@@ -43,9 +43,9 @@ func TestCheck(t *testing.T) {
 		"dir/a:b",
 		maxName + "a",
 	} {
-		assert.ErrorIs(t, Check(name, false), os.ErrInvalid, "%.20q", name)
+		assert.ErrorIs(t, ValidateName(name, false), os.ErrInvalid, "%.20q", name)
 	}
-	assert.ErrorIs(t, Check(maxName, true), os.ErrInvalid, "the slash of a directory is too much")
+	assert.ErrorIs(t, ValidateName(maxName, true), os.ErrInvalid, "the slash of a directory is too much")
 
 	// The error message doesn't grow with the name
 	for _, name := range []string{
@@ -54,7 +54,7 @@ func TestCheck(t *testing.T) {
 		strings.Repeat(":", 60000),
 		strings.Repeat("\x00", 1<<20),
 	} {
-		err := Check(name, false)
+		err := ValidateName(name, false)
 		assert.ErrorIs(t, err, os.ErrInvalid)
 		assert.Less(t, len(err.Error()), 1000, "error of a %d byte name", len(name))
 	}
@@ -263,6 +263,25 @@ func TestDecode(t *testing.T) {
 			"a/ä.txt",
 		},
 		{
+			// zipfs and zip tools on Windows take the backslash for a separator
+			"Unicode Path field that removes a backslash",
+			zip.FileHeader{Name: `a\b.txt`, NonUTF8: true, Extra: unicodePathExtra(`a\b.txt`, "a日b.txt")},
+			`a\b.txt`,
+		},
+		{
+			// The second byte of "表" in Shift-JIS is a backslash
+			"Unicode Path field of a double-byte character with a backslash",
+			zip.FileHeader{Name: "\x95\\.txt", NonUTF8: true, Extra: unicodePathExtra("\x95\\.txt", "表.txt")},
+			"表.txt",
+		},
+		{
+			// Regression guard: the ASCII end of the field overlaps
+			// its ASCII start, which used up the stored name
+			"Unicode Path field whose ASCII end overlaps its start",
+			zip.FileHeader{Name: "a.txt", Extra: unicodePathExtra("a.txt", "a.txt日.txt")},
+			"a.txt",
+		},
+		{
 			"Unicode Path field that removes an extension",
 			zip.FileHeader{Name: "\x84.exe", NonUTF8: true, Extra: unicodePathExtra("\x84.exe", "日")},
 			"ä.exe",
@@ -284,6 +303,8 @@ func FuzzKeepsASCII(f *testing.F) {
 	f.Add("a/\x84.txt", "a日.txt")
 	f.Add("\x83A.txt", "ア.txt")
 	f.Add("a_b?c.txt", "a日b本c.txt")
+	f.Add("ab", "ab日b")
+	f.Add(`a\b.txt`, "a日b.txt")
 	f.Fuzz(func(t *testing.T, stored, unicodeName string) {
 		if !utf8.ValidString(unicodeName) || !keepsASCII(stored, unicodeName) {
 			return

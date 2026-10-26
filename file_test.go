@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	iofs "io/fs"
 	"iter"
@@ -1402,4 +1403,42 @@ func TestFile_TrimExtOfTildeAndDotfiles(t *testing.T) {
 	}
 	config := File(filepath.Join(t.TempDir(), ".config.json"))
 	assert.Equal(t, File(strings.TrimSuffix(string(config), ".json")), config.TrimExt(), "TrimExt of a dotfile with an extension")
+}
+
+// backslashRejectingFS is a noRenameMoveFS whose ValidateName rejects names
+// with a backslash, like s3fs, which has no native Move either.
+type backslashRejectingFS struct{ *noRenameMoveFS }
+
+func (backslashRejectingFS) ValidateName(name string) error {
+	if strings.Contains(name, `\`) {
+		return fmt.Errorf("%w: the name %.200q contains a backslash", os.ErrInvalid, name)
+	}
+	return nil
+}
+
+// TestFile_Rename_HeldNames is a regression test: the rename of a directory
+// of a file system without native Move, which copies the directory, checked
+// the names below it with ValidateName, so a directory with a key like the
+// ones with a backslash, which S3 holds but s3fs doesn't write, couldn't be
+// renamed. The file system holds these names, see isHeldName.
+func TestFile_Rename_HeldNames(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	Unregister(memFS)
+	wrapped := backslashRejectingFS{&noRenameMoveFS{WriteFileSystem: memFS}}
+	require.NoError(t, Register(wrapped))
+	t.Cleanup(func() {
+		Unregister(wrapped)
+		_ = memFS.Close()
+	})
+	dir := wrapped.RootDir().Join("dir")
+	require.NoError(t, dir.MakeDir())
+	require.NoError(t, dir.Join(`legacy\key.txt`).WriteAllString(ctx, "x"))
+
+	renamed, err := dir.Rename(ctx, "renamed")
+	require.NoError(t, err)
+	require.True(t, renamed.Join(`legacy\key.txt`).Exists())
+	_, err = renamed.Rename(ctx, `new\name`)
+	require.ErrorIs(t, err, os.ErrInvalid, "a new name is checked")
 }

@@ -98,13 +98,13 @@ err = out.Close()
   A path can be written only once: a second write returns an error wrapping
   `os.ErrExist`, so an archive never gets duplicate entries. `MakeAllDirs` is
   native and writes an entry for every missing directory. A path with
-  a backslash or a NUL character, which a tar header can't hold, or that is
-  not valid UTF-8, which the PAX format requires, returns an error wrapping
-  `os.ErrInvalid`. The writer implements `fs.ValidateNameFileSystem`, so
-  a copy or move into it checks the names it writes first and fails before
-  it writes anything. `Close` writes the
-  end-of-archive marker and closes the gzip stream — an archive whose writer
-  was not closed is incomplete.
+  a backslash, which is rejected so archives stay portable, with a NUL
+  character, which a tar header can't hold, or that is not valid UTF-8, which
+  the PAX format requires, returns an error wrapping `os.ErrInvalid`. The
+  writer implements `fs.ValidateNameFileSystem`, so a copy or move into it
+  checks the names it writes first and fails before it writes anything.
+  `Close` writes the end-of-archive marker and closes the gzip stream — an
+  archive whose writer was not closed is incomplete.
 - **Permissions and times.** Written entries get the current time and the
   passed permissions, or `tarfs.DefaultPermissions` /
   `tarfs.DefaultDirPermissions`. Read entries report the permissions and

@@ -441,16 +441,25 @@ func hasURIScheme(s string) bool {
 }
 
 // validateNameIn returns an error if name is not valid for a new entry of the
-// directory dir, see validateWriteName, also for the file system that the
-// writes to dir go to, and os.ErrInvalid for the local file system if
-// isValidLocalName rejects it.
-func validateNameIn(dir File, name string) error {
-	dirFS, dirPath := dir.ParseRawURI()
-	if err := validateWriteName(dirFS, name); err != nil {
+// directory dirPath of dirFS, see validateWriteName, also for the file system
+// that the writes to the directory go to, and os.ErrInvalid for the local
+// file system if isValidLocalName rejects it. A held name, see isHeldName,
+// is not checked with ValidateName.
+func validateNameIn(dirFS FileSystem, dirPath, name string, held bool) error {
+	validate := validateWriteName
+	if held {
+		validate = func(fileSystem FileSystem, name string) error {
+			if !isValidName(fileSystem, name) {
+				return os.ErrInvalid
+			}
+			return nil
+		}
+	}
+	if err := validate(dirFS, name); err != nil {
 		return err
 	}
 	if target, _, _, ok := writeTarget(dirFS, dirPath); ok {
-		if err := validateWriteName(target, name); err != nil {
+		if err := validate(target, name); err != nil {
 			return err
 		}
 		if _, local := target.(*LocalFileSystem); local && !isValidLocalName(name) {

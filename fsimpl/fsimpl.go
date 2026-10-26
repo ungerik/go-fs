@@ -170,9 +170,10 @@ func SplitPath(filePath, separator string) []string {
 // names the file system with fsName and ends with reason, which tells
 // which servers split at a backslash and how to allow backslashes for
 // the servers that store them in names, if the file system can.
+// The error quotes at most 200 characters of filePath.
 func CheckNoBackslash(fsName, filePath, reason string) error {
 	if !strings.Contains(filePath, `\`) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s path %q contains a backslash, %s", os.ErrInvalid, fsName, filePath, reason)
+	return fmt.Errorf("%w: %s path %.200q contains a backslash, %s", os.ErrInvalid, fsName, filePath, reason)
 }

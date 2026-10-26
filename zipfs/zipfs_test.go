@@ -365,6 +365,12 @@ func TestZipWriter_ValidateName(t *testing.T) {
 	require.NoError(t, fs.Register(zipWriter))
 
 	assert.NoError(t, zipWriter.ValidateName("a.txt"))
+	// The errors quote at most 200 characters of a long name
+	for _, name := range []string{strings.Repeat("a", 70000) + `\`, strings.Repeat("a", 70000) + ":"} {
+		err := zipWriter.ValidateName(name)
+		assert.ErrorIs(t, err, os.ErrInvalid)
+		assert.Less(t, len(err.Error()), 1000)
+	}
 	for _, name := range []string{"b:c.txt", `a\b.txt`, "a\x00b", "evil\u202etxt.exe", "\xff.txt"} {
 		assert.ErrorIs(t, zipWriter.ValidateName(name), os.ErrInvalid, "%q", name)
 	}

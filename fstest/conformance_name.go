@@ -55,7 +55,7 @@ func (c *conformance) testValidateName(t *testing.T) {
 		checkNoError(t, v.ValidateName(name), "ValidateName(%q) of a name that every file system writes", name)
 	}
 	var valid, invalid []string
-	for _, name := range append(slices.Clone(validNames), nameProbes...) {
+	for _, name := range slices.Concat(validNames, nameProbes) {
 		// ValidateName gets the name of one directory entry
 		if strings.Contains(name, "/") || strings.Contains(name, c.fs.Separator()) {
 			continue

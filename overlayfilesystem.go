@@ -695,7 +695,13 @@ func (o *OverlayFileSystem) MakeAllDirs(dirPath string, perm Permissions) error 
 	if err := o.checkPath(dirPath); err != nil {
 		return err
 	}
-	return o.makeAllDirs(o.CleanPath(dirPath), perm)
+	dirPath = o.CleanPath(dirPath)
+	// The upper layer can be a file system like a zip writer,
+	// which can't remove the directories it made
+	if err := validateNewDirs(o, dirPath); err != nil {
+		return err
+	}
+	return o.makeAllDirs(dirPath, perm)
 }
 
 // makeAllDirs creates the clean dirPath and its missing parent
@@ -709,12 +715,6 @@ func (o *OverlayFileSystem) makeAllDirs(dirPath string, perm Permissions) error 
 	case err == nil:
 		return NewErrIsNotDirectory(info.File)
 	case dirPath == "/":
-		return err
-	}
-	// The upper layer can be a file system like a zip writer, which can't
-	// remove directories, so the names of the missing directories are
-	// checked before the first one is made
-	if err := validateWriteDirName(o, dirPath); err != nil {
 		return err
 	}
 	if err := o.makeAllDirs(o.CleanPath(dirPath, ".."), perm); err != nil {

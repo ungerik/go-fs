@@ -482,7 +482,7 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	}
 	// archive/zip adds a name that is too long to the central
 	// directory before it rejects it, so it must never get one
-	if err := zipname.Check(dirtree.CleanName(filePath), isDir); err != nil {
+	if err := zipname.ValidateName(dirtree.CleanName(filePath), isDir); err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}
 	node, isAncestor, err := f.tree.Conflict(filePath)
@@ -511,7 +511,7 @@ func (f *Writer) ValidateName(name string) error {
 	if _, err := dirtree.Elements(name); err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}
-	if err := zipname.Check(name, false); err != nil {
+	if err := zipname.ValidateName(name, false); err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}
 	return nil
@@ -571,7 +571,7 @@ func (f *Writer) writeFile(filePath string, data []byte, perm fs.Permissions) er
 
 // writeDirLocked writes a directory entry. f.mtx must be held.
 // dirPath must be validated with checkNewLocked, or with dirtree.Elements
-// and zipname.Check like in MakeAllDirs, then dirtree.CleanName
+// and zipname.ValidateName like in MakeAllDirs, then dirtree.CleanName
 // returns its elements joined with slashes.
 func (f *Writer) writeDirLocked(dirPath string, perm fs.Permissions) error {
 	header := &zip.FileHeader{
@@ -620,7 +620,7 @@ func (f *Writer) MakeAllDirs(dirPath string, perm fs.Permissions) error {
 		return fmt.Errorf("zipfs: %w", err)
 	}
 	// The parent directories are shorter and have no other characters
-	err = zipname.Check(strings.Join(elements, Separator), true)
+	err = zipname.ValidateName(strings.Join(elements, Separator), true)
 	if err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}

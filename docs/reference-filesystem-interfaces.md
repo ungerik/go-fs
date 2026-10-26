@@ -129,7 +129,7 @@ are only called on file systems that report themselves as writable.
 | `RemoveAllFileSystem`    | `RemoveAll`        | Recursive listing plus `Remove`. A path that does not exist is not an error, and entries removed concurrently are ignored. |
 | `CopyFileSystem`         | `CopyFile`         | `OpenReader` streamed into `OpenWriter` through a 4 MiB buffer. `destFile` is always the final path, never a directory to copy into. |
 | `MoveFileSystem`         | `Move(ctx, filePath, destPath)` | A copy of the file or directory tree, then the removal of the source after the copy succeeded. `destPath` is always the final path, never a directory to move into. |
-| `ValidateNameFileSystem` | `ValidateName` | Every name without a separator that is not empty, `.` or `..` counts as valid. `CopyFile`, `CopyRecursive`, `Move`, `MoveTo` and `Rename` check the names they write with `ValidateName` before they write anything, also the parent directories of a new path, which `MakeAllDirs` checks with a `Stat` of each missing one, and also through a `SubFileSystem` or `OverlayFileSystem` to the file system that gets the writes; `CopyRecursive` checks every directory and the files and links that match its patterns. Existing entries are read and removed with every name. Without it a name that the backend rejects fails a copy at that file. sftpfs, ftpfs, webdavfs, smbfs, s3fs, azureblobfs, dropboxfs and the zipfs and tarfs writers implement it. |
+| `ValidateNameFileSystem` | `ValidateName` | Every name without a separator that is not empty, `.` or `..` counts as valid. `CopyFile`, `CopyRecursive`, `Move`, `MoveTo` and `Rename` check the names they write with `ValidateName` before they write anything, also the parent directories of a new path, which `MakeAllDirs` checks before it makes the first one, with a `Stat` only for a rejected name, which an existing directory may have, and also through a `SubFileSystem` or `OverlayFileSystem` to the file system that gets the writes; `CopyRecursive` checks every directory and the files and links that match its patterns. Existing entries are read and removed with every name, and copied and moved with their names within the file system, which holds them. The write methods of the backend itself, like `OpenWriter` and `WriteAll`, are not checked with `ValidateName`. Without it a name that the backend rejects fails a copy at that file. sftpfs, ftpfs, webdavfs, smbfs, s3fs, azureblobfs, dropboxfs and the zipfs and tarfs writers implement it. |
 
 There is no rename interface: `File.Rename` is a `Move` within the directory,
 so it uses the native `Move` where the backend has one.
@@ -239,6 +239,7 @@ specialized), `r/o` read-only backend so the write operation does not apply.
 | SetPermissions         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
 | Symbolic links         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    |  –   |
 | Seeking reads          |  –  |   ✓    |  ✓   |  –  |  ✓  |    –    |   ✓    |  –   |
+| ValidateName           |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
 
 "Seeking reads" is not an interface: it means that the readers of
 `OpenReader` implement `fs.ReadAtSeekCloser`, so `File.OpenReadSeeker` needs

@@ -481,22 +481,8 @@ func fsMakeAllDirs(fileSystem FileSystem, dirPath string, perm Permissions) erro
 	if err != nil {
 		return err
 	}
-	if _, ok := w.(ValidateNameFileSystem); ok {
-		// A file system like a zip writer can't remove directories, so the
-		// names of the missing ones are checked before the first one is made
-		for p := dirPath; ; {
-			if _, err := w.Stat(p); err == nil {
-				break
-			}
-			if err := validateWriteDirName(w, p); err != nil {
-				return err
-			}
-			dir, name := fsSplitDirAndName(w, p)
-			if name == "" || dir == p {
-				break
-			}
-			p = dir
-		}
+	if err := validateNewDirs(w, dirPath); err != nil {
+		return err
 	}
 	if m, ok := w.(MakeAllDirsFileSystem); ok {
 		return m.MakeAllDirs(dirPath, perm)
@@ -504,22 +490,32 @@ func fsMakeAllDirs(fileSystem FileSystem, dirPath string, perm Permissions) erro
 	return makeAllDirs(w, dirPath, perm)
 }
 
-// validateWriteDirName returns an error wrapping the error of the ValidateName
-// method of the file system that the writes to dirPath of fileSystem go to,
-// see writeTarget, if it is a ValidateNameFileSystem that rejects the name of
-// the directory dirPath.
-func validateWriteDirName(fileSystem FileSystem, dirPath string) error {
-	target, targetPath, _, ok := writeTarget(fileSystem, dirPath)
-	v, validates := target.(ValidateNameFileSystem)
-	if !ok || !validates {
+// validateNewDirs returns an error wrapping os.ErrInvalid for a directory
+// of dirPath or above that doesn't exist and whose name validateWritePathName
+// rejects, if the writes to dirPath go to a ValidateNameFileSystem, see
+// writeTarget. A file system like a zip writer can't remove directories,
+// so the names of the missing directories are checked before the first one
+// is made. Only a rejected name costs a Stat: the parents of an existing
+// directory exist too, and existing entries are read with every name.
+func validateNewDirs(fileSystem FileSystem, dirPath string) error {
+	target, _, _, ok := writeTarget(fileSystem, dirPath)
+	if _, validates := target.(ValidateNameFileSystem); !ok || !validates {
 		return nil
 	}
-	if _, name := fsSplitDirAndName(target, targetPath); name != "" {
-		if err := v.ValidateName(name); err != nil {
-			return fmt.Errorf("can't make directory %q: %w", errSubject(fsFile(fileSystem, dirPath)), err)
+	for p := dirPath; ; {
+		name, err := validateWritePathName(fileSystem, p, false)
+		if err != nil {
+			if _, statErr := fsStat(fileSystem, p); statErr == nil {
+				return nil
+			}
+			return withNameCause(fmt.Errorf("%w: can't make directory %.200q, the name %.200q is not valid there", os.ErrInvalid, errSubject(fsFile(fileSystem, p)), name), err)
 		}
+		dir, _ := fsSplitDirAndName(fileSystem, p)
+		if name == "" || dir == p {
+			return nil
+		}
+		p = dir
 	}
-	return nil
 }
 
 // makeAllDirs recursively creates dirPath and its parents.
@@ -728,16 +724,13 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	}
 	srcIsDir := srcInfo.IsDir && !srcInfo.IsSymlink
 	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
-	if _, name := fsSplitDirAndName(destFS, destPath); name != "" {
-		// The copy would fail at a name that ValidateName rejects after it made
-		// the parent directories, which a zip writer can't remove
-		if err := c.validateWriteName(destFS, name); err != nil {
-			return errInvalidName(src, name, dest, err)
-		}
-		// Like the name of a device, the move would write to it
-		if c.localDest && !isValidLocalName(name) {
-			return errInvalidName(src, name, dest, nil)
-		}
+	// Like the name of a device, which the move would write to, the name is
+	// checked before the source is listed and a link at destPath is removed
+	_, srcName := fsSplitDirAndName(srcFS, srcPath)
+	_, destName := fsSplitDirAndName(destFS, destPath)
+	held := isHeldName(srcFS, srcName, destFS, destPath, destName)
+	if name, err := validateWritePathName(destFS, destPath, held); err != nil {
+		return errInvalidName(src, name, dest, err)
 	}
 
 	// The entry that the source shows, see fsReadTarget, for all checks
@@ -977,21 +970,29 @@ func validateWriteName(fileSystem FileSystem, name string) error {
 }
 
 // validateWritePathName returns the name of filePath and the error of
-// validateWriteName for it, of fileSystem and of the file system that the
-// writes to filePath go to, see writeTarget. A path without a name,
-// like the root, is no error.
-func validateWritePathName(fileSystem FileSystem, filePath string) (name string, err error) {
-	_, name = fsSplitDirAndName(fileSystem, filePath)
+// validateNameIn for it as a new entry of its directory, held tells if
+// the file system holds the name already, see isHeldName. A path without
+// a name, like the root, is no error.
+func validateWritePathName(fileSystem FileSystem, filePath string, held bool) (name string, err error) {
+	dir, name := fsSplitDirAndName(fileSystem, filePath)
 	if name == "" {
 		return "", nil
 	}
-	if err := validateWriteName(fileSystem, name); err != nil {
-		return name, err
+	return name, validateNameIn(fileSystem, dir, name, held)
+}
+
+// isHeldName reports if a copy or move of the entry srcName of srcFS to
+// destPath of destFS, whose name is name, writes a name that destFS holds
+// already: both are the same file system, not through an OverlayFileSystem,
+// whose entries can come from its base layer, and the name stays the same.
+// ValidateName doesn't check such a name, because the file system stores
+// it already, like a key with a backslash in S3, which s3fs doesn't write.
+func isHeldName(srcFS FileSystem, srcName string, destFS FileSystem, destPath, name string) bool {
+	if srcFS != destFS || srcName != name {
+		return false
 	}
-	if target, _, _, ok := writeTarget(fileSystem, filePath); ok && target != fileSystem {
-		return name, validateWriteName(target, name)
-	}
-	return name, nil
+	_, _, viaOverlay, ok := writeTarget(destFS, destPath)
+	return ok && !viaOverlay
 }
 
 func fsListDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {

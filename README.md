@@ -781,6 +781,7 @@ absolute path methods, whose defaults fit it. For the remote backends:
 | SetPermissions         | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
 | Symbolic links         | –   | –      | ✓    | –   | ✓   | –       | –      | –    |
 | Seeking reads          | –   | ✓      | ✓    | –   | ✓   | –       | ✓      | –    |
+| ValidateName           | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  |
 
 `✓` native implementation · `–` falls back to the generic emulation (works the
 same, just not specialized) · `r/o` read-only backend, so the write operation

@@ -19,14 +19,17 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   patterns, and every directory. `File.MakeAllDirs` checks the names of the
   missing directories, also the parent directories that a copy or move
   makes. Their errors wrap the error of `ValidateName`, which tells why.
-  Existing entries are read with every name. sftpfs, ftpfs, webdavfs,
-  smbfs, s3fs, azureblobfs, dropboxfs and the zipfs and tarfs writers
-  implement it with the names that their servers or formats can't write,
-  see the READMEs: a backslash (unless `Options.AllowBackslashInNames` for
-  sftpfs, ftpfs and webdavfs), a NUL character, at which an SFTP server
-  would end a path, CR and LF, which would inject an FTP command, the
-  characters and device names that SMB and Windows servers refuse, invalid
-  UTF-8, control characters, which the XML listings of S3 and Azure Blob
+  Existing entries are read with every name, and copied and moved with
+  their names within the file system, which holds them. The write methods
+  of a file system itself, like `OpenWriter`, are not checked. sftpfs,
+  ftpfs, webdavfs, smbfs, s3fs, azureblobfs, dropboxfs and the zipfs and
+  tarfs writers implement it with the names that their servers or formats
+  can't write, see the READMEs: a backslash (unless
+  `Options.AllowBackslashInNames` for sftpfs, ftpfs and webdavfs), a NUL
+  character, at which an SFTP server would end a path, CR and LF, which
+  would inject an FTP command, the characters and device names that SMB
+  and Windows servers refuse, invalid UTF-8, which go-fs doesn't write,
+  control characters, which the XML listings of S3 and Azure Blob
   Storage can't hold, and trailing dots, which Azure removes.
 - `fstest.RunConformance` checks the `ValidateName` of a file system that
   implements `fs.ValidateNameFileSystem`: names that every file system
@@ -34,9 +37,7 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   writes nothing, and every accepted name of a probe list is written, read
   back and listed with that name.
 - `fstest.MockFullyFeaturedFileSystem` implements `fs.ValidateNameFileSystem`
-  with the hook `MockValidateName`; without it every name is valid. Like every
-  `ValidateNameFileSystem` it makes a recursive copy or move within it list the
-  source first.
+  with the hook `MockValidateName`; without it every name is valid.
 
 ### Changed
 
@@ -64,6 +65,12 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   the flag. `archive/zip` returns the stored bytes, which
   `ZipMemFiles` and `zipfs.Writer` now reject, so the MemFiles and files of
   such an archive couldn't be zipped again.
+- Copies and moves from another file system into a backend fail before
+  they write anything at a name that `ValidateName` of the backend rejects,
+  also where the server wrote it before: a name that is not valid UTF-8
+  into sftpfs, ftpfs and webdavfs on Linux servers, and a backslash into
+  s3fs, which AWS S3 stores but S3-compatible servers reject. Copies and
+  moves within one of them keep these names.
 - `tarfs.Writer` rejects paths with a NUL character, which `archive/tar`
   failed to write without `os.ErrInvalid`, and paths that are not valid
   UTF-8, which the PAX format requires, with an error wrapping
@@ -72,10 +79,12 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Fixed
 
-- `File.Rename` checks the new name like a copy into the directory does:
-  on Windows a name that Windows writes to another entry, like `report.` to
-  `report`, replaced that file, and names with one of `< > " | ? *` reached
-  the file system.
+- `File.Rename`, and `fs.Move` and `File.MoveTo` within one file system,
+  check the new name like a copy into the directory does: on Windows a name
+  that Windows writes to another entry, like `report.` to `report`,
+  replaced that file, and names with one of `< > " | ? *` reached the file
+  system. `fs.CopyFile` to a local name that the local file system doesn't
+  write fails before it makes the parent directories, like `fs.Move`.
 
 - A `zipfs.Writer` path longer than 65535 bytes made the whole archive
   unreadable: `archive/zip` adds the name to its central directory before

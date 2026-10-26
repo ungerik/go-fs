@@ -61,10 +61,11 @@ func CleanName(name string) string {
 // A leading or trailing slash and empty or "." elements are ignored.
 // It returns an error wrapping os.ErrInvalid for names that contain
 // a backslash or a ".." element, because those could address a path
-// outside of the archive when the entries are extracted.
+// outside of the archive when the entries are extracted. The error
+// quotes at most 200 characters of the name.
 func Elements(name string) ([]string, error) {
 	if strings.Contains(name, `\`) {
-		return nil, fmt.Errorf("%w: archive entry name %q must not contain a backslash", os.ErrInvalid, name)
+		return nil, fmt.Errorf("%w: archive entry name %.200q must not contain a backslash", os.ErrInvalid, name)
 	}
 	var elements []string
 	for element := range strings.SplitSeq(name, "/") {
@@ -72,7 +73,7 @@ func Elements(name string) ([]string, error) {
 		case "", ".":
 			continue
 		case "..":
-			return nil, fmt.Errorf("%w: archive entry name %q must not contain a %q element", os.ErrInvalid, name, "..")
+			return nil, fmt.Errorf("%w: archive entry name %.200q must not contain a %q element", os.ErrInvalid, name, "..")
 		}
 		elements = append(elements, element)
 	}

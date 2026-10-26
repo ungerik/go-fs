@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -379,6 +380,9 @@ func TestWriter_ValidateName(t *testing.T) {
 	require.NoError(t, fs.Register(writer))
 
 	assert.NoError(t, writer.ValidateName("a.txt"))
+	err = writer.ValidateName(strings.Repeat("a", 70000) + `\`)
+	assert.ErrorIs(t, err, os.ErrInvalid)
+	assert.Less(t, len(err.Error()), 1000, "the error quotes at most 200 characters of a long name")
 	assert.NoError(t, writer.ValidateName("Größe: what?.txt"), "only Windows can't extract it")
 	for _, name := range []string{`a\b.txt`, "a\x00b", "\xff.txt"} {
 		assert.ErrorIs(t, writer.ValidateName(name), os.ErrInvalid, "%q", name)

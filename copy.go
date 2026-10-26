@@ -82,7 +82,8 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf []byte, per
 		// A name like `..\x` of a source with another separator,
 		// or "NUL" on Windows, would be written outside of dest
 		name := src.Name()
-		if err := validateNameIn(dest, name); err != nil {
+		destFS, destPath := dest.ParseRawURI()
+		if err := validateNameIn(destFS, destPath, name, isHeldName(srcFileSystem(src), name, destFS, destPath, name)); err != nil {
 			return withNameCause(fmt.Errorf("%w: can't copy %.200q into %.200q, the name %.200q is not valid there", os.ErrInvalid, errSubject(src), errSubject(dest), name), err)
 		}
 		dest = dest.Join(src.Name())
@@ -145,7 +146,9 @@ func checkCopySource(src FileReader) (Permissions, error) {
 // is replaced, an existing directory is an ErrIsDirectory.
 // Without perm the copy gets the permissions srcPerm of src,
 // as far as copyPermissions takes them over.
-// The parent directories of dest are created if makeParentDirs is true.
+// The parent directories of dest are created if makeParentDirs is true,
+// after the name of dest is checked with validateWritePathName; without it
+// the caller checked the name, like copyDir with treeCopier.validateWriteName.
 // destIsNotDir tells that the caller already checked
 // that dest is no directory, so it is not checked again.
 // buf points to the copy buffer, which is allocated if empty.
@@ -194,12 +197,14 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 	if makeParentDirs {
 		// A file system like a zip writer can't remove directories,
 		// so the name of dest is checked before they are made
-		if name, err := validateWritePathName(destFS, destPath); err != nil {
+		_, destName := fsSplitDirAndName(destFS, destPath)
+		held := isHeldName(srcFileSystem(src), src.Name(), destFS, destPath, destName)
+		if name, err := validateWritePathName(destFS, destPath, held); err != nil {
 			return errInvalidName(src, name, dest, err)
 		}
 		destDir := dest.Dir()
 		if err := destDir.MakeAllDirs(); err != nil {
-			return fmt.Errorf("CopyFile: can't make directory %q: %w", errSubject(destDir), err)
+			return fmt.Errorf("CopyFile: can't make directory %.200q: %w", errSubject(destDir), err)
 		}
 	}
 
@@ -386,7 +391,10 @@ func copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 // of empty directories and of files that don't match the patterns, are checked
 // while src is listed for the links to directories, which happens for every
 // copy to another file system, so the copy fails before it writes anything,
-// also with the error of listing a sub-directory of src.
+// also with the error of listing a sub-directory of src. Within one file
+// system the names are the ones it holds, which ValidateName doesn't check,
+// except through an OverlayFileSystem, whose names can come from its base
+// layer.
 // The files are copied with permissions like by [CopyFile],
 // the directories with the default permissions of dest.
 // One copy buffer is used for all files.
@@ -455,6 +463,7 @@ type treeCopier struct {
 	links     SymbolicLinkFileSystem // if not nil, every symbolic link is copied as link within it
 	dirLinks  SymbolicLinkFileSystem // the destination if it can create the copies of links to directories
 	sameFS    bool                   // the source and the destination are the same file system
+	heldNames bool                   // writeFS holds the names of the source, see isHeldName
 	writeFS   FileSystem             // the file system that the writes to the destination go to, see newTreeCopier
 	localDest bool                   // writeFS is the local file system
 	move      bool                   // the copy of a move, whose destination didn't exist, see destDir
@@ -467,13 +476,13 @@ func newTreeCopier(ctx context.Context, srcFS, destFS FileSystem, patterns []str
 	// The destination writes to the local file system if it is the
 	// LocalFileSystem, a SubFileSystem of one, or an OverlayFileSystem
 	// whose upper layer, which gets every write, does
-	writeFS, unwrapping := destFS, true
+	writeFS, unwrapping, viaOverlay := destFS, true, false
 	for unwrapping {
 		switch f := writeFS.(type) {
 		case *SubFileSystem:
 			writeFS = f.parent
 		case *OverlayFileSystem:
-			writeFS = f.upper
+			writeFS, viaOverlay = f.upper, true
 		default:
 			unwrapping = false
 		}
@@ -484,6 +493,7 @@ func newTreeCopier(ctx context.Context, srcFS, destFS FileSystem, patterns []str
 		patterns:  patterns,
 		dirLinks:  fsLinks(destFS),
 		sameFS:    srcFS == destFS,
+		heldNames: srcFS == destFS && !viaOverlay,
 		writeFS:   writeFS,
 		localDest: localDest,
 	}
@@ -498,8 +508,12 @@ func (c *treeCopier) validName(destFS FileSystem, name string) bool {
 
 // validateWriteName returns the error of validateWriteName for name, an entry
 // that the copy writes, of destFS and of the file system that the writes
-// go to.
+// go to. Within one file system it holds the names, see isHeldName, and
+// they are not checked.
 func (c *treeCopier) validateWriteName(destFS FileSystem, name string) error {
+	if c.heldNames {
+		return nil
+	}
 	if err := validateWriteName(destFS, name); err != nil || c.writeFS == destFS {
 		return err
 	}
@@ -642,6 +656,15 @@ func isValidWindowsName(name string) bool {
 	})
 }
 
+// srcFileSystem returns the file system of src if it is a File, else nil.
+func srcFileSystem(src FileReader) FileSystem {
+	if f, ok := src.(File); ok {
+		fileSystem, _ := f.ParseRawURI()
+		return fileSystem
+	}
+	return nil
+}
+
 // errInvalidName returns the error wrapping os.ErrInvalid for the entry src
 // of the source that can't be copied to dest, because name, the name of src
 // or of dest, is not valid there, see withNameCause for cause. It quotes at
@@ -688,13 +711,14 @@ func (c *treeCopier) errDirLink(link, dest File) error {
 // an empty directory and of a file that doesn't match the patterns, and
 // with validateWriteName the directories and the files and links that match.
 // The tree is only listed if links to directories can't be copied, which
-// includes every copy to another file system, or if the destination is a
-// ValidateNameFileSystem. Within one file system that copies links and
-// accepts every name it has the names come from the destination itself,
-// and copyDir checks every name again before it writes the entry.
+// includes every copy to another file system, or if the file system that
+// gets the writes is a ValidateNameFileSystem that doesn't hold the names,
+// see isHeldName. Within one file system that copies links the names come
+// from the destination itself, and copyDir checks every name again before
+// it writes the entry.
 func (c *treeCopier) checkSource(src, dest File) error {
 	// writeFS is destFS unless destFS is a SubFileSystem or OverlayFileSystem
-	if _, validates := c.writeFS.(ValidateNameFileSystem); !validates && (c.links != nil || c.canCopyDirLinks()) {
+	if _, validates := c.writeFS.(ValidateNameFileSystem); (!validates || c.heldNames) && (c.links != nil || c.canCopyDirLinks()) {
 		return nil
 	}
 	srcFS, srcPath := src.ParseRawURI()
@@ -785,7 +809,7 @@ func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 		// Also tried if Stat failed for another reason than a missing
 		// directory, like on write-only file systems.
 		if err := fsMakeAllDirs(destFS, destPath, NoPermissions); err != nil {
-			return fmt.Errorf("can't make directory %q: %w", errSubject(dest), err)
+			return fmt.Errorf("can't make directory %.200q: %w", errSubject(dest), err)
 		}
 	}
 	dir := c.newDestDir(statErr)

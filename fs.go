@@ -161,7 +161,7 @@ func Move(ctx context.Context, source, destination File) error {
 			// A name like `..\x` of a source with another separator,
 			// or "NUL" on Windows, would be moved outside of destination
 			name := source.Name()
-			if err := validateNameIn(destination, name); err != nil {
+			if err := validateNameIn(destFS, destPath, name, isHeldName(srcFS, name, destFS, destPath, name)); err != nil {
 				return withNameCause(fmt.Errorf("%w: can't move %.200q into %.200q, the name %.200q is not valid there", os.ErrInvalid, errSubject(source), errSubject(destination), name), err)
 			}
 			destination = destination.Join(source.Name())
@@ -169,9 +169,16 @@ func Move(ctx context.Context, source, destination File) error {
 		}
 	}
 	if srcFS == destFS {
-		// moveByCopy checks the name of destPath itself
-		if name, err := validateWritePathName(destFS, destPath); err != nil {
+		// moveByCopy checks destPath itself. A native move can make the
+		// missing parent directories, like the one of a blob store
+		_, destName := fsSplitDirAndName(destFS, destPath)
+		if name, err := validateWritePathName(destFS, destPath, isHeldName(srcFS, source.Name(), destFS, destPath, destName)); err != nil {
 			return withNameCause(fmt.Errorf("%w: can't move %.200q to %.200q, the name %.200q is not valid there", os.ErrInvalid, errSubject(source), errSubject(destination), name), err)
+		}
+		if dir, _ := fsSplitDirAndName(destFS, destPath); dir != "" {
+			if err := validateNewDirs(destFS, dir); err != nil {
+				return fmt.Errorf("can't move %.200q to %.200q: %w", errSubject(source), errSubject(destination), err)
+			}
 		}
 		return fsMove(ctx, srcFS, srcPath, destPath)
 	}

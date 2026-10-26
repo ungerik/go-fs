@@ -85,7 +85,7 @@ func Zip(ctx context.Context, files ...FileReader) ([]byte, error) {
 		if name == "" {
 			return nil, fmt.Errorf("can't zip %.200q: %w: zip entry name is empty", errSubject(file), os.ErrInvalid)
 		}
-		err = zipname.Check(name, info.IsDir())
+		err = zipname.ValidateName(name, info.IsDir())
 		if err != nil {
 			return nil, fmt.Errorf("can't zip %.200q: %w", errSubject(file), err)
 		}

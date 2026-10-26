@@ -29,7 +29,7 @@ const (
 // The bytes below 0x80 are ASCII.
 var cp437 = []rune("ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00a0")
 
-// Check returns an error wrapping os.ErrInvalid if name,
+// ValidateName returns an error wrapping os.ErrInvalid if name,
 // the slash separated name of a zip entry without the trailing slash
 // of a directory, is one that zip tools read wrong or that corrupts
 // the archive. archive/zip writes all of them, except a name that is
@@ -46,7 +46,7 @@ var cp437 = []rune("ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥
 // names such as CON, names ending in a dot or a space, names with one
 // of the characters < > " | ? * and names that differ only in case.
 // The path rules, like no ".." elements, are checked separately.
-func Check(name string, isDir bool) error {
+func ValidateName(name string, isDir bool) error {
 	size := len(name)
 	if isDir {
 		size++ // for the trailing slash
@@ -157,13 +157,25 @@ func Decode(header *zip.FileHeader) string {
 // only differs from stored, the stored name, in the characters that the
 // encoding of stored can't hold: the ASCII parts of unicodeName must be
 // the ones of stored in the same order, and every run of other characters
-// stands for at least one byte of stored that is no slash and no dot, like
-// a character of another code page, whose second byte can be ASCII, or
-// a substitute like "_". So a run can't hide a directory or an extension.
+// stands for at least one byte of stored that is no slash, no dot and no
+// backslash, which zip readers take for a separator, like a character of
+// another code page or a substitute like "_". A backslash can only be the
+// second byte of a double-byte character, after a byte from 0x80, like in
+// "表" of Shift-JIS. So a run can't hide a directory or an extension.
 func keepsASCII(stored, unicodeName string) bool {
 	isASCII := func(r rune) bool { return r < utf8.RuneSelf }
 	isOther := func(r rune) bool { return r >= utf8.RuneSelf }
-	isRunBytes := func(b string) bool { return b != "" && !strings.ContainsAny(b, "/.") }
+	isRunBytes := func(b string) bool {
+		if b == "" || strings.ContainsAny(b, "/.") {
+			return false
+		}
+		for i := range len(b) {
+			if b[i] == '\\' && (i == 0 || b[i-1] < utf8.RuneSelf) {
+				return false
+			}
+		}
+		return true
+	}
 	i := strings.IndexFunc(unicodeName, isOther)
 	if i < 0 {
 		return unicodeName == stored
