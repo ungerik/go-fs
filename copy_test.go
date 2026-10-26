@@ -1938,3 +1938,66 @@ func TestCopyRecursive_ValidName(t *testing.T) {
 	require.False(t, destFS.RootDir().Join("copy").Exists(), "nothing was written")
 	require.False(t, view.Join("copy").Exists(), "nothing was written through the SubFileSystem")
 }
+
+// TestValidName_WritesOnly verifies that ValidName is only consulted for
+// names that get written: a single file copied, moved or renamed into a
+// ValidNameFileSystem fails before it writes anything, while the existing
+// entries of a ValidNameFileSystem stay readable through a SubFileSystem
+// and as base layer of an OverlayFileSystem, which gets no writes, and a
+// copy into such an overlay writes to the upper layer.
+// Regression: the base and the parent rejected reads of such names.
+func TestValidName_WritesOnly(t *testing.T) {
+	ctx := t.Context()
+	newMemFS := func() *fs.MemFileSystem {
+		memFS, err := fs.NewMemFileSystem(nil)
+		require.NoError(t, err)
+		require.NoError(t, fs.Register(memFS))
+		t.Cleanup(func() { _ = memFS.Close() })
+		return memFS
+	}
+	srcFS := newMemFS()
+	src := srcFS.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	badSrc := src.Join("bad.txt")
+	require.NoError(t, badSrc.WriteAllString(ctx, "bad"))
+
+	baseMemFS, err := fs.NewMemFileSystem(nil)
+	require.NoError(t, err)
+	base := validNameFS{baseMemFS}
+	require.NoError(t, fs.Register(base))
+	t.Cleanup(func() { fs.Unregister(base) })
+	require.NoError(t, base.RootDir().Join("view").MakeDir())
+	require.NoError(t, base.RootDir().Join("view", "bad.txt").WriteAllString(ctx, "existing"))
+
+	// Writes of the name fail before anything is written
+	dir := base.RootDir().Join("dir")
+	require.NoError(t, dir.MakeDir())
+	require.ErrorIs(t, fs.CopyFile(ctx, badSrc, dir), os.ErrInvalid)
+	require.ErrorIs(t, fs.Move(ctx, badSrc, dir), os.ErrInvalid)
+	require.True(t, badSrc.Exists(), "the source of a failed move is kept")
+	require.False(t, dir.Join("bad.txt").Exists())
+	_, err = base.RootDir().Join("view", "bad.txt").Rename(ctx, "bad2.txt")
+	require.ErrorIs(t, err, os.ErrInvalid)
+
+	// Existing entries can be read through a SubFileSystem
+	sub, err := fs.NewSubFileSystem(base, "/view", "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(sub))
+	t.Cleanup(func() { _ = sub.Close() })
+	data, err := sub.RootDir().Join("bad.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "existing", data)
+
+	// and through an OverlayFileSystem, whose upper layer gets the writes
+	overlay, err := fs.NewOverlayFileSystem(base, newMemFS(), "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(overlay))
+	t.Cleanup(func() { _ = overlay.Close() })
+	data, err = overlay.RootDir().Join("view", "bad.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "existing", data)
+	require.NoError(t, fs.CopyRecursive(ctx, src, overlay.RootDir().Join("copy")))
+	data, err = overlay.RootDir().Join("copy", "bad.txt").ReadAllString(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "bad", data)
+}

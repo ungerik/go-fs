@@ -483,10 +483,11 @@ func newTreeCopier(ctx context.Context, srcFS, destFS FileSystem, patterns []str
 }
 
 // validName reports if an entry of the source with name can be written
-// to destFS as one entry with that name: see isValidName, also for the
-// file system that the writes go to, and for a local one isValidLocalName.
+// to destFS as one entry with that name: see isValidWriteName, also for
+// the file system that the writes go to, and for a local one
+// isValidLocalName.
 func (c *treeCopier) validName(destFS FileSystem, name string) bool {
-	return isValidName(destFS, name) && isValidName(c.writeFS, name) && (!c.localDest || isValidLocalName(name))
+	return isValidWriteName(destFS, name) && isValidWriteName(c.writeFS, name) && (!c.localDest || isValidLocalName(name))
 }
 
 // writeTarget returns the file system and the path that a write to filePath

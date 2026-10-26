@@ -366,6 +366,20 @@ func TestUnzipToMemFiles_InsecureUnicodePath(t *testing.T) {
 	}
 }
 
+// TestUnzipToMemFiles_LongNameError verifies that the error of an entry
+// name quotes at most 200 characters of it.
+func TestUnzipToMemFiles_LongNameError(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	_, err := zw.Create("../" + strings.Repeat("a", 60000))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	_, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
+	require.ErrorIs(t, err, zip.ErrInsecurePath)
+	require.Less(t, len(err.Error()), 1000)
+}
+
 // TestUnzipToMemFiles_MaxSize is a regression test: UnzipToMemFiles had
 // no size limit, so a small zip bomb could exhaust the memory.
 func TestUnzipToMemFiles_MaxSize(t *testing.T) {

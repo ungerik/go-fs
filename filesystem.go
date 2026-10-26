@@ -385,9 +385,11 @@ type WatchFileSystem interface {
 
 // ValidNameFileSystem can be implemented by file systems that can't
 // write some names of entries that their separator allows, like the
-// names that are not valid in a zip archive. A copy or move into them
-// checks the names of the source with ValidName and fails before it
-// writes anything instead of at the first such name.
+// names that are not valid in a zip archive. A copy, move or rename into
+// them checks the new names with ValidName and fails before it writes
+// anything instead of at the first such name. Existing entries are read
+// and removed with every name, also through a SubFileSystem or as base
+// layer of an OverlayFileSystem.
 type ValidNameFileSystem interface {
 	FileSystem
 

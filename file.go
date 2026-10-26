@@ -1299,7 +1299,7 @@ func (file File) Rename(ctx context.Context, newName string) (renamedFile File, 
 	if path == "" {
 		return "", ErrEmptyPath
 	}
-	if !isValidName(fileSystem, newName) {
+	if !isValidWriteName(fileSystem, newName) {
 		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
 	}
 	dir, _ := fsSplitDirAndName(fileSystem, path)
