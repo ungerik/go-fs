@@ -421,15 +421,22 @@ func ParseRawURI(uri string) (fs FileSystem, fsPath string) {
 }
 
 // parseLocalFileURI returns local and the clean local path of uri, a URI with
-// the [LocalPrefix], or the [InvalidFileSystem] and uri for a file URI with
-// a host like "file://server/share/x", which has no local path on
-// platforms without UNC paths, see cleanLocalFileURI.
+// the [LocalPrefix] whose path is percent-encoded like in a File, like
+// [LocalFileSystem.CleanPath] of the decoded uri, decoding and converting uri
+// once for ParseRawURI. For a file URI that names no local file, see
+// fileURILocalPath, like one with a host like "file://server/share/x", which
+// has no local path on platforms without UNC paths, it returns the
+// [InvalidFileSystem] and uri.
 func parseLocalFileURI(local FileSystem, uri string) (FileSystem, string) {
-	cleanPath, isLocal := cleanLocalFileURI(uri)
-	if !isLocal {
+	filePath, isLocal := decodeLocalFileURI(uri)
+	switch {
+	case !isLocal:
 		return Invalid, uri
+	case filePath == "":
+		// Not cleaned to ".", the working directory
+		return local, ""
 	}
-	return local, cleanPath
+	return local, cleanLocalPath(filePath, nil)
 }
 
 // uriPath returns the clean path of uri within fileSystem,

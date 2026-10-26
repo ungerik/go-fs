@@ -304,8 +304,7 @@ func decodeLocalFileURI(uri string) (filePath string, isLocal bool) {
 // becomes "server/share/x"), except the servers "localhost" and "~" and
 // servers like "C:", which keep the empty authority
 // ("file:////localhost/share/x"), because as authority they mean the local
-// host, the home directory and the drive, see needsEmptyAuthority, and
-// a Unix path is used as is.
+// host, the home directory and the drive, and a Unix path is used as is.
 // A relative path gets the authority "." of no host ("data/x" becomes
 // "./data/x"), see fileURILocalPath. windows selects the rules of Windows.
 //
@@ -317,13 +316,21 @@ func decodeLocalFileURI(uri string) (filePath string, isLocal bool) {
 // with the authority "?" or "." that names no file.
 func fileURIPathOf(slashPath string, windows bool) string {
 	switch {
-	case windows && (isLongPath(slashPath) || needsEmptyAuthority(slashPath)):
-		// The empty authority keeps the long path: "file:////?/C:/x".
-		// "file://localhost/share/x" would be "/share/x", "file://~/share/x"
-		// the home directory and "file://C:/x" the drive C:, the empty
-		// authority keeps the UNC path: "file:////localhost/share/x"
+	case windows && isLongPath(slashPath):
+		// The empty authority keeps the long path: "file:////?/C:/x"
 		return slashPath
 	case strings.HasPrefix(slashPath, "//"):
+		if windows {
+			// A server that a file URI can't have as authority, because as
+			// authority it means something else: "file://localhost/share/x",
+			// "localhost" in any case, would be "/share/x", "file://~/share/x"
+			// the home directory and "file://C:/x" the drive C:, the empty
+			// authority keeps the UNC path: "file:////localhost/share/x"
+			server, _ := uncServer(slashPath)
+			if strings.EqualFold(server, "localhost") || server == "~" || isDriveLetterPath(server) {
+				return slashPath
+			}
+		}
 		return slashPath[2:]
 	case strings.HasPrefix(slashPath, "/"):
 		return slashPath
@@ -402,7 +409,13 @@ func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool)
 	if isLongPath(filePath) {
 		return filePath, true
 	}
-	if isNoServerUNCPath(filePath) || isNTNamespacePath(filePath) {
+	// A UNC path with the server ".", ".." or "?", which are no servers, and
+	// a path that begins with the NT object namespace prefix `\??\`, like
+	// `\??\PhysicalDrive0`, which reaches devices, name no local file
+	server, isUNC := uncServer(filePath)
+	noServerUNC := isUNC && (server == "." || server == ".." || server == "?")
+	ntNamespace := len(filePath) >= 3 && isSlash(filePath[0]) && filePath[1] == '?' && filePath[2] == '?' && (len(filePath) == 3 || isSlash(filePath[3]))
+	if noServerUNC || ntNamespace {
 		return "/" + strings.TrimLeft(filePath, `/\`), false
 	}
 	if len(filePath) == 2 && filePath[1] == ':' {
@@ -410,27 +423,6 @@ func fileURILocalPath(rest string, windows bool) (filePath string, isLocal bool)
 		filePath += "/"
 	}
 	return filePath, true
-}
-
-// needsEmptyAuthority reports if the Windows path p with forward slashes
-// is a UNC path of a server that a file URI can't have as authority,
-// because as authority it means something else: "localhost", in any case,
-// a local path, "~" the home directory and a drive letter like "C:" the
-// drive, see fileURIPathOf.
-func needsEmptyAuthority(p string) bool {
-	if !strings.HasPrefix(p, "//") {
-		return false
-	}
-	server, _ := uncServer(p)
-	return strings.EqualFold(server, "localhost") || server == "~" || isDriveLetterPath(server)
-}
-
-// isNoServerUNCPath reports if the Windows path p with forward or
-// backward slashes has the form of a UNC path with the server ".",
-// ".." or "?", which are no servers, see fileURILocalPath.
-func isNoServerUNCPath(p string) bool {
-	server, ok := uncServer(p)
-	return ok && (server == "." || server == ".." || server == "?")
 }
 
 // uncServer returns the server of p, a Windows UNC path with forward or
@@ -459,13 +451,6 @@ func isLongPath(p string) bool {
 	return len(rest) > 2 && isDriveLetterPath(rest) || len(rest) > 4 && strings.EqualFold(rest[:3], "UNC") && isSlash(rest[3])
 }
 
-// isNTNamespacePath reports if the Windows path p with forward or
-// backward slashes begins with the NT object namespace prefix `\??\`,
-// like `\??\PhysicalDrive0`, which reaches devices, see fileURILocalPath.
-func isNTNamespacePath(p string) bool {
-	return len(p) >= 3 && isSlash(p[0]) && p[1] == '?' && p[2] == '?' && (len(p) == 3 || isSlash(p[3]))
-}
-
 // isSlash reports if c is a forward or a backward slash.
 func isSlash(c byte) bool {
 	return c == '/' || c == '\\'
@@ -481,23 +466,6 @@ func isDriveLetterPath(filePath string) bool {
 		return false
 	}
 	return len(filePath) == 2 || isSlash(filePath[2])
-}
-
-// cleanLocalFileURI returns the clean local path of uri, a URI with the
-// [LocalPrefix] whose path is percent-encoded like in a File, like
-// [LocalFileSystem.CleanPath] of the decoded uri, and reports if it names
-// a local file, see fileURILocalPath. It decodes and converts uri once
-// for ParseRawURI.
-func cleanLocalFileURI(uri string) (cleanPath string, isLocal bool) {
-	filePath, isLocal := decodeLocalFileURI(uri)
-	switch {
-	case !isLocal:
-		return "", false
-	case filePath == "":
-		// Not cleaned to ".", the working directory
-		return "", true
-	}
-	return cleanLocalPath(filePath, nil), true
 }
 
 // CleanPath converts a first element that begins with the [LocalPrefix]

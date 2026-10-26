@@ -3,6 +3,8 @@ package fs
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 // Filef is a shortcut for File(fmt.Sprintf(format, args...))
@@ -128,11 +130,34 @@ func Move(ctx context.Context, source, destination File) error {
 	if srcFS == destFS && srcPath == destPath {
 		return nil
 	}
-	// Moving into an existing directory, unless it is the source itself
-	// under another spelling of its name, which renames the source
-	if destination.IsDir() && !isLocalRenameOfDirEntry(srcFS, srcPath, destFS, destPath) {
-		destination = destination.Join(source.Name())
-		destFS, destPath = destination.ParseRawURI()
+	if destination.IsDir() {
+		// Moving into an existing directory, unless it is the directory entry
+		// of the source itself under another spelling of its name, which the
+		// file system matches to the same entry, like another case on
+		// a case-insensitive file system or another Unicode normalization on
+		// APFS: that renames the source. Both must be local paths of the same
+		// file per os.Lstat with other names in the same directory: that is
+		// the same entry for a directory, which has no other hard links,
+		// and for a name that only differs in case.
+		renamesSource := false
+		srcLocal, destLocal, _, bothLocal := fsLocalPaths(srcFS, srcPath, destFS, destPath)
+		if bothLocal && filepath.Base(srcLocal) != filepath.Base(destLocal) {
+			if srcInfo, srcErr := os.Lstat(srcLocal); srcErr == nil {
+				destInfo, destErr := os.Lstat(destLocal)
+				switch {
+				case destErr != nil || !os.SameFile(srcInfo, destInfo):
+					// Not the same file
+				case srcInfo.IsDir():
+					renamesSource = isLocalInSameDir(srcLocal, destLocal)
+				default:
+					renamesSource = isLocalSameDirEntry(srcLocal, destLocal)
+				}
+			}
+		}
+		if !renamesSource {
+			destination = destination.Join(source.Name())
+			destFS, destPath = destination.ParseRawURI()
+		}
 	}
 	if srcFS == destFS {
 		return fsMove(ctx, srcFS, srcPath, destPath)

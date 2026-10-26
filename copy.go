@@ -156,10 +156,26 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 		if srcFS == destFS && srcPath == destPath {
 			return nil // Copying a file onto itself is a no-op
 		}
-		if isCopyOntoItself(srcFS, srcPath, destFS, destPath) {
-			// Through another path to the file, like a SubFileSystem,
-			// the layer of an OverlayFileSystem or a local hard link
-			return nil
+		// Also a no-op through another path to the file, where the copy would
+		// write the file that it reads, which the writer would truncate before
+		// it is read: the entry that the source shows, see fsReadTarget, is the
+		// one that a write to the destination goes to, see writeTarget,
+		// compared by path, see isSameTarget, like through SubFileSystems of
+		// one file system or the layer of an OverlayFileSystem that holds the
+		// file, also when it is not local. A local file is also compared as
+		// file, see isLocalSameFile, so another path to it, like a symbolic
+		// link, a hard link or a bind mount, is the same file. Also within one
+		// file system, because an OverlayFileSystem resolves the links of its
+		// layers to other paths than the local file system.
+		if srcRead, srcReadPath, _, readOK := fsReadTarget(srcFS, srcPath); readOK {
+			if destTarget, destTargetPath, _, ok := writeTarget(destFS, destPath); ok && isSameTarget(srcRead, srcReadPath, destTarget, destTargetPath) {
+				return nil
+			}
+			if _, srcIsLocal := srcRead.(*LocalFileSystem); srcIsLocal {
+				if destLocal, _, ok := fsLocalPath(destFS, destPath); ok && isLocalSameFile(srcReadPath, destLocal, os.Stat) {
+					return nil
+				}
+			}
 		}
 		srcPerm = copyPermissions(srcFS, srcPerm)
 	}
@@ -362,8 +378,14 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 	if dest == "" {
 		return ErrEmptyPath
 	}
-	if err := checkPatterns(patterns); err != nil {
-		return err
+	// A malformed pattern fails the copy before it writes anything, also
+	// a copy of a file: copyDir only matches a pattern when it finds a file
+	// or a link, after it created the destination directory. path.Match
+	// checks the whole pattern, also the part after a mismatch.
+	for _, pattern := range patterns {
+		if _, err := path.Match(pattern, ""); err != nil {
+			return fmt.Errorf("%w: %q", err, pattern)
+		}
 	}
 	if !src.IsDir() {
 		// Just copy one file
@@ -407,20 +429,6 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 	return c.copyDir(src, dest, nil)
 }
 
-// checkPatterns returns an error wrapping path.ErrBadPattern for the first
-// malformed pattern of a tree copy, so that the copy fails before it writes
-// anything: copyDir only matches a pattern when it finds a file or a link,
-// after it created the destination directory. path.Match checks the whole
-// pattern, also the part after a mismatch.
-func checkPatterns(patterns []string) error {
-	for _, pattern := range patterns {
-		if _, err := path.Match(pattern, ""); err != nil {
-			return fmt.Errorf("%w: %q", err, pattern)
-		}
-	}
-	return nil
-}
-
 // treeCopier copies directory trees for CopyRecursive and moveByCopy.
 type treeCopier struct {
 	ctx       context.Context
@@ -428,7 +436,7 @@ type treeCopier struct {
 	links     SymbolicLinkFileSystem // if not nil, every symbolic link is copied as link within it
 	dirLinks  SymbolicLinkFileSystem // the destination if it can create the copies of links to directories
 	sameFS    bool                   // the source and the destination are the same file system
-	localDest bool                   // the destination writes to the local file system, see writesToLocal
+	localDest bool                   // the destination writes to the local file system, see newTreeCopier
 	move      bool                   // the copy of a move, whose destination didn't exist, see destDir
 	buf       []byte                 // copy buffer for all files, allocated on first use
 }
@@ -436,12 +444,27 @@ type treeCopier struct {
 // newTreeCopier returns a treeCopier from srcFS to destFS
 // that copies the files matching patterns.
 func newTreeCopier(ctx context.Context, srcFS, destFS FileSystem, patterns []string) *treeCopier {
+	// The destination writes to the local file system if it is the
+	// LocalFileSystem, a SubFileSystem of one, or an OverlayFileSystem
+	// whose upper layer, which gets every write, does
+	writeFS, unwrapping := destFS, true
+	for unwrapping {
+		switch f := writeFS.(type) {
+		case *SubFileSystem:
+			writeFS = f.parent
+		case *OverlayFileSystem:
+			writeFS = f.upper
+		default:
+			unwrapping = false
+		}
+	}
+	_, localDest := writeFS.(*LocalFileSystem)
 	return &treeCopier{
 		ctx:       ctx,
 		patterns:  patterns,
 		dirLinks:  fsLinks(destFS),
 		sameFS:    srcFS == destFS,
-		localDest: writesToLocal(destFS),
+		localDest: localDest,
 	}
 }
 
@@ -450,24 +473,6 @@ func newTreeCopier(ctx context.Context, srcFS, destFS FileSystem, patterns []str
 // and for a local destination isValidLocalName.
 func (c *treeCopier) validName(destFS FileSystem, name string) bool {
 	return isValidName(destFS, name) && (!c.localDest || isValidLocalName(name))
-}
-
-// writesToLocal reports if fileSystem writes its files to the local file
-// system: it is the LocalFileSystem, a SubFileSystem of one, or an
-// OverlayFileSystem whose upper layer, which gets every write, does.
-func writesToLocal(fileSystem FileSystem) bool {
-	for {
-		switch f := fileSystem.(type) {
-		case *LocalFileSystem:
-			return true
-		case *SubFileSystem:
-			fileSystem = f.parent
-		case *OverlayFileSystem:
-			fileSystem = f.upper
-		default:
-			return false
-		}
-	}
 }
 
 // writeTarget returns the file system and the path that a write to filePath
@@ -547,32 +552,6 @@ func isInsideDirView(dirFS FileSystem, dirPath string, target FileSystem, target
 			isInsideDirView(f.base, f.basePath(dirPath), target, targetPath)
 	}
 	return dirFS == target && isSubPath(dirFS, dirFS.CleanPath(dirPath), target.CleanPath(targetPath))
-}
-
-// isCopyOntoItself reports if a copy of the file srcPath of srcFS to destPath
-// of destFS would write the file that it reads, which the writer would
-// truncate before it is read: the entry that the source shows, see
-// fsReadTarget, is the one that a write to the destination goes to, see
-// writeTarget, compared by path, see isSameTarget, like through
-// SubFileSystems of one file system or the layer of an OverlayFileSystem
-// that holds the file, also when it is not local. A local file is also
-// compared as file, see isLocalSameFile, so another path to it, like
-// a symbolic link, a hard link or a bind mount, is the same file. Also
-// within one file system, because an OverlayFileSystem resolves the links
-// of its layers to other paths than the local file system.
-func isCopyOntoItself(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
-	src, srcTargetPath, _, ok := fsReadTarget(srcFS, srcPath)
-	if !ok {
-		return false
-	}
-	if dest, destTargetPath, _, ok := writeTarget(destFS, destPath); ok && isSameTarget(src, srcTargetPath, dest, destTargetPath) {
-		return true
-	}
-	if _, local := src.(*LocalFileSystem); !local {
-		return false
-	}
-	destLocal, _, ok := fsLocalPath(destFS, destPath)
-	return ok && isLocalSameFile(srcTargetPath, destLocal, os.Stat)
 }
 
 // isCopyIntoItself reports if a copy of the directory srcPath of srcFS to
@@ -699,7 +678,7 @@ func (c *treeCopier) checkSourceDir(srcFS FileSystem, dirPath string, dest File)
 		if !info.IsSymlink {
 			return nil
 		}
-		// checkPatterns rejected malformed patterns before
+		// CopyRecursive rejected malformed patterns before
 		match, err := fsimpl.MatchAnyPattern(info.Name, c.patterns)
 		if err != nil || !match {
 			return err
@@ -726,7 +705,7 @@ func (c *treeCopier) checkSourceDir(srcFS FileSystem, dirPath string, dest File)
 // whose name only differs in case from a directory or file of src on
 // a case-insensitive destination. An existing directory below the root
 // that the copy wrote for another name of the source is an error of
-// errCopiedOver, see destDir.
+// destDir.checkExisting.
 func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 	if err := c.ctx.Err(); err != nil {
 		return err
@@ -797,7 +776,7 @@ func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 // points to is never written, and a file that the copy would write into,
 // like a device, a named pipe or a socket, see isSpecialFile, the error of
 // errSpecialFile. An existing file that the copy wrote for another name of the
-// source is the error of errCopiedOver, see destDir. A missing dest or an
+// source is the error of destDir.checkExisting. A missing dest or an
 // error of Lstat, like on write-only file systems, is left to the writer.
 // The one Lstat replaces the check of copyFileTo if dest is a directory.
 func checkFileDest(src, dest File, dir *destDir) error {
@@ -899,7 +878,7 @@ type destDir struct {
 	written map[localEntryKey][]os.FileInfo
 
 	// listed has the names that the local directory listed when the copy
-	// first found an entry that it wrote under another name, see wroteEntry,
+	// first found an entry that it wrote under another name, see checkExisting,
 	// nil until then. It is empty if the directory can't be listed.
 	listed map[string]bool
 }
@@ -934,39 +913,36 @@ func (c *treeCopier) newDestDir(statErr error) *destDir {
 	return &destDir{}
 }
 
-// checkExisting returns the error of errCopiedOver if the existing entry
+// checkExisting returns an error wrapping os.ErrExist if the existing entry
 // dest of the directory, where src is to be copied, is one that the copy
-// wrote for another name of the source.
+// wrote for another name of the source that the destination doesn't tell
+// apart from the name of src, see destDir, or which another process created
+// in a directory that the copy created or a move found missing.
 func (d *destDir) checkExisting(src, dest File) error {
-	if d.isNew || d.wroteEntry(dest) {
-		return errCopiedOver(src, dest)
+	copiedOver := d.isNew
+	if !copiedOver && len(d.written) > 0 {
+		// The copy wrote the existing local entry dest under another name,
+		// see recordWrite, if it wrote the same file under a name that is not
+		// another hard link of it. Two hard links of a file are two entries,
+		// which the directory lists with both names, and the copy writes them
+		// one after the other. A name that the destination matches to an entry
+		// of another name, like another case, is not listed, the directory
+		// lists the entry with its name, see isListed.
+		if localPath, info, ok := localLstat(dest); ok {
+			copiedOver = slices.ContainsFunc(d.written[newLocalEntryKey(info)], func(written os.FileInfo) bool {
+				if !os.SameFile(written, info) {
+					return false
+				}
+				dir := filepath.Dir(localPath)
+				hardLinks := d.isListed(dir, written.Name()) && d.isListed(dir, info.Name())
+				return !hardLinks
+			})
+		}
+	}
+	if copiedOver {
+		return fmt.Errorf("can't copy %s over an entry that didn't exist before the copy, which the copy wrote for another name that the destination doesn't tell apart, like another case, or another process created: %w", errSubject(src), NewErrAlreadyExists(dest))
 	}
 	return nil
-}
-
-// wroteEntry reports if the copy wrote the existing local entry dest
-// under another name, see recordWrite: the copy wrote the same file under
-// a name that is not another hard link of it. Two hard links of a file are
-// two entries, which the directory lists with both names, and the copy
-// writes them one after the other. A name that the destination matches to
-// an entry of another name, like another case, is not listed, the directory
-// lists the entry with its name, see isListed.
-func (d *destDir) wroteEntry(dest File) bool {
-	if len(d.written) == 0 {
-		return false
-	}
-	localPath, info, ok := localLstat(dest)
-	if !ok {
-		return false
-	}
-	return slices.ContainsFunc(d.written[newLocalEntryKey(info)], func(written os.FileInfo) bool {
-		if !os.SameFile(written, info) {
-			return false
-		}
-		dir := filepath.Dir(localPath)
-		hardLinks := d.isListed(dir, written.Name()) && d.isListed(dir, info.Name())
-		return !hardLinks
-	})
 }
 
 // isListed reports if the local directory dirPath of d lists an entry with
@@ -975,7 +951,7 @@ func (d *destDir) wroteEntry(dest File) bool {
 // An entry that the copy creates after the listing is not listed, it is
 // a new file, whose only other name can be one that the destination matches
 // to its entry, like another case, which is never listed. If the directory
-// can't be listed, no name is listed, so every match of wroteEntry counts.
+// can't be listed, no name is listed, so every match of checkExisting counts.
 func (d *destDir) isListed(dirPath, name string) bool {
 	if d.listed == nil {
 		d.listed = make(map[string]bool)
@@ -1015,15 +991,6 @@ func localLstat(file File) (localPath string, info os.FileInfo, ok bool) {
 		return "", nil, false
 	}
 	return localPath, info, true
-}
-
-// errCopiedOver returns the error wrapping os.ErrExist for the existing
-// entry dest where the entry src of the source is to be copied, which the
-// copy wrote for another name of the source that the destination doesn't
-// tell apart from the name of src, see destDir, or which another process
-// created in a directory that the copy created or a move found missing.
-func errCopiedOver(src, dest File) error {
-	return fmt.Errorf("can't copy %s over an entry that didn't exist before the copy, which the copy wrote for another name that the destination doesn't tell apart, like another case, or another process created: %w", errSubject(src), NewErrAlreadyExists(dest))
 }
 
 // errDestLink returns the error wrapping os.ErrExist for the symbolic link

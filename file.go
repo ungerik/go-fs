@@ -397,7 +397,11 @@ func (file File) AbsPath() string {
 // path depending on the file system.
 func (file File) HasAbsPath() bool {
 	fileSystem, path := file.ParseRawURI()
-	return fsIsAbsPath(fileSystem, path)
+	// Paths are always absolute except for AbsPathFileSystem implementations
+	if a, ok := fileSystem.(AbsPathFileSystem); ok {
+		return a.IsAbsPath(path)
+	}
+	return true
 }
 
 // ToAbsPath returns the File with an absolute
@@ -427,7 +431,27 @@ func (file File) RelPathOf(target File) (string, error) {
 	if isEmptyLocalPath(fileSystem, basePath) || isEmptyLocalPath(fileSystem, targetPath) {
 		return "", ErrEmptyPath
 	}
-	return fsRelPath(fileSystem, basePath, targetPath)
+	if a, ok := fileSystem.(AbsPathFileSystem); ok {
+		return a.RelPath(basePath, targetPath)
+	}
+	// Every element of basePath after the ones that it shares with
+	// targetPath is left with "..", then the rest of targetPath follows
+	sep := fileSystem.Separator()
+	base := fsSplitPath(fileSystem, basePath)
+	targ := fsSplitPath(fileSystem, targetPath)
+	common := 0
+	for common < len(base) && common < len(targ) && base[common] == targ[common] {
+		common++
+	}
+	var parts []string
+	for range base[common:] {
+		parts = append(parts, "..")
+	}
+	parts = append(parts, targ[common:]...)
+	if len(parts) == 0 {
+		return ".", nil
+	}
+	return strings.Join(parts, sep), nil
 }
 
 // IsRegular reports if this is a regular file.
@@ -909,7 +933,18 @@ func (file File) ListDirInfoRecursive(ctx context.Context, callback func(*FileIn
 // at least one of the patterns are returned.
 func (file File) ListDirMax(ctx context.Context, max int, patterns ...string) (files []File, err error) {
 	fileSystem, path := file.ParseRawURI()
-	return fsListDirMax(ctx, fileSystem, path, max, patterns)
+	if path == "" {
+		return nil, ErrEmptyPath
+	}
+	if max == 0 {
+		return nil, nil
+	}
+	if err = fsReadable(fileSystem); err != nil {
+		return nil, err
+	}
+	return listDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
+		return fsListDir(ctx, fileSystem, path, patterns, FileInfoToFileCallback(callback))
+	})
 }
 
 // ListDirRecursiveMax returns at most max files from the directory and its sub-directories.
@@ -1241,7 +1276,15 @@ func (file File) Truncate(ctx context.Context, newSize int64) error {
 // where the file is copied and the original removed.
 func (file File) Rename(ctx context.Context, newName string) (renamedFile File, err error) {
 	fileSystem, path := file.ParseRawURI()
-	newPath, err := fsRename(ctx, fileSystem, path, newName)
+	if path == "" {
+		return "", ErrEmptyPath
+	}
+	if !isValidName(fileSystem, newName) {
+		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
+	}
+	dir, _ := fsSplitDirAndName(fileSystem, path)
+	newPath := fileSystem.CleanPath(dir, newName)
+	err = fsMove(ctx, fileSystem, path, newPath)
 	if err != nil {
 		return "", err
 	}

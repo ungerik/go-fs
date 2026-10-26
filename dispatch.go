@@ -94,44 +94,12 @@ func fsIsHidden(fileSystem FileSystem, filePath string) bool {
 	return strings.HasPrefix(name, ".")
 }
 
-// fsIsAbsPath returns if filePath is absolute.
-// Paths are always absolute except for AbsPathFileSystem implementations.
-func fsIsAbsPath(fileSystem FileSystem, filePath string) bool {
-	if a, ok := fileSystem.(AbsPathFileSystem); ok {
-		return a.IsAbsPath(filePath)
-	}
-	return true
-}
-
 // fsAbsPath returns filePath in absolute form.
 func fsAbsPath(fileSystem FileSystem, filePath string) string {
 	if a, ok := fileSystem.(AbsPathFileSystem); ok {
 		return a.AbsPath(filePath)
 	}
 	return filePath
-}
-
-// fsRelPath returns the path of targPath relative to basePath.
-func fsRelPath(fileSystem FileSystem, basePath, targPath string) (string, error) {
-	if a, ok := fileSystem.(AbsPathFileSystem); ok {
-		return a.RelPath(basePath, targPath)
-	}
-	sep := fileSystem.Separator()
-	base := fsSplitPath(fileSystem, basePath)
-	targ := fsSplitPath(fileSystem, targPath)
-	common := 0
-	for common < len(base) && common < len(targ) && base[common] == targ[common] {
-		common++
-	}
-	var parts []string
-	for range base[common:] {
-		parts = append(parts, "..")
-	}
-	parts = append(parts, targ[common:]...)
-	if len(parts) == 0 {
-		return ".", nil
-	}
-	return strings.Join(parts, sep), nil
 }
 
 // completeFileInfo fills File, Name and IsHidden of a FileInfo
@@ -668,8 +636,9 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // [errors.ErrUnsupported] that names the link before anything is copied.
 // A symbolic link at destPath is replaced, not the file it points to,
 // and recreated if the copy fails. Moving a symbolic link onto the file
-// it points to is an error wrapping [os.ErrInvalid], see isLinkOntoTarget,
-// because the file would be replaced with a link to itself.
+// it points to is an error wrapping [os.ErrInvalid], see the checks of the
+// existing destPath below, because the file would be replaced with a link
+// to itself.
 // Removing the source never follows symbolic links, see fsRemoveAll.
 // The copied files get permissions like with CopyFile.
 func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) error {
@@ -787,11 +756,37 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		return NewErrAlreadyExists(dest)
 	case srcIsDir:
 		return NewErrIsNotDirectory(dest)
-	case srcIsLink && !destInfo.IsSymlink && isLinkOntoTarget(srcFS, srcPath, destFS, destPath):
-		return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
-	case !moveLink && !destInfo.IsSymlink && isSpecialFile(dest, destInfo):
-		// A link replaces it like os.Rename, a copy would write into it
-		return errSpecialFile(src, dest)
+	case !destInfo.IsSymlink:
+		if srcIsLink {
+			// A move of the link onto the file that it points to would replace
+			// the file with the link: the link would then point to itself and
+			// the file would be gone, so mv refuses to move them as the same
+			// file. Local paths, also of the
+			// local layers of an OverlayFileSystem, are compared like by
+			// LocalFileSystem.Move, see isLocalLinkOntoTarget, because the local
+			// file system can resolve the link to another path than the overlay,
+			// a file with other hard links is kept by them and replaced like any
+			// other file. Within one other file system the paths are compared
+			// with every symbolic link resolved, see fsEvalSymlinks, a link that
+			// can't be resolved doesn't point to destPath.
+			linkOntoTarget := false
+			if srcLocal, destLocal, _, bothLocal := fsLocalPaths(srcFS, srcPath, destFS, destPath); bothLocal {
+				destLocalInfo, lstatErr := os.Lstat(destLocal)
+				linkOntoTarget = lstatErr == nil && isLocalLinkOntoTarget(srcLocal, destLocalInfo)
+			} else if srcFS == destFS {
+				if srcResolved, srcResolvedOK := fsEvalSymlinks(srcFS, srcPath); srcResolvedOK {
+					destResolved, destResolvedOK := fsEvalSymlinks(destFS, destPath)
+					linkOntoTarget = destResolvedOK && srcResolved == destResolved
+				}
+			}
+			if linkOntoTarget {
+				return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
+			}
+		}
+		if !moveLink && isSpecialFile(dest, destInfo) {
+			// A link replaces it like os.Rename, a copy would write into it
+			return errSpecialFile(src, dest)
+		}
 	}
 
 	switch {
@@ -823,33 +818,6 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	return fsRemoveAll(ctx, srcFS, srcPath)
 }
 
-// isLinkOntoTarget reports if the symbolic link srcPath of srcFS points to
-// destPath of destFS, an existing file that is no link, which a move of the
-// link would replace with the link: the link would then point to itself and
-// the file would be gone, so mv refuses to move them as the same file.
-// Local paths, also of the local layers of an OverlayFileSystem, are
-// compared like by LocalFileSystem.Move, see isLocalLinkOntoTarget, because
-// the local file system can resolve the link to another path than the
-// overlay, a file with other hard links is kept by them and replaced like
-// any other file. Within one other file system the paths are compared with
-// every symbolic link resolved, see fsEvalSymlinks, a link that can't be
-// resolved is reported as not pointing to destPath.
-func isLinkOntoTarget(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
-	if srcLocal, destLocal, _, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath); ok {
-		destInfo, err := os.Lstat(destLocal)
-		return err == nil && isLocalLinkOntoTarget(srcLocal, destInfo)
-	}
-	if srcFS != destFS {
-		return false
-	}
-	srcResolved, ok := fsEvalSymlinks(srcFS, srcPath)
-	if !ok {
-		return false
-	}
-	destResolved, ok := fsEvalSymlinks(destFS, destPath)
-	return ok && srcResolved == destResolved
-}
-
 // evalSymlinksMaxLinks is the number of symbolic links
 // that fsEvalSymlinks follows, like filepath.EvalSymlinks.
 const evalSymlinksMaxLinks = 255
@@ -862,7 +830,9 @@ const evalSymlinksMaxLinks = 255
 // which is absolute or relative to the resolved directory of the link.
 // Every element costs a Lstat, a round trip on a remote file system.
 func fsEvalSymlinks(fileSystem FileSystem, filePath string) (string, bool) {
-	if !fsCanReadLinks(fileSystem) {
+	// The links can only be read with linkTargetReader or with
+	// SymbolicLinkFileSystem below all SubFileSystems, see fsLinks
+	if _, ok := fileSystem.(linkTargetReader); !ok && fsLinks(fileSystem) == nil {
 		return "", false
 	}
 	sep := fileSystem.Separator()
@@ -891,7 +861,15 @@ func fsEvalSymlinks(fileSystem FileSystem, filePath string) (string, bool) {
 		if links++; links > evalSymlinksMaxLinks {
 			return "", false
 		}
-		target, err := fsReadSymbolicLink(fileSystem, next)
+		// The target as stored, read through one of the
+		// interfaces that the check at the top found
+		var target string
+		switch f := fileSystem.(type) {
+		case SymbolicLinkFileSystem:
+			target, err = f.ReadSymbolicLink(next)
+		case linkTargetReader:
+			target, err = f.readSymbolicLink(next)
+		}
 		if err != nil || target == "" {
 			return "", false
 		}
@@ -933,33 +911,6 @@ func isValidName(fileSystem FileSystem, name string) bool {
 		return false
 	}
 	return true
-}
-
-func fsRename(ctx context.Context, fileSystem FileSystem, filePath, newName string) (newPath string, err error) {
-	if filePath == "" {
-		return "", ErrEmptyPath
-	}
-	if !isValidName(fileSystem, newName) {
-		return "", fmt.Errorf("%w: invalid new name %q for Rename", os.ErrInvalid, newName)
-	}
-	dir, _ := fsSplitDirAndName(fileSystem, filePath)
-	newPath = fileSystem.CleanPath(dir, newName)
-	return newPath, fsMove(ctx, fileSystem, filePath, newPath)
-}
-
-func fsListDirMax(ctx context.Context, fileSystem FileSystem, dirPath string, max int, patterns []string) (files []File, err error) {
-	if dirPath == "" {
-		return nil, ErrEmptyPath
-	}
-	if max == 0 {
-		return nil, nil
-	}
-	if err := fsReadable(fileSystem); err != nil {
-		return nil, err
-	}
-	return listDirMaxImpl(ctx, max, func(ctx context.Context, callback func(File) error) error {
-		return fsListDir(ctx, fileSystem, dirPath, patterns, FileInfoToFileCallback(callback))
-	})
 }
 
 func fsListDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {
@@ -1029,30 +980,9 @@ func listDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string
 // linkTargetReader is implemented by file systems that can read the target
 // of a symbolic link without implementing SymbolicLinkFileSystem, like
 // OverlayFileSystem with the links of its layers, so that fsEvalSymlinks
-// can resolve their links, see fsReadSymbolicLink.
+// can resolve their links.
 type linkTargetReader interface {
 	readSymbolicLink(linkPath string) (string, error)
-}
-
-// fsReadSymbolicLink returns the target of the symbolic link at linkPath
-// as stored, using SymbolicLinkFileSystem or linkTargetReader.
-func fsReadSymbolicLink(fileSystem FileSystem, linkPath string) (string, error) {
-	switch f := fileSystem.(type) {
-	case SymbolicLinkFileSystem:
-		return f.ReadSymbolicLink(linkPath)
-	case linkTargetReader:
-		return f.readSymbolicLink(linkPath)
-	}
-	return "", NewErrUnsupported(fileSystem, "ReadSymbolicLink")
-}
-
-// fsCanReadLinks reports if fsReadSymbolicLink
-// can read the symbolic links of fileSystem.
-func fsCanReadLinks(fileSystem FileSystem) bool {
-	if _, ok := fileSystem.(linkTargetReader); ok {
-		return true
-	}
-	return fsLinks(fileSystem) != nil
 }
 
 // fsLinks returns fileSystem as SymbolicLinkFileSystem if it implements it,
@@ -1166,32 +1096,6 @@ func isLocalInSameDir(a, b string) bool {
 		return false
 	}
 	return os.SameFile(aDir, bDir)
-}
-
-// isLocalRenameOfDirEntry reports if destPath of destFS is the directory
-// entry of srcPath of srcFS under another spelling of its name, which the
-// file system matches to the same entry, like another case on
-// a case-insensitive file system or another Unicode normalization on APFS.
-// Both must be local paths of the same file per os.Lstat with other names
-// in the same directory: that is the same entry for a directory, which has
-// no other hard links, and for a name that only differs in case.
-func isLocalRenameOfDirEntry(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
-	srcLocal, destLocal, _, ok := fsLocalPaths(srcFS, srcPath, destFS, destPath)
-	if !ok || filepath.Base(srcLocal) == filepath.Base(destLocal) {
-		return false
-	}
-	srcInfo, err := os.Lstat(srcLocal)
-	if err != nil {
-		return false
-	}
-	destInfo, err := os.Lstat(destLocal)
-	if err != nil || !os.SameFile(srcInfo, destInfo) {
-		return false
-	}
-	if srcInfo.IsDir() {
-		return isLocalInSameDir(srcLocal, destLocal)
-	}
-	return isLocalSameDirEntry(srcLocal, destLocal)
 }
 
 // isLocalInsideDir reports if the local path filePath is inside the directory
