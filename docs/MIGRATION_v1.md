@@ -280,8 +280,8 @@ exact signatures. Changes compared to v0.1:
   (`os.ErrInvalid`), because a server on Windows takes it for a separator.
   For a server on Unix that has files with backslashes in their names, set
   `Options.AllowBackslashInNames`. A copy or move from another file system
-  with such names fails at the first of them and leaves the files copied
-  until then at the destination; the source of a move is kept.
+  with such names fails before it writes anything; the source of a move is
+  kept.
 - sftpfs and ftpfs reject addresses with an unencoded `@` after the host,
   sftpfs also an `@` in a path passed to `EnsureRegistered`: write it as
   `%40`, and percent-encode `/`, `?` and `#` in sftpfs usernames and

@@ -58,13 +58,14 @@ const (
 
 // Compile-time interface checks
 var (
-	_ fs.FileSystem          = new(fileSystem)
-	_ fs.WriteFileSystem     = new(fileSystem)
-	_ fs.ReadAllFileSystem   = new(fileSystem)
-	_ fs.WriteAllFileSystem  = new(fileSystem)
-	_ fs.MoveFileSystem      = new(fileSystem)
-	_ fs.CopyFileSystem      = new(fileSystem)
-	_ fs.RemoveAllFileSystem = new(fileSystem)
+	_ fs.FileSystem             = new(fileSystem)
+	_ fs.WriteFileSystem        = new(fileSystem)
+	_ fs.ValidateNameFileSystem = new(fileSystem)
+	_ fs.ReadAllFileSystem      = new(fileSystem)
+	_ fs.WriteAllFileSystem     = new(fileSystem)
+	_ fs.MoveFileSystem         = new(fileSystem)
+	_ fs.CopyFileSystem         = new(fileSystem)
+	_ fs.RemoveAllFileSystem    = new(fileSystem)
 )
 
 // Options for a WebDAV file system. A nil *Options uses the defaults.
@@ -379,6 +380,14 @@ func (f *fileSystem) checkPath(paths ...string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateName implements fs.ValidateNameFileSystem: a name that
+// checkPath rejects is an error wrapping os.ErrInvalid, so a copy
+// or move into the file system fails before it writes anything
+// instead of at that name.
+func (f *fileSystem) ValidateName(name string) error {
+	return f.checkPath(name)
 }
 
 // checkBackslash returns an error wrapping os.ErrInvalid for a path with

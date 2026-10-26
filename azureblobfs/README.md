@@ -113,6 +113,11 @@ messages of the errors it returns, so they don't leak into logs.
   (`/images/logo.png`), blob names are not (`images/logo.png`). Blobs that
   no path maps to, because their name starts with a slash or contains an
   empty element (`/x.txt`, `images//x.png`), are skipped by the listings.
+  The file system implements `fs.ValidateNameFileSystem`, so a copy or move
+  into it fails before it writes anything at a name that is not valid UTF-8,
+  contains a backslash, which Blob Storage takes for a separator, or
+  a control character, which the XML of a listing can't hold, ends with a
+  dot, which Blob Storage removes, or is longer than 1024 characters.
 - **Directories.** Blob Storage has no directories. A blob name prefix with
   at least one blob below it is an implicit directory. `MakeDir` creates a
   zero-byte marker blob with a trailing slash so empty directories exist

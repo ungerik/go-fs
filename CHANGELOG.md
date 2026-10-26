@@ -9,15 +9,34 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Added
 
-- `fs.ValidNameFileSystem`, an optional interface with `ValidName(name)`
+- `fs.ValidateNameFileSystem`, an optional interface with `ValidateName(name)`
   for file systems that can't write some names that their separator allows.
   `fs.CopyFile`, `fs.CopyRecursive`, `fs.Move`, `File.MoveTo` and
   `File.Rename` check the names they write with it, also through a
   `SubFileSystem` or `OverlayFileSystem` to the file system that gets the
   writes, so they fail before they write anything instead of at the first
   such name. `CopyRecursive` checks the files and links that match its
-  patterns, and every directory. Existing entries are read with every name.
-  `zipfs.Writer` implements it with its name rules.
+  patterns, and every directory. `File.MakeAllDirs` checks the names of the
+  missing directories, also the parent directories that a copy or move
+  makes. Their errors wrap the error of `ValidateName`, which tells why.
+  Existing entries are read with every name. sftpfs, ftpfs, webdavfs,
+  smbfs, s3fs, azureblobfs, dropboxfs and the zipfs and tarfs writers
+  implement it with the names that their servers or formats can't write,
+  see the READMEs: a backslash (unless `Options.AllowBackslashInNames` for
+  sftpfs, ftpfs and webdavfs), a NUL character, at which an SFTP server
+  would end a path, CR and LF, which would inject an FTP command, the
+  characters and device names that SMB and Windows servers refuse, invalid
+  UTF-8, control characters, which the XML listings of S3 and Azure Blob
+  Storage can't hold, and trailing dots, which Azure removes.
+- `fstest.RunConformance` checks the `ValidateName` of a file system that
+  implements `fs.ValidateNameFileSystem`: names that every file system
+  writes are valid, errors wrap `os.ErrInvalid`, a copy to a rejected name
+  writes nothing, and every accepted name of a probe list is written, read
+  back and listed with that name.
+- `fstest.MockFullyFeaturedFileSystem` implements `fs.ValidateNameFileSystem`
+  with the hook `MockValidateName`; without it every name is valid. Like every
+  `ValidateNameFileSystem` it makes a recursive copy or move within it list the
+  source first.
 
 ### Changed
 
@@ -38,13 +57,25 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   checked.
 - `fs.UnzipToMemFiles` and `zipfs.Reader` return entry names as UTF-8: a
   name without the UTF-8 flag is taken from its Info-ZIP Unicode Path extra
-  field if it has one, else a name that is not valid UTF-8, like the umlauts
-  of old Windows tools, is converted from CP-437, the encoding of names
-  without the flag. `archive/zip` returns the stored bytes, which
+  field if it has one that keeps the ASCII parts of the stored name, so it
+  can't give the entry another extension or directory than `archive/zip`
+  shows, else a name that is not valid UTF-8, like the umlauts of old
+  Windows tools, is converted from CP-437, the encoding of names without
+  the flag. `archive/zip` returns the stored bytes, which
   `ZipMemFiles` and `zipfs.Writer` now reject, so the MemFiles and files of
   such an archive couldn't be zipped again.
+- `tarfs.Writer` rejects paths with a NUL character, which `archive/tar`
+  failed to write without `os.ErrInvalid`, and paths that are not valid
+  UTF-8, which the PAX format requires, with an error wrapping
+  `os.ErrInvalid`. sftpfs rejects paths with a NUL character, at which the
+  server would end the path and use another file.
 
 ### Fixed
+
+- `File.Rename` checks the new name like a copy into the directory does:
+  on Windows a name that Windows writes to another entry, like `report.` to
+  `report`, replaced that file, and names with one of `< > " | ? *` reached
+  the file system.
 
 - A `zipfs.Writer` path longer than 65535 bytes made the whole archive
   unreadable: `archive/zip` adds the name to its central directory before

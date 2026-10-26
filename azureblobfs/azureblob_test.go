@@ -3040,3 +3040,15 @@ func TestEmptyPath(t *testing.T) {
 	assert.NoError(t, f.CopyFile(ctx, "/same.txt", "/same.txt"), "copying onto itself is a no-op")
 	assert.NoError(t, f.Touch("/", 0), "Touch of the root does nothing")
 }
+
+// TestValidateName verifies the names that a copy or move into the file
+// system rejects with ValidateName before it writes anything.
+func TestValidateName(t *testing.T) {
+	f := &fileSystem{}
+	for _, name := range []string{"a.txt", "Größe: what?*.txt", ".hidden", strings.Repeat("ä", 1024)} {
+		assert.NoError(t, f.ValidateName(name), "%.20q", name)
+	}
+	for _, name := range []string{"\xff.txt", `a\b`, "a\x01b", "trailing.", strings.Repeat("ä", 1025)} {
+		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%.20q", name)
+	}
+}

@@ -967,3 +967,18 @@ func TestBackslashInNames(t *testing.T) {
 	require.NoError(t, errors.Join(err, r.Close()))
 	assert.Equal(t, "unix name", string(data))
 }
+
+// TestValidateName verifies the names that a copy or move into the file
+// system rejects with ValidateName before it writes anything.
+func TestValidateName(t *testing.T) {
+	f := &fileSystem{}
+	for _, name := range []string{"a.txt", "Größe: what?.txt", "trailing."} {
+		assert.NoError(t, f.ValidateName(name), "%q", name)
+	}
+	for _, name := range []string{`a\b.txt`, "a\x00b", "\xff.txt"} {
+		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%q", name)
+	}
+	f.opts.AllowBackslashInNames = true
+	assert.NoError(t, f.ValidateName(`a\b.txt`), "Options.AllowBackslashInNames")
+	assert.ErrorIs(t, f.ValidateName("a\x00b"), os.ErrInvalid, "a NUL character, also with Options.AllowBackslashInNames")
+}

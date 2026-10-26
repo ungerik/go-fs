@@ -633,3 +633,19 @@ func TestBackslashPaths_Escape(t *testing.T) {
 		assert.ErrorIs(t, err, os.ErrNotExist, "%s must not have been written", outside)
 	}
 }
+
+// TestValidateName verifies the names that a copy or move into the file
+// system rejects with ValidateName before it writes anything.
+func TestValidateName(t *testing.T) {
+	f := &fileSystem{}
+	for _, name := range []string{"a.txt", "Größe.txt", ".hidden", "console.txt", "CON1", "COM10", "nul-free.txt"} {
+		assert.NoError(t, f.ValidateName(name), "%q", name)
+	}
+	for _, name := range []string{
+		`a\b`, "a:b", "a?b", "a*b", `a"b`, "a<b", "a>b", "a|b", "a\x01b", "a\tb",
+		"\xff.txt", "trailing.", "trailing ",
+		"CON", "con", "nul.txt", "Lpt1 .txt", "COM0", "COM¹", "aux.tar.gz",
+	} {
+		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%q", name)
+	}
+}

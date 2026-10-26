@@ -26,6 +26,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
@@ -64,6 +66,7 @@ const (
 var (
 	_ fs.FileSystem                 = new(fileSystem)
 	_ fs.WriteFileSystem            = new(fileSystem)
+	_ fs.ValidateNameFileSystem     = new(fileSystem)
 	_ fs.ReadAllFileSystem          = new(fileSystem)
 	_ fs.WriteAllFileSystem         = new(fileSystem)
 	_ fs.ReadWriterFileSystem       = new(fileSystem)
@@ -174,6 +177,33 @@ func NewFromConnectionString(ctx context.Context, connectionString, containerNam
 // ReadableWritable returns true and the negated Options.ReadOnly.
 func (f *fileSystem) ReadableWritable() (readable, writable bool) {
 	return true, !f.readOnly
+}
+
+// ValidateName implements fs.ValidateNameFileSystem: a name is an error
+// wrapping os.ErrInvalid if it is not valid UTF-8, which Azure Blob Storage
+// requires for blob names, if it contains a backslash, which the service
+// takes for a separator like "/", or a control character, which the XML of
+// a listing can't hold, so the directory couldn't be listed, if it ends with
+// a dot, which the service removes from the path elements of a blob name,
+// or if it is longer than the 1024 characters of a blob name.
+// Existing blobs are read with every name.
+func (f *fileSystem) ValidateName(name string) error {
+	var reason string
+	switch {
+	case !utf8.ValidString(name):
+		reason = "is not valid UTF-8"
+	case strings.Contains(name, `\`):
+		reason = "contains a backslash, which Azure Blob Storage takes for a separator"
+	case strings.ContainsFunc(name, unicode.IsControl):
+		reason = "contains a control character, which the XML of a listing can't hold"
+	case strings.HasSuffix(name, "."):
+		reason = "ends with a dot, which Azure Blob Storage removes"
+	case utf8.RuneCountInString(name) > 1024:
+		reason = "is longer than the 1024 characters of a blob name"
+	default:
+		return nil
+	}
+	return fmt.Errorf("%w: azureblobfs name %.200q %s", os.ErrInvalid, name, reason)
 }
 
 // RootDir returns the prefix followed by a slash as File.

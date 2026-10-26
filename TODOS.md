@@ -181,26 +181,6 @@ of each beta and release candidate; most of them fail to compile, so
 
 ## fs (core)
 
-### Implement ValidName in sftpfs, ftpfs, webdavfs and tarfs
-
-**What:** A copy or move into sftpfs, ftpfs, webdavfs or a `tarfs.Writer`
-with a name that contains a backslash fails at the first such name, after
-the files before it were copied.
-
-**Why:** Moving from S3 or mem into sftpfs, ftpfs or webdavfs with a name
-containing a backslash leaves a partial copy that a retry trips over.
-
-**Context:** `fs.ValidNameFileSystem` exists since v1.0.0-rc.2:
-`treeCopier.checkSource` checks every name of the source with its
-`ValidName` before the first write, and `zipfs.Writer` implements it. The
-four backends reject a backslash (sftpfs, ftpfs and webdavfs unless
-`Options.AllowBackslashInNames`) and only need a `ValidName` that says so.
-The partial copy is documented in `docs/MIGRATION_v1.md`.
-
-**Effort:** S
-**Priority:** P3
-**Depends on:** None
-
 ### Check that the source can read the names before a copy
 
 **What:** sftpfs, ftpfs and webdavfs list a name with a backslash of a
@@ -212,8 +192,8 @@ after the files before it were copied, because `checkSource` only checks
 the names against the destination.
 
 **Context:** Check the names of the source with the same rule in
-`checkSource`. `fs.ValidNameFileSystem` doesn't cover it: `ValidName` only
-checks the names that get written, existing entries are read with every
+`checkSource`. `fs.ValidateNameFileSystem` doesn't cover it: `ValidateName`
+only checks the names that get written, existing entries are read with every
 name, so the source needs a read-side rule of its own.
 
 **Effort:** S
@@ -874,6 +854,24 @@ a raw `@` in the path.
 **Depends on:** None
 
 ## Completed
+
+### Implement ValidateName in sftpfs, ftpfs, webdavfs and tarfs
+
+**What:** A copy or move into sftpfs, ftpfs, webdavfs or a `tarfs.Writer`
+with a name that contains a backslash failed at the first such name, after
+the files before it were copied.
+
+**Why:** Moving from S3 or mem into sftpfs, ftpfs or webdavfs with a name
+containing a backslash left a partial copy that a retry trips over.
+
+**Context:** sftpfs, ftpfs, webdavfs, smbfs, s3fs, azureblobfs, dropboxfs
+and the zipfs and tarfs writers implement `fs.ValidateNameFileSystem` with
+their name rules, and `fstest.RunConformance` checks that every name
+`ValidateName` accepts is written and listed with that name.
+
+**Effort:** S
+**Priority:** P3
+**Completed:** v1.0.0-rc.2 (2026-10-26)
 
 ### Run the Windows test of SubFileSystem roots without a drive in CI
 

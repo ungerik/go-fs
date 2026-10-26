@@ -20,6 +20,9 @@
 //
 // Paths have the separator "/". A path with a backslash is an error
 // wrapping os.ErrInvalid, because SMB servers take it for a separator.
+// The file system implements fs.ValidateNameFileSystem with the name rules
+// of SMB and of Windows servers, so a copy or move into it fails before
+// it writes anything instead of at a name that the server doesn't write.
 //
 // URIs have the form "smb://user@host:port/share/path" and never contain a
 // password; the port is omitted if it is 445, and "smb://user@host:445/share"
@@ -38,6 +41,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cloudsoda/go-smb2"
 
@@ -69,6 +73,7 @@ var (
 	_ fs.MoveFileSystem         = new(fileSystem)
 	_ fs.PermissionsFileSystem  = new(fileSystem)
 	_ fs.SymbolicLinkFileSystem = new(fileSystem)
+	_ fs.ValidateNameFileSystem = new(fileSystem)
 )
 
 type fileSystem struct {
@@ -211,6 +216,50 @@ func checkPath(filePath string) error {
 		return fs.ErrEmptyPath
 	}
 	return fsimpl.CheckNoBackslash("smbfs", filePath, "which SMB servers take for a separator")
+}
+
+// ValidateName implements fs.ValidateNameFileSystem: a name is an error
+// wrapping os.ErrInvalid if SMB servers don't write it to an entry of that
+// name, which the server of a share can't tell before it is written:
+//   - a name with a control character or one of the characters
+//     \ " * : < > ? |, which the SMB protocol doesn't allow in names
+//   - a name that is not valid UTF-8, which the UTF-16 names of the
+//     protocol can't hold, go-smb2 would write another name
+//   - a name ending with a dot or a space, which Windows servers remove,
+//     so they would write to another entry
+//   - a device name of Windows like CON, NUL or COM1, also with an
+//     extension, which a Windows server opens instead of a file
+//
+// Existing entries are read with every name.
+func (f *fileSystem) ValidateName(name string) error {
+	var reason string
+	switch {
+	case strings.ContainsFunc(name, func(r rune) bool { return r < ' ' || strings.ContainsRune(`\"*:<>?|`, r) }):
+		reason = `contains a control character or one of \ " * : < > ? |, which SMB doesn't allow in names`
+	case !utf8.ValidString(name):
+		reason = "is not valid UTF-8"
+	case strings.HasSuffix(name, ".") || strings.HasSuffix(name, " "):
+		reason = "ends with a dot or a space, which Windows servers remove"
+	case isWindowsDeviceName(name):
+		reason = "is a device name of Windows"
+	default:
+		return nil
+	}
+	return fmt.Errorf("%w: smbfs name %.200q %s", os.ErrInvalid, name, reason)
+}
+
+// isWindowsDeviceName reports if name is a device name of Windows, like
+// CON or LPT1, also in other cases, with an extension like "nul.txt" or
+// spaces before the dot, which Windows treats like the device.
+func isWindowsDeviceName(name string) bool {
+	base, _, _ := strings.Cut(name, ".")
+	switch strings.ToUpper(strings.TrimRight(base, " ")) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+		"LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³":
+		return true
+	}
+	return false
 }
 
 // checkLinkTarget checks the target of a symbolic link with checkPath and

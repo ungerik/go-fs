@@ -151,6 +151,7 @@ const (
 var (
 	_ fs.FileSystem                 = new(fileSystem)
 	_ fs.WriteFileSystem            = new(fileSystem)
+	_ fs.ValidateNameFileSystem     = new(fileSystem)
 	_ fs.ReadAllFileSystem          = new(fileSystem)
 	_ fs.WriteAllFileSystem         = new(fileSystem)
 	_ fs.AppendFileSystem           = new(fileSystem)
@@ -293,6 +294,14 @@ func (f *fileSystem) checkPath(filePath string) error {
 		}
 	}
 	return checkCommandArg("path", filePath, false)
+}
+
+// ValidateName implements fs.ValidateNameFileSystem: a name that
+// checkPath rejects, with a CR, LF or NUL character or a backslash,
+// is an error wrapping os.ErrInvalid, so a copy or move into the file
+// system fails before it writes anything instead of at that name.
+func (f *fileSystem) ValidateName(name string) error {
+	return f.checkPath(name)
 }
 
 // begin checks the paths and the state for a new operation.

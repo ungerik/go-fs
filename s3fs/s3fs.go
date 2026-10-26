@@ -29,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -90,6 +92,7 @@ const (
 var (
 	_ fs.FileSystem                 = new(fileSystem)
 	_ fs.WriteFileSystem            = new(fileSystem)
+	_ fs.ValidateNameFileSystem     = new(fileSystem)
 	_ fs.ReadAllFileSystem          = new(fileSystem)
 	_ fs.WriteAllFileSystem         = new(fileSystem)
 	_ fs.ReadWriterFileSystem       = new(fileSystem)
@@ -276,6 +279,30 @@ func (s *fileSystem) getWriteClient() (*s3.Client, error) {
 // ReadableWritable returns true and the negated Options.ReadOnly.
 func (s *fileSystem) ReadableWritable() (readable, writable bool) {
 	return true, !s.readOnly
+}
+
+// ValidateName implements fs.ValidateNameFileSystem: a name is an error
+// wrapping os.ErrInvalid if it is not valid UTF-8, which S3 requires for
+// keys, if it contains a backslash, which S3 recommends to avoid and
+// S3-compatible servers reject, or a control character, which the XML of
+// a listing can't hold, so the directory couldn't be listed, or if it is
+// longer than the 1024 bytes of a key. Existing objects are read with
+// every name.
+func (s *fileSystem) ValidateName(name string) error {
+	var reason string
+	switch {
+	case !utf8.ValidString(name):
+		reason = "is not valid UTF-8"
+	case strings.Contains(name, `\`):
+		reason = "contains a backslash, which S3-compatible servers reject"
+	case strings.ContainsFunc(name, unicode.IsControl):
+		reason = "contains a control character, which the XML of a listing can't hold"
+	case len(name) > 1024:
+		reason = "is longer than the 1024 bytes of a key"
+	default:
+		return nil
+	}
+	return fmt.Errorf("%w: s3fs name %.200q %s", os.ErrInvalid, name, reason)
 }
 
 // RootDir returns the URI prefix ("s3://bucket-name" or Options.Prefix)

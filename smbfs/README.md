@@ -113,7 +113,12 @@ and the requests of open file handles, and afterwards every method returns
   backslash is an error wrapping `os.ErrInvalid`: SMB servers take the
   backslash for a separator and resolve `..`, so a name like `..\x` from a
   `SubFileSystem` or `CopyRecursive` would reach a file outside of its
-  directory.
+  directory. The file system implements `fs.ValidateNameFileSystem`, so a
+  copy or move into it fails before it writes anything at a name that SMB
+  servers don't write: a control character or one of `\ " * : < > ? |`,
+  invalid UTF-8, a trailing dot or space, which Windows servers remove, and
+  device names of Windows like `CON` or `nul.txt`. Existing entries are read
+  with every name.
 - **Native operations.** SMB has real directories and random access file
   handles, so nearly every optional interface is native: `ReadAll`,
   `WriteAll`, `OpenAppendWriter`, `OpenReadWriter`, `Truncate`, `Touch`,
