@@ -59,8 +59,9 @@ What go-fs protects against
 
 Plain string paths with `os`, `path/filepath` and `io/fs`, or the client
 packages of a storage (`pkg/sftp`, `jlaffaye/ftp`, `go-smb2`, the AWS and
-Azure SDKs, a WebDAV client), leave these checks to every caller. go-fs makes
-them for every file system, and where it can before anything is written:
+Azure SDKs, a WebDAV client), leave the following checks to every caller.
+go-fs makes them for every file system, and where it can before anything is
+written:
 
 - **No silent local writes for remote URIs.** To `os`, the string
   `s3://bucket/report.pdf` is the relative path `s3:/bucket/report.pdf`, so
