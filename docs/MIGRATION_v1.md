@@ -282,6 +282,14 @@ exact signatures. Changes compared to v0.1:
   `Options.AllowBackslashInNames`. A copy or move from another file system
   with such names fails before it writes anything; the source of a move is
   kept.
+- Copies and moves from another file system into `s3fs`, `sftpfs`, `ftpfs`
+  and `dropboxfs` fail with an error wrapping `os.ErrInvalid` before they
+  write anything at a name that the backend's `ValidateName` rejects, where
+  v0.1 wrote the files before it: a name that is not valid UTF-8 for all
+  four, in `s3fs` also a backslash, a control character and a name longer
+  than 1024 bytes, in `sftpfs` and `ftpfs` the backslash rule above, and in
+  `dropboxfs` and `sftpfs` a NUL character, which `sftpfs` rejects in every
+  path. A copy or move within one file system keeps the names it holds.
 - sftpfs and ftpfs reject addresses with an unencoded `@` after the host,
   sftpfs also an `@` in a path passed to `EnsureRegistered`: write it as
   `%40`, and percent-encode `/`, `?` and `#` in sftpfs usernames and

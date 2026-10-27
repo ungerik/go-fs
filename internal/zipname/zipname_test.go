@@ -117,9 +117,10 @@ func TestDecode(t *testing.T) {
 			"日/",
 		},
 		{
+			// The field only replaces the bytes from 0x80 of the name
 			"Unicode Path field before a valid UTF-8 name without the flag",
-			zip.FileHeader{Name: "Größe.txt", NonUTF8: true, Extra: unicodePathExtra("Größe.txt", "日.txt")},
-			"日.txt",
+			zip.FileHeader{Name: "Größe.txt", NonUTF8: true, Extra: unicodePathExtra("Größe.txt", "Grüße.txt")},
+			"Grüße.txt",
 		},
 		{
 			"UTF-8 flag ignores the Unicode Path field",
@@ -200,6 +201,34 @@ func TestDecode(t *testing.T) {
 			"Unicode Path field that changes an ASCII name",
 			zip.FileHeader{Name: "photo.jpg", Extra: unicodePathExtra("photo.jpg", "photo.html")},
 			"photo.jpg",
+		},
+		{
+			// Regression: a run of other characters could stand for any ASCII
+			// letters, so the field showed photo.exe as a name that looks
+			// like photo.jpg, or removed the colon of a drive letter
+			"Unicode Path field that replaces ASCII letters with look-alikes",
+			zip.FileHeader{Name: "photo.exe", Extra: unicodePathExtra("photo.exe", "photo.јрɡ")},
+			"photo.exe",
+		},
+		{
+			"Unicode Path field that replaces a drive letter",
+			zip.FileHeader{Name: "C:/x.txt", Extra: unicodePathExtra("C:/x.txt", "é/x.txt")},
+			"C:/x.txt",
+		},
+		{
+			"Unicode Path field that replaces a colon",
+			zip.FileHeader{Name: "a.txt:s", Extra: unicodePathExtra("a.txt:s", "a.txtè")},
+			"a.txt:s",
+		},
+		{
+			"Unicode Path field for two ASCII bytes after a byte of another code page",
+			zip.FileHeader{Name: "\x83AB.txt", NonUTF8: true, Extra: unicodePathExtra("\x83AB.txt", "アイ.txt")},
+			"âAB.txt",
+		},
+		{
+			"Unicode Path field with a bidirectional override for a substitute",
+			zip.FileHeader{Name: "a?txt.exe", Extra: unicodePathExtra("a?txt.exe", "a\u202etxt.exe")},
+			"a?txt.exe",
 		},
 		{
 			"Unicode Path field that changes the extension",
@@ -295,8 +324,11 @@ func TestDecode(t *testing.T) {
 }
 
 // FuzzKeepsASCII verifies that keepsASCII never panics and that a Unicode
-// Path name it accepts has the slashes and dots of the stored name, so it
-// can't name another directory or extension.
+// Path name it accepts keeps every ASCII byte of the stored name that a run
+// of other characters can't stand for: all of them except the substitutes
+// "?" and "_" and the letters and signs from "@" to "~" that follow a byte
+// from 0x80, like the second byte of a double-byte character. So it can't
+// name another directory, extension or drive letter.
 // Regression: it sliced the stored name past its end for a field whose
 // ASCII parts used up the stored name.
 func FuzzKeepsASCII(f *testing.F) {
@@ -306,13 +338,30 @@ func FuzzKeepsASCII(f *testing.F) {
 	f.Add("a_b?c.txt", "a日b本c.txt")
 	f.Add("ab", "ab日b")
 	f.Add(`a\b.txt`, "a日b.txt")
+	f.Add("photo.exe", "photo.јрɡ")
+	f.Add("\x83AB.txt", "アイ.txt")
 	f.Fuzz(func(t *testing.T, stored, unicodeName string) {
 		if !utf8.ValidString(unicodeName) || !keepsASCII(stored, unicodeName) {
 			return
 		}
-		for _, c := range []string{"/", "."} {
-			if strings.Count(stored, c) != strings.Count(unicodeName, c) {
-				t.Errorf("keepsASCII(%q, %q) accepted another number of %q", stored, unicodeName, c)
+		afterOther := make(map[byte]int)
+		for i := 1; i < len(stored); i++ {
+			if stored[i-1] >= utf8.RuneSelf {
+				afterOther[stored[i]]++
+			}
+		}
+		for c := range byte(utf8.RuneSelf) {
+			have := strings.Count(stored, string(c))
+			kept := strings.Count(unicodeName, string(c))
+			ok := kept == have
+			switch {
+			case c == '?' || c == '_':
+				ok = kept <= have
+			case '@' <= c && c <= '~' && c != '\\':
+				ok = kept <= have && kept >= have-afterOther[c]
+			}
+			if !ok {
+				t.Errorf("keepsASCII(%q, %q) accepted %d of the %d bytes %q", stored, unicodeName, kept, have, c)
 			}
 		}
 	})

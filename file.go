@@ -1089,6 +1089,15 @@ func (file File) MakeDir(perm ...Permissions) error {
 // is an error wrapping os.ErrInvalid, before the first one is created.
 func (file File) MakeAllDirs(perm ...Permissions) error {
 	fileSystem, path := file.ParseRawURI()
+	if path == "" {
+		return ErrEmptyPath
+	}
+	if _, err := fsWritable(fileSystem); err != nil {
+		return err
+	}
+	if err := validateNewDirs(fileSystem, path); err != nil {
+		return err
+	}
 	return fsMakeAllDirs(fileSystem, path, JoinPermissions(perm, NoPermissions))
 }
 

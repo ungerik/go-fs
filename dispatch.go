@@ -477,22 +477,6 @@ func fsMakeAllDirs(fileSystem FileSystem, dirPath string, perm Permissions) erro
 	if dirPath == "" {
 		return ErrEmptyPath
 	}
-	if _, err := fsWritable(fileSystem); err != nil {
-		return err
-	}
-	if err := validateNewDirs(fileSystem, dirPath); err != nil {
-		return err
-	}
-	return fsMakeAllDirsUnvalidated(fileSystem, dirPath, perm)
-}
-
-// fsMakeAllDirsUnvalidated makes dirPath and its missing parent directories
-// like fsMakeAllDirs, but doesn't check their names with ValidateName, for
-// callers that checked them, like a copy, see treeCopier.copyDir.
-func fsMakeAllDirsUnvalidated(fileSystem FileSystem, dirPath string, perm Permissions) error {
-	if dirPath == "" {
-		return ErrEmptyPath
-	}
 	w, err := fsWritable(fileSystem)
 	if err != nil {
 		return err

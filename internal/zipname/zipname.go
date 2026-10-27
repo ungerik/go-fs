@@ -91,10 +91,11 @@ func isDisguisingRune(r rune) bool {
 // valid UTF-8, is taken from its Info-ZIP Unicode Path extra field
 // if it has one for the stored name that agrees on being a directory,
 // like zip tools do, and only differs from the stored name in the
-// characters that its encoding can't hold, see keepsASCII. So the field
-// can't give the entry another extension or directory than archive/zip
-// and the zip tools that ignore the field show. header.Name keeps the
-// stored name.
+// characters that its encoding can't hold, see keepsASCII, and has no
+// control or formatting character, see isDisguisingRune. So the field
+// can't give the entry another extension, directory or drive letter than
+// archive/zip and the zip tools that ignore the field show, also not one
+// that only looks like another. header.Name keeps the stored name.
 // Else a name that is valid UTF-8 is returned as it is, because many
 // zip tools write UTF-8 without the UTF-8 flag, and any other name
 // is decoded from CP-437, the encoding of the zip format for names
@@ -121,7 +122,8 @@ func Decode(header *zip.FileHeader) string {
 			if len(field) > 5 && field[0] == 1 && utf8.Valid(field[5:]) &&
 				(field[len(field)-1] == '/') == strings.HasSuffix(name, "/") &&
 				binary.LittleEndian.Uint32(field[1:]) == crc32.ChecksumIEEE([]byte(name)) {
-				if unicodeName := string(field[5:]); keepsASCII(name, unicodeName) {
+				unicodeName := string(field[5:])
+				if keepsASCII(name, unicodeName) && !strings.ContainsFunc(unicodeName, isDisguisingRune) {
 					return unicodeName
 				}
 			}
@@ -157,17 +159,31 @@ func Decode(header *zip.FileHeader) string {
 // only differs from stored, the stored name, in the characters that the
 // encoding of stored can't hold: the ASCII parts of unicodeName must be
 // the ones of stored in the same order, and every run of other characters
-// stands for at least one byte of stored that is no slash, no dot and no
-// backslash, which zip readers take for a separator, like a character of
-// another code page or a substitute like "_". So a run can't hide
-// a directory or an extension. A backslash can also be the second byte of
-// a character of Shift-JIS, like in "表", but readers of other code pages
-// take it for a separator, so these names keep the stored name.
+// stands for at least one byte of stored that is a byte of another code
+// page from 0x80, the ASCII second byte of a double-byte character, like
+// the "A" of "ア" in Shift-JIS, which follows a byte from 0x80, or one of
+// the substitutes "?" and "_" that tools write for a character their code
+// page lacks. So a run can't hide or replace a directory, an extension or
+// a drive letter, which are ASCII, also not with characters that look
+// like them. A backslash can also be the second byte of a character of
+// Shift-JIS, like in "表", but readers of other code pages take it for
+// a separator, so these names keep the stored name.
 // It is a function of its own for FuzzKeepsASCII.
 func keepsASCII(stored, unicodeName string) bool {
 	isASCII := func(r rune) bool { return r < utf8.RuneSelf }
 	isOther := func(r rune) bool { return r >= utf8.RuneSelf }
-	isRunBytes := func(b string) bool { return b != "" && !strings.ContainsAny(b, `/.\`) }
+	isRunBytes := func(b string) bool {
+		for i := range len(b) {
+			c := b[i]
+			switch {
+			case c >= utf8.RuneSelf, c == '?', c == '_':
+			case i > 0 && b[i-1] >= utf8.RuneSelf && '@' <= c && c <= '~' && c != '\\':
+			default:
+				return false
+			}
+		}
+		return b != ""
+	}
 	i := strings.IndexFunc(unicodeName, isOther)
 	if i < 0 {
 		return unicodeName == stored

@@ -186,7 +186,8 @@ func (f *fileSystem) ReadableWritable() (readable, writable bool) {
 // a listing can't hold, so the directory couldn't be listed, if it ends with
 // a dot, which the service removes from the path elements of a blob name,
 // or if it is longer than the 1024 characters of a blob name.
-// Existing blobs are read with every name.
+// The 1024 characters also limit the whole blob name, which the service
+// checks when it is written. Existing blobs are read with every name.
 func (f *fileSystem) ValidateName(name string) error {
 	var reason string
 	switch {

@@ -117,7 +117,9 @@ messages of the errors it returns, so they don't leak into logs.
   into it fails before it writes anything at a name that is not valid UTF-8,
   contains a backslash, which Blob Storage takes for a separator, or
   a control character, which the XML of a listing can't hold, ends with a
-  dot, which Blob Storage removes, or is longer than 1024 characters.
+  dot, which Blob Storage removes, or is longer than 1024 characters. The
+  service checks the 1024 characters of a whole blob name only when it is
+  written.
 - **Directories.** Blob Storage has no directories. A blob name prefix with
   at least one blob below it is an implicit directory. `MakeDir` creates a
   zero-byte marker blob with a trailing slash so empty directories exist

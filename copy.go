@@ -746,9 +746,9 @@ func (c *treeCopier) checkSourceDir(srcFS FileSystem, dirPath string, dest File)
 		if !c.validName(destFS, info.Name) {
 			return errInvalidName(info.File, info.Name, dest, nil)
 		}
-		// Directories and links copied as links are always written,
-		// files and other links only if they match the patterns
-		if (!info.IsDir || info.IsSymlink) && (!info.IsSymlink || c.links == nil) {
+		// Directories are always written, files and links only if they
+		// match the patterns. No link is copied as link, see checkSource
+		if !info.IsDir || info.IsSymlink {
 			// CopyRecursive rejected malformed patterns before
 			match, err := fsimpl.MatchAnyPattern(info.Name, c.patterns)
 			if err != nil || !match {
@@ -761,7 +761,7 @@ func (c *treeCopier) checkSourceDir(srcFS FileSystem, dirPath string, dest File)
 		if info.IsDir && !info.IsSymlink {
 			return c.checkSourceDir(srcFS, info.File.Path(), dest)
 		}
-		if !info.IsSymlink || c.links != nil || c.canCopyDirLinks() {
+		if !info.IsSymlink {
 			return nil
 		}
 		// A link that can't be followed is an error of copyDir
@@ -825,7 +825,7 @@ func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 				}
 			}
 		}
-		if err := fsMakeAllDirsUnvalidated(destFS, destPath, NoPermissions); err != nil {
+		if err := fsMakeAllDirs(destFS, destPath, NoPermissions); err != nil {
 			return fmt.Errorf("can't make directory %.200q: %w", errSubject(dest), err)
 		}
 	}

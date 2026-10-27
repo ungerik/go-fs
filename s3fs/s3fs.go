@@ -286,8 +286,9 @@ func (s *fileSystem) ReadableWritable() (readable, writable bool) {
 // keys, if it contains a backslash, which S3 recommends to avoid and
 // S3-compatible servers reject, or a control character, which the XML of
 // a listing can't hold, so the directory couldn't be listed, or if it is
-// longer than the 1024 bytes of a key. Existing objects are read with
-// every name.
+// longer than the 1024 bytes of a key. The 1024 bytes also limit the whole
+// key, which the server checks when it is written. Existing objects are
+// read with every name.
 func (s *fileSystem) ValidateName(name string) error {
 	var reason string
 	switch {
