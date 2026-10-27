@@ -1219,3 +1219,16 @@ func TestReadAllRanges(t *testing.T) {
 	_, err = f.ReadAll(canceled, p)
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+// TestValidateName verifies the names that a copy or move into the file
+// system rejects with ValidateName before it writes anything.
+func TestValidateName(t *testing.T) {
+	f := &fileSystem{}
+	// The limit of a key is 1024 bytes, not characters
+	for _, name := range []string{"a.txt", "Größe: what?*.txt", "trailing.", strings.Repeat("a", 1024), strings.Repeat("ä", 512)} {
+		assert.NoError(t, f.ValidateName(name), "%.20q", name)
+	}
+	for _, name := range []string{"\xff.txt", `a\b`, "a\x01b", "a\nb", strings.Repeat("a", 1025), strings.Repeat("ä", 513)} {
+		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%.20q", name)
+	}
+}

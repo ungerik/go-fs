@@ -43,7 +43,7 @@ cover what spans several types.
 
 | Document                                           | Contents                                           |
 | -------------------------------------------------- | -------------------------------------------------- |
-| [FileSystem interfaces](reference-filesystem-interfaces.md) | All 27 interfaces, every fallback, the backend support matrix |
+| [FileSystem interfaces](reference-filesystem-interfaces.md) | All 28 interfaces, every fallback, the backend support matrix |
 | [Errors](reference-errors.md)                      | Every sentinel and typed error, and how to check it |
 | [fsimpl](reference-fsimpl.md)                      | Helpers for implementing a backend                 |
 | [fstest](reference-fstest.md)                      | The conformance suite and the mock file systems    |
@@ -80,7 +80,7 @@ useful when something surprises you.
 | [Why File is a string](explanation-the-file-type.md) | Why not an interface or a struct?                  |
 | [Paths, URIs and the registry](explanation-path-and-uri-model.md) | How does a string become a file system?            |
 | [The context rule](explanation-context-rule.md)    | Why do only some methods take a `ctx`?             |
-| [Optional interfaces and emulation](explanation-optional-interfaces.md) | Why 26 file system interfaces, and why does everything work everywhere? |
+| [Optional interfaces and emulation](explanation-optional-interfaces.md) | Why 27 file system interfaces, and why does everything work everywhere? |
 
 ## Project documents
 

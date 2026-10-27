@@ -383,6 +383,30 @@ type WatchFileSystem interface {
 	Watch(filePath string, onEvent func(File, Event)) (cancel func() error, err error)
 }
 
+// ValidateNameFileSystem can be implemented by file systems that can't
+// write some names of entries that their separator allows, like the
+// names that are not valid in a zip archive. A copy, move or rename into
+// them checks the new names with ValidateName and fails before it writes
+// anything instead of at the first such name. So does File.MakeAllDirs,
+// which checks the names of the missing directories before it makes the
+// first one, also the parent directories that a copy or move makes, with
+// a Stat only for a rejected name, which an existing directory may have.
+// Existing entries are read and removed with every name, also through
+// a SubFileSystem or as base layer of an OverlayFileSystem, and copied and
+// moved with their names within the file system, which holds them.
+// The write methods of the file system itself, like OpenWriter and
+// WriteAll, are not checked with ValidateName.
+type ValidateNameFileSystem interface {
+	FileSystem
+
+	// ValidateName returns an error wrapping os.ErrInvalid if name,
+	// the name of a directory entry without a separator,
+	// can't be written to the file system. The error tells why
+	// and the errors of copies, moves and renames wrap it, so it
+	// should quote only the start of a long name, like with %.200q.
+	ValidateName(name string) error
+}
+
 // HiddenFileSystem can be implemented by file systems
 // with a definition of hidden files that differs from
 // the default of names beginning with a dot.

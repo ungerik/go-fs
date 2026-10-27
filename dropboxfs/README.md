@@ -83,6 +83,10 @@ dbxFS, err := dropboxfs.New(ctx, "", &dropboxfs.Options{HTTPClient: client})
   Dropbox reports, usually the one they were created with. A `Move` that only
   changes the case of a name works, `CopyFile` onto the same path in another
   case is a no-op.
+- **Names.** The file system implements `fs.ValidateNameFileSystem`: a copy
+  or move into it fails before it writes anything at a name that is not
+  valid UTF-8, whose bytes the JSON of the API would replace, or that
+  contains a NUL character.
 - **Folders.** Like the Dropbox API, `MakeDir`, uploads, `Move` and
   `CopyFile` create missing parent folders.
 - **Uploads.** Files of up to 150 MiB are uploaded with one request, larger

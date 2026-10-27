@@ -194,4 +194,8 @@ func TestCheckNoBackslash(t *testing.T) {
 	err := CheckNoBackslash("testfs", `/dir/..\victim.txt`, "which test servers take for a separator")
 	assert.ErrorIs(t, err, os.ErrInvalid)
 	assert.EqualError(t, err, `invalid argument: testfs path "/dir/..\\victim.txt" contains a backslash, which test servers take for a separator`)
+	// The error quotes at most 200 characters of a long path
+	err = CheckNoBackslash("testfs", strings.Repeat("a", 70000)+`\`, "reason")
+	assert.ErrorIs(t, err, os.ErrInvalid)
+	assert.Less(t, len(err.Error()), 1000)
 }

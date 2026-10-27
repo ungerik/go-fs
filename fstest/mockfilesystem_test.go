@@ -362,6 +362,7 @@ func TestMockFullyFeaturedFileSystem_NilHooks(t *testing.T) {
 	checkEqual(t, 0, len(m.PrefixAliases()), "default PrefixAliases")
 	checkTrue(t, m.IsHidden("/dir/.hidden"), "default IsHidden of a dot file")
 	checkFalse(t, m.IsHidden("/.dir/visible"), "default IsHidden of a file in a dot directory")
+	checkNoError(t, m.ValidateName("a:b"), "default ValidateName accepts every name")
 	checkEqual(t, "", m.VolumeName("/a"), "default VolumeName")
 	checkTrue(t, m.IsAbsPath("/a"), "default IsAbsPath")
 	checkEqual(t, "/a", m.AbsPath("/a"), "default AbsPath")

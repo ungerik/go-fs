@@ -126,7 +126,12 @@ client := s3.New(s3.Options{
   object keys are not (`docs/readme.txt`). Keys that no path maps to,
   because they start with a slash or contain an empty element
   (`/x.txt`, `docs//x.txt`), are skipped by the listings, see
-  [Migrating from v0](#migrating-from-v0).
+  [Migrating from v0](#migrating-from-v0). The file system implements
+  `fs.ValidateNameFileSystem`, so a copy or move into it fails before it
+  writes anything at a name that is not valid UTF-8, contains a backslash,
+  which S3-compatible servers reject, or a control character, which the XML
+  of a listing can't hold, or is longer than the 1024 bytes of a key. The
+  server checks the 1024 bytes of a whole key only when it is written.
 - **Directories.** S3 has no directories. A prefix with at least one
   object below it is an implicit directory. `MakeDir` creates a zero-byte
   marker object with a trailing slash (`docs/`) so that empty directories

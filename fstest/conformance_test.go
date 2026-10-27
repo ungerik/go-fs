@@ -3,6 +3,7 @@ package fstest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -178,6 +179,53 @@ var violations = map[string]struct {
 				return nil, err
 			}
 			return committingAborter{w}, nil
+		}
+	}},
+	"ValidateNameUnwrapped": {"ValidateName", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockValidateName = func(name string) error {
+			if strings.Contains(name, ":") {
+				return errors.New("no colons")
+			}
+			return nil
+		}
+	}},
+	"ValidateNameRejectsPlainNames": {"ValidateName", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockValidateName = func(name string) error { return os.ErrInvalid }
+	}},
+	"ValidateNameAcceptsUnwritable": {"ValidateName/Accepted", func(ref *MockFullyFeaturedFileSystem) {
+		base := *ref
+		ref.MockOpenWriter = func(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+			if strings.Contains(filePath, ":") {
+				return nil, errors.New("no colons")
+			}
+			return base.OpenWriter(filePath, perm)
+		}
+	}},
+	"ValidateNameListsOtherName": {"ValidateName/Accepted", func(ref *MockFullyFeaturedFileSystem) {
+		// Like a server that lists decomposed names
+		base := *ref
+		ref.MockListDir = func(ctx context.Context, dirPath string, patterns []string, callback func(*fs.FileInfo) error) error {
+			return base.ListDir(ctx, dirPath, patterns, func(info *fs.FileInfo) error {
+				if strings.HasSuffix(dirPath, "validate-name") {
+					info.Name = strings.ReplaceAll(info.Name, "\u00f6", "o\u0308")
+				}
+				return callback(info)
+			})
+		}
+	}},
+	"ValidateNameLongError": {"ValidateName", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockValidateName = func(name string) error {
+			if strings.Contains(name, ":") {
+				return fmt.Errorf("%w: %q", os.ErrInvalid, name)
+			}
+			return nil
+		}
+	}},
+	"ValidateNameAcceptsMangled": {"ValidateName/Accepted", func(ref *MockFullyFeaturedFileSystem) {
+		// Like Windows, which removes a trailing dot
+		base := *ref
+		ref.MockOpenWriter = func(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+			return base.OpenWriter(strings.TrimSuffix(filePath, "."), perm)
 		}
 	}},
 	"StatAfterCloseNotExist": {"Close/Stat", func(ref *MockFullyFeaturedFileSystem) {

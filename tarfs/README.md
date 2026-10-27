@@ -4,7 +4,9 @@ A [go-fs](https://github.com/ungerik/go-fs) file system for tar archives,
 optionally gzip compressed (`.tar.gz`, `.tgz`): `tarfs.Reader` reads an
 existing archive, `tarfs.Writer` creates a new one. The package mirrors
 [zipfs](../zipfs/README.md): both use the same rules for entry names,
-duplicates and permissions.
+duplicates and permissions, only zipfs converts entry names that are not
+UTF-8 and `zipfs.Writer` rejects the names that are not valid in a zip
+archive.
 
 Both work on any `fs.File`, so the archive itself can live on the local
 disk, in memory, on S3 or on any other backend.
@@ -95,9 +97,14 @@ err = out.Close()
   implement `fs.WriteAborter`, `Abort` discards the file without an entry.
   A path can be written only once: a second write returns an error wrapping
   `os.ErrExist`, so an archive never gets duplicate entries. `MakeAllDirs` is
-  native and writes an entry for every missing directory. `Close` writes the
-  end-of-archive marker and closes the gzip stream — an archive whose writer
-  was not closed is incomplete.
+  native and writes an entry for every missing directory. A path with
+  a backslash, which is rejected so archives stay portable, with a NUL
+  character, which a tar header can't hold, or that is not valid UTF-8, which
+  the PAX format requires, returns an error wrapping `os.ErrInvalid`. The
+  writer implements `fs.ValidateNameFileSystem`, so a copy or move into it
+  checks the names it writes first and fails before it writes anything.
+  `Close` writes the end-of-archive marker and closes the gzip stream — an
+  archive whose writer was not closed is incomplete.
 - **Permissions and times.** Written entries get the current time and the
   passed permissions, or `tarfs.DefaultPermissions` /
   `tarfs.DefaultDirPermissions`. Read entries report the permissions and

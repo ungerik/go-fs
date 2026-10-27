@@ -448,3 +448,14 @@ func TestRemoveRoot(t *testing.T) {
 	assert.ErrorIs(t, dbfs.RemoveAll(t.Context(), "/"), os.ErrInvalid, "RemoveAll of the root")
 	assert.Contains(t, client.entries, "/file.txt", "nothing must be removed")
 }
+
+// TestValidateName verifies the names that a copy or move into the file
+// system rejects with ValidateName before it writes anything.
+func TestValidateName(t *testing.T) {
+	f := &fileSystem{}
+	for _, name := range []string{"a.txt", "Größe: what?.txt"} {
+		assert.NoError(t, f.ValidateName(name), "%q", name)
+	}
+	assert.ErrorIs(t, f.ValidateName("\xff.txt"), os.ErrInvalid)
+	assert.ErrorIs(t, f.ValidateName("a\x00b"), os.ErrInvalid)
+}

@@ -108,6 +108,10 @@ The file system uses a copy of `Options.Client` with its own
   and resolves `..`, so a name like `..\x` from a `SubFileSystem` or
   `CopyRecursive` would reach a file outside of its directory. Set the option
   only for servers that store backslashes in names, like servers on Unix.
+  The file system implements `fs.ValidateNameFileSystem` with this rule and
+  rejects new names with a NUL character or that are not valid UTF-8, which
+  servers that store the files on disk can't write, so a copy or move into
+  it fails before it writes anything.
 - **Methods.** `PROPFIND` backs `Stat` and `ListDir`, `GET` backs reads,
   `PUT` backs writes, `MKCOL` backs `MakeDir`, `DELETE` backs `Remove`, and
   `MOVE` and `COPY` back `Move` and `CopyFile`.

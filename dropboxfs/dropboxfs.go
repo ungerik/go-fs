@@ -32,6 +32,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox"
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox/files"
@@ -59,6 +60,7 @@ const (
 var (
 	_ fs.FileSystem                 = new(fileSystem)
 	_ fs.WriteFileSystem            = new(fileSystem)
+	_ fs.ValidateNameFileSystem     = new(fileSystem)
 	_ fs.WriteAllFileSystem         = new(fileSystem)
 	_ fs.ReadWriterFileSystem       = new(fileSystem)
 	_ fs.CopyFileSystem             = new(fileSystem)
@@ -194,6 +196,21 @@ func (dbfs *fileSystem) check(ctx context.Context) error {
 
 func (dbfs *fileSystem) ReadableWritable() (readable, writable bool) {
 	return true, true
+}
+
+// ValidateName implements fs.ValidateNameFileSystem: a name that is not
+// valid UTF-8 is an error wrapping os.ErrInvalid, because the JSON of the
+// Dropbox API would replace its invalid bytes with U+FFFD and the file
+// would get another name, and so is a name with a NUL character, which
+// no file system stores. Existing files are read with every name.
+func (dbfs *fileSystem) ValidateName(name string) error {
+	switch {
+	case !utf8.ValidString(name):
+		return fmt.Errorf("%w: dropboxfs name %.200q is not valid UTF-8", os.ErrInvalid, name)
+	case strings.Contains(name, "\x00"):
+		return fmt.Errorf("%w: dropboxfs name %.200q contains a NUL character", os.ErrInvalid, name)
+	}
+	return nil
 }
 
 func (dbfs *fileSystem) RootDir() fs.File {

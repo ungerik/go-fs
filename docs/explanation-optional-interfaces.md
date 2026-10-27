@@ -1,8 +1,8 @@
 # Optional interfaces and emulation
 
-go-fs defines 26 file system interfaces. A backend implements one or two of
+go-fs defines 27 file system interfaces. A backend implements one or two of
 them, `FileSystem` and, if it can write, `WriteFileSystem`, and gets what the
-other 24 offer for free. This document explains the mechanism and why it is
+other 25 offer for free. This document explains the mechanism and why it is
 built this way.
 
 ## The problem
@@ -155,7 +155,7 @@ implementations against the same checks as the emulation.
 
 | Chosen                                    | Given up                                      |
 | ----------------------------------------- | --------------------------------------------- |
-| 24 small optional interfaces              | A single interface you can read in one screen |
+| 25 small optional interfaces              | A single interface you can read in one screen |
 | Backends implement only what they improve | Knowing a backend's cost from its type        |
 | Emulation means every op works everywhere | Failing loudly when an op will be slow        |
 | Type assertion per operation              | Zero-cost dispatch                            |

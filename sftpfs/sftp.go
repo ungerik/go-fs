@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pkg/sftp"
 
@@ -49,6 +50,7 @@ const (
 var (
 	_ fs.FileSystem                 = new(fileSystem)
 	_ fs.WriteFileSystem            = new(fileSystem)
+	_ fs.ValidateNameFileSystem     = new(fileSystem)
 	_ fs.AppendWriterFileSystem     = new(fileSystem)
 	_ fs.ReadWriterFileSystem       = new(fileSystem)
 	_ fs.TruncateFileSystem         = new(fileSystem)
@@ -110,19 +112,38 @@ func (f *fileSystem) file(filePath string) fs.File {
 }
 
 // checkPath returns an error wrapping os.ErrInvalid for a path with
-// a backslash unless Options.AllowBackslashInNames is set.
+// a NUL character, at which the server would end the path and use
+// another file, and for a path with a backslash unless
+// Options.AllowBackslashInNames is set.
 // run checks the paths of an operation with it.
 func (f *fileSystem) checkPath(paths ...string) error {
-	if f.opts.AllowBackslashInNames {
-		return nil
-	}
 	for _, filePath := range paths {
+		if strings.Contains(filePath, "\x00") {
+			return fmt.Errorf("%w: sftpfs path %.200q contains a NUL character", os.ErrInvalid, filePath)
+		}
+		if f.opts.AllowBackslashInNames {
+			continue
+		}
 		err := fsimpl.CheckNoBackslash("sftpfs", filePath, "which SFTP servers on Windows take for a separator, see Options.AllowBackslashInNames")
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// ValidateName implements fs.ValidateNameFileSystem: a name that
+// checkPath rejects and a name that is not valid UTF-8, which the remote
+// backends of go-fs don't write and servers on file systems like APFS
+// refuse, are errors wrapping os.ErrInvalid, so a copy or move into the
+// file system fails before it writes anything instead of at that name.
+// Existing entries are read with every name, and copied and moved with it
+// within the server.
+func (f *fileSystem) ValidateName(name string) error {
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("%w: sftpfs name %.200q is not valid UTF-8", os.ErrInvalid, name)
+	}
+	return f.checkPath(name)
 }
 
 // pathErr returns err with the os.ErrNotExist and os.ErrPermission

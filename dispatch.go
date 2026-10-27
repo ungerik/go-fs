@@ -487,6 +487,34 @@ func fsMakeAllDirs(fileSystem FileSystem, dirPath string, perm Permissions) erro
 	return makeAllDirs(w, dirPath, perm)
 }
 
+// validateNewDirs returns an error wrapping os.ErrInvalid for a directory
+// of dirPath or above that doesn't exist and whose name validateWritePathName
+// rejects, if the writes to dirPath go to a ValidateNameFileSystem, see
+// writeTarget. A file system like a zip writer can't remove directories,
+// so the names of the missing directories are checked before the first one
+// is made. Only a rejected name costs a Stat: the parents of an existing
+// directory exist too, and existing entries are read with every name.
+func validateNewDirs(fileSystem FileSystem, dirPath string) error {
+	target, _, _, ok := writeTarget(fileSystem, dirPath)
+	if _, validates := target.(ValidateNameFileSystem); !ok || !validates {
+		return nil
+	}
+	for p := dirPath; ; {
+		name, err := validateWritePathName(fileSystem, p, false)
+		if err != nil {
+			if _, statErr := fsStat(fileSystem, p); statErr == nil {
+				return nil
+			}
+			return withNameCause(fmt.Errorf("%w: can't make directory %.200q, the name %.200q is not valid there", os.ErrInvalid, errSubject(fsFile(fileSystem, p)), name), err)
+		}
+		dir, _ := fsSplitDirAndName(fileSystem, p)
+		if name == "" || dir == p {
+			return nil
+		}
+		p = dir
+	}
+}
+
 // makeAllDirs recursively creates dirPath and its parents.
 func makeAllDirs(w WriteFileSystem, dirPath string, perm Permissions) error {
 	if info, err := w.Stat(dirPath); err == nil {
@@ -624,9 +652,12 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // the replaced one. A name that is not valid for destFS, see
 // treeCopier.validName, is an error wrapping [os.ErrInvalid], below
 // a directory, also of an empty directory, before anything is copied, see
-// treeCopier.checkSource. So is a name of destPath that the local file
-// system would not write to an entry of that name or that Windows refuses,
-// see isValidLocalName.
+// treeCopier.checkSource. So is a name of destPath that the ValidateName
+// method of a [ValidateNameFileSystem] rejects, see validateWritePathName
+// and isHeldName, and one that the local file system would
+// not write to an entry of that name or that Windows refuses, see
+// isValidLocalName, checked before the parent directories of destPath
+// are made.
 //
 // Within a file system that implements [SymbolicLinkFileSystem],
 // symbolic links are copied as links with their target stored verbatim,
@@ -690,9 +721,10 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	}
 	srcIsDir := srcInfo.IsDir && !srcInfo.IsSymlink
 	src, dest := fsFile(srcFS, srcPath), fsFile(destFS, destPath)
-	if _, name := fsSplitDirAndName(destFS, destPath); c.localDest && name != "" && !isValidLocalName(name) {
-		// Like the name of a device, the move would write to it
-		return errInvalidName(src, name, dest)
+	// Like the name of a device, which the move would write to, the name is
+	// checked before the source is listed and a link at destPath is removed
+	if name, err := validateWritePathName(destFS, destPath, isHeldName(srcFS, srcPath, destFS, destPath)); err != nil {
+		return errInvalidName(src, name, dest, err)
 	}
 
 	// The entry that the source shows, see fsReadTarget, for all checks
@@ -914,6 +946,55 @@ func isValidName(fileSystem FileSystem, name string) bool {
 		return false
 	}
 	return true
+}
+
+// validateWriteName returns an error if fileSystem can't write an entry with
+// name: os.ErrInvalid for a name that is not valid, see isValidName, and
+// the error of the ValidateName method of a ValidateNameFileSystem that rejects
+// it, which tells why. Existing entries are read and removed with every
+// name of isValidName.
+func validateWriteName(fileSystem FileSystem, name string) error {
+	if !isValidName(fileSystem, name) {
+		return os.ErrInvalid
+	}
+	if v, ok := fileSystem.(ValidateNameFileSystem); ok {
+		return v.ValidateName(name)
+	}
+	return nil
+}
+
+// validateWritePathName returns the name of filePath and the error of
+// validateNameIn for it as a new entry of its directory, held tells if
+// the file system holds the name already, see isHeldName. A path without
+// a name, like the root, is no error.
+func validateWritePathName(fileSystem FileSystem, filePath string, held bool) (name string, err error) {
+	dir, name := fsSplitDirAndName(fileSystem, filePath)
+	if name == "" {
+		return "", nil
+	}
+	return name, validateNameIn(fileSystem, dir, name, held)
+}
+
+// isHeldName reports if a copy or move of srcPath of srcFS to destPath of
+// destFS writes a name that the file system that gets the writes holds
+// already: the name stays the same, and both paths go to the same file
+// system, see writeTarget, also through SubFileSystems, but not through an
+// OverlayFileSystem, whose entries can come from its base layer.
+// ValidateName doesn't check such a name, because the file system stores
+// it already, like a key with a backslash in S3, which s3fs doesn't write.
+// A nil srcFS, of a source that is no File, holds no name.
+func isHeldName(srcFS FileSystem, srcPath string, destFS FileSystem, destPath string) bool {
+	if srcFS == nil {
+		return false
+	}
+	_, srcName := fsSplitDirAndName(srcFS, srcPath)
+	_, destName := fsSplitDirAndName(destFS, destPath)
+	if srcName == "" || srcName != destName {
+		return false
+	}
+	srcTarget, _, srcViaOverlay, srcOK := writeTarget(srcFS, srcPath)
+	destTarget, _, destViaOverlay, destOK := writeTarget(destFS, destPath)
+	return srcOK && destOK && !srcViaOverlay && !destViaOverlay && srcTarget == destTarget
 }
 
 func fsListDirRecursive(ctx context.Context, fileSystem FileSystem, dirPath string, patterns []string, callback func(*FileInfo) error) error {

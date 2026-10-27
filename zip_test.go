@@ -4,9 +4,14 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	iofs "io/fs"
+	"math"
 	"os"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +119,73 @@ func TestZip_InsecureNames(t *testing.T) {
 	}, unzipped)
 }
 
+// TestZip_InvalidNames is a regression test: archive/zip writes almost
+// every name, so ZipMemFiles and Zip wrote entries with names that are not
+// valid in a zip archive, like a NUL byte, invalid UTF-8 that zip readers
+// decode as CP-437, or a drive letter that UnzipToMemFiles rejects on Windows.
+func TestZip_InvalidNames(t *testing.T) {
+	longName := strings.Repeat("a", math.MaxUint16)
+	data := NewMemFile("data.txt", []byte("x"))
+	for _, tc := range []struct {
+		desc string
+		file FileReader
+	}{
+		{"empty", NewMemFile("", []byte("x"))},
+		{"root", NewMemFile("/", nil)},
+		{"NUL", NewMemFile("a\x00b.txt", []byte("x"))},
+		{"newline", NewMemFile("a\nb.txt", []byte("x"))},
+		{"right-to-left override", NewMemFile("evil\u202etxt.exe", []byte("x"))},
+		{"DEL", NewMemFile("a\x7fb.txt", []byte("x"))},
+		{"invalid UTF-8", NewMemFile("dir/\xff.txt", []byte("x"))},
+		{"drive letter", NewMemFile("C:x.txt", []byte("x"))},
+		{"drive letter with slash", NewMemFile("C:/x.txt", []byte("x"))},
+		{"colon", NewMemFile("dir/a:b.txt", []byte("x"))},
+		{"too long", NewMemFile(longName+"a", []byte("x"))},
+		{"too long with the slash of a directory", NewMemFile(longName+"/", nil)},
+		{"FileReader with empty name", FileReaderWithName(data, "")},
+		{"FileReader with trailing slash", FileReaderWithName(data, "dir/")},
+		{"FileReader with empty element", FileReaderWithName(data, "a//b.txt")},
+		{"FileReader with dot element", FileReaderWithName(data, "a/./b.txt")},
+		{"FileReader with long unclean name", FileReaderWithName(data, strings.Repeat("a/", 30000))},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			_, err := Zip(t.Context(), tc.file)
+			require.ErrorIs(t, err, os.ErrInvalid)
+			require.Less(t, len(err.Error()), 2000, "the error quotes at most 200 characters of a name")
+			if memFile, ok := tc.file.(MemFile); ok {
+				_, err = ZipMemFiles(memFile)
+				require.ErrorIs(t, err, os.ErrInvalid, "ZipMemFiles")
+			}
+		})
+	}
+
+	// Valid names up to the maximum length survive the round trip
+	files := []MemFile{
+		NewMemFile("dir/Größe ü.txt", []byte("a")),
+		NewMemFile(longName, []byte("b")),
+		NewMemFile(longName[1:]+"/", nil),
+	}
+	zipped, err := ZipMemFiles(files...)
+	require.NoError(t, err)
+	require.Equal(t, []string{"dir/Größe ü.txt", longName, longName[1:] + "/"}, zipEntryNamesOf(t, zipped))
+	unzipped, err := UnzipToMemFiles(t.Context(), NewMemFile("x.zip", zipped))
+	require.NoError(t, err)
+	require.Equal(t, files[:2], unzipped)
+}
+
+// TestZip_WindowsDeviceNames verifies that Zip rejects device names
+// like CON only on Windows, where UnzipToMemFiles rejects them too.
+func TestZip_WindowsDeviceNames(t *testing.T) {
+	for _, name := range []string{"CON", "dir/nul"} {
+		_, err := ZipMemFiles(NewMemFile(name, []byte("x")))
+		if runtime.GOOS == "windows" {
+			require.ErrorIs(t, err, os.ErrInvalid, name)
+		} else {
+			require.NoError(t, err, name)
+		}
+	}
+}
+
 // TestZip_Modified checks that Zip takes the modification time from Stat.
 func TestZip_Modified(t *testing.T) {
 	file := File(t.TempDir()).Join("a.txt")
@@ -151,6 +223,14 @@ func (r *zipTestReadCloser) Stat() (iofs.FileInfo, error) {
 	return nil, errors.New("not implemented")
 }
 
+// zipOpenErrorFileReader is a MemFile whose OpenReader fails with err.
+type zipOpenErrorFileReader struct {
+	MemFile
+	err error
+}
+
+func (f zipOpenErrorFileReader) OpenReader() (ReadCloser, error) { return nil, f.err }
+
 // TestZip_ReaderErrors is a regression test: Zip didn't close the reader
 // of a file when copying it failed and ignored the context while copying.
 func TestZip_ReaderErrors(t *testing.T) {
@@ -160,6 +240,27 @@ func TestZip_ReaderErrors(t *testing.T) {
 		_, err := Zip(t.Context(), zipTestFileReader{NewMemFile("a.txt", nil), reader})
 		require.ErrorIs(t, err, errRead)
 		require.True(t, reader.closed, "reader must be closed after a failed copy")
+	})
+
+	// The name check needs the FileInfo of Stat to know
+	// if the entry is a directory, so a Stat error comes first,
+	// also for a file whose name is invalid too
+	t.Run("stat error", func(t *testing.T) {
+		missing := File(t.TempDir()).Join("missing.txt")
+		zipped, err := Zip(t.Context(), NewMemFile("a.txt", []byte("a")), FileReaderWithName(missing, "a:b.txt"))
+		require.ErrorIs(t, err, os.ErrNotExist)
+		require.NotErrorIs(t, err, os.ErrInvalid)
+		require.Nil(t, zipped)
+	})
+
+	// A file that can't be opened, like one without read permission,
+	// fails Zip with an error that names it instead of zipping it empty
+	t.Run("open error", func(t *testing.T) {
+		errOpen := errors.New("open failed")
+		zipped, err := Zip(t.Context(), NewMemFile("a.txt", []byte("a")), zipOpenErrorFileReader{NewMemFile("b.txt", []byte("b")), errOpen})
+		require.ErrorIs(t, err, errOpen)
+		require.ErrorContains(t, err, `"b.txt"`)
+		require.Nil(t, zipped)
 	})
 
 	t.Run("canceled while copying", func(t *testing.T) {
@@ -227,6 +328,112 @@ func TestUnzipToMemFiles_InsecureNames(t *testing.T) {
 			require.ErrorIs(t, err, zip.ErrInsecurePath)
 		})
 	}
+}
+
+// TestUnzipToMemFiles_CP437Names is a regression test: UnzipToMemFiles
+// returned the CP-437 bytes of a name without the UTF-8 flag, like old
+// Windows tools write umlauts, as FileName, and ZipMemFiles rejected
+// that FileName as not valid UTF-8, so the MemFiles couldn't be zipped again.
+func TestUnzipToMemFiles_CP437Names(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "dir/M\x81ller.pdf", NonUTF8: true})
+	require.NoError(t, err)
+	_, err = w.Write([]byte("pdf"))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	files, err := UnzipToMemFiles(t.Context(), NewMemFile("legacy.zip", buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, []MemFile{NewMemFile("dir/Müller.pdf", []byte("pdf"))}, files)
+
+	zipped, err := ZipMemFiles(files...)
+	require.NoError(t, err, "the decoded name can be zipped again")
+	files, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", zipped))
+	require.NoError(t, err)
+	require.Equal(t, []MemFile{NewMemFile("dir/Müller.pdf", []byte("pdf"))}, files)
+}
+
+// TestUnzipToMemFiles_InsecureUnicodePath verifies that the Info-ZIP
+// Unicode Path extra field of an entry can't make its name escape
+// a directory: a field that changes the ASCII parts of the stored name is
+// ignored, and the name of a field that keeps them is checked like
+// a stored name.
+func TestUnzipToMemFiles_InsecureUnicodePath(t *testing.T) {
+	for _, tc := range []struct {
+		stored, field string
+		want          string // empty for zip.ErrInsecurePath
+	}{
+		{"\x93vil.txt", "../evil.txt", "ôvil.txt"},
+		{"\x93vil.txt", "/abs.txt", "ôvil.txt"},
+		{"\x93vil.txt", `dir\evil.txt`, "ôvil.txt"},
+		{"../\x93.txt", "../日.txt", ""},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			// Info-ZIP Unicode Path extra field of ID 0x7075 with the version 1,
+			// the CRC-32 of the stored name and the UTF-8 name
+			field := []byte{1}
+			field = binary.LittleEndian.AppendUint32(field, crc32.ChecksumIEEE([]byte(tc.stored)))
+			field = append(field, tc.field...)
+			extra := binary.LittleEndian.AppendUint16(nil, 0x7075)
+			extra = binary.LittleEndian.AppendUint16(extra, uint16(len(field))) //#nosec G115 -- short test names
+			extra = append(extra, field...)
+
+			var buf bytes.Buffer
+			zw := zip.NewWriter(&buf)
+			w, err := zw.CreateHeader(&zip.FileHeader{Name: tc.stored, NonUTF8: true, Extra: extra})
+			require.NoError(t, err)
+			_, err = w.Write([]byte("evil"))
+			require.NoError(t, err)
+			require.NoError(t, zw.Close())
+
+			files, err := UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
+			if tc.want == "" {
+				require.ErrorIs(t, err, zip.ErrInsecurePath)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			require.Equal(t, tc.want, files[0].FileName)
+		})
+	}
+}
+
+// TestUnzipToMemFiles_LongNameError verifies that the error of an entry
+// name quotes at most 200 characters of it.
+func TestUnzipToMemFiles_LongNameError(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	_, err := zw.Create("../" + strings.Repeat("a", 60000))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	_, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
+	require.ErrorIs(t, err, zip.ErrInsecurePath)
+	require.Less(t, len(err.Error()), 1000)
+}
+
+// TestUnzipToMemFiles_OpenError verifies that an entry that can't be
+// opened, like one with a compression method that archive/zip doesn't
+// know, is an error naming the entry with its decoded name.
+func TestUnzipToMemFiles_OpenError(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateRaw(&zip.FileHeader{
+		Name:               "M\x81ller.txt",
+		NonUTF8:            true,
+		Method:             99,
+		CompressedSize64:   1,
+		UncompressedSize64: 1,
+	})
+	require.NoError(t, err)
+	_, err = w.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	_, err = UnzipToMemFiles(t.Context(), NewMemFile("x.zip", buf.Bytes()))
+	require.ErrorIs(t, err, zip.ErrAlgorithm)
+	require.ErrorContains(t, err, `"Müller.txt"`)
 }
 
 // TestUnzipToMemFiles_MaxSize is a regression test: UnzipToMemFiles had

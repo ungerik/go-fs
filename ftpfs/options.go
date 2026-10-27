@@ -276,7 +276,7 @@ func checkCommandArg(what, s string, secret bool) error {
 	if secret {
 		return fmt.Errorf("%w: ftpfs %s contains a CR, LF or NUL character", os.ErrInvalid, what)
 	}
-	return fmt.Errorf("%w: ftpfs %s %q contains a CR, LF or NUL character", os.ErrInvalid, what, s)
+	return fmt.Errorf("%w: ftpfs %s %.200q contains a CR, LF or NUL character", os.ErrInvalid, what, s)
 }
 
 // invalidAddressErr returns the error for an address that url.Parse rejects.

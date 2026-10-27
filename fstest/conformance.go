@@ -291,6 +291,9 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 		c.run(t, "WriteOnly", c.testWriteOnly)
 	}
 	if c.writable {
+		if _, ok := fileSystem.(fs.ValidateNameFileSystem); ok {
+			c.run(t, "ValidateName", c.testValidateName)
+		}
 		if c.readable {
 			c.run(t, "Write", c.testWrite)
 			c.run(t, "LargeContent", c.testLargeContent)

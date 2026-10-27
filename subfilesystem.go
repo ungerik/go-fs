@@ -558,6 +558,7 @@ func (s *SubFileSystem) MakeAllDirs(dirPath string, perm Permissions) error {
 	if err != nil {
 		return err
 	}
+	// File.MakeAllDirs checked the names
 	return s.subErr(fsMakeAllDirs(s.parent, parentPath, perm))
 }
 

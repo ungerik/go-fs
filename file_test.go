@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	iofs "io/fs"
 	"iter"
@@ -938,6 +939,29 @@ func registerNoRenameMoveFS(t *testing.T, initialFiles ...MemFile) File {
 	return wrapped.RootDir()
 }
 
+// TestFile_Rename_WindowsName is a regression test: Rename didn't check
+// a new name like Windows writes it, so on Windows "report." was written
+// to "report" and replaced an unrelated file.
+func TestFile_Rename_WindowsName(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows writes a name like report. to another entry")
+	}
+	ctx := t.Context()
+	dir := File(t.TempDir())
+	keep := dir.Join("report")
+	require.NoError(t, keep.WriteAllString(ctx, "keep"))
+	draft := dir.Join("draft.txt")
+	require.NoError(t, draft.WriteAllString(ctx, "draft"))
+	for _, name := range []string{"report.", "report ", "what?.txt"} {
+		_, err := draft.Rename(ctx, name)
+		require.ErrorIs(t, err, os.ErrInvalid, name)
+	}
+	data, err := keep.ReadAllString(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "keep", data, "the unrelated file is kept")
+	require.True(t, draft.Exists(), "the file is not renamed")
+}
+
 // TestFile_Rename_DefaultBranch covers the move emulation used by file systems
 // that don't implement MoveFileSystem. A previous implementation created
 // an empty directory and then tried file.Remove(), which silently discarded
@@ -1379,4 +1403,83 @@ func TestFile_TrimExtOfTildeAndDotfiles(t *testing.T) {
 	}
 	config := File(filepath.Join(t.TempDir(), ".config.json"))
 	assert.Equal(t, File(strings.TrimSuffix(string(config), ".json")), config.TrimExt(), "TrimExt of a dotfile with an extension")
+}
+
+// backslashRejectingFS is a noRenameMoveFS whose ValidateName rejects names
+// with a backslash, like s3fs, which has no native Move either.
+type backslashRejectingFS struct{ *noRenameMoveFS }
+
+func (backslashRejectingFS) ValidateName(name string) error {
+	if strings.Contains(name, `\`) {
+		return fmt.Errorf("%w: the name %.200q contains a backslash", os.ErrInvalid, name)
+	}
+	return nil
+}
+
+// TestFile_Rename_HeldNames is a regression test: the rename of a directory
+// of a file system without native Move, which copies the directory, checked
+// the names below it with ValidateName, so a directory with a key like the
+// ones with a backslash, which S3 holds but s3fs doesn't write, couldn't be
+// renamed. The file system holds these names, see isHeldName.
+func TestFile_Rename_HeldNames(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	Unregister(memFS)
+	wrapped := backslashRejectingFS{&noRenameMoveFS{WriteFileSystem: memFS}}
+	require.NoError(t, Register(wrapped))
+	t.Cleanup(func() {
+		Unregister(wrapped)
+		_ = memFS.Close()
+	})
+	dir := wrapped.RootDir().Join("dir")
+	require.NoError(t, dir.MakeDir())
+	require.NoError(t, dir.Join(`legacy\key.txt`).WriteAllString(ctx, "x"))
+
+	renamed, err := dir.Rename(ctx, "renamed")
+	require.NoError(t, err)
+	require.True(t, renamed.Join(`legacy\key.txt`).Exists())
+	_, err = renamed.Rename(ctx, `new\name`)
+	require.ErrorIs(t, err, os.ErrInvalid, "a new name is checked")
+}
+
+// TestFile_HeldNamesWithoutNativeMove verifies that CopyFile into
+// a directory, a Move by copy and the copy of directories within a file
+// system without native Move keep the names it holds, like the keys and
+// prefixes with a backslash of S3, see isHeldName.
+// Regression: the directories of the copy were checked with ValidateName,
+// so a copy or rename failed after it wrote a part.
+func TestFile_HeldNamesWithoutNativeMove(t *testing.T) {
+	ctx := t.Context()
+	memFS, err := RegisteredTestMemFileSystem(nil)
+	require.NoError(t, err)
+	Unregister(memFS)
+	wrapped := backslashRejectingFS{&noRenameMoveFS{WriteFileSystem: memFS}}
+	require.NoError(t, Register(wrapped))
+	t.Cleanup(func() {
+		Unregister(wrapped)
+		_ = memFS.Close()
+	})
+	dir := wrapped.RootDir().Join("dir")
+	require.NoError(t, dir.MakeDir())
+	held := wrapped.RootDir().Join(`legacy\key.txt`)
+	require.NoError(t, held.WriteAllString(ctx, "x"))
+
+	require.NoError(t, CopyFile(ctx, held, dir), "CopyFile of a held name into a directory")
+	require.NoError(t, dir.Join(`legacy\key.txt`).Remove())
+	require.NoError(t, Move(ctx, held, dir.Join(`legacy\key.txt`)), "Move of a held name without native Move")
+	require.True(t, dir.Join(`legacy\key.txt`).Exists())
+
+	// A held directory name below a copied or renamed directory
+	tree := wrapped.RootDir().Join("tree")
+	require.NoError(t, memFS.MakeAllDirs(`/tree/legacy\sub`, NoPermissions))
+	require.NoError(t, tree.Join("a.txt").WriteAllString(ctx, "a"))
+	require.NoError(t, tree.Join(`legacy\sub`, "key.txt").WriteAllString(ctx, "x"))
+	require.NoError(t, CopyRecursive(ctx, tree, wrapped.RootDir().Join("copy")))
+	require.True(t, wrapped.RootDir().Join("copy", `legacy\sub`, "key.txt").Exists())
+	renamed, err := tree.Rename(ctx, "renamed")
+	require.NoError(t, err)
+	require.True(t, renamed.Join(`legacy\sub`, "key.txt").Exists())
+	require.NoError(t, Move(ctx, renamed.Join(`legacy\sub`), dir), "Move of a held directory name into a directory")
+	require.True(t, dir.Join(`legacy\sub`, "key.txt").Exists())
 }

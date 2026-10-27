@@ -106,6 +106,14 @@ also through a symbolic link to a parent directory or a bind mount. One
 buffer is used for all files, which get permissions like with `CopyFile`;
 directories get the destination's defaults.
 
+A file system that can't write some names, like a `zipfs.Writer` a name with
+a colon or `s3fs` a name with a backslash, implements
+`fs.ValidateNameFileSystem`. `CopyFile`, `CopyRecursive` and `Move` into it,
+also through a `SubFileSystem` or `OverlayFileSystem`, check the new names of
+the files and links they copy and of every directory, also the missing parent
+directories, and fail with an error wrapping `os.ErrInvalid` before they write
+anything. A copy or move within one file system keeps the names it holds.
+
 A symbolic link to a file is followed: the copy is a file with the content
 and permissions of the target. A symbolic link to a directory is never
 followed, like by `filepath.WalkDir`, so a link cycle can't copy the tree into
@@ -246,7 +254,9 @@ renamed, err = file.Renamef(ctx, "report-%d.pdf", year)
 file. An existing file with the new name is replaced, an existing directory is
 an error wrapping `os.ErrExist`. `Rename` rejects a name that is empty, `.` or
 `..`, or that contains a slash or the separator, with an error wrapping
-`os.ErrInvalid` — use `Move` to change directories.
+`os.ErrInvalid` — use `Move` to change directories. So is a name that the local
+file system would write to another entry, like `report.` on Windows, and a new
+name that a file system implementing `fs.ValidateNameFileSystem` rejects.
 
 ## Remove
 

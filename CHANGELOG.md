@@ -5,6 +5,101 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [1.0.0-rc.2] - 2026-10-27
+
+Second release candidate: zip archives get one name rule for every writer
+and UTF-8 names on read, and a copy, move or rename into a file system that
+can't write a name, like a zip writer or an S3-compatible server, fails
+before it writes anything instead of at that name.
+
+### Added
+
+- `fs.ValidateNameFileSystem`, an optional interface with `ValidateName(name)`
+  for file systems that can't write some names that their separator allows.
+  `fs.CopyFile`, `fs.CopyRecursive`, `fs.Move`, `File.MoveTo` and
+  `File.Rename` check the names they write with it, also through a
+  `SubFileSystem` or `OverlayFileSystem` to the file system that gets the
+  writes, so they fail before they write anything instead of at the first
+  such name. `CopyRecursive` checks the files and links that match its
+  patterns, and every directory. `File.MakeAllDirs` checks the names of the
+  missing directories, also the parent directories that a copy or move
+  makes. Their errors wrap the error of `ValidateName`, which tells why.
+  Existing entries are read with every name, and copied and moved with
+  their names within the file system, which holds them. The write methods
+  of a file system itself, like `OpenWriter`, are not checked. sftpfs,
+  ftpfs, webdavfs, smbfs, s3fs, azureblobfs, dropboxfs and the zipfs and
+  tarfs writers implement it with the names that their servers or formats
+  can't write, see the READMEs: a backslash (unless
+  `Options.AllowBackslashInNames` for sftpfs, ftpfs and webdavfs), a NUL
+  character, at which an SFTP server would end a path, CR and LF, which
+  would inject an FTP command, the characters that SMB refuses, the device
+  names and trailing dots that Windows servers refuse, invalid UTF-8, which
+  the remote backends don't write, control characters, which the XML
+  listings of S3 and Azure Blob Storage can't hold, and trailing dots,
+  which Azure removes.
+- `fstest.RunConformance` checks the `ValidateName` of a file system that
+  implements `fs.ValidateNameFileSystem`: names that every file system
+  writes are valid, errors wrap `os.ErrInvalid`, a copy to a rejected name
+  writes nothing, and every accepted name of a probe list is written, read
+  back and listed with that name.
+- `fstest.MockFullyFeaturedFileSystem` implements `fs.ValidateNameFileSystem`
+  with the hook `MockValidateName`; without it every name is valid.
+
+### Changed
+
+- `fs.Zip` and `ZipMemFiles` reject the names that are not valid in a zip
+  archive with an error wrapping `os.ErrInvalid`, not only the names that
+  `UnzipToMemFiles` rejects: names that are not valid UTF-8, which zip
+  readers decode as CP-437, that contain a control character like NUL, a
+  line or paragraph separator, a bidirectional embedding, override or
+  isolate, which can disguise an extension (`evil\u202etxt.exe`), or a
+  colon, which marks a drive letter on Windows, and names longer than the
+  65535 bytes of a zip header. The name of a `FileReader` that is not a
+  `MemFile` has to be a clean, slash separated path (`io/fs.ValidPath`, not
+  `a//b.txt` or `dir/` for a file); the `FileName` of a `MemFile` is cleaned
+  as before. `archive/zip` writes all of these names, except a name that is
+  too long, which it rejects after adding it to the central directory.
+  `zipfs.Writer` rejects the same characters and lengths in its cleaned
+  paths. Names that only Windows can't extract, like `what?.txt`, are not
+  checked.
+- `fs.UnzipToMemFiles` and `zipfs.Reader` return entry names as UTF-8: a
+  name without the UTF-8 flag is taken from its Info-ZIP Unicode Path extra
+  field if it has one that keeps the ASCII parts of the stored name and
+  only replaces its bytes of another code page and the `?` and `_`
+  substitutes, without a control or bidirectional formatting character, so
+  it can't give the entry another extension, directory or drive letter
+  than `archive/zip` shows, also not one that only looks like another,
+  else a name that is not valid UTF-8, like the umlauts of old Windows
+  tools, is converted from CP-437, the encoding of names without the flag.
+  `archive/zip` returns the stored bytes, which `ZipMemFiles` and
+  `zipfs.Writer` now reject, so the MemFiles and files of such an archive
+  couldn't be zipped again.
+- Copies and moves from another file system into a backend fail before
+  they write anything at a name that `ValidateName` of the backend rejects,
+  also where the server wrote it before: a name that is not valid UTF-8
+  into sftpfs, ftpfs and webdavfs on Linux servers, a backslash into s3fs,
+  which AWS S3 stores but S3-compatible servers reject, and Windows device
+  names and trailing dots or spaces into smbfs, which Samba writes. Copies
+  and moves within one of them keep these names.
+- `tarfs.Writer` rejects paths with a NUL character, which `archive/tar`
+  failed to write without `os.ErrInvalid`, and paths that are not valid
+  UTF-8, which the PAX format requires, with an error wrapping
+  `os.ErrInvalid`. sftpfs rejects paths with a NUL character, at which the
+  server would end the path and use another file.
+
+### Fixed
+
+- `File.Rename`, and `fs.Move` and `File.MoveTo` within one file system,
+  check the new name like a copy into the directory does: on Windows a name
+  that Windows writes to another entry, like `report.` to `report`,
+  replaced that file, and names with one of `< > " | ? *` reached the file
+  system. `fs.CopyFile` to a local name that the local file system doesn't
+  write fails before it makes the parent directories, like `fs.Move`.
+
+- A `zipfs.Writer` path longer than 65535 bytes made the whole archive
+  unreadable: `archive/zip` adds the name to its central directory before
+  it rejects it, so `Close` returned no error and wrote a corrupt archive.
+
 ## [1.0.0-rc.1] - 2026-10-26
 
 First release candidate: file URIs follow RFC 8089 on every platform, copies
@@ -360,7 +455,8 @@ modules are tagged in lockstep, the `tools` module is not tagged.
 Second beta. It fixes the bugs of a full review of beta.1 (data loss,
 security, crashes) and settles the API decisions that freeze with v1.0.0.
 Most breaking changes fail to compile, so the compiler finds the call sites;
-`docs/MIGRATION_v1.md` lists them in "Upgrading from v1.0.0-beta.1". All
+`docs/MIGRATION_v1.md` of this release lists them in "Upgrading from
+v1.0.0-beta.1". All
 modules are tagged in lockstep, the `tools` module is not tagged.
 
 ### Changed

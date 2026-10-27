@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -63,6 +64,24 @@ func TestConformance(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestConformance_OnDisk runs the suite against a server that stores the
+// files on disk, where names that a server in memory stores, like ones
+// with a NUL character or that are not valid UTF-8, can't be written, so
+// ValidateName must reject them.
+func TestConformance_OnDisk(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows refuses names that a server on Unix writes, which ValidateName can't tell apart")
+	}
+	srv := newStyledServerOn(t, webdav.Dir(t.TempDir()), styleXNet, "/dav", true)
+	davFS := newTestFS(t, srv.Server, "/dav")
+	require.NoError(t, davFS.(fs.WriteFileSystem).MakeDir("/conformance", 0))
+	fstest.RunConformance(t, davFS, fstest.Config{
+		Name:    "WebDAV",
+		Prefix:  davFS.Prefix(),
+		TestDir: "/conformance",
+	})
 }
 
 func TestNew_Errors(t *testing.T) {
@@ -1019,4 +1038,18 @@ func TestBackslashInNames(t *testing.T) {
 	data, err := allow.ReadAll(ctx, `/dir/a\b.txt`)
 	require.NoError(t, err)
 	assert.Equal(t, "unix name", string(data))
+}
+
+// TestValidateName verifies the names that a copy or move into the file
+// system rejects with ValidateName before it writes anything.
+func TestValidateName(t *testing.T) {
+	f := &fileSystem{}
+	for _, name := range []string{"a.txt", "Größe: what?.txt"} {
+		assert.NoError(t, f.ValidateName(name), "%q", name)
+	}
+	for _, name := range []string{`a\b.txt`, "a\x00b", "\xff.txt"} {
+		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%q", name)
+	}
+	f.allowBackslash = true
+	assert.NoError(t, f.ValidateName(`a\b.txt`), "Options.AllowBackslashInNames")
 }

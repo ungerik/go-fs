@@ -146,7 +146,12 @@ and open readers, and afterwards every method returns
   (IIS, FileZilla Server) takes it for a separator and resolves `..`, so a
   name like `..\x` from a `SubFileSystem` or `CopyRecursive` would reach a
   file outside of its directory. Set the option only for servers that store
-  backslashes in names, like servers on Unix.
+  backslashes in names, like servers on Unix. A path with a CR, LF or NUL
+  character, which would inject another FTP command, is an error wrapping
+  `os.ErrInvalid` too. The file system implements `fs.ValidateNameFileSystem`
+  with these rules and rejects new names that are not valid UTF-8, which
+  servers in the UTF8 mode of RFC 2640, which the client turns on, expect,
+  so a copy or move into it fails before it writes anything.
 - **Native operations.** `ReadAll`, `WriteAll`, `Append`,
   `OpenAppendWriter`, `OpenReadWriter`, `Touch`, `RemoveAll`,
   `ListDirRecursive` and `Move` are native; everything else uses the generic

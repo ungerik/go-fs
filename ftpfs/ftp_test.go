@@ -2163,3 +2163,23 @@ func TestBackslashInNames(t *testing.T) {
 	_, err = linkFS.Stat("/dir/link")
 	assert.ErrorIs(t, err, os.ErrInvalid, "Stat of a link with a backslash in its target")
 }
+
+// TestValidateName verifies the names that a copy or move into the file
+// system rejects with ValidateName before it writes anything.
+func TestValidateName(t *testing.T) {
+	f := &fileSystem{cfg: &dialConfig{}}
+	for _, name := range []string{"a.txt", "Größe: what?.txt"} {
+		assert.NoError(t, f.ValidateName(name), "%q", name)
+	}
+	for _, name := range []string{`a\b.txt`, "a\rb", "a\nb", "a\x00b", "\xff.txt"} {
+		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%q", name)
+	}
+	for _, name := range []string{strings.Repeat("a", 70000) + `\`, strings.Repeat("a", 70000) + "\n"} {
+		err := f.ValidateName(name)
+		assert.ErrorIs(t, err, os.ErrInvalid)
+		assert.Less(t, len(err.Error()), 1000, "the error quotes at most 200 characters of a long name")
+	}
+	f.cfg.opts.AllowBackslashInNames = true
+	assert.NoError(t, f.ValidateName(`a\b.txt`), "Options.AllowBackslashInNames")
+	assert.ErrorIs(t, f.ValidateName("a\nb"), os.ErrInvalid, "a line break, also with Options.AllowBackslashInNames")
+}

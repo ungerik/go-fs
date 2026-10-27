@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -359,6 +360,44 @@ func TestWriter_MakeAllDirs(t *testing.T) {
 	require.NoError(t, writer.Close())
 
 	assertEntryNames(t, tarFile, "a/", "a/b/", "a/b/c/", "a/b/d/", "a/f.txt")
+}
+
+// TestWriter_ValidateName verifies that the writer rejects the names that
+// a tar archive can't hold, also with ValidateName, so a copy into the
+// archive fails before it writes anything.
+// Regression: a NUL character failed in archive/tar without os.ErrInvalid.
+func TestWriter_ValidateName(t *testing.T) {
+	ctx := t.Context()
+	memFS := newMemFS(t, "/")
+	src := memFS.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	for _, name := range []string{"a.txt", "b\x00c.txt", "z.txt"} {
+		require.NoError(t, src.Join(name).WriteAllString(ctx, name))
+	}
+	tarFile := memFS.RootDir().Join("copy.tar")
+	writer, err := NewWriter(tarFile, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(writer))
+
+	assert.NoError(t, writer.ValidateName("a.txt"))
+	err = writer.ValidateName(strings.Repeat("a", 70000) + `\`)
+	assert.ErrorIs(t, err, os.ErrInvalid)
+	assert.Less(t, len(err.Error()), 1000, "the error quotes at most 200 characters of a long name")
+	assert.NoError(t, writer.ValidateName("Größe: what?.txt"), "only Windows can't extract it")
+	for _, name := range []string{`a\b.txt`, "a\x00b", "\xff.txt"} {
+		assert.ErrorIs(t, writer.ValidateName(name), os.ErrInvalid, "%q", name)
+		assert.ErrorIs(t, writer.Touch("/"+name, 0), os.ErrInvalid, "Touch(%q)", name)
+		assert.ErrorIs(t, writer.MakeAllDirs("/dir/"+name, 0), os.ErrInvalid, "MakeAllDirs(%q)", name)
+	}
+
+	err = fs.CopyRecursive(ctx, src, writer.RootDir().Join("copy"))
+	assert.ErrorIs(t, err, os.ErrInvalid)
+	assert.ErrorContains(t, err, "NUL character", "the error tells why")
+	assert.ErrorIs(t, fs.Move(ctx, src, writer.RootDir().Join("moved")), os.ErrInvalid)
+	assert.True(t, src.Join("a.txt").Exists(), "the source of a failed move is kept")
+	assert.ErrorIs(t, fs.CopyFile(ctx, src.Join("a.txt"), writer.RootDir().Join("dir\xff", "a.txt")), os.ErrInvalid)
+	require.NoError(t, writer.Close())
+	assertEntryNames(t, tarFile)
 }
 
 // TestWriter_EntryMetadata verifies that written entries get the current

@@ -3,10 +3,10 @@
 Complete catalogue of the interfaces a go-fs backend can implement, and what
 the package does for every operation a backend leaves out.
 
-`filesystem.go` defines 27 interfaces: 26 file system interfaces and
+`filesystem.go` defines 28 interfaces: 27 file system interfaces and
 `WriteAborter` for writers. A backend implements two file system interfaces
 at most to be usable: `FileSystem` for reading, and `WriteFileSystem` if it
-can write. The other 24 are *optional*: when a backend does not implement
+can write. The other 25 are *optional*: when a backend does not implement
 one, the operation still works, built from the core primitives, or it is
 refused with `ErrUnsupported` where nothing can be emulated. A backend
 implements an optional interface only when it can do the job better than
@@ -129,6 +129,7 @@ are only called on file systems that report themselves as writable.
 | `RemoveAllFileSystem`    | `RemoveAll`        | Recursive listing plus `Remove`. A path that does not exist is not an error, and entries removed concurrently are ignored. |
 | `CopyFileSystem`         | `CopyFile`         | `OpenReader` streamed into `OpenWriter` through a 4 MiB buffer. `destFile` is always the final path, never a directory to copy into. |
 | `MoveFileSystem`         | `Move(ctx, filePath, destPath)` | A copy of the file or directory tree, then the removal of the source after the copy succeeded. `destPath` is always the final path, never a directory to move into. |
+| `ValidateNameFileSystem` | `ValidateName` | Every name without a separator that is not empty, `.` or `..` counts as valid. `CopyFile`, `CopyRecursive`, `Move`, `MoveTo` and `Rename` check the names they write with `ValidateName` before they write anything, also the parent directories of a new path, which `MakeAllDirs` checks before it makes the first one, with a `Stat` only for a rejected name, which an existing directory may have, and also through a `SubFileSystem` or `OverlayFileSystem` to the file system that gets the writes; `CopyRecursive` checks every directory and the files and links that match its patterns. Existing entries are read and removed with every name, and copied and moved with their names within the file system, which holds them. The write methods of the backend itself, like `OpenWriter` and `WriteAll`, are not checked with `ValidateName`. Without it a name that the backend rejects fails a copy at that file. sftpfs, ftpfs, webdavfs, smbfs, s3fs, azureblobfs, dropboxfs and the zipfs and tarfs writers implement it. |
 
 There is no rename interface: `File.Rename` is a `Move` within the directory,
 so it uses the native `Move` where the backend has one.
@@ -238,6 +239,7 @@ specialized), `r/o` read-only backend so the write operation does not apply.
 | SetPermissions         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
 | Symbolic links         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    |  –   |
 | Seeking reads          |  –  |   ✓    |  ✓   |  –  |  ✓  |    –    |   ✓    |  –   |
+| ValidateName           |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
 
 "Seeking reads" is not an interface: it means that the readers of
 `OpenReader` implement `fs.ReadAtSeekCloser`, so `File.OpenReadSeeker` needs
@@ -263,7 +265,8 @@ and `ListDirRecursive`.
 The archive and request-scoped backends implement a mode-dependent subset:
 `zipfs.Reader` and `tarfs.Reader` provide `Exists`, `ReadAll` and
 `ListDirRecursive`; the writers provide `Touch` and `MakeAllDirs`
-(`tarfs.Writer` also `WriteAll`); `multipartfs` is read-only and provides
+(`tarfs.Writer` also `WriteAll`, both writers also `ValidateName`);
+`multipartfs` is read-only and provides
 `Exists` and `ReadAll`.
 
 ## The path contract

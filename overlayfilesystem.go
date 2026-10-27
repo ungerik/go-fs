@@ -515,6 +515,7 @@ func (o *OverlayFileSystem) prepareUpper(filePath string) error {
 	if !info.IsDir {
 		return NewErrIsNotDirectory(info.File)
 	}
+	// The write methods of the overlay are not checked with ValidateName
 	err = fsMakeAllDirs(o.upper, o.upperPath(parent), 0)
 	if err != nil {
 		return o.overlayErr(o.upper, err)

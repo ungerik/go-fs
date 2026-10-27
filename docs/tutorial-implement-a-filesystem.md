@@ -461,6 +461,7 @@ when you can beat the emulation.** Good candidates for a real backend:
 | Byte range reads               | See `fsimpl.RangeReader`                     |
 | A recursive listing API        | `ListDirRecursiveFileSystem`                 |
 | Uploads that commit on `Close` | Writers that implement `fs.WriteAborter`     |
+| Names it can't write           | `ValidateNameFileSystem`, so copies fail before writing |
 
 Leave the rest alone. An unimplemented optional interface is not a gap; it is
 the emulation doing its job.
