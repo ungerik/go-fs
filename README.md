@@ -61,27 +61,42 @@ Plain string paths with `os`, `path/filepath` and `io/fs`, or the client
 packages of a storage (`pkg/sftp`, `jlaffaye/ftp`, `go-smb2`, the AWS and
 Azure SDKs, a WebDAV client), leave the following checks to every caller.
 go-fs makes them for every file system, and where it can before anything is
-written:
+written.
+
+*URIs mean one thing*
 
 - **No silent local writes for remote URIs.** To `os`, the string
   `s3://bucket/report.pdf` is the relative path `s3:/bucket/report.pdf`, so
   `os.MkdirAll` and `os.WriteFile` write it below a local directory named
-  `s3:`. A `File` with a scheme that no file system is registered for is the
-  invalid file system, whose operations fail with an error that names the
-  URI with its password redacted.
+  `s3:` when s3fs isn't imported. A `File` with a scheme that no file system
+  is registered for is the invalid file system, whose operations fail with
+  an error that names the URI with its password redacted.
+- **File URIs follow RFC 8089.** `file://server/share/x` is the UNC path
+  `\\server\share\x` on Windows, and on other platforms a file URI with
+  a host other than `localhost` is the invalid file system instead of a path
+  relative to the working directory.
+- **A prefix matches only at a boundary.** The file system registered for
+  `s3://logs` doesn't answer for `s3://logs-archive/...`.
+- **Names keep their characters.** `file:///tmp/a#b.txt` is the file
+  `a#b.txt`, where `net/url` would read `#b.txt` as a fragment, and a local
+  file named `a%20b` is reached by that name, not as `a b`.
+
+*Copies, moves and renames don't lose data*
+
 - **Names that would land somewhere else are rejected.** A copy, move or
   rename fails with an error wrapping `os.ErrInvalid` before it writes
   anything at a name that the destination would write outside of the
   directory or to another entry: `..\x` from an archive on a file system with
   the separator `\`, and on Windows `NUL` or `COM1` (a device), `a:b` (an
-  alternate data stream) or `report.` (written as `report`). A file system
-  that can't write some names, like a zip writer a name with a colon or an
-  S3-compatible server a backslash, implements `fs.ValidateNameFileSystem`,
-  so a copy into it fails before the first file instead of halfway.
+  alternate data stream) or `report.` (written as `report`, replacing it).
+  A file system that can't write some names, like a zip writer a name with a
+  colon or an S3-compatible server a backslash, implements
+  `fs.ValidateNameFileSystem`, so a copy of a thousand files into it fails
+  before the first one instead of at file 500.
 - **No overwrites from name collisions.** Two entries that a case-insensitive
-  or normalizing destination can't tell apart, like `A.txt` and `a.txt`, make
-  a copy into a new directory fail with an error wrapping `os.ErrExist`
-  instead of the second replacing the first.
+  or normalizing destination can't tell apart, like `A.txt` and `a.txt` from
+  Linux copied to macOS, make a copy into a new directory fail with an error
+  wrapping `os.ErrExist` instead of the second replacing the first.
 - **Copies don't write through special files or links.** When
   `fs.CopyRecursive` copies a directory, and in a move, a device, a named
   pipe or a socket at the destination is an error instead of the copy
@@ -90,39 +105,75 @@ written:
   a link to `/` doesn't copy a whole disk, and they are not recreated on
   another file system, where the same target could point outside of the
   copy.
+- **Copying a file onto itself keeps it.** `io.Copy` from `os.Open(p)` to
+  `os.Create(p)` truncates the file before it is read. `fs.CopyFile` of a
+  file onto itself is a no-op, also when the two paths reach the same file
+  through `SubFileSystem`s, a symbolic link, a hard link or a bind mount.
+- **Copying a directory into itself fails.** A copy of `/data` into
+  `/data/backup` is an error wrapping `os.ErrInvalid` instead of a copy that
+  keeps copying its own output.
 - **Moving a file onto itself keeps it.** The copy then delete fallback of
   `Move` would destroy a file that source and destination reach under two
   paths. go-fs recognizes that through `SubFileSystem`s, bind mounts,
   symbolic links and case-insensitive names and makes the move a no-op, a
-  rename to the new case of the name, or an error.
+  rename to the new case of the name, or an error. Moving a symbolic link
+  onto the file it points to is an error, like `mv` reports "are the same
+  file", instead of a link that points to itself, and a directory with the
+  source's name at the destination is an error wrapping `os.ErrExist`, never
+  merged or deleted.
 - **Copies don't take over setuid, setgid and sticky bits**, so a copy out
   of an archive can't create a setuid binary.
-- **Archives can't write outside of the destination.** `UnzipToMemFiles`
-  rejects entries that would leave the directory, the zipfs and tarfs readers
-  remove `..` elements, and zip entry names are decoded to UTF-8 so that an
-  Info-ZIP Unicode Path field can't make `photo.exe` look like `photo.jpg`.
-  `fs.Zip`, `ZipMemFiles` and `zipfs.Writer` refuse names that zip tools read
-  wrong, and a name that is too long can't corrupt the archive.
-- **Views stay views.** The paths of a `SubFileSystem` can't escape its
-  directory, and an `OverlayFileSystem` writes only to its upper layer.
-- **Paths can't inject protocol commands.** ftpfs rejects CR, LF and NUL in
-  paths and credentials, which would inject FTP commands, sftpfs rejects
-  a NUL, at which the server would end the path, and both reject backslashes,
-  which servers on Windows take for a separator.
-- **Credentials stay out of errors.** URIs and addresses in error messages
-  have their passwords redacted.
 - **Failed uploads commit nothing.** The upload writers of s3fs,
   azureblobfs, dropboxfs, webdavfs and ftpfs implement `fs.WriteAborter`,
   and `fs.CopyFile` and the package's own copies call `Abort` when a copy
   fails or the context is canceled, so no partial upload replaces a file.
 - **Azure Blob moves don't lose concurrent writes.** Every copy and delete of
-  a `Move` is pinned to the ETag of the blob, and blobs with snapshots are
-  not deleted unless `Options.DeleteSnapshots` is set.
+  a `Move` is pinned to the ETag of the blob, so a blob that another client
+  changed meanwhile is not deleted, and blobs with snapshots are not
+  deleted unless `Options.DeleteSnapshots` is set.
+- **Deleting the root fails.** `Remove` and `RemoveRecursive` of the root
+  directory are an error wrapping `os.ErrInvalid` on every file system,
+  including the root of a local volume, whose contents v0.1 deleted before
+  it failed.
+
+*Archives*
+
+- **Archives can't write outside of the destination.** `UnzipToMemFiles`
+  rejects entries like `../../.bashrc` that would leave the directory, and
+  the zipfs and tarfs readers remove such `..` elements.
+- **Zip names show what is stored.** Entry names are decoded to UTF-8, from
+  CP-437 or the Info-ZIP Unicode Path field, but that field can't make
+  `photo.exe` look like `photo.jpg` or drop the drive letter of `C:/x.txt`.
+- **Zip writers refuse names that zip tools read wrong**, like a name with
+  a bidirectional override, which shows `x\u202etxt.exe` as `xexe.txt`, a
+  colon, which is a drive letter on Windows, or invalid UTF-8, and a name
+  that is too long can't corrupt the archive.
+- **A zip bomb can't exhaust the memory.** `UnzipToMemFiles` reads at most
+  `fs.UnzipToMemFilesMaxSize` (1 GiB) of uncompressed data.
+
+*Views, servers and credentials*
+
+- **Views stay views.** The paths of a `SubFileSystem` can't escape its
+  directory: a client name like `../../etc/passwd` served from a
+  `SubFileSystem` of `/srv/data` can't reach `/etc/passwd`, which
+  `filepath.Join` would. An `OverlayFileSystem` writes only to its upper
+  layer.
+- **Paths can't inject protocol commands.** ftpfs rejects CR, LF and NUL in
+  paths and credentials, which would inject FTP commands, sftpfs rejects
+  a NUL, at which the server would end the path, and both reject backslashes,
+  which servers on Windows take for a separator.
+- **Credentials don't travel.** sftpfs, ftpfs and smbfs reject an address
+  with an unencoded `@` after the host, and webdavfs follows no redirect to
+  another host or port or from https to http unless the `CheckRedirect` of
+  `Options.Client` allows it, and then without credentials.
+- **Credentials stay out of errors.** URIs and addresses in error messages
+  have their passwords redacted.
 
 The details and documented limits are in
 [Copy, move and compare](docs/howto-copy-move-and-compare.md),
-[Work with archives](docs/howto-work-with-archives.md) and the READMEs of the
-backends.
+[Work with archives](docs/howto-work-with-archives.md),
+[Paths, URIs and the registry](docs/explanation-path-and-uri-model.md) and
+the READMEs of the backends.
 
 Introduction
 ------------
