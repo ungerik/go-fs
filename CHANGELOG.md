@@ -5,7 +5,12 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## [Unreleased]
+## [1.0.0-rc.2] - 2026-10-27
+
+Second release candidate: zip archives get one name rule for every writer
+and UTF-8 names on read, and a copy, move or rename into a file system that
+can't write a name, like a zip writer or an S3-compatible server, fails
+before it writes anything instead of at that name.
 
 ### Added
 
@@ -59,13 +64,16 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   checked.
 - `fs.UnzipToMemFiles` and `zipfs.Reader` return entry names as UTF-8: a
   name without the UTF-8 flag is taken from its Info-ZIP Unicode Path extra
-  field if it has one that keeps the ASCII parts of the stored name, so it
-  can't give the entry another extension or directory than `archive/zip`
-  shows, else a name that is not valid UTF-8, like the umlauts of old
-  Windows tools, is converted from CP-437, the encoding of names without
-  the flag. `archive/zip` returns the stored bytes, which
-  `ZipMemFiles` and `zipfs.Writer` now reject, so the MemFiles and files of
-  such an archive couldn't be zipped again.
+  field if it has one that keeps the ASCII parts of the stored name and
+  only replaces its bytes of another code page and the `?` and `_`
+  substitutes, without a control or bidirectional formatting character, so
+  it can't give the entry another extension, directory or drive letter
+  than `archive/zip` shows, also not one that only looks like another,
+  else a name that is not valid UTF-8, like the umlauts of old Windows
+  tools, is converted from CP-437, the encoding of names without the flag.
+  `archive/zip` returns the stored bytes, which `ZipMemFiles` and
+  `zipfs.Writer` now reject, so the MemFiles and files of such an archive
+  couldn't be zipped again.
 - Copies and moves from another file system into a backend fail before
   they write anything at a name that `ValidateName` of the backend rejects,
   also where the server wrote it before: a name that is not valid UTF-8

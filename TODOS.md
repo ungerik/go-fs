@@ -42,7 +42,11 @@ with snapshots.
 
 **Why:** The offline fake client covers the code paths, not the real API.
 
-**Context:** The token-gated tests skip without the variable.
+**Context:** The token-gated tests skip without the variable. Also check
+whether the API refuses names like `desktop.ini`, `thumbs.db`, `.ds_store`,
+`icon\r`, `.dropbox` and `.dropbox.attr` (`disallowed_name`); then the
+dropboxfs `ValidateName` has to reject them, so a copy of a Windows or macOS
+folder fails before it writes anything.
 
 **Effort:** S
 **Priority:** P0
@@ -103,36 +107,6 @@ release from the CHANGELOG section.
 **Priority:** P0
 **Depends on:** The other release items
 
-### Explain in the README what go-fs protects against
-
-**What:** A section in `README.md` that explains which pitfalls and security
-issues go-fs solves compared with working with string paths and the
-standard library (`os`, `path/filepath`, `io/fs`), and compared with using
-the client packages of a storage directly (`pkg/sftp`, `jlaffaye/ftp`,
-`go-smb2`, the AWS and Azure SDKs, a WebDAV client) instead of the go-fs
-file systems built on them (`sftpfs`, `ftpfs`, `smbfs`, `s3fs`,
-`azureblobfs`, `webdavfs`).
-
-**Why:** The protections are spread over the package docs, the CHANGELOG and
-`docs/MIGRATION_v1.md`, so a reader of the README can't see why to use go-fs
-instead of plain paths and SDK calls.
-
-**Context:** Candidates from the v1.0 work, each with a one-line example of
-the failure it prevents: a URI of an unregistered scheme is the `Invalid`
-file system instead of a silent local write; RFC 8089 file URIs and the SMB
-host check of Windows UNC paths; names that collide on case-insensitive or
-normalizing targets fail instead of overwriting; Windows reserved names,
-alternate data streams and trailing dots are rejected before anything is
-written; copies don't write into pipes or devices; `RemoveAll` doesn't delete
-through symbolic links (ftpfs, SubFileSystem, OverlayFileSystem); Azure moves
-pinned to ETags; checked names of `CopyFile`/`Move` into directories;
-redacted credentials in errors; aborted uploads that commit nothing. Link to
-the reference docs for the details and the documented limits.
-
-**Effort:** S
-**Priority:** P1
-**Depends on:** None
-
 ### Close the how-to gaps of the v1.0 features
 
 **What:** Several v1.0 behaviours are documented only in the reference docs,
@@ -180,6 +154,68 @@ of each beta and release candidate; most of them fail to compile, so
 **Depends on:** Release v1.0.0
 
 ## fs (core)
+
+### Keep the source of a move into an archive writer until the archive is written
+
+**What:** `fs.Move` into a `zipfs.Writer` or `tarfs.Writer` removes the
+source as soon as its entry is in the writer's stream, but the archive is
+only complete when `Writer.Close` succeeds.
+
+**Why:** A failing `Close`, like a failed upload of the archive, or a crash
+before it loses the moved files: `Move` returned nil and the source is gone.
+
+**Context:** Found by the adversarial review of v1.0.0-rc.2 with a probe
+(an archive target whose writer fails on `Close`). The copy then delete
+fallback ends with `fsRemoveAll` of the source in `moveByCopy`
+(`dispatch.go`), unchanged since beta.2. The zipfs and tarfs package docs
+name `fs.Move` into the archive. Options: refuse `Move` into a file system
+that can't read back what it wrote (both archive writers), or document
+"CopyRecursive, Close, then remove the source".
+
+**Effort:** S
+**Priority:** P1, before v1.0.0
+**Depends on:** None
+
+### Decode Shift-JIS Unicode Path names whose second byte repeats the next letter
+
+**What:** `zipname.Decode` ignores a valid Info-ZIP Unicode Path field when
+the ASCII second byte of a double-byte character is followed by the same
+letter and more non-ASCII characters, like Shift-JIS `アA日.txt`
+(`83 41 41 93 FA`), and returns the CP-437 decoding instead.
+
+**Why:** Names from Japanese Windows tools like `エリアA計画.xlsx` or
+`ケースX仕様.pdf` show as mojibake. It is safe (the stored name decides),
+but it is a regression of the rc.2 rule that closed the look-alike spoof.
+
+**Context:** `keepsASCII` takes the leftmost match of a middle ASCII part.
+Since a run may hold an ASCII byte only right after a byte from 0x80, that
+match can be the second byte, and the next run then starts with the real
+letter. Skip a match whose next byte can't start a run (from 0x80, `?` or
+`_`) and add the cases above to `TestDecode` and the `FuzzKeepsASCII`
+seeds. Also add rows for a dot or slash after a byte from 0x80, which pin the
+`@` lower bound of the second-byte rule.
+
+**Effort:** S
+**Priority:** P1, before v1.0.0
+**Depends on:** None
+
+### Reject zero-width characters and device names that zip name decoding produces
+
+**What:** A Unicode Path run or the CP-437 decoding can produce a name with
+a zero-width character (U+200B, U+FEFF, U+2060) or a Windows device name
+(`COM?` to `COM¹`) that `isDisguisingRune` and the stored name don't have.
+
+**Why:** `report?.pdf` can decode to a name that looks exactly like
+`report.pdf`; Windows-side checks (`filepath.Localize`, smbfs) catch the
+device names, the zero-width characters only show in a listing.
+
+**Context:** Found by the adversarial review of v1.0.0-rc.2. Decide whether
+`isDisguisingRune` covers all of Unicode category Cf, which also affects
+the names `fs.Zip` and `zipfs.Writer` reject.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
 
 ### Check that the source can read the names before a copy
 
@@ -812,6 +848,23 @@ blob, and nothing stops it under a context without a deadline. The native
 
 ## sftpfs, smbfs, webdavfs, uuiddir
 
+### Check trailing-dot names of existing directories on Windows SMB servers
+
+**What:** `validateNewDirs` accepts a rejected directory name if `Stat`
+finds an entry at that path. If a Windows SMB server strips trailing dots
+like the Win32 layer does, `Stat("reports.")` finds `reports`, and a copy to
+`reports./q3.txt` writes `reports/q3.txt`.
+
+**Why:** The smbfs `ValidateName` rejects trailing dots because Windows
+servers remove them; either the bypass is real or the smbfs doc is wrong.
+
+**Context:** Found by the adversarial review of v1.0.0-rc.2 with a simulated
+server. Check against a real Windows SMB share; Samba keeps the names.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** A Windows SMB server
+
 ### Concurrent writes in sftpfs
 
 **What:** Enable `sftp.UseConcurrentWrites`.
@@ -854,6 +907,37 @@ a raw `@` in the path.
 **Depends on:** None
 
 ## Completed
+
+### Explain in the README what go-fs protects against
+
+**What:** A section in `README.md` that explains which pitfalls and security
+issues go-fs solves compared with working with string paths and the
+standard library (`os`, `path/filepath`, `io/fs`), and compared with using
+the client packages of a storage directly (`pkg/sftp`, `jlaffaye/ftp`,
+`go-smb2`, the AWS and Azure SDKs, a WebDAV client) instead of the go-fs
+file systems built on them (`sftpfs`, `ftpfs`, `smbfs`, `s3fs`,
+`azureblobfs`, `webdavfs`).
+
+**Why:** The protections are spread over the package docs, the CHANGELOG and
+`docs/MIGRATION_v1.md`, so a reader of the README can't see why to use go-fs
+instead of plain paths and SDK calls.
+
+**Context:** Candidates from the v1.0 work, each with a one-line example of
+the failure it prevents: a URI of an unregistered scheme is the `Invalid`
+file system instead of a silent local write; RFC 8089 file URIs and the SMB
+host check of Windows UNC paths; names that collide on case-insensitive or
+normalizing targets fail instead of overwriting; Windows reserved names,
+alternate data streams and trailing dots are rejected before anything is
+written; copies don't write into pipes or devices; `RemoveAll` doesn't delete
+through symbolic links (ftpfs, SubFileSystem, OverlayFileSystem); Azure moves
+pinned to ETags; checked names of `CopyFile`/`Move` into directories;
+redacted credentials in errors; aborted uploads that commit nothing. Link to
+the reference docs for the details and the documented limits.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+**Completed:** v1.0.0-rc.2 (2026-10-27)
 
 ### Implement ValidateName in sftpfs, ftpfs, webdavfs and tarfs
 
