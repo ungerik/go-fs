@@ -155,6 +155,41 @@ of each beta and release candidate; most of them fail to compile, so
 
 ## fs (core)
 
+### Redact the prefix in the errors of httpfs.New
+
+**What:** `httpfs.New` puts the raw prefix into two error messages
+(`httpfs/http.go:103` and `:106`), so the password of a prefix with user
+info shows in the error.
+
+**Why:** Every other error of go-fs redacts passwords; the README promises it
+only for the invalid file system and the remote backends because of this.
+
+**Context:** Found by the fact check of the README section of v1.0.0-rc.2.
+Wrap the prefix in `fsimpl.RedactURI`. Hardening: the "into itself" errors
+of `copy.go` print raw paths; use `errSubject` like the other errors.
+
+**Effort:** S
+**Priority:** P1, before v1.0.0
+**Depends on:** None
+
+### Don't truncate an sftpfs or smbfs file by copying a link onto it
+
+**What:** `fs.CopyFile` of a symbolic link on sftpfs or smbfs onto the file
+it points to, or on smbfs of another case of a name onto the file, opens
+the writer with `O_TRUNC` and truncates the file before it is read.
+
+**Why:** Data loss: the same-file check of `copyFileTo` compares links,
+hard links and bind mounts only for local files.
+
+**Context:** Found by the fact check of the README section of v1.0.0-rc.2.
+sftpfs and smbfs have no native `CopyFile`. Resolve the link target (or
+compare file identities where the server reports them) before opening the
+writer, like `isLocalSameFile` does locally.
+
+**Effort:** M
+**Priority:** P1, before v1.0.0
+**Depends on:** None
+
 ### Keep the source of a move into an archive writer until the archive is written
 
 **What:** `fs.Move` into a `zipfs.Writer` or `tarfs.Writer` removes the
