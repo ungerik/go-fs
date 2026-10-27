@@ -10,7 +10,7 @@ go-fs: A unified file system for Go
 The package is built around a `File` type that is a string underneath
 and interprets its value as a local file system path or as a URI.
 
-Version 1.0 is a release candidate (v1.0.0-rc.1); the v1 API freezes with
+Version 1.0 is a release candidate (v1.0.0-rc.2); the v1 API freezes with
 the v1.0.0 release. Upgrading from v0.x is mechanical, see
 [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md).
 
@@ -41,7 +41,7 @@ design rationale and the implementer reference see **[docs/](docs/README.md)**.
 
 *Reference*
 
-- [FileSystem interfaces](docs/reference-filesystem-interfaces.md) — all 27
+- [FileSystem interfaces](docs/reference-filesystem-interfaces.md) — all 28
   interfaces, every fallback, the backend support matrix
 - [Errors](docs/reference-errors.md) · [fsimpl](docs/reference-fsimpl.md) ·
   [fstest](docs/reference-fstest.md) · [uuiddir](docs/reference-uuiddir.md)
@@ -53,6 +53,75 @@ design rationale and the implementer reference see **[docs/](docs/README.md)**.
   [Paths, URIs and the registry](docs/explanation-path-and-uri-model.md) ·
   [The context rule](docs/explanation-context-rule.md) ·
   [Optional interfaces and emulation](docs/explanation-optional-interfaces.md)
+
+What go-fs protects against
+---------------------------
+
+Plain string paths with `os`, `path/filepath` and `io/fs`, or the client
+packages of a storage (`pkg/sftp`, `jlaffaye/ftp`, `go-smb2`, the AWS and
+Azure SDKs, a WebDAV client), leave these checks to every caller. go-fs makes
+them for every file system, and where it can before anything is written:
+
+- **No silent local writes for remote URIs.** To `os`, the string
+  `s3://bucket/report.pdf` is the relative path `s3:/bucket/report.pdf`, so
+  `os.MkdirAll` and `os.WriteFile` write it below a local directory named
+  `s3:`. A `File` with a scheme that no file system is registered for is the
+  invalid file system, whose operations fail with an error that names the
+  URI with its password redacted.
+- **Names that would land somewhere else are rejected.** A copy, move or
+  rename fails with an error wrapping `os.ErrInvalid` before it writes
+  anything at a name that the destination would write outside of the
+  directory or to another entry: `..\x` from an archive on a file system with
+  the separator `\`, and on Windows `NUL` or `COM1` (a device), `a:b` (an
+  alternate data stream) or `report.` (written as `report`). A file system
+  that can't write some names, like a zip writer a name with a colon or an
+  S3-compatible server a backslash, implements `fs.ValidateNameFileSystem`,
+  so a copy into it fails before the first file instead of halfway.
+- **No overwrites from name collisions.** Two entries that a case-insensitive
+  or normalizing destination can't tell apart, like `A.txt` and `a.txt`, make
+  a copy into a new directory fail with an error wrapping `os.ErrExist`
+  instead of the second replacing the first.
+- **Copies don't write through special files or links.** When
+  `fs.CopyRecursive` copies a directory, and in a move, a device, a named
+  pipe or a socket at the destination is an error instead of the copy
+  writing into it, and a symbolic link below the destination is never
+  written through. Links to directories are not followed, so a link cycle or
+  a link to `/` doesn't copy a whole disk, and they are not recreated on
+  another file system, where the same target could point outside of the
+  copy.
+- **Moving a file onto itself keeps it.** The copy then delete fallback of
+  `Move` would destroy a file that source and destination reach under two
+  paths. go-fs recognizes that through `SubFileSystem`s, bind mounts,
+  symbolic links and case-insensitive names and makes the move a no-op, a
+  rename to the new case of the name, or an error.
+- **Copies don't take over setuid, setgid and sticky bits**, so a copy out
+  of an archive can't create a setuid binary.
+- **Archives can't write outside of the destination.** `UnzipToMemFiles`
+  rejects entries that would leave the directory, the zipfs and tarfs readers
+  remove `..` elements, and zip entry names are decoded to UTF-8 so that an
+  Info-ZIP Unicode Path field can't make `photo.exe` look like `photo.jpg`.
+  `fs.Zip`, `ZipMemFiles` and `zipfs.Writer` refuse names that zip tools read
+  wrong, and a name that is too long can't corrupt the archive.
+- **Views stay views.** The paths of a `SubFileSystem` can't escape its
+  directory, and an `OverlayFileSystem` writes only to its upper layer.
+- **Paths can't inject protocol commands.** ftpfs rejects CR, LF and NUL in
+  paths and credentials, which would inject FTP commands, sftpfs rejects
+  a NUL, at which the server would end the path, and both reject backslashes,
+  which servers on Windows take for a separator.
+- **Credentials stay out of errors.** URIs and addresses in error messages
+  have their passwords redacted.
+- **Failed uploads commit nothing.** The upload writers of s3fs,
+  azureblobfs, dropboxfs, webdavfs and ftpfs implement `fs.WriteAborter`,
+  and `fs.CopyFile` and the package's own copies call `Abort` when a copy
+  fails or the context is canceled, so no partial upload replaces a file.
+- **Azure Blob moves don't lose concurrent writes.** Every copy and delete of
+  a `Move` is pinned to the ETag of the blob, and blobs with snapshots are
+  not deleted unless `Options.DeleteSnapshots` is set.
+
+The details and documented limits are in
+[Copy, move and compare](docs/howto-copy-move-and-compare.md),
+[Work with archives](docs/howto-work-with-archives.md) and the READMEs of the
+backends.
 
 Introduction
 ------------

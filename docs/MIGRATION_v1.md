@@ -287,9 +287,10 @@ exact signatures. Changes compared to v0.1:
   write anything at a name that the backend's `ValidateName` rejects, where
   v0.1 wrote the files before it: a name that is not valid UTF-8 for all
   four, in `s3fs` also a backslash, a control character and a name longer
-  than 1024 bytes, in `sftpfs` and `ftpfs` the backslash rule above, and in
-  `dropboxfs` and `sftpfs` a NUL character, which `sftpfs` rejects in every
-  path. A copy or move within one file system keeps the names it holds.
+  than 1024 bytes, in `sftpfs` and `ftpfs` the backslash rule above, in
+  `dropboxfs`, `sftpfs` and `ftpfs` a NUL character, and in `ftpfs` also CR
+  and LF; `sftpfs` and `ftpfs` reject these characters in every path. A copy
+  or move within one file system keeps the names it holds.
 - sftpfs and ftpfs reject addresses with an unencoded `@` after the host,
   sftpfs also an `@` in a path passed to `EnsureRegistered`: write it as
   `%40`, and percent-encode `/`, `?` and `#` in sftpfs usernames and

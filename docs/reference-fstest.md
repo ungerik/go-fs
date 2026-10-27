@@ -222,8 +222,9 @@ package's own emulations: `Exists`, `ReadAll`, `WriteAll`, `Append`,
 `OpenAppendWriter`, `OpenReadWriter`, `Truncate`, `MakeAllDirs`, `RemoveAll`,
 `CopyFile`, `Move` (with the overwrite semantics above) and `ListDirRecursive`
 use the primitives, `Touch` creates a missing file, `Lstat` is `Stat`,
-`IsHidden` is the dot rule, `PrefixAliases` is empty, `VolumeName` is empty and
-`IsAbsPath`/`AbsPath`/`RelPath` treat every path as absolute. `Watch`,
+`IsHidden` is the dot rule, `PrefixAliases` is empty, `VolumeName` is empty,
+`IsAbsPath`/`AbsPath`/`RelPath` treat every path as absolute and
+`ValidateName` accepts every name. `Watch`,
 `SetPermissions`, `User`, `SetUser`, `Group`, `SetGroup`, `CreateSymbolicLink`,
 `ReadSymbolicLink` and the extended attribute methods return an error wrapping
 `errors.ErrUnsupported`, because the package has no emulation for them either.

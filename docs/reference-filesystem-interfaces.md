@@ -3,10 +3,10 @@
 Complete catalogue of the interfaces a go-fs backend can implement, and what
 the package does for every operation a backend leaves out.
 
-`filesystem.go` defines 27 interfaces: 26 file system interfaces and
+`filesystem.go` defines 28 interfaces: 27 file system interfaces and
 `WriteAborter` for writers. A backend implements two file system interfaces
 at most to be usable: `FileSystem` for reading, and `WriteFileSystem` if it
-can write. The other 24 are *optional*: when a backend does not implement
+can write. The other 25 are *optional*: when a backend does not implement
 one, the operation still works, built from the core primitives, or it is
 refused with `ErrUnsupported` where nothing can be emulated. A backend
 implements an optional interface only when it can do the job better than
