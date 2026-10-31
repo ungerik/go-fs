@@ -21,7 +21,10 @@ mistake:
 ## Read a ZIP archive
 
 ```go
-import "github.com/ungerik/go-fs/zipfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/zipfs"
+)
 
 zipFS, err := zipfs.NewReader(fs.File("archive.zip"), "") // "" = random id
 if err != nil {
@@ -106,7 +109,10 @@ content when it is read, whatever its name. When writing, the file name decides:
 a `.gz` or `.tgz` suffix means gzip, anything else is an uncompressed tar.
 
 ```go
-import "github.com/ungerik/go-fs/tarfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/tarfs"
+)
 
 tarFS, err := tarfs.NewReader(fs.File("backup.tar.gz"), "")
 if err != nil {

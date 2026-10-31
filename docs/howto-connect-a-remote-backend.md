@@ -12,8 +12,10 @@ from anywhere in your program.
   module** with its own dependencies, so importing `s3fs` does not pull the
   Azure SDK into your build
 
+Get the backend together with the core module, at the same version:
+
 ```bash
-go get github.com/ungerik/go-fs/s3fs   # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.2 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.2 # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs
 ```
 
 ## The constructor rule every backend follows
@@ -82,7 +84,10 @@ err = backendFS.RootDir().Join("dir", "file.txt").WriteAllString(ctx, "...")
 ### S3
 
 ```go
-import "github.com/ungerik/go-fs/s3fs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/s3fs"
+)
 
 // Default AWS credential chain (env, ~/.aws/config, IAM role, ...)
 bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-bucket", nil)
@@ -122,6 +127,7 @@ Credential setup, S3-compatible services and the full concept mapping are in
 
 ```go
 import (
+    fs "github.com/ungerik/go-fs"
     "github.com/ungerik/go-fs/sftpfs"
     "golang.org/x/crypto/ssh/knownhosts"
 )
@@ -193,7 +199,10 @@ part of the prefix, so the files are `sftp://user@host/path`.
 ### FTP / FTPS
 
 ```go
-import "github.com/ungerik/go-fs/ftpfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/ftpfs"
+)
 
 ftpFS, err := ftpfs.Dial(ctx, "ftps://example.com", &ftpfs.Options{
     Username: "user",
@@ -237,7 +246,10 @@ like the one of `sftpfs`.
 ### SMB / CIFS
 
 ```go
-import "github.com/ungerik/go-fs/smbfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/smbfs"
+)
 
 smbFS, err := smbfs.Dial(ctx, "smb://nas.local/documents", &smbfs.Options{
     Username: "alice",
@@ -271,7 +283,10 @@ the user write bit survives a round trip.
 ### WebDAV
 
 ```go
-import "github.com/ungerik/go-fs/webdavfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/webdavfs"
+)
 
 davFS, err := webdavfs.New(ctx,
     "https://cloud.example.com/remote.php/dav/files/alice",
@@ -312,7 +327,10 @@ backs `Stat` and `ListDir`, `MOVE` and `COPY` are native, and readers seek with
 ### Azure Blob Storage
 
 ```go
-import "github.com/ungerik/go-fs/azureblobfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/azureblobfs"
+)
 
 blobFS, err := azureblobfs.NewFromConnectionString(ctx,
     os.Getenv("AZURE_STORAGE_CONNECTION_STRING"), "assets", nil)
@@ -340,7 +358,10 @@ modification time by setting blob metadata.
 ### Dropbox
 
 ```go
-import "github.com/ungerik/go-fs/dropboxfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/dropboxfs"
+)
 
 dbxFS, err := dropboxfs.New(ctx, accessToken, &dropboxfs.Options{CacheTimeout: 5 * time.Minute})
 if err != nil {
@@ -372,7 +393,10 @@ for callers that know the account id.
 No dialing, no credentials, just a side-effect import:
 
 ```go
-import _ "github.com/ungerik/go-fs/httpfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    _ "github.com/ungerik/go-fs/httpfs"
+)
 
 data, err := fs.File("https://example.com/file.txt").ReadAll(ctx)
 ```

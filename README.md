@@ -1,58 +1,115 @@
-go-fs: A unified file system for Go
-===================================
+go-fs
+=====
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ungerik/go-fs.svg)](https://pkg.go.dev/github.com/ungerik/go-fs)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ungerik/go-fs)](https://goreportcard.com/report/github.com/ungerik/go-fs)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/ungerik/go-fs)](https://github.com/ungerik/go-fs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub release](https://img.shields.io/github/release/ungerik/go-fs.svg)](https://github.com/ungerik/go-fs/releases)
+[![GitHub release](https://img.shields.io/github/v/release/ungerik/go-fs?include_prereleases)](https://github.com/ungerik/go-fs/releases)
 
-The package is built around a `File` type that is a string underneath
-and interprets its value as a local file system path or as a URI.
+One file API for Go over the local disk, memory, S3, Azure Blob Storage,
+SFTP, FTP, SMB, WebDAV, Dropbox, HTTP, and ZIP and tar archives. A file is a
+path or URI string like `s3://bucket/report.pdf`, and the same code reads,
+writes, lists, copies and moves files on every one of them.
 
-Version 1.0 is a release candidate (v1.0.0-rc.2); the v1 API freezes with
-the v1.0.0 release. Upgrading from v0.x is mechanical, see
-[docs/MIGRATION_v1.md](docs/MIGRATION_v1.md).
+Install
+-------
+
+```bash
+go get github.com/ungerik/go-fs@v1.0.0-rc.2
+```
+
+Requires Go 1.26 or newer. v1.0.0-rc.2 is the release candidate for v1.0.0,
+which freezes the v1 API. Until v1.0.0 is tagged, `go get` without a version
+installs v0.1.0, whose API differs; [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md)
+covers the upgrade from v0.x.
+
+`httpfs`, `zipfs`, `tarfs` and `multipartfs` come with the core module. The
+network backends are modules of their own: get the ones you use together
+with the core module, at the same version.
+
+```bash
+go get github.com/ungerik/go-fs@v1.0.0-rc.2 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.2 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
+```
+
+Example
+-------
+
+```go
+import (
+    fs "github.com/ungerik/go-fs"
+    _ "github.com/ungerik/go-fs/httpfs" // registers http:// and https://
+    "github.com/ungerik/go-fs/s3fs"
+)
+
+// countWords works on every file system
+func countWords(ctx context.Context, file fs.File) (int, error) {
+    text, err := file.ReadAllString(ctx)
+    if err != nil {
+        return 0, err
+    }
+    return len(strings.Fields(text)), nil
+}
+
+// s3://my-bucket/... resolves once the bucket is registered
+bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-bucket", nil)
+if err != nil {
+    return err
+}
+defer bucket.Close()
+err = fs.Register(bucket)
+
+n, err := countWords(ctx, "notes.txt")                    // local disk
+n, err = countWords(ctx, "https://example.com/notes.txt") // HTTP
+n, err = countWords(ctx, "s3://my-bucket/notes.txt")      // S3
+
+// Copy between any two of them
+err = fs.CopyFile(ctx, fs.File("https://example.com/report.pdf"), "s3://my-bucket/report.pdf")
+```
+
+Features
+--------
+
+- **Address any file with a string** — `fs.File` is a string type, so
+  `"~/notes.txt"`, `"s3://bucket/notes.txt"` and `"sftp://user@host/notes.txt"`
+  can be constants and marshal to JSON as plain strings.
+- **Change the storage, keep the code** — every backend answers the same
+  `File` methods, and an operation a backend can't do natively runs on a
+  generic implementation built on its core methods.
+- **Copy and move between any two file systems** — `fs.CopyFile` and
+  `fs.Move` take files on different backends, and use the server-side copy or
+  move when both are on one backend that has it.
+- **Lose no data to a copy or move** — names that would land outside the
+  destination directory are rejected before they are written, and a failed
+  copy to S3, Azure Blob or Dropbox discards its upload instead of committing
+  it. [All the checks](#what-go-fs-protects-against) are listed below.
+- **Never write `s3://` URIs to the local disk** — to `os`,
+  `s3://bucket/key` is the relative path `s3:/bucket/key`; in go-fs a scheme
+  without a registered file system is an error.
+- **Keep paths inside archives and views** — zip and tar entries like
+  `../../.bashrc` can't leave the destination, and a client path like
+  `../../etc/passwd` can't escape a `SubFileSystem`.
+- **Read archives and form uploads as file systems** — `zipfs` and `tarfs`
+  read and write ZIP and tar archives (also `.tar.gz`), and `multipartfs`
+  turns the files of an HTML form upload into `fs.File` values.
+- **Plug into `io/fs`** — `File.StdFS()` hands a directory on any backend to
+  `http.FileServer` or `template.ParseFS`, and `fs.NewStdFileSystem` turns an
+  `embed.FS` into a go-fs file system.
+- **Test without the disk** — `MemFileSystem` stands in for any backend, and
+  `fstest.RunConformance` checks a backend you write against the contract of
+  every method.
+- **Import only what you use** — the core module depends on fsnotify,
+  pkg/xattr and golang.org/x/sys; each network backend is a module of its
+  own, so the AWS SDK only arrives with `s3fs`.
 
 Documentation
 -------------
 
-The rest of this README is an API tour. For task-oriented guides,
-design rationale and the implementer reference see **[docs/](docs/README.md)**.
-
-*Tutorials*
-
-- [Getting started](docs/tutorial-getting-started.md) — read and write files
-  against local disk, memory and HTTP with the same code
-- [Implement a file system](docs/tutorial-implement-a-filesystem.md) — a
-  complete backend in about 170 lines that passes the conformance suite
-
-*How-to*
-
-- [Connect a remote backend](docs/howto-connect-a-remote-backend.md) — S3,
-  SFTP, FTP, SMB, WebDAV, Azure Blob, Dropbox
-- [Test with MemFileSystem](docs/howto-test-with-memfilesystem.md)
-- [Serve files over HTTP](docs/howto-serve-files-over-http.md)
-- [Handle form uploads](docs/howto-handle-form-uploads.md)
-- [Work with archives](docs/howto-work-with-archives.md)
-- [Copy, move and compare](docs/howto-copy-move-and-compare.md)
-- [Run the conformance suite](docs/howto-run-the-conformance-suite.md)
-- [Migrating to v1.0](docs/MIGRATION_v1.md)
-
-*Reference*
-
-- [FileSystem interfaces](docs/reference-filesystem-interfaces.md) — all 28
-  interfaces, every fallback, the backend support matrix
-- [Errors](docs/reference-errors.md) · [fsimpl](docs/reference-fsimpl.md) ·
-  [fstest](docs/reference-fstest.md) · [uuiddir](docs/reference-uuiddir.md)
-- Full API on [pkg.go.dev](https://pkg.go.dev/github.com/ungerik/go-fs)
-
-*Explanation*
-
-- [Why File is a string](docs/explanation-the-file-type.md) ·
-  [Paths, URIs and the registry](docs/explanation-path-and-uri-model.md) ·
-  [The context rule](docs/explanation-context-rule.md) ·
-  [Optional interfaces and emulation](docs/explanation-optional-interfaces.md)
+[Getting started](docs/tutorial-getting-started.md) runs the same code
+against the local disk, memory and HTTP. [docs/](docs/README.md) indexes every
+guide and backend README, and the full API is on
+[pkg.go.dev](https://pkg.go.dev/github.com/ungerik/go-fs). The rest of this
+README is a tour of the API.
 
 What go-fs protects against
 ---------------------------
@@ -211,7 +268,10 @@ For example, create a `FileSystem` from a multi-part
 HTTP form request that contains an uploaded file:
 
 ```go
-import "github.com/ungerik/go-fs/multipartfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/multipartfs"
+)
 
 multipartFS, err := multipartfs.NewFromRequest(request, maxUploadMemory, "") // "" = random id
 if err != nil {
@@ -254,13 +314,14 @@ fileVar = "~/file.c"
 Handy to pass string literals of local paths or URIs to functions:
 
 ```go
+import (
+    fs "github.com/ungerik/go-fs"
+    _ "github.com/ungerik/go-fs/httpfs" // HTTP reading works when httpfs is imported
+)
+
 func readFile(f fs.File) { /* ... */ }
 
 readFile("../my-local-file.txt")
-
-// HTTP reading works when httpfs is imported
-import _ "github.com/ungerik/go-fs/httpfs"
-
 readFile("https://example.com/file-via-uri.txt")
 ```
 
@@ -947,7 +1008,10 @@ and renaming, truncating, and dialing connections.
 ### httpfs
 
 ```go
-import _ "github.com/ungerik/go-fs/httpfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    _ "github.com/ungerik/go-fs/httpfs"
+)
 
 data, err := fs.File("https://example.com/file.txt").ReadAll(ctx)
 ```
@@ -969,7 +1033,10 @@ server unchanged. [httpfs/README.md](httpfs/README.md) has the details.
 ### s3fs
 
 ```go
-import "github.com/ungerik/go-fs/s3fs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/s3fs"
+)
 
 // Using the default AWS credential chain
 bucket, err := s3fs.NewLoadDefaultConfig(ctx, "my-bucket", nil)
@@ -998,6 +1065,7 @@ S3-compatible service configuration and the full concept mapping.
 
 ```go
 import (
+    fs "github.com/ungerik/go-fs"
     "github.com/ungerik/go-fs/sftpfs"
     "golang.org/x/crypto/ssh/knownhosts"
 )
@@ -1034,7 +1102,10 @@ concept mapping.
 ### ftpfs
 
 ```go
-import "github.com/ungerik/go-fs/ftpfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/ftpfs"
+)
 
 err := ftpfs.DialAndRegister(ctx, "ftps://example.com", &ftpfs.Options{
     Username: "user",
@@ -1058,7 +1129,10 @@ mapping.
 ### dropboxfs
 
 ```go
-import "github.com/ungerik/go-fs/dropboxfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/dropboxfs"
+)
 
 dbxFS, err := dropboxfs.New(ctx, accessToken, &dropboxfs.Options{CacheTimeout: 5 * time.Minute})
 if err != nil {
@@ -1083,7 +1157,10 @@ setup and how to run the tests against a real account.
 ### webdavfs
 
 ```go
-import "github.com/ungerik/go-fs/webdavfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/webdavfs"
+)
 
 davFS, err := webdavfs.New(ctx, "https://cloud.example.com/remote.php/dav/files/alice",
     &webdavfs.Options{Username: "alice", Password: "app-password"})
@@ -1107,7 +1184,10 @@ the full concept mapping.
 ### smbfs
 
 ```go
-import "github.com/ungerik/go-fs/smbfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/smbfs"
+)
 
 smbFS, err := smbfs.Dial(ctx, "smb://nas.local/documents", &smbfs.Options{
     Username: "alice",
@@ -1135,7 +1215,10 @@ full concept mapping.
 ### azureblobfs
 
 ```go
-import "github.com/ungerik/go-fs/azureblobfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/azureblobfs"
+)
 
 blobFS, err := azureblobfs.NewFromConnectionString(ctx, os.Getenv("AZURE_STORAGE_CONNECTION_STRING"), "assets", nil)
 if err != nil {
@@ -1159,7 +1242,10 @@ the full concept mapping.
 ### zipfs
 
 ```go
-import "github.com/ungerik/go-fs/zipfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/zipfs"
+)
 
 // Read a ZIP archive as a file system
 zipFS, err := zipfs.NewReader(fs.File("archive.zip"), "") // "" = random id
@@ -1195,7 +1281,10 @@ discards the file. [zipfs/README.md](zipfs/README.md) has the details.
 The same for tar archives, optionally gzip compressed (`.tar.gz`, `.tgz`):
 
 ```go
-import "github.com/ungerik/go-fs/tarfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/tarfs"
+)
 
 tarFS, err := tarfs.NewReader(fs.File("backup.tar.gz"), "")
 if err != nil {

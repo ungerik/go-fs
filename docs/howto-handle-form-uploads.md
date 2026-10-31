@@ -15,7 +15,10 @@ or S3.
 ### 1. Parse the request form into a file system
 
 ```go
-import "github.com/ungerik/go-fs/multipartfs"
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/multipartfs"
+)
 
 const maxUploadSize = 32 << 20 // 32 MB kept in memory, the rest spills to temp files
 
