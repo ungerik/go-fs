@@ -4,8 +4,10 @@ A [go-fs](https://github.com/ungerik/go-fs) file system for a Dropbox account.
 
 ## Installation
 
+Get the backend together with the go-fs core module, at the same version:
+
 ```bash
-go get github.com/ungerik/go-fs/dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.2 github.com/ungerik/go-fs/dropboxfs@v1.0.0-rc.2
 ```
 
 ## Usage

@@ -21,7 +21,7 @@ Create a directory and initialise a module:
 ```bash
 mkdir gofs-tutorial && cd gofs-tutorial
 go mod init example.com/gofs-tutorial
-go get github.com/ungerik/go-fs
+go get github.com/ungerik/go-fs@v1.0.0-rc.2
 ```
 
 Create `main.go`:
