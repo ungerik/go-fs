@@ -543,6 +543,7 @@ func TestImplicitDirectories(t *testing.T) {
 	assert.NoError(t, writer.Close(), "Close is idempotent")
 	_, err = writer.Stat("/a")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorContains(t, err, writer.Prefix(), "the error names the archive")
 
 	reader, err := NewReader(tarFile, "")
 	require.NoError(t, err)
@@ -570,4 +571,9 @@ func TestImplicitDirectories(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
 	err = root.Join("newdir").MakeDir()
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
+
+	require.NoError(t, reader.Close())
+	_, err = reader.Stat("/a")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorContains(t, err, reader.Prefix(), "the error names the archive")
 }

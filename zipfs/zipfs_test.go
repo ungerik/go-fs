@@ -494,6 +494,20 @@ func TestZipReader_SameRulesAsTarfs(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "OpenReader of a directory")
 	_, err = root.Join("missing").OpenReader()
 	assert.ErrorIs(t, err, os.ErrNotExist)
+
+	// The root directory of an archive with a "./" entry has the
+	// header of that entry, like in tarfs. Its Sys used to be nil.
+	reader = openReader(t, fs.NewMemFile("root.zip", makeZip(t, [2]string{"./", ""})))
+	info, err := reader.Stat("/")
+	require.NoError(t, err)
+	header, ok := info.Sys.(*zip.FileHeader)
+	require.True(t, ok, "Sys of the root is the header of its entry")
+	assert.Equal(t, "./", header.Name)
+
+	require.NoError(t, reader.Close())
+	_, err = reader.Stat("/")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorContains(t, err, reader.Prefix(), "the error names the archive")
 }
 
 func TestZipWriter_MakeDirReadOnlyErrors(t *testing.T) {
@@ -560,6 +574,7 @@ func TestZipWriter_ReadRejected(t *testing.T) {
 
 	_, err = zipWriter.Stat("/empty.txt")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorContains(t, err, zipWriter.Prefix(), "the error names the archive")
 	_, err = zipWriter.OpenReader("/empty.txt")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
 	err = zipWriter.ListDir(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
