@@ -5,12 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## [Unreleased]
+## [1.0.0-rc.4] - 2026-11-01
 
-The fixes that TODOS.md listed for before v1.0.0: two ways to lose data in
-copies and moves, a password in httpfs errors, an unchecked
-`EnsureRegistered` prefix, two ways for an ftpfs `RemoveAll` to delete
-through a link, and mojibake for some Shift-JIS zip names.
+Fourth release candidate: copies and moves within sftpfs, smbfs, ftpfs and
+other file systems that are not local no longer truncate or delete a file
+that the destination reaches under another name, a move into a zip or tar
+writer is refused instead of losing the source, ftpfs `RemoveAll` can no
+longer be tricked into deleting through a link, `EnsureRegistered` checks
+its prefix like `Register`, passwords stay out of httpfs errors, and more
+Shift-JIS zip names decode.
 
 ### Changed
 
@@ -57,7 +60,7 @@ through a link, and mojibake for some Shift-JIS zip names.
   only differs in case and has those attributes, and a move between
   a `SubFileSystem` and its parent that is not local uses the native
   `Move` of the parent, which renames on the server, except for a symbolic
-  link to a file, which is still copied as file.
+  link, which is handled like between other file systems.
 - `fs.Move` of the root directory of a `SubFileSystem` to another file
   system copied the whole directory before it failed to remove the root;
   it is refused with an error wrapping `os.ErrInvalid` before anything is

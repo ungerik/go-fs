@@ -127,7 +127,7 @@ empty" while the conformance suite requires the scheme.
 
 **What:** CHANGELOG `[1.0.0]`, `VERSION` = `v1.0.0`, the MIGRATION intro
 names v1.0.0 instead of the rc, the `go get` lines in the Markdown files
-drop their `@v1.0.0-rc.3` pins (`grep -rn '@v1.0.0-rc.3' --include='*.md'`)
+drop their `@v1.0.0-rc.4` pins (`grep -rn '@v1.0.0-rc.4' --include='*.md'`)
 and the README drops the note that plain `go get` installs v0.1.0, then tag
 all modules with
 `tag-release.sh` after the merge (never the `tools` module).
@@ -484,6 +484,25 @@ of sftpfs, ftpfs and webdavfs.
 
 ## ftpfs
 
+### Count the parent listing of the path of an ftpfs RemoveAll without MLST
+
+**What:** On servers without MLST support, `RemoveAll` takes the passed path
+for a directory from the `LIST` of its parent directory, which `lstat` reads
+without `listChecked`, so a dropped line of the link at the passed path and
+a forged directory line with its name make `RemoveAll` delete through it.
+
+**Why:** The checks of the listings below the path, and of every parent on
+servers with MLST support, fail closed; the path itself doesn't.
+
+**Context:** Found by the documentation audit of v1.0.0-rc.4; the ftpfs
+README states the gap. Use `listChecked` and the duplicate-name check of
+`removeFolder` for the parent listing in `RemoveAll` on servers without
+MLST, not in `Stat`, where a FIFO in the parent would fail every `Stat`.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
 ### Detect links on servers with MLST support
 
 **What:** With MLSD/MLST, `jlaffaye/ftp` reads `type=OS.unix=slink:…` as a
@@ -643,6 +662,24 @@ also skip the link check for nested links.
 **Depends on:** None
 
 ## s3fs and azureblobfs
+
+### Refuse case-only moves within s3fs only on case-insensitive stores
+
+**What:** The copy then delete fallback of `fs.Move` refuses a destination
+that only differs in case from the source and has its size, modification
+time and permissions, because on a case-insensitive server it may be the
+source. s3fs has no native `Move` and is case-sensitive, so such a move of
+one key onto another existing key is refused there too.
+
+**Why:** A rare false refusal, never data loss.
+
+**Context:** Found by the documentation audit of v1.0.0-rc.4. Options: an
+optional interface that tells case sensitivity, or skipping the refusal for
+file systems known to be case-sensitive.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
 
 ### An option to skip the directory check before writes
 
@@ -818,12 +855,12 @@ attributes of the source like `maybeSameAttrs` (an error, not a no-op, since
 equal attributes don't prove the same file), or copying through a temporary
 file in the destination directory that is renamed over the destination.
 
-Done: `copyFileTo` writes a copy within one non-local file system without native `CopyFile` onto an existing destination with the size, modification time and permissions of the source (`isSameFileInfo`) to `gofs-copy-<random>.tmp` in its directory, closes the source and moves the new file onto the destination; a false positive only costs the extra file and move. A copy onto a symbolic link replaces the file it points to, and a temporary copy is kept and named in the error when the failed move already removed the destination. The copy then delete fallback of `Move` refuses a case-only destination with the same attributes. Found while testing: sftpfs `Move` with posix-rename onto another hard link leaves both names (see "Remove the source of an sftpfs move onto another hard link"); Samba refuses the native smbfs `Move` onto another hard link with an error and keeps both names. A move between a `SubFileSystem` and its non-local parent uses the native `Move` of the parent (not for links to files), and the root directory of a `SubFileSystem` is refused up front like by `SubFileSystem.Move`, after the pre-landing review of rc.4 found that the first version of that shortcut renamed the root.
+Done: `copyFileTo` writes a copy within one non-local file system without native `CopyFile` onto an existing destination with the size, modification time and permissions of the source (`isSameFileInfo`) to `gofs-copy-<random>.tmp` in its directory, closes the source and moves the new file onto the destination; a false positive only costs the extra file and move. A copy onto a symbolic link replaces the file it points to, and a temporary copy is kept and named in the error when the failed move already removed the destination. The copy then delete fallback of `Move` refuses a case-only destination with the same attributes. Found while testing: sftpfs `Move` with posix-rename onto another hard link leaves both names (see "Remove the source of an sftpfs move onto another hard link"); Samba refuses the native smbfs `Move` onto another hard link with an error and keeps both names. A move between a `SubFileSystem` and its non-local parent uses the native `Move` of the parent (not for symbolic links), and the root directory of a `SubFileSystem` is refused up front like by `SubFileSystem.Move`, after the pre-landing review of rc.4 found that the first version of that shortcut renamed the root.
 
 **Effort:** M
 **Priority:** P2
 **Depends on:** None
-**Completed:** unreleased (2026-11-01)
+**Completed:** v1.0.0-rc.4 (2026-11-01)
 
 ### List without a path argument on servers without MLST that glob LIST arguments
 
@@ -854,7 +891,7 @@ Done: `conn.list` lists a path with one of `*?[{~\\` or a leading `-` on servers
 **Effort:** M
 **Priority:** P2
 **Depends on:** None
-**Completed:** unreleased (2026-11-01)
+**Completed:** v1.0.0-rc.4 (2026-11-01)
 
 ### Redact the prefix in the errors of httpfs.New
 
@@ -874,7 +911,7 @@ Done: both errors redact the password, the query error also leaves out the query
 **Effort:** S
 **Priority:** P1
 **Depends on:** None
-**Completed:** unreleased (2026-11-01)
+**Completed:** v1.0.0-rc.4 (2026-11-01)
 
 ### Don't truncate an sftpfs or smbfs file by copying a link onto it
 
@@ -895,7 +932,7 @@ Done: within one file system that is not local and has symbolic links, `copyFile
 **Effort:** M
 **Priority:** P1
 **Depends on:** None
-**Completed:** unreleased (2026-11-01)
+**Completed:** v1.0.0-rc.4 (2026-11-01)
 
 ### Keep the source of a move into an archive writer until the archive is written
 
@@ -919,7 +956,7 @@ Done: `Move` into a write-only file system fails with `ErrWriteOnlyFileSystem` b
 **Effort:** S
 **Priority:** P1
 **Depends on:** None
-**Completed:** unreleased (2026-11-01)
+**Completed:** v1.0.0-rc.4 (2026-11-01)
 
 ### Decode Shift-JIS Unicode Path names whose second byte repeats the next letter
 
@@ -945,7 +982,7 @@ Done: a match of a middle ASCII part must be followed by a byte that can start a
 **Effort:** S
 **Priority:** P1
 **Depends on:** None
-**Completed:** unreleased (2026-11-01)
+**Completed:** v1.0.0-rc.4 (2026-11-01)
 
 ### Check the prefix of EnsureRegistered like Register
 
@@ -966,7 +1003,7 @@ Done: `validateRegisterPrefix` runs in `registerLocked` for every prefix and ali
 **Effort:** S
 **Priority:** P1
 **Depends on:** None
-**Completed:** unreleased (2026-11-01)
+**Completed:** v1.0.0-rc.4 (2026-11-01)
 
 ### Fail closed when the client library drops a LIST line
 
@@ -999,7 +1036,7 @@ Done: `conn.listChecked` counts the lines of the data connection (after TLS) and
 **Effort:** S
 **Priority:** P1
 **Depends on:** None
-**Completed:** unreleased (2026-11-01)
+**Completed:** v1.0.0-rc.4 (2026-11-01)
 
 ### Explain in the README what go-fs protects against
 
