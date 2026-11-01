@@ -118,8 +118,8 @@ func (f *fileSystem) file(filePath string) fs.File {
 // run checks the paths of an operation with it.
 func (f *fileSystem) checkPath(paths ...string) error {
 	for _, filePath := range paths {
-		if strings.Contains(filePath, "\x00") {
-			return fmt.Errorf("%w: sftpfs path %.200q contains a NUL character", os.ErrInvalid, filePath)
+		if err := fsimpl.ValidateNoNUL("sftpfs path", filePath); err != nil {
+			return err
 		}
 		if f.opts.AllowBackslashInNames {
 			continue

@@ -5,6 +5,40 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [1.0.0-rc.3] - 2026-11-01
+
+Third release candidate: the zipfs and tarfs readers and writers share
+their entry info, conflict checks and directory creation instead of two
+copies, backends share one NUL check, and the README is rewritten for a
+first-time reader.
+
+### Added
+
+- `fsimpl.ValidateNoNUL(subject, s)` returns an error wrapping
+  `os.ErrInvalid` for a path or name with a NUL character, next to
+  `fsimpl.CheckNoBackslash`, for backends that can't store such names.
+  sftpfs, webdavfs, dropboxfs and tarfs use it; their error messages are
+  unchanged.
+
+### Changed
+
+- The root directory of a zip or tar archive with an explicit `./` or `/`
+  entry has the header of that entry as `FileInfo.Sys`, a
+  `*zip.FileHeader` or `*tar.Header`, like every other entry; it was nil.
+  The root of an archive without such an entry still has no `Sys`.
+- The errors of `zipfs` and `tarfs` file systems after `Close` name the
+  file system and its URI prefix, like httpfs and `MemFileSystem`:
+  `Tar reader filesystem with prefix tar://<id>: file system is closed`.
+  tarfs returned the bare `fs.ErrFileSystemClosed`, so compare with
+  `errors.Is(err, fs.ErrFileSystemClosed)`, not `==`.
+- The README starts with a one-line pitch, an install section, a short
+  example that runs one function on local disk, HTTP and S3, and the
+  feature list. The `go get` lines of the backend READMEs and the connect
+  how-to fetch the core module together with the backend, because a
+  backend fetched alone in a fresh module can't resolve the placeholder
+  version of the core module, and Go examples that use `fs.*` import the
+  core module.
+
 ## [1.0.0-rc.2] - 2026-10-27
 
 Second release candidate: zip archives get one name rule for every writer

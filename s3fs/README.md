@@ -9,7 +9,7 @@ S3-compatible object stores (DigitalOcean Spaces, Wasabi, Backblaze B2,
 Get the backend together with the go-fs core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.2 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.2
+go get github.com/ungerik/go-fs@v1.0.0-rc.3 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.3
 ```
 
 ## Usage

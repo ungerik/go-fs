@@ -185,7 +185,10 @@ Both packages read and write entries with the same rules:
   passed permissions, or `DefaultPermissions` / `DefaultDirPermissions` of the
   package. Read entries report the permissions and modification time stored in
   the archive; entries without permission bits get the defaults.
-  `FileInfo.Sys` is the `*tar.Header` or `*zip.FileHeader` of the entry.
+  `FileInfo.Sys` is the `*tar.Header` or `*zip.FileHeader` of the entry,
+  also for the root directory of an archive with a `./` or `/` entry.
+  Directories implied by entry names, and the root of an archive without
+  such an entry, have no `Sys`.
 - `MakeDir` writes a directory entry, so empty directories are kept.
 
 ## Zip in memory

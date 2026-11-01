@@ -239,6 +239,7 @@ Standalone helpers, useful when embedding `PathHelper` does not fit.
 | `MatchAnyPattern(name string, patterns []string) (bool, error)` | `true` if `name` matches any pattern via `path.Match`, and `true` when `patterns` is empty. |
 | `RandomString() string`                            | 120 random bits as a 20 character URL-safe base64 string, never starting with `-` or `_` so it can't be mistaken for a command line option. |
 | `CheckNoBackslash(fsName, filePath, reason string) error` | An error wrapping `os.ErrInvalid` if `filePath` contains a backslash, `nil` otherwise. The path check of remote file systems with the separator `/` whose servers can split names at a backslash, like servers on Windows, so that a name like `..\x` can't leave its directory. The message names the file system with `fsName` after the text of `os.ErrInvalid` and ends with `reason`. `ftpfs`, `sftpfs`, `webdavfs` and `smbfs` use it. |
+| `ValidateNoNUL(subject, s string) error`           | An error wrapping `os.ErrInvalid` if `s`, a path or a name, contains a NUL character, `nil` otherwise. No file system stores a NUL in names, and C APIs and some protocols end a path at it, so it would address another file. The message begins with `subject`, which says what `s` is, like `"sftpfs path"` or `"dropboxfs name"`, after the text of `os.ErrInvalid`, and quotes at most 200 characters of `s`. `sftpfs`, `webdavfs`, `dropboxfs` and `tarfs` use it. |
 
 `Ext` is worth a second look because the empty-separator case is the surprise:
 

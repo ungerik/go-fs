@@ -390,10 +390,10 @@ func (f *fileSystem) checkPath(paths ...string) error {
 // file system fails before it writes anything instead of at that name.
 // Existing entries are read with every name.
 func (f *fileSystem) ValidateName(name string) error {
-	switch {
-	case strings.Contains(name, "\x00"):
-		return fmt.Errorf("%w: webdavfs name %.200q contains a NUL character", os.ErrInvalid, name)
-	case !utf8.ValidString(name):
+	if err := fsimpl.ValidateNoNUL("webdavfs name", name); err != nil {
+		return err
+	}
+	if !utf8.ValidString(name) {
 		return fmt.Errorf("%w: webdavfs name %.200q is not valid UTF-8", os.ErrInvalid, name)
 	}
 	return f.checkPath(name)

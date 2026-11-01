@@ -2,8 +2,8 @@
 // directory tree, with the directories implied by the entry paths.
 //
 // It is used by the readers of tarfs and zipfs to look up and list
-// entries, and by their writers to detect entries that were already
-// written or conflict with a written one.
+// entries and to return their FileInfo, and by their writers to detect
+// entries that were already written or conflict with a written one.
 package dirtree
 
 import (
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
 )
 
@@ -164,6 +165,92 @@ func (t *Tree) Conflict(name string) (node *Node, isAncestor bool, err error) {
 		current = child
 	}
 	return current, false, nil
+}
+
+// ValidateNew returns an error if an entry name can't be added to
+// a tree of written entries without replacing anything, see Conflict:
+// an error wrapping os.ErrInvalid for an invalid name, see Elements,
+// with the name of the file system fsName as prefix,
+// fs.ErrIsNotDirectory if an ancestor is a file, fs.ErrIsDirectory if
+// a file would replace a directory, else fs.ErrAlreadyExists if the
+// name was already added. The errors name the files with paths.
+func (t *Tree) ValidateNew(fsName string, paths fsimpl.PathHelper, name string, isDir bool) error {
+	node, isAncestor, err := t.Conflict(name)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s: %w", fsName, err)
+	case node == nil:
+		return nil
+	case isAncestor:
+		return fs.NewErrIsNotDirectory(fs.File(paths.JoinCleanURI(node.Path)))
+	case node.IsDir && !isDir:
+		return fs.NewErrIsDirectory(fs.File(paths.JoinCleanURI(name)))
+	default:
+		return fs.NewErrAlreadyExists(fs.File(paths.JoinCleanURI(name)))
+	}
+}
+
+// AddMissingDirs calls addDir with the path of each directory along
+// the path elements, from the first to the last element, that is not
+// in the tree yet; addDir must add it to the tree. Existing directories
+// are skipped, a file along the path is an error wrapping
+// fs.ErrIsNotDirectory that names the file with paths.
+func (t *Tree) AddMissingDirs(paths fsimpl.PathHelper, elements []string, addDir func(dirPath string) error) error {
+	current := t.Root()
+	for i, element := range elements {
+		child := current.children[element]
+		switch {
+		case child == nil:
+			dirPath := strings.Join(elements[:i+1], "/")
+			err := addDir(dirPath)
+			if err != nil {
+				return err
+			}
+			child = current.children[element]
+			if child == nil {
+				return fmt.Errorf("archive directory %q was not added to the tree", dirPath)
+			}
+		case !child.IsDir:
+			return fs.NewErrIsNotDirectory(fs.File(paths.JoinCleanURI(child.Path)))
+		}
+		current = child
+	}
+	return nil
+}
+
+// FileInfo returns the FileInfo of node for the file system with paths,
+// with sys as FileInfo.Sys and the permissions perm, or defaultPerm for
+// a file and defaultDirPerm for a directory if perm is zero.
+// The root gets the root directory of paths as File.
+func FileInfo(paths fsimpl.PathHelper, node *Node, perm, defaultPerm, defaultDirPerm fs.Permissions, sys any) *fs.FileInfo {
+	if node.IsDir {
+		perm = perm.OrDefault(defaultDirPerm)
+	} else {
+		perm = perm.OrDefault(defaultPerm)
+	}
+	if node.Path == "" {
+		return &fs.FileInfo{
+			File:        fs.File(paths.URIPrefix + "/"),
+			Name:        "/",
+			Exists:      true,
+			IsDir:       true,
+			Modified:    node.Modified,
+			Permissions: perm,
+			Sys:         sys,
+		}
+	}
+	return &fs.FileInfo{
+		File:        fs.File(paths.JoinCleanURI(node.Path)),
+		Name:        node.Name,
+		Exists:      true,
+		IsDir:       node.IsDir,
+		IsRegular:   !node.IsDir,
+		IsHidden:    strings.HasPrefix(node.Name, "."),
+		Size:        node.Size,
+		Modified:    node.Modified,
+		Permissions: perm,
+		Sys:         sys,
+	}
 }
 
 // Children returns the children of a directory node

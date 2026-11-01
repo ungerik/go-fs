@@ -258,6 +258,18 @@ func TestReader_HeaderMetadata(t *testing.T) {
 	info, err = reader.Stat("/dir")
 	require.NoError(t, err)
 	assert.Equal(t, fs.Permissions(0o700), info.Permissions)
+
+	// The root directory of an archive with a "./" entry has the
+	// permissions and the header of that entry. Its Sys used to be nil.
+	reader = openReader(t, "root.tar", makeTar(t,
+		tarEntry{header: tar.Header{Typeflag: tar.TypeDir, Name: "./", Mode: 0o700}},
+	))
+	info, err = reader.Stat("/")
+	require.NoError(t, err)
+	assert.Equal(t, fs.Permissions(0o700), info.Permissions)
+	header, ok = info.Sys.(*tar.Header)
+	require.True(t, ok, "Sys of the root is the header of its entry")
+	assert.Equal(t, "./", header.Name)
 }
 
 // TestWriter_WriteOnce verifies that a path can be written only once.
@@ -531,6 +543,7 @@ func TestImplicitDirectories(t *testing.T) {
 	assert.NoError(t, writer.Close(), "Close is idempotent")
 	_, err = writer.Stat("/a")
 	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorContains(t, err, writer.Prefix(), "the error names the archive")
 
 	reader, err := NewReader(tarFile, "")
 	require.NoError(t, err)
@@ -558,4 +571,9 @@ func TestImplicitDirectories(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
 	err = root.Join("newdir").MakeDir()
 	assert.ErrorIs(t, err, fs.ErrReadOnlyFileSystem)
+
+	require.NoError(t, reader.Close())
+	_, err = reader.Stat("/a")
+	assert.ErrorIs(t, err, fs.ErrFileSystemClosed)
+	assert.ErrorContains(t, err, reader.Prefix(), "the error names the archive")
 }
