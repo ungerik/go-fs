@@ -118,7 +118,7 @@ func (f *fileSystem) file(filePath string) fs.File {
 // run checks the paths of an operation with it.
 func (f *fileSystem) checkPath(paths ...string) error {
 	for _, filePath := range paths {
-		if err := fsimpl.ValidateNoNUL("sftpfs", filePath); err != nil {
+		if err := fsimpl.ValidateNoNUL("sftpfs path", filePath); err != nil {
 			return err
 		}
 		if f.opts.AllowBackslashInNames {

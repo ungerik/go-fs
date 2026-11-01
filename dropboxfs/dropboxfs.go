@@ -207,7 +207,7 @@ func (dbfs *fileSystem) ValidateName(name string) error {
 	if !utf8.ValidString(name) {
 		return fmt.Errorf("%w: dropboxfs name %.200q is not valid UTF-8", os.ErrInvalid, name)
 	}
-	return fsimpl.ValidateNoNUL("dropboxfs", name)
+	return fsimpl.ValidateNoNUL("dropboxfs name", name)
 }
 
 func (dbfs *fileSystem) RootDir() fs.File {

@@ -212,7 +212,7 @@ func (f *Reader) checkClosed() error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if f.closed {
-		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+		return fmt.Errorf("%s: %w", f, fs.ErrFileSystemClosed)
 	}
 	return nil
 }
@@ -220,16 +220,15 @@ func (f *Reader) checkClosed() error {
 // nodeInfo returns the FileInfo of a tree node.
 // Its Sys is the *zip.FileHeader of the entry, or nil for implied directories.
 func (f *Reader) nodeInfo(node *dirtree.Node) *fs.FileInfo {
-	perm := DefaultPermissions
-	if node.IsDir {
-		perm = DefaultDirPermissions
+	var (
+		perm fs.Permissions
+		sys  any
+	)
+	if zipFile, ok := node.Sys.(*zip.File); ok {
+		perm = fs.PermissionsFromFileMode(zipFile.Mode())
+		sys = &zipFile.FileHeader
 	}
-	zipFile, ok := node.Sys.(*zip.File)
-	if !ok {
-		return dirtree.FileInfo(f.paths, node, perm, nil)
-	}
-	perm = fs.PermissionsFromFileMode(zipFile.Mode()).OrDefault(perm)
-	return dirtree.FileInfo(f.paths, node, perm, &zipFile.FileHeader)
+	return dirtree.FileInfo(f.paths, node, perm, DefaultPermissions, DefaultDirPermissions, sys)
 }
 
 // lookup returns the tree node of a path or an error wrapping os.ErrNotExist.
@@ -439,7 +438,7 @@ func (f *Writer) checkClosed() error {
 
 func (f *Writer) checkClosedLocked() error {
 	if f.fileWriter == nil {
-		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+		return fmt.Errorf("%s: %w", f, fs.ErrFileSystemClosed)
 	}
 	return nil
 }
@@ -456,7 +455,7 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	if err := zipname.ValidateName(dirtree.CleanName(filePath), isDir); err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}
-	return f.tree.ValidateNew(f.paths, filePath, isDir)
+	return f.tree.ValidateNew("zipfs", f.paths, filePath, isDir)
 }
 
 // ValidateName returns an error wrapping os.ErrInvalid if name, the name

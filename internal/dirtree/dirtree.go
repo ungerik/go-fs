@@ -170,14 +170,15 @@ func (t *Tree) Conflict(name string) (node *Node, isAncestor bool, err error) {
 // ValidateNew returns an error if an entry name can't be added to
 // a tree of written entries without replacing anything, see Conflict:
 // an error wrapping os.ErrInvalid for an invalid name, see Elements,
+// with the name of the file system fsName as prefix,
 // fs.ErrIsNotDirectory if an ancestor is a file, fs.ErrIsDirectory if
 // a file would replace a directory, else fs.ErrAlreadyExists if the
 // name was already added. The errors name the files with paths.
-func (t *Tree) ValidateNew(paths fsimpl.PathHelper, name string, isDir bool) error {
+func (t *Tree) ValidateNew(fsName string, paths fsimpl.PathHelper, name string, isDir bool) error {
 	node, isAncestor, err := t.Conflict(name)
 	switch {
 	case err != nil:
-		return err
+		return fmt.Errorf("%s: %w", fsName, err)
 	case node == nil:
 		return nil
 	case isAncestor:
@@ -195,25 +196,38 @@ func (t *Tree) ValidateNew(paths fsimpl.PathHelper, name string, isDir bool) err
 // are skipped, a file along the path is an error wrapping
 // fs.ErrIsNotDirectory that names the file with paths.
 func (t *Tree) AddMissingDirs(paths fsimpl.PathHelper, elements []string, addDir func(dirPath string) error) error {
-	for i := range elements {
-		dirPath := strings.Join(elements[:i+1], "/")
-		node := t.Lookup(dirPath)
+	current := t.Root()
+	for i, element := range elements {
+		child := current.children[element]
 		switch {
-		case node == nil:
-			if err := addDir(dirPath); err != nil {
+		case child == nil:
+			dirPath := strings.Join(elements[:i+1], "/")
+			err := addDir(dirPath)
+			if err != nil {
 				return err
 			}
-		case !node.IsDir:
-			return fs.NewErrIsNotDirectory(fs.File(paths.JoinCleanURI(dirPath)))
+			child = current.children[element]
+			if child == nil {
+				return fmt.Errorf("archive directory %q was not added to the tree", dirPath)
+			}
+		case !child.IsDir:
+			return fs.NewErrIsNotDirectory(fs.File(paths.JoinCleanURI(child.Path)))
 		}
+		current = child
 	}
 	return nil
 }
 
 // FileInfo returns the FileInfo of node for the file system with paths,
-// with the permissions perm and sys as FileInfo.Sys.
-// The root gets the root directory of paths as File and no Sys.
-func FileInfo(paths fsimpl.PathHelper, node *Node, perm fs.Permissions, sys any) *fs.FileInfo {
+// with sys as FileInfo.Sys and the permissions perm, or defaultPerm for
+// a file and defaultDirPerm for a directory if perm is zero.
+// The root gets the root directory of paths as File.
+func FileInfo(paths fsimpl.PathHelper, node *Node, perm, defaultPerm, defaultDirPerm fs.Permissions, sys any) *fs.FileInfo {
+	if node.IsDir {
+		perm = perm.OrDefault(defaultDirPerm)
+	} else {
+		perm = perm.OrDefault(defaultPerm)
+	}
 	if node.Path == "" {
 		return &fs.FileInfo{
 			File:        fs.File(paths.URIPrefix + "/"),
@@ -222,6 +236,7 @@ func FileInfo(paths fsimpl.PathHelper, node *Node, perm fs.Permissions, sys any)
 			IsDir:       true,
 			Modified:    node.Modified,
 			Permissions: perm,
+			Sys:         sys,
 		}
 	}
 	return &fs.FileInfo{

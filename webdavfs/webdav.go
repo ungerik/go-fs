@@ -390,7 +390,7 @@ func (f *fileSystem) checkPath(paths ...string) error {
 // file system fails before it writes anything instead of at that name.
 // Existing entries are read with every name.
 func (f *fileSystem) ValidateName(name string) error {
-	if err := fsimpl.ValidateNoNUL("webdavfs", name); err != nil {
+	if err := fsimpl.ValidateNoNUL("webdavfs name", name); err != nil {
 		return err
 	}
 	if !utf8.ValidString(name) {

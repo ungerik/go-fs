@@ -201,13 +201,13 @@ func TestCheckNoBackslash(t *testing.T) {
 }
 
 func TestValidateNoNUL(t *testing.T) {
-	assert.NoError(t, ValidateNoNUL("testfs", "/dir/file.txt"))
-	assert.NoError(t, ValidateNoNUL("testfs", ""))
-	err := ValidateNoNUL("testfs", "/dir/a\x00.txt")
+	assert.NoError(t, ValidateNoNUL("testfs path", "/dir/file.txt"))
+	assert.NoError(t, ValidateNoNUL("testfs path", ""))
+	err := ValidateNoNUL("testfs path", "/dir/a\x00.txt")
 	assert.ErrorIs(t, err, os.ErrInvalid)
 	assert.EqualError(t, err, `invalid argument: testfs path "/dir/a\x00.txt" contains a NUL character`)
 	// The error quotes at most 200 characters of a long path
-	err = ValidateNoNUL("testfs", strings.Repeat("a", 70000)+"\x00")
+	err = ValidateNoNUL("testfs name", strings.Repeat("a", 70000)+"\x00")
 	assert.ErrorIs(t, err, os.ErrInvalid)
 	assert.Less(t, len(err.Error()), 1000)
 }

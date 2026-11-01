@@ -305,7 +305,7 @@ func (f *Reader) checkClosed() error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 	if f.closed {
-		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+		return fmt.Errorf("%s: %w", f, fs.ErrFileSystemClosed)
 	}
 	return nil
 }
@@ -313,16 +313,15 @@ func (f *Reader) checkClosed() error {
 // nodeInfo returns the FileInfo of a tree node.
 // Its Sys is the *tar.Header of the entry, or nil for implied directories.
 func (f *Reader) nodeInfo(node *dirtree.Node) *fs.FileInfo {
-	perm := DefaultPermissions
-	if node.IsDir {
-		perm = DefaultDirPermissions
+	var (
+		perm fs.Permissions
+		sys  any
+	)
+	if e, ok := node.Sys.(*entry); ok {
+		perm = fs.PermissionsFromFileMode(e.header.FileInfo().Mode())
+		sys = e.header
 	}
-	e, ok := node.Sys.(*entry)
-	if !ok {
-		return dirtree.FileInfo(f.paths, node, perm, nil)
-	}
-	perm = fs.PermissionsFromFileMode(e.header.FileInfo().Mode()).OrDefault(perm)
-	return dirtree.FileInfo(f.paths, node, perm, e.header)
+	return dirtree.FileInfo(f.paths, node, perm, DefaultPermissions, DefaultDirPermissions, sys)
 }
 
 // lookup returns the tree node of a path or an error wrapping os.ErrNotExist.
@@ -576,7 +575,7 @@ func (f *Writer) checkClosed() error {
 
 func (f *Writer) checkClosedLocked() error {
 	if f.closed {
-		return fmt.Errorf("%s %w", f.Name(), fs.ErrFileSystemClosed)
+		return fmt.Errorf("%s: %w", f, fs.ErrFileSystemClosed)
 	}
 	return nil
 }
@@ -591,7 +590,7 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	if err := validateEntryName(dirtree.CleanName(filePath)); err != nil {
 		return err
 	}
-	return f.tree.ValidateNew(f.paths, filePath, isDir)
+	return f.tree.ValidateNew("tarfs", f.paths, filePath, isDir)
 }
 
 // ValidateName returns an error wrapping os.ErrInvalid if name, the name
@@ -614,7 +613,7 @@ func (f *Writer) ValidateName(name string) error {
 // requires and which archive/tar writes unchanged.
 // Error messages quote at most 200 characters of a name.
 func validateEntryName(name string) error {
-	if err := fsimpl.ValidateNoNUL("tarfs", name); err != nil {
+	if err := fsimpl.ValidateNoNUL("tarfs: entry name", name); err != nil {
 		return err
 	}
 	if !utf8.ValidString(name) {

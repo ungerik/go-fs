@@ -178,14 +178,15 @@ func CheckNoBackslash(fsName, filePath, reason string) error {
 	return fmt.Errorf("%w: %s path %.200q contains a backslash, %s", os.ErrInvalid, fsName, filePath, reason)
 }
 
-// ValidateNoNUL returns an error wrapping [os.ErrInvalid] if filePath
-// contains a NUL character, which no file system stores in names and
-// at which C APIs and some protocols end a path, so it would address
-// another file. The error message names the file system with fsName
-// and quotes at most 200 characters of filePath.
-func ValidateNoNUL(fsName, filePath string) error {
-	if !strings.Contains(filePath, "\x00") {
+// ValidateNoNUL returns an error wrapping [os.ErrInvalid] if s, a path
+// or a name, contains a NUL character, which no file system stores in
+// names and at which C APIs and some protocols end a path, so it would
+// address another file. The error message begins with subject, which
+// says what s is, like "sftpfs path" or "dropboxfs name", and quotes at
+// most 200 characters of s.
+func ValidateNoNUL(subject, s string) error {
+	if !strings.Contains(s, "\x00") {
 		return nil
 	}
-	return fmt.Errorf("%w: %s path %.200q contains a NUL character", os.ErrInvalid, fsName, filePath)
+	return fmt.Errorf("%w: %s %.200q contains a NUL character", os.ErrInvalid, subject, s)
 }

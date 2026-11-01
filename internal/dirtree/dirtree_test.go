@@ -278,25 +278,26 @@ func TestTree_ValidateNew(t *testing.T) {
 	_, err := tree.Add("dir/file.txt", false, 1, time.Time{}, nil)
 	require.NoError(t, err)
 
-	assert.NoError(t, tree.ValidateNew(testPaths, "new.txt", false), "a new file")
-	assert.NoError(t, tree.ValidateNew(testPaths, "dir/new", true), "a new directory in an existing one")
+	assert.NoError(t, tree.ValidateNew("testfs", testPaths, "new.txt", false), "a new file")
+	assert.NoError(t, tree.ValidateNew("testfs", testPaths, "dir/new", true), "a new directory in an existing one")
 
-	err = tree.ValidateNew(testPaths, "dir/file.txt", false)
+	err = tree.ValidateNew("testfs", testPaths, "dir/file.txt", false)
 	assert.ErrorIs(t, err, fs.ErrAlreadyExists{}, "an existing file")
 	assert.ErrorContains(t, err, "test://id/dir/file.txt", "the error names the file")
 
-	err = tree.ValidateNew(testPaths, "dir", false)
+	err = tree.ValidateNew("testfs", testPaths, "dir", false)
 	assert.ErrorIs(t, err, fs.ErrIsDirectory{}, "a file can't replace a directory")
 
-	err = tree.ValidateNew(testPaths, "dir", true)
+	err = tree.ValidateNew("testfs", testPaths, "dir", true)
 	assert.ErrorIs(t, err, fs.ErrAlreadyExists{}, "an existing directory")
 
-	err = tree.ValidateNew(testPaths, "dir/file.txt/sub", true)
+	err = tree.ValidateNew("testfs", testPaths, "dir/file.txt/sub", true)
 	assert.ErrorIs(t, err, fs.ErrIsNotDirectory{}, "a file as ancestor")
 	assert.ErrorContains(t, err, "test://id/dir/file.txt", "the error names the ancestor")
 
-	err = tree.ValidateNew(testPaths, "../evil.txt", false)
+	err = tree.ValidateNew("testfs", testPaths, "../evil.txt", false)
 	assert.ErrorIs(t, err, os.ErrInvalid, "an invalid name")
+	assert.ErrorContains(t, err, "testfs: ", "the error names the file system")
 }
 
 // TestTree_AddMissingDirs verifies that only the missing directories
@@ -326,13 +327,24 @@ func TestTree_AddMissingDirs(t *testing.T) {
 	assert.ErrorContains(t, err, "test://id/file.txt")
 	assert.Empty(t, added, "nothing is added after the file")
 
+	err = tree.AddMissingDirs(testPaths, []string{"a", "b", "c", "file.txt"}, addDir)
+	assert.NoError(t, err, "a file name only as last element of another path")
+	assert.Equal(t, []string{"a/b/c/file.txt"}, added)
+
 	errAdd := errors.New("add failed")
 	err = tree.AddMissingDirs(testPaths, []string{"x", "y"}, func(string) error { return errAdd })
 	assert.ErrorIs(t, err, errAdd, "the error of addDir is returned")
+
+	err = tree.AddMissingDirs(testPaths, []string{"x", "y"}, func(string) error { return nil })
+	assert.ErrorContains(t, err, `"x" was not added`, "an addDir that doesn't add the directory")
 }
 
 // TestFileInfo verifies the FileInfo of the root and of the entries.
 func TestFileInfo(t *testing.T) {
+	const (
+		defaultPerm    = fs.UserReadWrite
+		defaultDirPerm = fs.UserReadWriteExecute
+	)
 	mod := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	tree := New()
 	_, err := tree.Add("/", true, 0, mod, "root sys")
@@ -340,17 +352,17 @@ func TestFileInfo(t *testing.T) {
 	_, err = tree.Add("dir/.hidden.txt", false, 3, mod, "file sys")
 	require.NoError(t, err)
 
-	root := FileInfo(testPaths, tree.Root(), fs.UserReadWriteExecute, "root sys")
+	root := FileInfo(testPaths, tree.Root(), fs.AllRead, defaultPerm, defaultDirPerm, "root sys")
 	assert.Equal(t, fs.File("test://id/"), root.File)
 	assert.Equal(t, "/", root.Name)
 	assert.True(t, root.Exists)
 	assert.True(t, root.IsDir)
 	assert.False(t, root.IsRegular)
 	assert.Equal(t, mod, root.Modified)
-	assert.Equal(t, fs.UserReadWriteExecute, root.Permissions)
-	assert.Nil(t, root.Sys, "the root has no Sys")
+	assert.Equal(t, fs.AllRead, root.Permissions, "the permissions of an entry")
+	assert.Equal(t, "root sys", root.Sys, "the Sys of an explicit root entry")
 
-	file := FileInfo(testPaths, tree.Lookup("dir/.hidden.txt"), fs.UserReadWrite, "file sys")
+	file := FileInfo(testPaths, tree.Lookup("dir/.hidden.txt"), 0, defaultPerm, defaultDirPerm, "file sys")
 	assert.Equal(t, fs.File("test://id/dir/.hidden.txt"), file.File)
 	assert.Equal(t, ".hidden.txt", file.Name)
 	assert.True(t, file.Exists)
@@ -359,12 +371,13 @@ func TestFileInfo(t *testing.T) {
 	assert.True(t, file.IsHidden, "a name beginning with a dot")
 	assert.Equal(t, int64(3), file.Size)
 	assert.Equal(t, mod, file.Modified)
-	assert.Equal(t, fs.UserReadWrite, file.Permissions)
+	assert.Equal(t, defaultPerm, file.Permissions, "the default permissions of a file")
 	assert.Equal(t, "file sys", file.Sys)
 
-	dir := FileInfo(testPaths, tree.Lookup("dir"), fs.UserReadWriteExecute, nil)
+	dir := FileInfo(testPaths, tree.Lookup("dir"), 0, defaultPerm, defaultDirPerm, nil)
 	assert.True(t, dir.IsDir)
 	assert.False(t, dir.IsRegular)
 	assert.False(t, dir.IsHidden)
+	assert.Equal(t, defaultDirPerm, dir.Permissions, "the default permissions of a directory")
 	assert.Nil(t, dir.Sys)
 }
