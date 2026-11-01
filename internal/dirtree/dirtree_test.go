@@ -347,7 +347,7 @@ func TestFileInfo(t *testing.T) {
 	)
 	mod := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	tree := New()
-	_, err := tree.Add("/", true, 0, mod, "root sys")
+	_, err := tree.Add("/", true, 0, mod, nil)
 	require.NoError(t, err)
 	_, err = tree.Add("dir/.hidden.txt", false, 3, mod, "file sys")
 	require.NoError(t, err)
@@ -360,7 +360,7 @@ func TestFileInfo(t *testing.T) {
 	assert.False(t, root.IsRegular)
 	assert.Equal(t, mod, root.Modified)
 	assert.Equal(t, fs.AllRead, root.Permissions, "the permissions of an entry")
-	assert.Equal(t, "root sys", root.Sys, "the Sys of an explicit root entry")
+	assert.Equal(t, "root sys", root.Sys, "the root keeps sys, like the header of an explicit root entry")
 
 	file := FileInfo(testPaths, tree.Lookup("dir/.hidden.txt"), 0, defaultPerm, defaultDirPerm, "file sys")
 	assert.Equal(t, fs.File("test://id/dir/.hidden.txt"), file.File)
