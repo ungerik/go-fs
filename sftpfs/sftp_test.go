@@ -548,11 +548,17 @@ func TestCopyFileHardLinkAndCaseAlias(t *testing.T) {
 	require.NoError(t, fs.CopyFile(t.Context(), f.JoinCleanFile(root, "file.txt"), f.JoinCleanFile(root, "hardlink.txt")))
 	assert.Equal(t, "content", readFile("file.txt"))
 	assert.Equal(t, "content", readFile("hardlink.txt"))
+	name := "file.txt"
 	if _, err := os.Stat(root + "/FILE.TXT"); err == nil {
 		require.NoError(t, fs.CopyFile(t.Context(), f.JoinCleanFile(root, "file.txt"), f.JoinCleanFile(root, "FILE.TXT")), "another case of the name")
 		assert.Equal(t, "content", readFile("file.txt"))
+		if runtime.GOOS == "windows" {
+			// The in-process server runs on Windows here, where renaming
+			// the new file over the old one keeps the case of the new name
+			name = "FILE.TXT"
+		}
 	}
-	assert.ElementsMatch(t, []string{"file.txt", "hardlink.txt"}, dirNames(t, root), "no temporary file is left")
+	assert.ElementsMatch(t, []string{name, "hardlink.txt"}, dirNames(t, root), "no temporary file is left")
 
 	require.NoError(t, os.Remove(root+"/hardlink.txt"))
 	require.NoError(t, os.Link(root+"/file.txt", root+"/hardlink.txt"))
@@ -564,6 +570,11 @@ func TestCopyFileHardLinkAndCaseAlias(t *testing.T) {
 	// see TestMoveOntoHardLink, a copy then delete would leave one
 	require.NoError(t, fs.Move(t.Context(), sub.RootDir().Join("file.txt"), f.JoinCleanFile(root, "hardlink.txt")))
 	assert.Equal(t, "content", readFile("hardlink.txt"))
+	if runtime.GOOS == "windows" {
+		// The rename of the Windows host replaces the other hard link
+		assert.Equal(t, []string{"hardlink.txt"}, dirNames(t, root))
+		return
+	}
 	assert.Equal(t, []string{"file.txt", "hardlink.txt"}, dirNames(t, root), "moved with the native Move of the parent")
 }
 
@@ -587,7 +598,9 @@ func TestMoveOntoHardLink(t *testing.T) {
 			f.currentConn().posixRename = posixRename
 
 			require.NoError(t, f.Move(t.Context(), root+"/file.txt", root+"/hardlink.txt"))
-			if posixRename {
+			// The in-process server runs on the Windows host there, whose
+			// rename replaces the other hard link instead of doing nothing
+			if posixRename && runtime.GOOS != "windows" {
 				assert.Equal(t, []string{"file.txt", "hardlink.txt"}, dirNames(t, root))
 			} else {
 				assert.Equal(t, []string{"hardlink.txt"}, dirNames(t, root))
