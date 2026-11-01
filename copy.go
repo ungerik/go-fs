@@ -44,7 +44,12 @@ const copyBufferSize = 1024 * 1024 * 4
 // another file, an existing dest with the size, modification time and
 // permissions of src is written as a new file in its directory that then
 // replaces it with a move, so src is never truncated before it is read.
-// dest is a new file then, its other hard links keep their content.
+// If that move fails after it removed dest, the new file is kept and the
+// error names it.
+// dest is a new file then, its other hard links keep their content, and it
+// gets the owner and permissions of a new file. That copy needs the
+// permission to create, rename and remove files in the directory of dest,
+// which an overwrite of dest in place doesn't need.
 // dest is checked by path before it is opened for writing, which follows
 // a symbolic link at dest, so these guarantees assume that dest is not
 // changed concurrently by others.
@@ -205,8 +210,11 @@ func copyFileTo(ctx context.Context, src FileReader, srcInfo *FileInfo, dest Fil
 	// which is used for permissions only if they can be set after the copy
 	nativeCopy := false
 	// mayBeSrc tells that dest may be the file of src under another name
-	// that the checks below can't tell apart from another file
+	// that the checks below can't tell apart from another file. Then the
+	// copy replaces the file at replacePath of replaceFS, the one that
+	// a write to dest goes to, also through a symbolic link at dest.
 	mayBeSrc := false
+	replaceFS, replacePath := destFS, destPath
 	if srcIsFile {
 		srcFS, srcPath = srcFile.ParseRawURI()
 		if srcFS == destFS && srcPath == destPath {
@@ -247,8 +255,15 @@ func copyFileTo(ctx context.Context, src FileReader, srcInfo *FileInfo, dest Fil
 				}
 			} else if destOK && srcRead == destTarget && destInfo != nil {
 				// A missing destination is no file, which saves the walks
-				if hasLinks && isSameEvaluatedPath(srcRead, srcReadPath, destTargetPath) {
-					return nil
+				if hasLinks {
+					srcResolved, srcResolvedOK := fsEvalSymlinks(srcRead, srcReadPath)
+					destResolved, destResolvedOK := fsEvalSymlinks(destTarget, destTargetPath)
+					if srcResolvedOK && destResolvedOK && srcResolved == destResolved {
+						return nil
+					}
+					if destResolvedOK {
+						replaceFS, replacePath = destTarget, destResolved
+					}
 				}
 				mayBeSrc = !nativeCopy && srcInfo != nil && isSameFileInfo(srcInfo, destInfo)
 			}
@@ -296,13 +311,14 @@ func copyFileTo(ctx context.Context, src FileReader, srcInfo *FileInfo, dest Fil
 	}()
 	// A dest that may be src is not opened for writing, which would truncate
 	// src before it is read: the copy is written to a new file in the
-	// directory of dest, which then replaces dest with fsMove
-	writePath := destPath
+	// directory of the file that a write to dest goes to, which then replaces
+	// that file with fsMove, so a symbolic link at dest stays a link
+	writeFS, writePath := destFS, destPath
 	if mayBeSrc {
-		dir, _ := fsSplitDirAndName(destFS, destPath)
-		writePath = destFS.CleanPath(dir, "gofs-copy-"+fsimpl.RandomString()+".tmp")
+		dir, _ := fsSplitDirAndName(replaceFS, replacePath)
+		writeFS, writePath = replaceFS, replaceFS.CleanPath(dir, "gofs-copy-"+fsimpl.RandomString()+".tmp")
 	}
-	w, err := fsOpenWriter(destFS, writePath, filePerm)
+	w, err := fsOpenWriter(writeFS, writePath, filePerm)
 	if err != nil {
 		return fmt.Errorf("CopyFile: can't open destination writer: %w", err)
 	}
@@ -316,13 +332,19 @@ func copyFileTo(ctx context.Context, src FileReader, srcInfo *FileInfo, dest Fil
 	// SMB servers refuse to replace a file that is open, like src
 	readerOpen = false
 	_ = r.Close()
+	temp := errSubject(fsFile(writeFS, writePath))
 	if err == nil {
-		if err = fsMove(ctx, destFS, writePath, destPath); err == nil {
+		if err = fsMove(ctx, writeFS, writePath, replacePath); err == nil {
 			return nil
 		}
+		// A move that failed after it removed or overwrote the replaced
+		// file, which may be src, leaves the copy as the only complete one
+		if info, statErr := fsStat(replaceFS, replacePath); statErr != nil || !isSameFileInfo(info, destInfo) {
+			return fmt.Errorf("%w (the copy of %s is at %s)", err, errSubject(src), temp)
+		}
 	}
-	if removeErr := fsRemove(destFS, writePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		err = fmt.Errorf("%w (can't remove the temporary copy %s: %w)", err, errSubject(fsFile(destFS, writePath)), removeErr)
+	if removeErr := fsRemove(writeFS, writePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		err = fmt.Errorf("%w (can't remove the temporary copy %s: %w)", err, temp, removeErr)
 	}
 	return err
 }

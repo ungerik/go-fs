@@ -47,14 +47,14 @@ through a link, and mojibake for some Shift-JIS zip names.
   These servers can't tell such a destination from another file, so
   a destination with the size, modification time and permissions of the
   source is now written as a new file in its directory that then replaces
-  it with a move. The copy then delete fallback of `fs.Move` refuses
-  a destination that only differs in case and has those attributes, and
-  a move between a `SubFileSystem` and its parent that is not local uses
-  the native `Move` of the parent.
-- sftpfs `Move` of a file onto another hard link of it with the
-  posix-rename extension returned nil and left the source, because
-  rename(2) does nothing for two links of the same file. The source is
-  removed now if a listing of its directory still shows its name.
+  it with a move. That copy needs the permission to create, rename and
+  remove files in the destination directory, which an overwrite in place
+  doesn't, and the replaced file gets the owner and permissions of a new
+  file. A copy onto a symbolic link replaces the file it points to and
+  keeps the link, and when the move onto the destination fails after it
+  removed the destination, the new file is kept and the error names it.
+  The copy then delete fallback of `fs.Move` refuses a destination that
+  only differs in case and has those attributes.
 - An ftpfs `RemoveAll` could delete the files that a symbolic link points
   to: a client that could write into the directory could make the client
   library drop the line of its link and add a forged directory line with

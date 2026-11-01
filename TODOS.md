@@ -141,21 +141,6 @@ empty" while the conformance suite requires the scheme.
 **Priority:** P2
 **Depends on:** None
 
-### Update the dependents
-
-**What:** Update the repositories that use go-fs to v1.0.0.
-
-**Why:** They are on betas, v0.1.0 or older pseudo-versions.
-
-**Context:** The list of dependents is tracked outside this repository.
-`docs/MIGRATION_v1.md` lists the changes from v0.1.0, `CHANGELOG.md` those
-of each beta and release candidate; most of them fail to compile, so
-`go build ./...` finds the call sites.
-
-**Effort:** L
-**Priority:** P1
-**Depends on:** Release v1.0.0
-
 ## fs (core)
 
 ### Reject zero-width characters and device names that zip name decoding produces
@@ -361,8 +346,7 @@ truncation. The single-file case is done: `CopyFile` and the copy then
 delete fallback of `Move` compare an existing destination with every link
 resolved, also between a `SubFileSystem` and its parent, a destination
 that may be another hard link or case of the source is replaced through
-a new file, and moves between a `SubFileSystem` and its parent use the
-native `Move` of the parent. Left are the into-itself checks of directories
+a new file. Left are the into-itself checks of directories
 (`isCopyIntoItself`, `isInsideDirView`).
 
 **Effort:** M
@@ -737,6 +721,25 @@ blob, and nothing stops it under a context without a deadline. The native
 
 ## sftpfs, smbfs, webdavfs, uuiddir
 
+### Remove the source of an sftpfs move onto another hard link
+
+**What:** sftpfs `Move` of a file onto another hard link of it, with the
+posix-rename extension, returns nil and leaves both names, because
+rename(2) does nothing for two links of the same file.
+
+**Why:** `Move` promises that the source is gone afterwards.
+
+**Context:** A listing can't tell another hard link from the same directory
+entry under another path, like through a link to its directory or another
+case of its name on a case-insensitive server, which removing the source
+would remove: the pre-landing review of rc.4 reproduced that data loss and
+the removal was reverted. A fix needs `RealPath` of both parent directories
+and a listing of that directory that shows both names as separate entries.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ### Check trailing-dot names of existing directories on Windows SMB servers
 
 **What:** `validateNewDirs` accepts a rejected directory name if `Stat`
@@ -814,7 +817,7 @@ attributes of the source like `maybeSameAttrs` (an error, not a no-op, since
 equal attributes don't prove the same file), or copying through a temporary
 file in the destination directory that is renamed over the destination.
 
-Done: `copyFileTo` writes a copy within one non-local file system without native `CopyFile` onto an existing destination with the size, modification time and permissions of the source (`isSameFileInfo`) to `gofs-copy-<random>.tmp` in its directory, closes the source and moves the new file onto the destination; a false positive only costs the extra file and move. The copy then delete fallback of `Move` uses the native `Move` of the parent between a `SubFileSystem` and its non-local parent, and refuses a case-only destination with the same attributes. Found while testing: sftpfs `Move` with posix-rename onto another hard link left the source (rename(2) does nothing), now removed after a listing confirms the name; Samba refuses the native smbfs `Move` onto another hard link with an error and keeps both names.
+Done: `copyFileTo` writes a copy within one non-local file system without native `CopyFile` onto an existing destination with the size, modification time and permissions of the source (`isSameFileInfo`) to `gofs-copy-<random>.tmp` in its directory, closes the source and moves the new file onto the destination; a false positive only costs the extra file and move. A copy onto a symbolic link replaces the file it points to, and a temporary copy is kept and named in the error when the failed move already removed the destination. The copy then delete fallback of `Move` refuses a case-only destination with the same attributes. Found while testing: sftpfs `Move` with posix-rename onto another hard link leaves both names (see "Remove the source of an sftpfs move onto another hard link"); Samba refuses the native smbfs `Move` onto another hard link with an error and keeps both names. The pre-landing review of rc.4 dropped a native `Move` shortcut between a `SubFileSystem` and its parent, which skipped the root guard of `SubFileSystem.Move`.
 
 **Effort:** M
 **Priority:** P2

@@ -25,7 +25,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -528,11 +527,8 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 // so a destination with the size, mode, owner and modification time of the
 // file that the link points to is taken for that file, see isLinkOntoTarget.
 // Unlike LocalFileSystem.Move, a move onto another hard link of the file
-// is refused too. A move of a file onto another hard link of it with the
-// posix-rename extension leaves both names, see rename(2), so after a move
-// of a file with the attributes of the destination, see maybeSameAttrs,
-// its directory is listed, and if it still lists the name of the source,
-// the source is removed.
+// is refused too. With the posix-rename extension, a move of a file onto
+// another hard link of it leaves both names, see rename(2).
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	// Checked here, because the checks before f.run already answer
 	if err := f.checkPath(filePath, destPath); err != nil {
@@ -579,23 +575,7 @@ func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string)
 		// Replace the file or symbolic link at destPath
 		noRetry()
 		if c.posixRename {
-			if err = c.sftp.PosixRename(filePath, destPath); err != nil || !maybeSameAttrs(srcInfo, destInfo) {
-				return f.pathErr(err, filePath)
-			}
-			// rename(2) does nothing for two hard links of the same file, so
-			// the source is still listed under its name then and is removed
-			// like by LocalFileSystem.Move. Another name of the same directory
-			// entry, like another case or Unicode normalization of the name,
-			// is listed only with the name of the destination.
-			dir, name := path.Split(filePath)
-			entries, err := c.sftp.ReadDirContext(ctx, path.Clean(dir))
-			if err != nil {
-				return fmt.Errorf("sftpfs: moved %s to %s, but can't list %s to check whether the source was another hard link of the destination: %w", f.file(filePath), f.file(destPath), f.file(path.Clean(dir)), f.pathErr(err, dir))
-			}
-			if slices.ContainsFunc(entries, func(entry os.FileInfo) bool { return entry.Name() == name }) {
-				return f.pathErr(c.sftp.Remove(filePath), filePath)
-			}
-			return nil
+			return f.pathErr(c.sftp.PosixRename(filePath, destPath), filePath)
 		}
 		if maybeSameFile(filePath, destPath, srcInfo, destInfo) {
 			return f.moveViaTemp(c.sftp, filePath, destPath)

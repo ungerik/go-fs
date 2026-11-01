@@ -794,11 +794,21 @@ func TestCopyFile_SameFileThroughLinks(t *testing.T) {
 		{"through a link to the parent directory", root.Join("dirlink", "file.txt"), file},
 		{"onto a path through a link to the parent directory", file, root.Join("dirlink", "file.txt")},
 	}
+	// A no-op neither replaces the file, which keeps its modification time,
+	// nor the link, which a copy through a new file would replace with a file
+	modTime := time.Now().Add(-time.Hour).Truncate(time.Second)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			require.NoError(t, file.WriteAllString(t.Context(), "precious"))
+			require.NoError(t, os.Chtimes(file.Path(), modTime, modTime))
 			require.NoError(t, fs.CopyFile(t.Context(), tt.src, tt.dest), "a no-op")
 			requireContent(t, file, "precious")
+			info, err := os.Stat(file.Path())
+			require.NoError(t, err)
+			require.True(t, info.ModTime().Equal(modTime), "the file is not written")
+			linkInfo, err := os.Lstat(file.Dir().Join("link.txt").Path())
+			require.NoError(t, err)
+			require.NotZero(t, linkInfo.Mode()&os.ModeSymlink, "the link is still a link")
 		})
 	}
 
@@ -887,6 +897,148 @@ func TestCopyFile_HardLinkAndCaseAlias(t *testing.T) {
 	require.NoError(t, fs.CopyFile(t.Context(), file, other))
 	requireContent(t, other, "precious")
 	requireNames(t, root, "file.txt", "hardlink.txt", "other.txt")
+}
+
+// TestCopyRecursive_HardLink checks that CopyRecursive into an existing
+// directory within a file system that is not local and has no native
+// CopyFile writes a file whose destination is another hard link of it
+// through a new file, like CopyFile, instead of truncating it.
+func TestCopyRecursive_HardLink(t *testing.T) {
+	_, root := newInPlaceLocalFS(t)
+	src, dest := root.Join("src"), root.Join("dest")
+	require.NoError(t, src.MakeDir())
+	require.NoError(t, dest.MakeDir())
+	require.NoError(t, src.Join("a.txt").WriteAllString(t.Context(), "precious"))
+	if err := os.Link(src.Join("a.txt").Path(), dest.Join("a.txt").Path()); err != nil {
+		t.Skipf("can't create a hard link: %v", err)
+	}
+
+	require.NoError(t, fs.CopyRecursive(t.Context(), src, dest))
+	requireContent(t, src.Join("a.txt"), "precious")
+	requireContent(t, dest.Join("a.txt"), "precious")
+	requireNames(t, dest, "a.txt")
+}
+
+// TestCopyFile_HardLinkThroughSubFileSystem checks the copy of a file onto
+// another hard link of it within a SubFileSystem of a file system that is
+// not local, which copies through the SubFileSystem's CopyFile: the
+// destination that it stats may be the source like for CopyFile.
+func TestCopyFile_HardLinkThroughSubFileSystem(t *testing.T) {
+	links, root := newInPlaceLocalFS(t)
+	require.NoError(t, root.Join("file.txt").WriteAllString(t.Context(), "precious"))
+	if err := os.Link(root.Join("file.txt").Path(), root.Join("hardlink.txt").Path()); err != nil {
+		t.Skipf("can't create a hard link: %v", err)
+	}
+	sub, err := fs.NewSubFileSystem(links, root.Path(), "")
+	require.NoError(t, err)
+	register(t, sub)
+
+	require.NoError(t, fs.CopyFile(t.Context(), sub.RootDir().Join("file.txt"), sub.RootDir().Join("hardlink.txt")))
+	requireContent(t, root.Join("file.txt"), "precious")
+	requireContent(t, root.Join("hardlink.txt"), "precious")
+	requireNames(t, root, "file.txt", "hardlink.txt")
+}
+
+// moveErrFileSystem is a minimalFileSystem whose native Move fails.
+type moveErrFileSystem struct{ *minimalFileSystem }
+
+var errMoveFailed = errors.New("move failed")
+
+func (moveErrFileSystem) Move(context.Context, string, string) error { return errMoveFailed }
+
+// TestCopyFile_MayBeSourceMoveFails checks that the new file of a copy onto
+// a destination that may be the source is removed when the move onto the
+// destination fails, and that the destination is kept.
+func TestCopyFile_MayBeSourceMoveFails(t *testing.T) {
+	// MemFiles of the same size created together have the same modification
+	// time and permissions, so dest.txt may be src.txt
+	m := moveErrFileSystem{newMinimalFileSystem(fsimpl.RandomString(), newMemBacking(t,
+		fs.NewMemFile("/src.txt", []byte("new")),
+		fs.NewMemFile("/dest.txt", []byte("old")),
+	))}
+	register(t, m)
+	root := m.RootDir()
+
+	err := fs.CopyFile(t.Context(), root.Join("src.txt"), root.Join("dest.txt"))
+	require.ErrorIs(t, err, errMoveFailed)
+	requireContent(t, root.Join("dest.txt"), "old")
+	requireNames(t, root, "dest.txt", "src.txt")
+}
+
+// moveRemovesDestFileSystem is a minimalFileSystem whose native Move
+// removes the destination and then fails, like a move by remove and rename
+// whose rename fails.
+type moveRemovesDestFileSystem struct{ *minimalFileSystem }
+
+func (m moveRemovesDestFileSystem) Move(_ context.Context, _, destPath string) error {
+	if err := m.Remove(destPath); err != nil {
+		return err
+	}
+	return errMoveFailed
+}
+
+// TestCopyFile_MayBeSourceMoveRemovedDest checks that the new file of a copy
+// onto a destination that may be the source is kept when the failed move
+// onto the destination already removed it, because the destination may
+// have been the source and the new file is the only complete copy then.
+// The error names the new file.
+func TestCopyFile_MayBeSourceMoveRemovedDest(t *testing.T) {
+	m := moveRemovesDestFileSystem{newMinimalFileSystem(fsimpl.RandomString(), newMemBacking(t,
+		fs.NewMemFile("/src.txt", []byte("new")),
+		fs.NewMemFile("/dest.txt", []byte("old")),
+	))}
+	register(t, m)
+	root := m.RootDir()
+
+	err := fs.CopyFile(t.Context(), root.Join("src.txt"), root.Join("dest.txt"))
+	require.ErrorIs(t, err, errMoveFailed)
+	var temp fs.File
+	require.NoError(t, root.ListDir(t.Context(), func(file fs.File) error {
+		if strings.HasPrefix(file.Name(), "gofs-copy-") {
+			temp = file
+		}
+		return nil
+	}))
+	require.NotEmpty(t, temp, "the new file is kept")
+	require.ErrorContains(t, err, temp.Name(), "the error names the new file")
+	requireContent(t, temp, "new")
+}
+
+// TestCopyFile_MayBeSourceThroughLink checks that a copy onto a symbolic
+// link to a file that may be the source, within a file system that is not
+// local and has no native CopyFile, replaces the file that the link points
+// to through a new file and keeps the link, like a copy that writes through
+// the link.
+func TestCopyFile_MayBeSourceThroughLink(t *testing.T) {
+	links, root := newInPlaceLocalFS(t)
+	src, other := root.Join("src.txt"), root.Join("other.txt")
+	require.NoError(t, src.WriteAllString(t.Context(), "AAAA"))
+	require.NoError(t, other.WriteAllString(t.Context(), "BBBB"))
+	modTime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(src.Path(), modTime, modTime))
+	require.NoError(t, os.Chtimes(other.Path(), modTime, modTime))
+	require.NoError(t, links.CreateSymbolicLink("other.txt", root.Join("link.txt").Path()))
+
+	require.NoError(t, fs.CopyFile(t.Context(), src, root.Join("link.txt")))
+	requireContent(t, other, "AAAA")
+	linkInfo, err := os.Lstat(root.Join("link.txt").Path())
+	require.NoError(t, err)
+	require.NotZero(t, linkInfo.Mode()&os.ModeSymlink, "the link is still a link")
+	requireNames(t, root, "link.txt", "other.txt", "src.txt")
+}
+
+// TestMove_SubFileSystemRootIntoParent is a regression test: a move between
+// a SubFileSystem and its parent that is not local used the native Move of
+// the parent, which renamed the root directory of the SubFileSystem that
+// SubFileSystem.Move refuses to move, and the registered SubFileSystem then
+// had no root.
+func TestMove_SubFileSystemRootIntoParent(t *testing.T) {
+	mem := newLinkMemFS(t, fs.NewMemFile("/a/x.txt", []byte("x")))
+	sub := newRegisteredSubFS(t, mem, "/a")
+
+	// The copy then delete fallback fails at the removal of the root
+	require.Error(t, fs.Move(t.Context(), sub.RootDir(), mem.RootDir().Join("b")))
+	requireContent(t, mem.RootDir().Join("a", "x.txt"), "x")
 }
 
 // TestMove_HardLinkAndCaseAlias checks the copy then delete fallback of Move

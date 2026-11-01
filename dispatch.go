@@ -739,24 +739,7 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	// The entry that the source shows, see fsReadTarget, for all checks
 	// below: through an OverlayFileSystem it costs Lstats of the layers
 	srcRead, srcReadPath, srcViaOverlay, readOK := fsReadTarget(srcFS, srcPath)
-	_, srcIsLocal := srcRead.(*LocalFileSystem)
-	if _, nativeMove := srcRead.(MoveFileSystem); readOK && !srcIsLocal && !srcViaOverlay && nativeMove {
-		// Between SubFileSystems of a file system that is not local and its
-		// parent, the native Move of the parent renames on the server, which
-		// replaces another hard link of the file and renames another case of
-		// its name, which a copy can't tell from other files, see copyFileTo,
-		// and removing the source would remove such a copy
-		if destTarget, destTargetPath, destViaOverlay, ok := writeTarget(destFS, destPath); ok && !destViaOverlay && srcRead == destTarget {
-			// Like Move checks the parent directories of a native move
-			if dir, _ := fsSplitDirAndName(destFS, destPath); dir != "" {
-				if err := validateNewDirs(destFS, dir); err != nil {
-					return fmt.Errorf("can't move %.200q to %.200q: %w", errSubject(src), errSubject(dest), err)
-				}
-			}
-			return fsMove(ctx, srcRead, srcReadPath, destTargetPath)
-		}
-	}
-	if readOK && srcIsLocal {
+	if _, srcIsLocal := srcRead.(*LocalFileSystem); readOK && srcIsLocal {
 		// The local paths of both, like fsLocalPaths tells them
 		srcLocal := srcReadPath
 		destLocal, destViaOverlay, destIsLocal := fsLocalPath(destFS, destPath)

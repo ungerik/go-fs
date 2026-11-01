@@ -1715,6 +1715,43 @@ func TestGlobbedLISTWithoutMLST(t *testing.T) {
 	assert.Equal(t, int64(len("rel")), info.Size)
 }
 
+// TestGlobbedLISTWithoutMLST_Errors checks the listing of a path with glob
+// characters on a server without MLST support when it fails: a missing
+// directory is reported as missing like by LIST, and the working directory
+// stays the one after the login. Without an absolute working directory
+// from PWD, which the listing changes back to, the listing fails.
+func TestGlobbedLISTWithoutMLST_Errors(t *testing.T) {
+	const home = "/home/testuser"
+	srv := newTestFTPServer(t)
+	srv.writeFile("/a[b]/file.txt", "data")
+	srv.writeFile(home+"/rel.txt", "rel")
+	srv.configure(func(s *testFTPServer) {
+		s.noMLST = true
+		s.home = home
+	})
+	ftpFS := dialInProcess(t, srv)
+
+	_, err := ftpFS.Stat("/no[pe]/file.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "Stat in a missing directory")
+	err = ftpFS.ListDir(t.Context(), "/no[pe]", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, os.ErrNotExist, "ListDir of a missing directory")
+	_, err = ftpFS.Stat("rel.txt")
+	require.NoError(t, err, "the working directory is still the one after the login")
+
+	for _, reply := range []string{"550 not allowed", `257 "relative"`} {
+		srv2 := newTestFTPServer(t)
+		srv2.writeFile("/a[b]/file.txt", "data")
+		srv2.configure(func(s *testFTPServer) {
+			s.noMLST = true
+			s.pwdReply = reply
+		})
+		ftpFS2 := dialInProcess(t, srv2)
+		err := ftpFS2.ListDir(t.Context(), "/a[b]", nil, func(*fs.FileInfo) error { return nil })
+		require.Error(t, err, "PWD reply %q", reply)
+		assert.Empty(t, srv2.argsOf("CWD"), "no CWD without a directory to change back to, PWD reply %q", reply)
+	}
+}
+
 // TestGlobbedLISTWithoutMLST_RestoreFails checks that a connection whose
 // working directory can't be changed back after a listing of a path with
 // glob characters is not used again, because relative paths would resolve

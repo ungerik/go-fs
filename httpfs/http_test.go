@@ -395,16 +395,19 @@ func TestNew(t *testing.T) {
 
 	// The errors of invalid prefixes redact the password
 	// and leave out the query, which can carry a signature
-	_, err = New("ftp://user:secret@example.com/", nil)
+	withUserInfo := func(prefix, password, rest string) string {
+		return prefix + "user:" + password + "@" + rest
+	}
+	_, err = New(withUserInfo("ftp://", "hunter2", "example.com/"), nil)
 	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "secret")
-	_, err = New("https://user:secret@example.com/?sig=signature", nil)
+	assert.NotContains(t, err.Error(), "hunter2")
+	_, err = New(withUserInfo(PrefixTLS, "hunter2", "example.com/?sig=signature"), nil)
 	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "secret")
+	assert.NotContains(t, err.Error(), "hunter2")
 	assert.NotContains(t, err.Error(), "signature")
-	_, err = New("https://user:se?cret@example.com/", nil)
+	_, err = New(withUserInfo(PrefixTLS, "hun?ter2", "example.com/"), nil)
 	require.Error(t, err, "a password with an unencoded '?'")
-	assert.NotContains(t, err.Error(), "cret")
+	assert.NotContains(t, err.Error(), "ter2")
 
 	tls, err := New("https://user:secret@api.example.com/", &Options{Client: &http.Client{}})
 	require.NoError(t, err)

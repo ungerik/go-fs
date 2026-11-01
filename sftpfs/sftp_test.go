@@ -526,9 +526,8 @@ func TestCopyFileLinkOntoTarget(t *testing.T) {
 // a file onto another hard link of it, or onto another case of its name on
 // a case-insensitive disk, truncated the file before it was read, because
 // SFTP reports no inode numbers that would tell them from another file.
-// The copy is written to a new file that replaces the destination. A move
-// between a SubFileSystem and its parent onto another hard link uses the
-// native Move, which renames on the server.
+// The copy is written to a new file that replaces the destination, also
+// by the copy then delete of a move between a SubFileSystem and its parent.
 func TestCopyFileHardLinkAndCaseAlias(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	require.NoError(t, os.WriteFile(root+"/file.txt", []byte("content"), 0o600))
@@ -565,12 +564,13 @@ func TestCopyFileHardLinkAndCaseAlias(t *testing.T) {
 	assert.Equal(t, []string{"hardlink.txt"}, dirNames(t, root))
 }
 
-// TestMoveOntoHardLink is a regression test: Move of a file onto another
-// hard link of it with the posix-rename extension returned nil and left the
-// source, because rename(2) does nothing for two links of the same file.
-// The source is removed like by LocalFileSystem.Move, with and without the
-// extension, and a rename to another case of the name on a case-insensitive
-// disk, the same directory entry, keeps the file.
+// TestMoveOntoHardLink checks Move of a file onto another hard link of it.
+// Without the posix-rename extension the source is renamed to a temporary
+// name first, see moveViaTemp, so only the destination is left. With the
+// extension the rename does nothing for two links of the same file, see
+// rename(2), and both names are left with the file: SFTP can't tell another
+// hard link from the same directory entry under another path, like through
+// a link to its directory, which removing the source would remove.
 func TestMoveOntoHardLink(t *testing.T) {
 	for _, posixRename := range []bool{true, false} {
 		t.Run(fmt.Sprintf("posixRename=%t", posixRename), func(t *testing.T) {
@@ -584,20 +584,35 @@ func TestMoveOntoHardLink(t *testing.T) {
 			f.currentConn().posixRename = posixRename
 
 			require.NoError(t, f.Move(t.Context(), root+"/file.txt", root+"/hardlink.txt"))
-			assert.Equal(t, []string{"hardlink.txt"}, dirNames(t, root))
+			if posixRename {
+				assert.Equal(t, []string{"file.txt", "hardlink.txt"}, dirNames(t, root))
+			} else {
+				assert.Equal(t, []string{"hardlink.txt"}, dirNames(t, root))
+			}
 			data, err := os.ReadFile(root + "/hardlink.txt")
 			require.NoError(t, err)
 			assert.Equal(t, "content", string(data))
-
-			if _, err := os.Stat(root + "/HARDLINK.TXT"); err == nil {
-				require.NoError(t, f.Move(t.Context(), root+"/hardlink.txt", root+"/HARDLINK.TXT"))
-				assert.Len(t, dirNames(t, root), 1, "the renamed file is kept")
-				data, err := os.ReadFile(root + "/HARDLINK.TXT")
-				require.NoError(t, err)
-				assert.Equal(t, "content", string(data))
-			}
 		})
 	}
+}
+
+// TestMoveThroughDirectoryLink is a regression test: Move of a file onto
+// its own path through a link to its directory, with the posix-rename
+// extension, removed the file, because a listing still showed its name
+// after the rename, which did nothing, like for another hard link.
+func TestMoveThroughDirectoryLink(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	require.NoError(t, os.Mkdir(root+"/a", 0o700))
+	require.NoError(t, os.Symlink("a", root+"/b"))
+	require.NoError(t, os.WriteFile(root+"/a/x", []byte("content"), 0o600))
+	s := startTestServer(t, testServerConfig{root: root})
+	f := s.dial(t, nil)
+	f.currentConn().posixRename = true
+
+	require.NoError(t, f.Move(t.Context(), root+"/a/x", root+"/b/x"))
+	data, err := os.ReadFile(root + "/a/x")
+	require.NoError(t, err, "the file must still exist")
+	assert.Equal(t, "content", string(data))
 }
 
 // TestMoveLinkOntoOtherFile moves symbolic links onto files that are not
