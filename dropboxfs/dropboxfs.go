@@ -204,13 +204,10 @@ func (dbfs *fileSystem) ReadableWritable() (readable, writable bool) {
 // would get another name, and so is a name with a NUL character, which
 // no file system stores. Existing files are read with every name.
 func (dbfs *fileSystem) ValidateName(name string) error {
-	switch {
-	case !utf8.ValidString(name):
+	if !utf8.ValidString(name) {
 		return fmt.Errorf("%w: dropboxfs name %.200q is not valid UTF-8", os.ErrInvalid, name)
-	case strings.Contains(name, "\x00"):
-		return fmt.Errorf("%w: dropboxfs name %.200q contains a NUL character", os.ErrInvalid, name)
 	}
-	return nil
+	return fsimpl.ValidateNoNUL("dropboxfs", name)
 }
 
 func (dbfs *fileSystem) RootDir() fs.File {

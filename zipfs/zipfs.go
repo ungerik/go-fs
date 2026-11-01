@@ -220,41 +220,16 @@ func (f *Reader) checkClosed() error {
 // nodeInfo returns the FileInfo of a tree node.
 // Its Sys is the *zip.FileHeader of the entry, or nil for implied directories.
 func (f *Reader) nodeInfo(node *dirtree.Node) *fs.FileInfo {
-	var perm fs.Permissions
-	zipFile, _ := node.Sys.(*zip.File)
-	if zipFile != nil {
-		perm = fs.PermissionsFromFileMode(zipFile.Mode())
-	}
+	perm := DefaultPermissions
 	if node.IsDir {
-		perm = perm.OrDefault(DefaultDirPermissions)
-	} else {
-		perm = perm.OrDefault(DefaultPermissions)
+		perm = DefaultDirPermissions
 	}
-	if node.Path == "" {
-		return &fs.FileInfo{
-			File:        f.RootDir(),
-			Name:        Separator,
-			Exists:      true,
-			IsDir:       true,
-			Modified:    node.Modified,
-			Permissions: perm,
-		}
+	zipFile, ok := node.Sys.(*zip.File)
+	if !ok {
+		return dirtree.FileInfo(f.paths, node, perm, nil)
 	}
-	info := &fs.FileInfo{
-		File:        f.file(node.Path),
-		Name:        node.Name,
-		Exists:      true,
-		IsDir:       node.IsDir,
-		IsRegular:   !node.IsDir,
-		IsHidden:    strings.HasPrefix(node.Name, "."),
-		Size:        node.Size,
-		Modified:    node.Modified,
-		Permissions: perm,
-	}
-	if zipFile != nil {
-		info.Sys = &zipFile.FileHeader
-	}
-	return info
+	perm = fs.PermissionsFromFileMode(zipFile.Mode()).OrDefault(perm)
+	return dirtree.FileInfo(f.paths, node, perm, &zipFile.FileHeader)
 }
 
 // lookup returns the tree node of a path or an error wrapping os.ErrNotExist.
@@ -455,10 +430,6 @@ func (f *Writer) String() string {
 	return f.Name() + " with prefix " + f.Prefix()
 }
 
-func (f *Writer) file(filePath string) fs.File {
-	return fs.File(f.paths.JoinCleanURI(filePath))
-}
-
 // checkClosed returns fs.ErrFileSystemClosed if the archive was closed.
 func (f *Writer) checkClosed() error {
 	f.mtx.Lock()
@@ -485,19 +456,7 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 	if err := zipname.ValidateName(dirtree.CleanName(filePath), isDir); err != nil {
 		return fmt.Errorf("zipfs: %w", err)
 	}
-	node, isAncestor, err := f.tree.Conflict(filePath)
-	switch {
-	case err != nil:
-		return fmt.Errorf("zipfs: %w", err)
-	case node == nil:
-		return nil
-	case isAncestor:
-		return fs.NewErrIsNotDirectory(f.file(node.Path))
-	case node.IsDir && !isDir:
-		return fs.NewErrIsDirectory(f.file(filePath))
-	default:
-		return fs.NewErrAlreadyExists(f.file(filePath))
-	}
+	return f.tree.ValidateNew(f.paths, filePath, isDir)
 }
 
 // ValidateName returns an error wrapping os.ErrInvalid if name, the name
@@ -629,19 +588,9 @@ func (f *Writer) MakeAllDirs(dirPath string, perm fs.Permissions) error {
 	if err := f.checkClosedLocked(); err != nil {
 		return err
 	}
-	for i := range elements {
-		dir := strings.Join(elements[:i+1], Separator)
-		node := f.tree.Lookup(dir)
-		switch {
-		case node == nil:
-			if err := f.writeDirLocked(dir, perm); err != nil {
-				return err
-			}
-		case !node.IsDir:
-			return fs.NewErrIsNotDirectory(f.file(dir))
-		}
-	}
-	return nil
+	return f.tree.AddMissingDirs(f.paths, elements, func(dir string) error {
+		return f.writeDirLocked(dir, perm)
+	})
 }
 
 // OpenWriter returns a writer that buffers the file in memory

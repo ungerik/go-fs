@@ -177,3 +177,15 @@ func CheckNoBackslash(fsName, filePath, reason string) error {
 	}
 	return fmt.Errorf("%w: %s path %.200q contains a backslash, %s", os.ErrInvalid, fsName, filePath, reason)
 }
+
+// ValidateNoNUL returns an error wrapping [os.ErrInvalid] if filePath
+// contains a NUL character, which no file system stores in names and
+// at which C APIs and some protocols end a path, so it would address
+// another file. The error message names the file system with fsName
+// and quotes at most 200 characters of filePath.
+func ValidateNoNUL(fsName, filePath string) error {
+	if !strings.Contains(filePath, "\x00") {
+		return nil
+	}
+	return fmt.Errorf("%w: %s path %.200q contains a NUL character", os.ErrInvalid, fsName, filePath)
+}
