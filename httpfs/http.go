@@ -100,10 +100,17 @@ type FileSystem struct {
 // The file system is not registered, see NewAndRegister.
 func New(prefix string, opts *Options) (*FileSystem, error) {
 	if !strings.HasPrefix(prefix, Prefix) && !strings.HasPrefix(prefix, PrefixTLS) {
-		return nil, fmt.Errorf("httpfs prefix must start with %s or %s: %q", Prefix, PrefixTLS, prefix)
+		return nil, fmt.Errorf("httpfs prefix must start with %s or %s: %q", Prefix, PrefixTLS, fsimpl.RedactURI(prefix))
 	}
 	if strings.ContainsAny(prefix, "?#") {
-		return nil, fmt.Errorf("httpfs prefix must not contain a query or fragment: %q", prefix)
+		// The password is redacted before the query is cut off,
+		// because a password with an unencoded '?' or '#' reaches into it,
+		// and the query can carry secrets like presigned URL signatures
+		redacted := fsimpl.RedactURI(prefix)
+		if i := strings.IndexAny(redacted, "?#"); i >= 0 {
+			redacted = redacted[:i]
+		}
+		return nil, fmt.Errorf("httpfs prefix must not contain a query or fragment: %q", redacted)
 	}
 	client := http.DefaultClient
 	if opts != nil && opts.Client != nil {

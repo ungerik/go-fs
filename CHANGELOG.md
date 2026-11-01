@@ -5,6 +5,82 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+The fixes that TODOS.md listed for before v1.0.0: two ways to lose data in
+copies and moves, a password in httpfs errors, an unchecked
+`EnsureRegistered` prefix, two ways for an ftpfs `RemoveAll` to delete
+through a link, and mojibake for some Shift-JIS zip names.
+
+### Changed
+
+- `fs.Move` into a write-only file system, like a `zipfs.Writer` or
+  `tarfs.Writer`, fails with an error wrapping `fs.ErrWriteOnlyFileSystem`
+  before it copies anything. It removed the source as soon as its entry was
+  in the writer's stream, but the archive is only written by `Close`, so
+  a failing `Close` lost the moved files. Copy with `fs.CopyRecursive`,
+  close the writer and remove the source after `Close` succeeded.
+- ftpfs `RemoveAll` fails for a directory whose `LIST` listing, which tells
+  a directory from a symbolic link, has a line that the FTP client library
+  dropped because it can't parse it, like the line of a FIFO, a device or
+  a socket, or one with a five-digit year. Empty lines and the `total N`
+  line of `ls -l` are fine. On servers with MLST support this is the
+  listing of the parent of every directory whose `DELE` failed, on servers
+  without it the listing of the removed directory. The check for an entry
+  named `-a` runs after every such listing instead of once per directory.
+
+### Fixed
+
+- `fs.CopyFile` of a symbolic link onto the file it points to, of a file
+  onto a link to it, or through a link to a parent directory, within one
+  file system that is not local and has no native `CopyFile`, like sftpfs
+  and smbfs, truncated the file before reading it. An existing destination
+  is now compared with every link resolved, also between a
+  `SubFileSystem` and its parent, and the copy is a no-op like for local
+  files. The copy then delete fallback of `fs.Move` refuses such paths as
+  the same file with an error wrapping `os.ErrInvalid` instead of removing
+  the source.
+- `fs.CopyFile` of a file onto another hard link of it, or onto another
+  case of its name on a case-insensitive server, within sftpfs, smbfs,
+  ftpfs or another file system that is not local and has no native
+  `CopyFile`, truncated the file before reading it (reproduced on Samba).
+  These servers can't tell such a destination from another file, so
+  a destination with the size, modification time and permissions of the
+  source is now written as a new file in its directory that then replaces
+  it with a move. The copy then delete fallback of `fs.Move` refuses
+  a destination that only differs in case and has those attributes, and
+  a move between a `SubFileSystem` and its parent that is not local uses
+  the native `Move` of the parent.
+- sftpfs `Move` of a file onto another hard link of it with the
+  posix-rename extension returned nil and left the source, because
+  rename(2) does nothing for two links of the same file. The source is
+  removed now if a listing of its directory still shows its name.
+- An ftpfs `RemoveAll` could delete the files that a symbolic link points
+  to: a client that could write into the directory could make the client
+  library drop the line of its link and add a forged directory line with
+  the link's name through a file name with a line feed (see Changed).
+- On FTP servers without MLST support that expand glob characters in the
+  path argument of `LIST`, like wu-ftpd and ProFTPD with `UseGlobbing` but
+  without `mod_facts`, ftpfs listed another directory for a path with `*`,
+  `?` or `[`, so `Stat` and `ListDir` described its entries and `RemoveAll`
+  could take a symbolic link for a directory and delete the files it points
+  to. Such a path, and a relative one that begins with `-`, is now listed
+  after a `CWD` to it with `LIST` without an argument, and the working
+  directory is changed back; a failed change back closes the connection.
+- `fs.EnsureRegistered` registered a prefix with a slash or backslash
+  before its `://`, which `fs.Register` refuses, so after the last `free`
+  its URIs were local paths. The prefix is refused with an error wrapping
+  `os.ErrInvalid` before `create` is called, and so is a prefix alias of
+  the created file system.
+- The errors of `httpfs.New` for an invalid prefix contained the password
+  of a prefix with user info; the error for a prefix with a query also
+  leaves out the query now. The errors of `fs.CopyRecursive` for
+  a directory copied into itself redact passwords like the other errors.
+- zip names: an Info-ZIP Unicode Path field was ignored for Shift-JIS
+  names where the ASCII second byte of a double-byte character is followed
+  by the same letter, like `アA日.txt` or `エリアA計画.xlsx`, which then
+  showed the CP-437 decoding of the stored name.
+
 ## [1.0.0-rc.3] - 2026-11-01
 
 Third release candidate: the zipfs and tarfs readers and writers share

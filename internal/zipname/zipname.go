@@ -210,12 +210,25 @@ func keepsASCII(stored, unicodeName string) bool {
 			return false
 		}
 		// The leftmost match leaves the most bytes for the parts after it
-		// and the fewest for the run before it
-		at := strings.Index(stored[pos+1:], rest[:i])
-		if at < 0 || !isRunBytes(stored[pos:pos+1+at]) {
-			return false
+		// and the fewest for the run before it. A match must be followed by
+		// a byte that can start the next run: the leftmost one can be the
+		// ASCII second byte of a double-byte character of the run, like
+		// the first "A" of "アA日" in Shift-JIS (83 41 41 93 FA), and the
+		// next run would then start with the ASCII letter of the match
+		start := pos + 1
+		for {
+			at := strings.Index(stored[start:], rest[:i])
+			if at < 0 || !isRunBytes(stored[pos:start+at]) {
+				// A later match would only add bytes to the run
+				return false
+			}
+			end := start + at + i
+			if end < len(stored) && (stored[end] >= utf8.RuneSelf || stored[end] == '?' || stored[end] == '_') {
+				pos = end
+				break
+			}
+			start += at + 1
 		}
-		pos += 1 + at + i
 		rest = rest[i:]
 	}
 }

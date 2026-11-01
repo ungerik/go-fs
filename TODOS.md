@@ -158,85 +158,6 @@ of each beta and release candidate; most of them fail to compile, so
 
 ## fs (core)
 
-### Redact the prefix in the errors of httpfs.New
-
-**What:** `httpfs.New` puts the raw prefix into two error messages
-(`httpfs/http.go:103` and `:106`), so the password of a prefix with user
-info shows in the error.
-
-**Why:** Every other error of go-fs redacts passwords; the README promises it
-only for the invalid file system and the remote backends because of this.
-
-**Context:** Found by the fact check of the README section of v1.0.0-rc.2.
-Wrap the prefix in `fsimpl.RedactURI`. Hardening: the "into itself" errors
-of `copy.go` print raw paths; use `errSubject` like the other errors.
-
-**Effort:** S
-**Priority:** P1, before v1.0.0
-**Depends on:** None
-
-### Don't truncate an sftpfs or smbfs file by copying a link onto it
-
-**What:** `fs.CopyFile` of a symbolic link on sftpfs or smbfs onto the file
-it points to, or on smbfs of another case of a name onto the file, opens
-the writer with `O_TRUNC` and truncates the file before it is read.
-
-**Why:** Data loss: the same-file check of `copyFileTo` compares links,
-hard links and bind mounts only for local files.
-
-**Context:** Found by the fact check of the README section of v1.0.0-rc.2.
-sftpfs and smbfs have no native `CopyFile`. Resolve the link target (or
-compare file identities where the server reports them) before opening the
-writer, like `isLocalSameFile` does locally.
-
-**Effort:** M
-**Priority:** P1, before v1.0.0
-**Depends on:** None
-
-### Keep the source of a move into an archive writer until the archive is written
-
-**What:** `fs.Move` into a `zipfs.Writer` or `tarfs.Writer` removes the
-source as soon as its entry is in the writer's stream, but the archive is
-only complete when `Writer.Close` succeeds.
-
-**Why:** A failing `Close`, like a failed upload of the archive, or a crash
-before it loses the moved files: `Move` returned nil and the source is gone.
-
-**Context:** Found by the adversarial review of v1.0.0-rc.2 with a probe
-(an archive target whose writer fails on `Close`). The copy then delete
-fallback ends with `fsRemoveAll` of the source in `moveByCopy`
-(`dispatch.go`), unchanged since beta.2. The zipfs and tarfs package docs
-name `fs.Move` into the archive. Options: refuse `Move` into a file system
-that can't read back what it wrote (both archive writers), or document
-"CopyRecursive, Close, then remove the source".
-
-**Effort:** S
-**Priority:** P1, before v1.0.0
-**Depends on:** None
-
-### Decode Shift-JIS Unicode Path names whose second byte repeats the next letter
-
-**What:** `zipname.Decode` ignores a valid Info-ZIP Unicode Path field when
-the ASCII second byte of a double-byte character is followed by the same
-letter and more non-ASCII characters, like Shift-JIS `アA日.txt`
-(`83 41 41 93 FA`), and returns the CP-437 decoding instead.
-
-**Why:** Names from Japanese Windows tools like `エリアA計画.xlsx` or
-`ケースX仕様.pdf` show as mojibake. It is safe (the stored name decides),
-but it is a regression of the rc.2 rule that closed the look-alike spoof.
-
-**Context:** `keepsASCII` takes the leftmost match of a middle ASCII part.
-Since a run may hold an ASCII byte only right after a byte from 0x80, that
-match can be the second byte, and the next run then starts with the real
-letter. Skip a match whose next byte can't start a run (from 0x80, `?` or
-`_`) and add the cases above to `TestDecode` and the `FuzzKeepsASCII`
-seeds. Also add rows for a dot or slash after a byte from 0x80, which pin the
-`@` lower bound of the second-byte rule.
-
-**Effort:** S
-**Priority:** P1, before v1.0.0
-**Depends on:** None
-
 ### Reject zero-width characters and device names that zip name decoding produces
 
 **What:** A Unicode Path run or the CP-437 decoding can produce a name with
@@ -272,24 +193,6 @@ name, so the source needs a read-side rule of its own.
 
 **Effort:** S
 **Priority:** P3
-**Depends on:** None
-
-### Check the prefix of EnsureRegistered like Register
-
-**What:** `fs.Register` refuses a prefix with a slash or backslash before
-its `://`, but `fs.EnsureRegistered` registers through `registerLocked`
-without that check.
-
-**Why:** `EnsureRegistered(ctx, "backup/s3://bucket", …)` registers it, and
-after the last `free` its URIs are local paths, the silent local writes the
-check exists to prevent (reproduced).
-
-**Context:** Check the prefixes in `registerLocked` or in one function that
-`Register` and the creation of `EnsureRegistered` both call, and the
-`prefix` argument of `EnsureRegistered` before it creates anything.
-
-**Effort:** S
-**Priority:** P1, before v1.0.0
 **Depends on:** None
 
 ### Decide whether a prefix must have a scheme
@@ -454,7 +357,13 @@ are also compared as files (`isLocalSameFile`).
 **Context:** Resolve symbolic links with `Lstat`/`ReadSymbolicLink` before
 comparing, or compare an identity where a backend has one (sftpfs reports no
 inode). Writing to a temporary file and renaming it would also avoid the
-truncation.
+truncation. The single-file case is done: `CopyFile` and the copy then
+delete fallback of `Move` compare an existing destination with every link
+resolved, also between a `SubFileSystem` and its parent, a destination
+that may be another hard link or case of the source is replaced through
+a new file, and moves between a `SubFileSystem` and its parent use the
+native `Move` of the parent. Left are the into-itself checks of directories
+(`isCopyIntoItself`, `isInsideDirView`).
 
 **Effort:** M
 **Priority:** P2
@@ -647,36 +556,6 @@ fail closed otherwise, or find another way to detect reparse points.
 **Priority:** P2
 **Depends on:** None
 
-### Fail closed when the client library drops a LIST line
-
-**What:** `jlaffaye/ftp` drops a line of a `LIST` listing that it can't
-parse without an error, like one whose year doesn't have four digits. The
-directory check of `remover.removeFolder` then can't see the line of a link,
-and one forged directory line with the link's name, from a file whose name
-contains a line feed, is the only entry with that name.
-
-**Why:** A client that can write into the parent directory and set the
-modification time of its link can make `RemoveAll` on a server with MLST
-support delete the files that the link points to (reproduced with the test
-server's `listOmits` and `listForged` hooks). Documented in the package doc.
-
-**Context:** Count the raw lines on the data connections of the listing
-connection (ftpfs dials them with its own `dialFunc`), and make the listing
-an error if the parser dropped any line other than `total N`. Do the same for
-the `LIST` of the operation's connection on servers without MLST support:
-there a link that the server hides from `LIST`, like a dotfile on vsftpd
-with `force_dot_files=NO`, or whose line the parser drops, like the first
-line of a FIFO named with a line feed, doesn't count against one forged
-directory line with its name, and `RemoveAll` deletes through it (reproduced
-with `listOmits` and `listForged`; documented in the package doc). Add the test
-case of an omitted link line with one forged line. While there, run the `-a`
-check (in `remover.list`) for every listing instead of once per directory,
-so it is as fresh as the listing.
-
-**Effort:** S
-**Priority:** P1, before v1.0.0
-**Depends on:** None
-
 ### Count names of a listing in one pass
 
 **What:** The duplicate-name check of `remover.removeFolder` calls
@@ -690,34 +569,6 @@ the first `DELE`, 100,000 about 19 s, at every level of the tree.
 where `full[i:]` begins with `" -> "`, the names `listsName` matches.
 
 **Effort:** S
-**Priority:** P2
-**Depends on:** None
-
-### List without a path argument on servers without MLST that glob LIST arguments
-
-**What:** On servers without MLST support, `remover.removeFolder`, the
-`lstat` fallback, `ListDir` and `ListDirRecursive` send `LIST <path>` on the
-connection of the operation. Servers that expand glob characters in that
-argument (wu-ftpd, ProFTPD with `UseGlobbing` but without `mod_facts`) list
-another directory for a path with `*`, `?` or `[`.
-
-**Why:** `RemoveAll` can take a link to a directory for a directory and
-delete the files it points to: `/tree/a[b]/L` linking to `/victim`, next to
-`/tree/ab/L/keep.txt`, deletes `/victim/keep.txt`
-(`TestRemoveAll_GlobbedLISTKnownLimitation`). `Stat` and `ListDir` describe
-entries of the other directory.
-
-**Context:** Documented in the package doc. Either send `CWD <dir>` and
-`LIST` without an argument on the main connection and restore the working
-directory (the login directory read with `PWD`, which relative paths resolve
-against; a failed restore must mark the connection broken), about two round
-trips more per listing, or use a listing connection like on MLST servers,
-which fails on servers that allow one connection per user and must list
-without `-a`, because the `-a` check needs MLST. Check how vsftpd (no MLST)
-treats glob characters: it seems to filter by the last element only when the
-literal path is no directory.
-
-**Effort:** M
 **Priority:** P2
 **Depends on:** None
 
@@ -945,6 +796,206 @@ a raw `@` in the path.
 **Depends on:** None
 
 ## Completed
+
+### Detect hard links and case aliases before an in-place copy
+
+**What:** `fs.CopyFile` within sftpfs or smbfs of a file onto another hard
+link of it, or on a case-insensitive SMB server onto another case of its
+name, still opens the destination with `O_TRUNC` and truncates the file
+before it is read.
+
+**Why:** Data loss, like for the links that the release candidate fixed.
+
+**Context:** The core compares an existing destination with every symbolic
+link resolved, but SFTP and go-smb2 report no inode numbers or link counts,
+and the core can't tell a case-insensitive server. Options: a native
+`CopyFile` in sftpfs and smbfs that refuses a destination with the
+attributes of the source like `maybeSameAttrs` (an error, not a no-op, since
+equal attributes don't prove the same file), or copying through a temporary
+file in the destination directory that is renamed over the destination.
+
+Done: `copyFileTo` writes a copy within one non-local file system without native `CopyFile` onto an existing destination with the size, modification time and permissions of the source (`isSameFileInfo`) to `gofs-copy-<random>.tmp` in its directory, closes the source and moves the new file onto the destination; a false positive only costs the extra file and move. The copy then delete fallback of `Move` uses the native `Move` of the parent between a `SubFileSystem` and its non-local parent, and refuses a case-only destination with the same attributes. Found while testing: sftpfs `Move` with posix-rename onto another hard link left the source (rename(2) does nothing), now removed after a listing confirms the name; Samba refuses the native smbfs `Move` onto another hard link with an error and keeps both names.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+**Completed:** unreleased (2026-11-01)
+
+### List without a path argument on servers without MLST that glob LIST arguments
+
+**What:** On servers without MLST support, `remover.removeFolder`, the
+`lstat` fallback, `ListDir` and `ListDirRecursive` send `LIST <path>` on the
+connection of the operation. Servers that expand glob characters in that
+argument (wu-ftpd, ProFTPD with `UseGlobbing` but without `mod_facts`) list
+another directory for a path with `*`, `?` or `[`.
+
+**Why:** `RemoveAll` can take a link to a directory for a directory and
+delete the files it points to: `/tree/a[b]/L` linking to `/victim`, next to
+`/tree/ab/L/keep.txt`, deletes `/victim/keep.txt`
+(`TestRemoveAll_GlobbedLISTKnownLimitation`). `Stat` and `ListDir` describe
+entries of the other directory.
+
+**Context:** Documented in the package doc. Either send `CWD <dir>` and
+`LIST` without an argument on the main connection and restore the working
+directory (the login directory read with `PWD`, which relative paths resolve
+against; a failed restore must mark the connection broken), about two round
+trips more per listing, or use a listing connection like on MLST servers,
+which fails on servers that allow one connection per user and must list
+without `-a`, because the `-a` check needs MLST. Check how vsftpd (no MLST)
+treats glob characters: it seems to filter by the last element only when the
+literal path is no directory.
+
+Done: `conn.list` lists a path with one of `*?[{~\\` or a leading `-` on servers without MLST after a `CWD` to its absolute path with `LIST` without an argument, then changes back to the login directory read once with `PWD`; a failed change back aborts the connection. `TestGlobbedLISTWithoutMLST` replaces the known-limitation test.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+**Completed:** unreleased (2026-11-01)
+
+### Redact the prefix in the errors of httpfs.New
+
+**What:** `httpfs.New` puts the raw prefix into two error messages
+(`httpfs/http.go:103` and `:106`), so the password of a prefix with user
+info shows in the error.
+
+**Why:** Every other error of go-fs redacts passwords; the README promises it
+only for the invalid file system and the remote backends because of this.
+
+**Context:** Found by the fact check of the README section of v1.0.0-rc.2.
+Wrap the prefix in `fsimpl.RedactURI`. Hardening: the "into itself" errors
+of `copy.go` print raw paths; use `errSubject` like the other errors.
+
+Done: both errors redact the password, the query error also leaves out the query, and the "into itself" errors of `CopyRecursive` use `errSubject`.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+**Completed:** unreleased (2026-11-01)
+
+### Don't truncate an sftpfs or smbfs file by copying a link onto it
+
+**What:** `fs.CopyFile` of a symbolic link on sftpfs or smbfs onto the file
+it points to, or on smbfs of another case of a name onto the file, opens
+the writer with `O_TRUNC` and truncates the file before it is read.
+
+**Why:** Data loss: the same-file check of `copyFileTo` compares links,
+hard links and bind mounts only for local files.
+
+**Context:** Found by the fact check of the README section of v1.0.0-rc.2.
+sftpfs and smbfs have no native `CopyFile`. Resolve the link target (or
+compare file identities where the server reports them) before opening the
+writer, like `isLocalSameFile` does locally.
+
+Done: within one file system that is not local and has symbolic links, `copyFileTo` compares an existing destination with every link resolved (`fsEvalSymlinks`), also through SubFileSystems, and the copy is a no-op; the copy then delete fallback of `Move` refuses such paths as the same file. Hard links and another case of a name stay undetected, see "Detect hard links and case aliases before an in-place copy", completed too.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** None
+**Completed:** unreleased (2026-11-01)
+
+### Keep the source of a move into an archive writer until the archive is written
+
+**What:** `fs.Move` into a `zipfs.Writer` or `tarfs.Writer` removes the
+source as soon as its entry is in the writer's stream, but the archive is
+only complete when `Writer.Close` succeeds.
+
+**Why:** A failing `Close`, like a failed upload of the archive, or a crash
+before it loses the moved files: `Move` returned nil and the source is gone.
+
+**Context:** Found by the adversarial review of v1.0.0-rc.2 with a probe
+(an archive target whose writer fails on `Close`). The copy then delete
+fallback ends with `fsRemoveAll` of the source in `moveByCopy`
+(`dispatch.go`), unchanged since beta.2. The zipfs and tarfs package docs
+name `fs.Move` into the archive. Options: refuse `Move` into a file system
+that can't read back what it wrote (both archive writers), or document
+"CopyRecursive, Close, then remove the source".
+
+Done: `Move` into a write-only file system fails with `ErrWriteOnlyFileSystem` before it copies anything; the docs name CopyRecursive, Close, then remove.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+**Completed:** unreleased (2026-11-01)
+
+### Decode Shift-JIS Unicode Path names whose second byte repeats the next letter
+
+**What:** `zipname.Decode` ignores a valid Info-ZIP Unicode Path field when
+the ASCII second byte of a double-byte character is followed by the same
+letter and more non-ASCII characters, like Shift-JIS `アA日.txt`
+(`83 41 41 93 FA`), and returns the CP-437 decoding instead.
+
+**Why:** Names from Japanese Windows tools like `エリアA計画.xlsx` or
+`ケースX仕様.pdf` show as mojibake. It is safe (the stored name decides),
+but it is a regression of the rc.2 rule that closed the look-alike spoof.
+
+**Context:** `keepsASCII` takes the leftmost match of a middle ASCII part.
+Since a run may hold an ASCII byte only right after a byte from 0x80, that
+match can be the second byte, and the next run then starts with the real
+letter. Skip a match whose next byte can't start a run (from 0x80, `?` or
+`_`) and add the cases above to `TestDecode` and the `FuzzKeepsASCII`
+seeds. Also add rows for a dot or slash after a byte from 0x80, which pin the
+`@` lower bound of the second-byte rule.
+
+Done: a match of a middle ASCII part must be followed by a byte that can start a run, else the next match is tried.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+**Completed:** unreleased (2026-11-01)
+
+### Check the prefix of EnsureRegistered like Register
+
+**What:** `fs.Register` refuses a prefix with a slash or backslash before
+its `://`, but `fs.EnsureRegistered` registers through `registerLocked`
+without that check.
+
+**Why:** `EnsureRegistered(ctx, "backup/s3://bucket", …)` registers it, and
+after the last `free` its URIs are local paths, the silent local writes the
+check exists to prevent (reproduced).
+
+**Context:** Check the prefixes in `registerLocked` or in one function that
+`Register` and the creation of `EnsureRegistered` both call, and the
+`prefix` argument of `EnsureRegistered` before it creates anything.
+
+Done: `validateRegisterPrefix` runs in `registerLocked` for every prefix and alias and in `EnsureRegistered` before `create`.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+**Completed:** unreleased (2026-11-01)
+
+### Fail closed when the client library drops a LIST line
+
+**What:** `jlaffaye/ftp` drops a line of a `LIST` listing that it can't
+parse without an error, like one whose year doesn't have four digits. The
+directory check of `remover.removeFolder` then can't see the line of a link,
+and one forged directory line with the link's name, from a file whose name
+contains a line feed, is the only entry with that name.
+
+**Why:** A client that can write into the parent directory and set the
+modification time of its link can make `RemoveAll` on a server with MLST
+support delete the files that the link points to (reproduced with the test
+server's `listOmits` and `listForged` hooks). Documented in the package doc.
+
+**Context:** Count the raw lines on the data connections of the listing
+connection (ftpfs dials them with its own `dialFunc`), and make the listing
+an error if the parser dropped any line other than `total N`. Do the same for
+the `LIST` of the operation's connection on servers without MLST support:
+there a link that the server hides from `LIST`, like a dotfile on vsftpd
+with `force_dot_files=NO`, or whose line the parser drops, like the first
+line of a FIFO named with a line feed, doesn't count against one forged
+directory line with its name, and `RemoveAll` deletes through it (reproduced
+with `listOmits` and `listForged`; documented in the package doc). Add the test
+case of an omitted link line with one forged line. While there, run the `-a`
+check (in `remover.list`) for every listing instead of once per directory,
+so it is as fresh as the listing.
+
+Done: `conn.listChecked` counts the lines of the data connection (after TLS) and fails if the library parsed fewer entries than lines other than empty ones and "total N"; used by the listing connection and by the LIST of servers without MLST. The `-a` check runs after every listing. A link that the server hides from LIST stays a documented limit.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+**Completed:** unreleased (2026-11-01)
 
 ### Explain in the README what go-fs protects against
 

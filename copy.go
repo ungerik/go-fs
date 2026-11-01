@@ -35,6 +35,16 @@ const copyBufferSize = 1024 * 1024 * 4
 // by path, which doesn't detect another name that the file system matches
 // to the file, like another case. A local file is also compared as file,
 // so another path to it, like a symbolic link or a hard link, is a no-op too.
+// Within one other file system with symbolic links, like sftpfs or smbfs,
+// an existing dest is compared with every link resolved, so a link to the
+// file or a path through a link to a parent directory is a no-op too, at the
+// cost of a request per path element. Within one file system that is not
+// local and has no native CopyFile, like sftpfs, smbfs and ftpfs, which can't
+// tell another hard link of the file or another case of its name from
+// another file, an existing dest with the size, modification time and
+// permissions of src is written as a new file in its directory that then
+// replaces it with a move, so src is never truncated before it is read.
+// dest is a new file then, its other hard links keep their content.
 // dest is checked by path before it is opened for writing, which follows
 // a symbolic link at dest, so these guarantees assume that dest is not
 // changed concurrently by others.
@@ -74,18 +84,22 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf []byte, per
 	if dest == "" {
 		return ErrEmptyPath
 	}
-	srcPerm, err := checkCopySource(src)
+	srcInfo, err := checkCopySource(src)
 	if err != nil {
 		return err
 	}
 	// If dest is no directory, copyFileTo doesn't have to check it again,
 	// every Stat is a round trip on a remote file system
-	destIsDir := dest.IsDir()
+	destFS, destPath := dest.ParseRawURI()
+	destInfo, statErr := fsStat(destFS, destPath)
+	if statErr != nil {
+		destInfo = nil
+	}
+	destIsDir := destInfo != nil && destInfo.IsDir
 	if destIsDir {
 		// A name like `..\x` of a source with another separator,
 		// or "NUL" on Windows, would be written outside of dest
 		name := src.Name()
-		destFS, destPath := dest.ParseRawURI()
 		joined := dest.Join(name)
 		held := false
 		if f, ok := src.(File); ok {
@@ -96,9 +110,9 @@ func CopyFileBuf(ctx context.Context, src FileReader, dest File, buf []byte, per
 		if err := validateNameIn(destFS, destPath, name, held); err != nil {
 			return withNameCause(fmt.Errorf("%w: can't copy %.200q into %.200q, the name %.200q is not valid there", os.ErrInvalid, errSubject(src), errSubject(dest), name), err)
 		}
-		dest = joined
+		dest, destInfo = joined, nil
 	}
-	return copyFileTo(ctx, src, srcPerm, dest, &buf, perm, true, !destIsDir)
+	return copyFileTo(ctx, src, srcInfo, dest, &buf, perm, true, destInfo, !destIsDir)
 }
 
 // copyFileFinal copies src to dest like CopyFileBuf,
@@ -114,55 +128,58 @@ func copyFileFinal(ctx context.Context, src FileReader, dest File, buf []byte, p
 	if dest == "" {
 		return ErrEmptyPath
 	}
-	srcPerm, err := checkCopySource(src)
+	srcInfo, err := checkCopySource(src)
 	if err != nil {
 		return err
 	}
-	return copyFileTo(ctx, src, srcPerm, dest, &buf, perm, true, false)
+	return copyFileTo(ctx, src, srcInfo, dest, &buf, perm, true, nil, false)
 }
 
 // checkCopySource returns an error if src does not exist or is a directory,
-// and the permissions of src if it is a File.
+// and the FileInfo of src if it is a File, else nil.
 // A MemFile always exists, its name doesn't matter for its data.
-func checkCopySource(src FileReader) (Permissions, error) {
+func checkCopySource(src FileReader) (*FileInfo, error) {
 	switch f := src.(type) {
 	case File:
 		fileSystem, path := f.ParseRawURI()
 		info, err := fsStat(fileSystem, path)
 		if err != nil {
-			return NoPermissions, err
+			return nil, err
 		}
 		if info.IsDir {
-			return NoPermissions, NewErrIsDirectory(f)
+			return nil, NewErrIsDirectory(f)
 		}
-		return info.Permissions, nil
+		return info, nil
 	case MemFile:
 		if f.IsDir() {
-			return NoPermissions, NewErrIsDirectory(f)
+			return nil, NewErrIsDirectory(f)
 		}
-		return NoPermissions, nil
+		return nil, nil
 	}
 	if err := src.CheckExists(); err != nil {
-		return NoPermissions, err
+		return nil, err
 	}
 	if src.IsDir() {
-		return NoPermissions, NewErrIsDirectory(src)
+		return nil, NewErrIsDirectory(src)
 	}
-	return NoPermissions, nil
+	return nil, nil
 }
 
 // copyFileTo copies the checked source file src to dest,
 // dest being the final path of the copy: an existing file
 // is replaced, an existing directory is an ErrIsDirectory.
-// Without perm the copy gets the permissions srcPerm of src,
+// srcInfo describes the file that src reads, with symbolic links
+// followed, if src is a File, else it is nil.
+// Without perm the copy gets the permissions of src,
 // as far as copyPermissions takes them over.
 // The parent directories of dest are created if makeParentDirs is true,
 // after the name of dest is checked with validateWritePathName; without it
 // the caller checked the name, like copyDir with treeCopier.validateWriteName.
-// destIsNotDir tells that the caller already checked
-// that dest is no directory, so it is not checked again.
+// destChecked tells that the caller already checked that dest is no
+// directory, so it is not checked again, then destInfo describes the file
+// that a write to dest goes to, or is nil if dest doesn't exist.
 // buf points to the copy buffer, which is allocated if empty.
-func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest File, buf *[]byte, perm []Permissions, makeParentDirs, destIsNotDir bool) error {
+func copyFileTo(ctx context.Context, src FileReader, srcInfo *FileInfo, dest File, buf *[]byte, perm []Permissions, makeParentDirs bool, destInfo *FileInfo, destChecked bool) error {
 	destFS, destPath := dest.ParseRawURI()
 	if destPath == "" {
 		return ErrEmptyPath
@@ -170,14 +187,34 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 	if _, err := fsWritable(destFS); err != nil {
 		return err
 	}
+	if !destChecked {
+		destInfo = nil
+		if info, err := fsStat(destFS, destPath); err == nil {
+			if info.IsDir {
+				return NewErrIsDirectory(dest)
+			}
+			destInfo = info
+		}
+	}
+	setPerm := JoinPermissions(perm, NoPermissions)
 	srcFile, srcIsFile := src.(File)
 	var srcFS FileSystem
 	var srcPath string
+	srcPerm := NoPermissions
+	// nativeCopy tells that the native CopyFile of destFS copies within it,
+	// which is used for permissions only if they can be set after the copy
+	nativeCopy := false
+	// mayBeSrc tells that dest may be the file of src under another name
+	// that the checks below can't tell apart from another file
+	mayBeSrc := false
 	if srcIsFile {
 		srcFS, srcPath = srcFile.ParseRawURI()
 		if srcFS == destFS && srcPath == destPath {
 			return nil // Copying a file onto itself is a no-op
 		}
+		_, canCopy := destFS.(CopyFileSystem)
+		_, canSetPerm := destFS.(PermissionsFileSystem)
+		nativeCopy = srcFS == destFS && canCopy && (setPerm == NoPermissions || canSetPerm)
 		// Also a no-op through another path to the file, where the copy would
 		// write the file that it reads, which the writer would truncate before
 		// it is read: the entry that the source shows, see fsReadTarget, is the
@@ -188,21 +225,37 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 		// file, see isLocalSameFile, so another path to it, like a symbolic
 		// link, a hard link or a bind mount, is the same file. Also within one
 		// file system, because an OverlayFileSystem resolves the links of its
-		// layers to other paths than the local file system.
+		// layers to other paths than the local file system. Within one other
+		// file system with symbolic links, like sftpfs or smbfs, whose writers
+		// truncate in place, an existing destination is compared with every
+		// link resolved, see fsEvalSymlinks, a round trip per path element.
+		// Such a file system can't tell another hard link of the file or
+		// another case of its name on a case-insensitive server from another
+		// file, so without a native CopyFile, which copies on the server, an
+		// existing destination with the size, modification time and
+		// permissions of the source may be the source, see mayBeSrc.
 		if srcRead, srcReadPath, _, readOK := fsReadTarget(srcFS, srcPath); readOK {
-			if destTarget, destTargetPath, _, ok := writeTarget(destFS, destPath); ok && isSameTarget(srcRead, srcReadPath, destTarget, destTargetPath) {
+			destTarget, destTargetPath, _, destOK := writeTarget(destFS, destPath)
+			if destOK && isSameTarget(srcRead, srcReadPath, destTarget, destTargetPath) {
 				return nil
 			}
+			_, readsLinks := srcRead.(linkTargetReader)
+			hasLinks := readsLinks || fsLinks(srcRead) != nil
 			if _, srcIsLocal := srcRead.(*LocalFileSystem); srcIsLocal {
 				if destLocal, _, ok := fsLocalPath(destFS, destPath); ok && isLocalSameFile(srcReadPath, destLocal, os.Stat) {
 					return nil
 				}
+			} else if destOK && srcRead == destTarget && destInfo != nil {
+				// A missing destination is no file, which saves the walks
+				if hasLinks && isSameEvaluatedPath(srcRead, srcReadPath, destTargetPath) {
+					return nil
+				}
+				mayBeSrc = !nativeCopy && srcInfo != nil && isSameFileInfo(srcInfo, destInfo)
 			}
 		}
-		srcPerm = copyPermissions(srcFS, srcPerm)
-	}
-	if !destIsNotDir && dest.IsDir() {
-		return NewErrIsDirectory(dest)
+		if srcInfo != nil {
+			srcPerm = copyPermissions(srcFS, srcInfo.Permissions)
+		}
 	}
 	if makeParentDirs {
 		// A file system like a zip writer can't remove directories,
@@ -216,19 +269,14 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 		}
 	}
 
-	setPerm := JoinPermissions(perm, NoPermissions)
-	if srcIsFile && srcFS == destFS {
-		copyFS, canCopy := destFS.(CopyFileSystem)
-		permFS, canSetPerm := destFS.(PermissionsFileSystem)
-		if canCopy && (setPerm == NoPermissions || canSetPerm) {
-			if err := copyFS.CopyFile(ctx, srcPath, destPath); err != nil {
-				return err
-			}
-			if setPerm == NoPermissions {
-				return nil
-			}
-			return permFS.SetPermissions(destPath, setPerm)
+	if nativeCopy {
+		if err := destFS.(CopyFileSystem).CopyFile(ctx, srcPath, destPath); err != nil {
+			return err
 		}
+		if setPerm == NoPermissions {
+			return nil
+		}
+		return destFS.(PermissionsFileSystem).SetPermissions(destPath, setPerm)
 	}
 
 	filePerm := setPerm.OrDefault(srcPerm)
@@ -240,15 +288,52 @@ func copyFileTo(ctx context.Context, src FileReader, srcPerm Permissions, dest F
 	if err != nil {
 		return fmt.Errorf("CopyFile: can't open source reader: %w", err)
 	}
-	defer r.Close()
-	w, err := fsOpenWriter(destFS, destPath, filePerm)
+	readerOpen := true
+	defer func() {
+		if readerOpen {
+			_ = r.Close()
+		}
+	}()
+	// A dest that may be src is not opened for writing, which would truncate
+	// src before it is read: the copy is written to a new file in the
+	// directory of dest, which then replaces dest with fsMove
+	writePath := destPath
+	if mayBeSrc {
+		dir, _ := fsSplitDirAndName(destFS, destPath)
+		writePath = destFS.CleanPath(dir, "gofs-copy-"+fsimpl.RandomString()+".tmp")
+	}
+	w, err := fsOpenWriter(destFS, writePath, filePerm)
 	if err != nil {
 		return fmt.Errorf("CopyFile: can't open destination writer: %w", err)
 	}
 	if len(*buf) == 0 {
 		*buf = make([]byte, copyBufferSize)
 	}
-	return commitOrAbort(ctx, w, copyBuffer(ctx, w, r, *buf))
+	err = commitOrAbort(ctx, w, copyBuffer(ctx, w, r, *buf))
+	if !mayBeSrc {
+		return err
+	}
+	// SMB servers refuse to replace a file that is open, like src
+	readerOpen = false
+	_ = r.Close()
+	if err == nil {
+		if err = fsMove(ctx, destFS, writePath, destPath); err == nil {
+			return nil
+		}
+	}
+	if removeErr := fsRemove(destFS, writePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		err = fmt.Errorf("%w (can't remove the temporary copy %s: %w)", err, errSubject(fsFile(destFS, writePath)), removeErr)
+	}
+	return err
+}
+
+// isSameFileInfo reports if a and b, the FileInfos of two existing files,
+// may describe the same file: they have the same size, modification time
+// and permissions. Without file identities, like on SFTP and SMB servers,
+// that is all that tells another hard link of a file or another case of its
+// name, which also another file can have.
+func isSameFileInfo(a, b *FileInfo) bool {
+	return a.Size == b.Size && a.Modified.Equal(b.Modified) && a.Permissions == b.Permissions
 }
 
 // copyPermissions returns the permissions that a copy without perm takes
@@ -439,12 +524,12 @@ func CopyRecursive(ctx context.Context, src, dest File, patterns ...string) erro
 			return nil // Copying a directory onto itself is a no-op
 		}
 		if isSubPath(srcFS, srcPath, destPath) {
-			return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
+			return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
 		}
 	}
 	srcRead, srcReadPath, _, _ := fsReadTarget(srcFS, srcPath)
 	if isCopyIntoItself(srcFS, srcPath, srcRead, srcReadPath, destFS, destPath) {
-		return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, src, dest)
+		return fmt.Errorf("%w: can't copy directory %s into itself at %s", os.ErrInvalid, errSubject(src), errSubject(dest))
 	}
 	// Through SubFileSystems and OverlayFileSystems also of other
 	// file systems than the local one, compared by path
@@ -852,7 +937,7 @@ func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 		if info.IsDir && !info.IsSymlink {
 			return dir.recordWrite(fileDest, c.copyDir(file, fileDest, dir))
 		}
-		perm := info.Permissions
+		fileInfo := info
 		if info.IsSymlink {
 			target, err := fsStat(srcFS, file.Path())
 			if err != nil {
@@ -862,12 +947,13 @@ func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 				return dir.recordWrite(fileDest, c.copyDirLink(file, fileDest, dir))
 			}
 			// Copy the file that the link points to
-			perm = target.Permissions
+			fileInfo = target
 		}
-		if err := checkFileDest(file, fileDest, dir); err != nil {
+		destInfo, err := checkFileDest(file, fileDest, dir)
+		if err != nil {
 			return err
 		}
-		return dir.recordWrite(fileDest, copyFileTo(c.ctx, file, perm, fileDest, &c.buf, nil, false, true))
+		return dir.recordWrite(fileDest, copyFileTo(c.ctx, file, fileInfo, fileDest, &c.buf, nil, false, destInfo, true))
 	})
 }
 
@@ -879,21 +965,22 @@ func (c *treeCopier) copyDir(src, dest File, parent *destDir) error {
 // errSpecialFile. An existing file that the copy wrote for another name of the
 // source is the error of destDir.checkExisting. A missing dest or an
 // error of Lstat, like on write-only file systems, is left to the writer.
-// The one Lstat replaces the check of copyFileTo if dest is a directory.
-func checkFileDest(src, dest File, dir *destDir) error {
+// The one Lstat replaces the check of copyFileTo if dest is a directory,
+// its FileInfo of an existing file is returned, nil for a missing dest.
+func checkFileDest(src, dest File, dir *destDir) (*FileInfo, error) {
 	destFS, destPath := dest.ParseRawURI()
 	info, err := fsLstat(destFS, destPath)
 	switch {
 	case err != nil:
-		return nil
+		return nil, nil
 	case info.IsSymlink:
-		return errDestLink(src, dest)
+		return nil, errDestLink(src, dest)
 	case info.IsDir:
-		return NewErrIsDirectory(dest)
+		return nil, NewErrIsDirectory(dest)
 	case isSpecialFile(dest, info):
-		return errSpecialFile(src, dest)
+		return nil, errSpecialFile(src, dest)
 	}
-	return dir.checkExisting(src, dest)
+	return info, dir.checkExisting(src, dest)
 }
 
 // isSpecialFile reports if the existing entry dest, described by info, which

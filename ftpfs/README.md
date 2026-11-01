@@ -188,10 +188,11 @@ and open readers, and afterwards every method returns
   both have the same line. Servers
   among them that expand glob characters in the path argument of `LIST`,
   like wu-ftpd and ProFTPD with `UseGlobbing` but without `mod_facts`
-  (which provides MLST), can list another directory for a path with `*`,
-  `?` or `[`: then `ftpfs` describes the entries of that directory, and
-  `RemoveAll` can take a link to a directory for a directory in it and
-  delete the files that the link points to. `RemoveAll` refuses a directory
+  (which provides MLST), would list another directory for a path with `*`,
+  `?` or `[`, so `ftpfs` lists such a path, and a relative path that begins
+  with `-`, after a `CWD` to it with `LIST` without a path argument, and
+  changes back to the working directory after the login, two more round
+  trips. `RemoveAll` refuses a directory
   whose name its listing lists more than once, like for a file whose name
   contains a line feed followed by a forged line. Servers among them that
   hide the names that begin with a dot from `LIST`, like vsftpd with
@@ -225,13 +226,15 @@ and open readers, and afterwards every method returns
   library sends `LIST -a`, and servers that don't parse the options of
   `LIST` take `-a` for a path and list the entry `-a` of the directory
   instead, so `RemoveAll` doesn't use the listing of a directory that has an
-  entry named `-a`, which it checks with `MLST`, and fails for the
-  directories in such a directory. The client library drops a `LIST` line
-  that it can't parse without an error, like one whose year doesn't have
-  four digits, so a client that can write into the directory and set the
-  modification time of its link can hide the link's line and, with a file
-  whose name contains a line feed followed by a forged directory line, make
-  `RemoveAll` delete through the link. FTP servers on Windows (IIS with
+  entry named `-a`, which it checks with `MLST` after every listing, and
+  fails for the directories in such a directory. The client library drops
+  a `LIST` line that it can't parse without an error, like the line of
+  a FIFO, a device or a socket, or one whose year doesn't have four digits,
+  which a client that can write into the directory and set the modification
+  time of its link could use to hide the link's line. So `RemoveAll` counts
+  the lines of the listings that tell a directory from a link and fails if
+  the library dropped one, other than an empty line or the `total N` line
+  of `ls -l`. FTP servers on Windows (IIS with
   listings in the DOS format, and FileZilla Server or IIS with listings in
   the Unix format, which list junctions and links to directories as
   directories) and ProFTPD with `ShowSymlinks off` list a link to a

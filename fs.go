@@ -68,6 +68,10 @@ func JoinCleanFilePath(uriParts ...string) File {
 // Else source is copied to the destination and removed
 // after the copy completely succeeded, so a failed or canceled copy,
 // for example a failed upload, never deletes the source.
+// A destination on a write-only file system, like a zipfs or tarfs Writer,
+// which writes the archive only when it is closed, is an error wrapping
+// [ErrWriteOnlyFileSystem] before anything is copied: copy the source with
+// [CopyRecursive] and remove it after the Close of the writer succeeded.
 // Between different file systems a symbolic link to a file is followed:
 // the destination gets a copy of the file, but only the link is removed
 // from the source. A symbolic link to a directory, the source itself or one
@@ -101,7 +105,13 @@ func JoinCleanFilePath(uriParts ...string) File {
 // for [LocalFileSystem.Move], [MemFileSystem.Move], the native Move of
 // sftpfs and smbfs and the copy-then-delete fallback, also through the local layers of an OverlayFileSystem, which
 // can resolve the link to another path than the local file system, except
-// for a local file with other hard links that keep it.
+// for a local file with other hard links that keep it. Within one file system
+// that is not local, also through SubFileSystems, the fallback also refuses
+// a file that the other path reaches through a link to a parent directory,
+// and a destination that only differs in case and has the size, modification
+// time and permissions of source, which may be source on a case-insensitive
+// server. A move between a SubFileSystem and its parent that is not local
+// uses the native Move of the parent if it has one.
 //
 // The copy-then-delete fallback replaces a symbolic link at destination,
 // never writes through it and never writes through a link below a moved

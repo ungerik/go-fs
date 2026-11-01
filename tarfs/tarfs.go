@@ -35,9 +35,12 @@
 //     So are cleaned paths with a NUL character, which a tar header can't
 //     hold, and paths that are not valid UTF-8, which the PAX format
 //     requires. All of them are errors wrapping os.ErrInvalid.
-//     The Writer implements fs.ValidateNameFileSystem, so fs.CopyFile,
-//     fs.CopyRecursive and fs.Move into the archive fail before they
-//     write anything.
+//     The Writer implements fs.ValidateNameFileSystem, so fs.CopyFile and
+//     fs.CopyRecursive into the archive fail before they write anything.
+//   - fs.Move into the archive is an error wrapping fs.ErrWriteOnlyFileSystem,
+//     because the archive is only complete after Close, after Move would
+//     have removed the source. Copy with fs.CopyRecursive and remove the
+//     source after Close succeeded.
 //   - Entries get the current time and the passed permissions,
 //     or DefaultPermissions and DefaultDirPermissions if none are passed.
 package tarfs
@@ -596,9 +599,9 @@ func (f *Writer) checkNewLocked(filePath string, isDir bool) error {
 // ValidateName returns an error wrapping os.ErrInvalid if name, the name
 // of a directory entry, can't be written to the archive: if it contains
 // a backslash or a NUL character, or is not valid UTF-8, see
-// validateEntryName. fs.CopyFile, fs.CopyRecursive and fs.Move check the
-// names they write with it, so they fail before they write anything, also
-// for the parent directories of a new path, whose names MakeAllDirs checks
+// validateEntryName. fs.CopyFile and fs.CopyRecursive check the names
+// they write with it, so they fail before they write anything, also for
+// the parent directories of a new path, whose names MakeAllDirs checks
 // first.
 func (f *Writer) ValidateName(name string) error {
 	if _, err := dirtree.Elements(name); err != nil {

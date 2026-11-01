@@ -39,11 +39,12 @@
 // the link "a -> b", but they also take the link "a" to "b -> c" for a link
 // "a -> b" to "c", because both have the same line. Servers among them that
 // expand glob characters in the path argument of LIST, like wu-ftpd and
-// ProFTPD with UseGlobbing but without mod_facts, which provides MLST, can
-// list another directory for a path with '*', '?' or '[': then ftpfs
-// describes the entries of that directory, and RemoveAll can take a link to
-// a directory for a directory in it and delete the files that the link
-// points to. RemoveAll refuses a directory whose name its listing lists
+// ProFTPD with UseGlobbing but without mod_facts, which provides MLST,
+// would list another directory for a path with '*', '?' or '[', so ftpfs
+// lists a path with such a character, and a relative path that begins with
+// '-', which servers can take for options, after a CWD to it with LIST
+// without a path argument and changes back to the working directory after
+// the login, two more round trips. RemoveAll refuses a directory whose name its listing lists
 // more than once, like for a file whose name contains a line feed followed
 // by a forged line. Servers among them that hide the names that begin with
 // a dot from LIST, like vsftpd with force_dot_files=NO, its default, hide
@@ -77,15 +78,17 @@
 // the path again. The library sends LIST with the option -a, which servers
 // that don't parse the options of LIST take for a path, so that they list
 // the entry -a of the directory instead: RemoveAll doesn't use the listing
-// of a directory that has an entry named -a, which it checks once per
-// directory with MLST, and fails for the directories in such a directory.
+// of a directory that has an entry named -a, which it checks with MLST after
+// every listing, and fails for the directories in such a directory.
 // The FTP client library drops a line of a LIST listing that it can't
-// parse without an error, like one whose year doesn't have four digits,
-// so a client that can write into the directory and set the modification
-// time of its link to such a year can hide the line of the link, and with
-// a file whose name contains a line feed followed by a line that lists
-// a directory with the name of the link, make the check confirm the link
-// and RemoveAll delete the files that it points to.
+// parse without an error, like the line of a FIFO, a device or a socket,
+// or one whose year doesn't have four digits, which a client that can write
+// into the directory and set the modification time of its link could use to
+// hide the line of the link. So RemoveAll counts the lines of the listings
+// that tell a directory from a link and fails if the library dropped one,
+// other than an empty line or the "total N" line of "ls -l": on servers with
+// MLST support for the directories in a directory with such an entry, and on
+// servers without for the directory itself.
 // FTP servers on Windows (IIS with listings in the DOS format, and
 // FileZilla Server or IIS with listings in the Unix format, which list
 // junctions and links to directories as directories) and ProFTPD with
@@ -556,7 +559,7 @@ func (f *fileSystem) lstat(c *conn, filePath string) (info *fs.FileInfo, linkTar
 		return nil, "", fs.NewErrDoesNotExist(f.JoinCleanFile(filePath))
 	}
 	dir, name := splitParent(filePath)
-	entries, err := c.List(dir)
+	entries, err := c.list(dir)
 	if err == nil {
 		// Find the entry that lists name, see listsName. An entry with the
 		// name itself is preferred, so that a file named "a -> b" is not
@@ -666,7 +669,7 @@ func (f *fileSystem) ListDir(ctx context.Context, dirPath string, patterns []str
 	err := f.do(ctx, func(c *conn) error {
 		infos = nil
 		dirPath := path.Clean(dirPath)
-		entries, err := c.List(dirPath)
+		entries, err := c.list(dirPath)
 		if err != nil {
 			if isConnectionError(err) {
 				return err
@@ -772,7 +775,7 @@ func (f *fileSystem) listedItself(c *conn, dirPath string, entries []*ftp.Entry)
 	if listedTarget {
 		return entries, nil
 	}
-	entries, err = c.List(target)
+	entries, err = c.list(target)
 	if err != nil {
 		return nil, fmt.Errorf("ftpfs: listing %s, the target of %s: %w", f.JoinCleanFile(target), info.File, err)
 	}
@@ -781,7 +784,7 @@ func (f *fileSystem) listedItself(c *conn, dirPath string, entries []*ftp.Entry)
 
 // list lists the directory dirPath for ListDirRecursive.
 func (f *fileSystem) list(c *conn, dirPath string) ([]*ftp.Entry, error) {
-	entries, err := c.List(dirPath)
+	entries, err := c.list(dirPath)
 	if err != nil {
 		return nil, fmt.Errorf("ftpfs: listing %s: %w", f.JoinCleanFile(dirPath), err)
 	}
@@ -1182,7 +1185,7 @@ func (f *fileSystem) Remove(filePath string) error {
 		}
 		err = c.RemoveDir(filePath)
 		if fileUnavailable(err) {
-			if entries, listErr := c.List(filePath); listErr == nil && hasEntries(entries) {
+			if entries, listErr := c.list(filePath); listErr == nil && hasEntries(entries) {
 				return fs.NewErrDirectoryNotEmpty(info.File)
 			}
 		}
@@ -1248,10 +1251,9 @@ type remover struct {
 	c   *conn
 	ctx context.Context // of the operation, for the listing connection
 
-	lister    *conn               // lists with LIST, dialed on first use, see list
-	listerErr error               // why the listing connection can't be used
-	home      string              // the working directory after the login, for relative paths
-	checked   map[string]struct{} // directories without an entry named -a, see list
+	lister    *conn  // lists with LIST, dialed on first use, see list
+	listerErr error  // why the listing connection can't be used
+	home      string // the working directory after the login, for relative paths
 }
 
 // newRemover returns a remover for the operation that runs on c,
@@ -1378,7 +1380,14 @@ func (r *remover) removeFolder(dirPath string) error {
 			return fmt.Errorf("ftpfs: not removing %s: DELE failed, and LIST of %s doesn't list it as a directory, so it may be a symbolic link to one: %w", r.f.JoinCleanFile(dirPath), r.f.JoinCleanFile(dir), deleteErr)
 		}
 	}
-	entries, err := r.c.List(dirPath)
+	// On servers without MLST support LIST is the listing, see listChecked
+	var entries []*ftp.Entry
+	var err error
+	if r.c.hasMLST() {
+		entries, err = r.c.List(dirPath)
+	} else {
+		entries, err = r.c.listChecked(dirPath)
+	}
 	if err != nil {
 		return err
 	}
@@ -1418,7 +1427,6 @@ func (r *remover) removeFolder(dirPath string) error {
 			return err
 		}
 	}
-	delete(r.checked, dirPath)
 	return r.c.RemoveDir(dirPath)
 }
 
@@ -1432,8 +1440,9 @@ func (r *remover) removeFolder(dirPath string) error {
 // characters like '[' in that argument and some take an argument that
 // starts with '-' for options, so that "LIST -a p[q]" can list another
 // directory. A listing is only used if MLST finds no entry named "-a" in
-// the directory, which is checked once per directory until the directory
-// is removed. The connection is dialed on first use and closed by close.
+// the directory, which is checked after every listing, and if the FTP client
+// library dropped none of its lines, see listChecked. The connection is
+// dialed on first use and closed by close.
 // If it breaks, like when the server closed it while it was idle, it is
 // dialed again once for the listing, which changes nothing on the server,
 // and if that fails too, it is not used again.
@@ -1458,31 +1467,26 @@ func (r *remover) list(dirPath string) (entries []*ftp.Entry, listErr, err error
 	if listErr != nil {
 		return nil, listErr, nil
 	}
-	if _, ok := r.checked[dirPath]; !ok {
-		// The listing connection sends "LIST -a", and servers that don't
-		// parse the options of LIST, like ftpserverlib with DisableLISTArgs,
-		// take "-a" for a path relative to the directory and list the entry
-		// "-a" instead, which a client that can write into the directory can
-		// fill with entries of any name and type: an entry named "-a" is a
-		// listErr. MLST on the connection of the operation checks the
-		// absolute path that the listing changed to, so the working
-		// directory of that connection doesn't matter. A failure of MLST
-		// other than the reply for a missing path is a listErr too, and a
-		// broken connection of the operation is err.
-		optionPath := path.Join(r.absDir(dirPath), "-a")
-		_, mlstErr := r.c.GetEntry(optionPath)
-		switch {
-		case mlstErr == nil:
-			return nil, errors.New("the directory has an entry named -a, which servers that don't parse options of LIST would list instead"), nil
-		case isConnectionError(mlstErr):
-			return nil, nil, mlstErr
-		case statusCode(mlstErr) != ftp.StatusFileUnavailable:
-			return nil, fmt.Errorf("MLST of %s, an entry that servers that don't parse options of LIST would list instead, failed: %w", r.f.JoinCleanFile(optionPath), mlstErr), nil
-		}
-		if r.checked == nil {
-			r.checked = make(map[string]struct{})
-		}
-		r.checked[dirPath] = struct{}{}
+	// The listing connection sends "LIST -a", and servers that don't
+	// parse the options of LIST, like ftpserverlib with DisableLISTArgs,
+	// take "-a" for a path relative to the directory and list the entry
+	// "-a" instead, which a client that can write into the directory can
+	// fill with entries of any name and type: an entry named "-a" is a
+	// listErr. MLST on the connection of the operation checks the
+	// absolute path that the listing changed to, so the working
+	// directory of that connection doesn't matter. A failure of MLST
+	// other than the reply for a missing path is a listErr too, and a
+	// broken connection of the operation is err. It is checked after every
+	// listing, so that it is as fresh as the listing.
+	optionPath := path.Join(r.absDir(dirPath), "-a")
+	_, mlstErr := r.c.GetEntry(optionPath)
+	switch {
+	case mlstErr == nil:
+		return nil, errors.New("the directory has an entry named -a, which servers that don't parse options of LIST would list instead"), nil
+	case isConnectionError(mlstErr):
+		return nil, nil, mlstErr
+	case statusCode(mlstErr) != ftp.StatusFileUnavailable:
+		return nil, fmt.Errorf("MLST of %s, an entry that servers that don't parse options of LIST would list instead, failed: %w", r.f.JoinCleanFile(optionPath), mlstErr), nil
 	}
 	return entries, nil, nil
 }
@@ -1531,7 +1535,7 @@ func (r *remover) listOnce(dirPath string) ([]*ftp.Entry, error) {
 		if err = r.lister.ChangeDir(r.absDir(dirPath)); err != nil {
 			return err
 		}
-		entries, err = r.lister.List("")
+		entries, err = r.lister.listChecked("")
 		return err
 	})
 	return entries, err

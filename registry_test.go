@@ -528,3 +528,36 @@ func TestRegister_PrefixWithSeparatorBeforeScheme(t *testing.T) {
 		require.False(t, IsRegistered(stdFS))
 	}
 }
+
+// TestEnsureRegistered_PrefixWithSeparatorBeforeScheme is a regression test:
+// EnsureRegistered registered a prefix with a slash or backslash before
+// "://", which Register refuses, so after the last free its URIs were local
+// paths. The prefix is refused before create is called, and a prefix alias
+// with a separator of the created file system is refused like by Register.
+func TestEnsureRegistered_PrefixWithSeparatorBeforeScheme(t *testing.T) {
+	for _, prefix := range []string{"backup/s3://bucket", `backup\s3://bucket`} {
+		_, _, err := EnsureRegistered(t.Context(), prefix, func(context.Context) (FileSystem, error) {
+			t.Fatalf("must not create a file system for the prefix %q", prefix)
+			return nil, nil
+		})
+		require.ErrorIs(t, err, os.ErrInvalid, "EnsureRegistered with the prefix %q", prefix)
+		require.Nil(t, GetFileSystemByPrefixOrNil(prefix))
+	}
+
+	var aliasFS *prefixAliasTestFS
+	_, _, err := EnsureRegistered(t.Context(), "ensure-alias://host", func(context.Context) (FileSystem, error) {
+		aliasFS = &prefixAliasTestFS{prefixTestFS: prefixTestFS{prefix: "ensure-alias://host"}, aliases: []string{"backup/ensure-alias://host"}}
+		return aliasFS, nil
+	})
+	require.ErrorIs(t, err, os.ErrInvalid, "a prefix alias with a separator before \"://\"")
+	require.False(t, IsRegistered(aliasFS))
+	require.Nil(t, GetFileSystemByPrefixOrNil("ensure-alias://host"))
+}
+
+// prefixAliasTestFS is a prefixTestFS with prefix aliases.
+type prefixAliasTestFS struct {
+	prefixTestFS
+	aliases []string
+}
+
+func (f *prefixAliasTestFS) PrefixAliases() []string { return f.aliases }
