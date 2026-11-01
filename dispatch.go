@@ -763,7 +763,8 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		// like another case or Unicode normalization of the name, also
 		// through a link to a parent directory, which a copy can't tell, see
 		// copyFileTo, and removing the source would remove such a copy.
-		// A link to a file is copied as file like between other file systems.
+		// A symbolic link is handled like between other file systems: a link
+		// to a file is copied as file, a link to a directory is an error.
 		if destTarget, destTargetPath, destViaOverlay, ok := writeTarget(destFS, destPath); ok && !destViaOverlay && srcRead == destTarget {
 			// Like Move checks the parent directories of a native move
 			if dir, _ := fsSplitDirAndName(destFS, destPath); dir != "" {

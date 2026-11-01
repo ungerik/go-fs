@@ -8,7 +8,7 @@ servers, built on [github.com/jlaffaye/ftp](https://github.com/jlaffaye/ftp).
 Get the backend together with the go-fs core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.3 github.com/ungerik/go-fs/ftpfs@v1.0.0-rc.3
+go get github.com/ungerik/go-fs@v1.0.0-rc.4 github.com/ungerik/go-fs/ftpfs@v1.0.0-rc.4
 ```
 
 ## Usage
@@ -232,9 +232,13 @@ and open readers, and afterwards every method returns
   a FIFO, a device or a socket, or one whose year doesn't have four digits,
   which a client that can write into the directory and set the modification
   time of its link could use to hide the link's line. So `RemoveAll` counts
-  the lines of the listings that tell a directory from a link and fails if
-  the library dropped one, other than an empty line or the `total N` line
-  of `ls -l`. FTP servers on Windows (IIS with
+  the lines of the listings that tell a directory from a link, on servers
+  with MLST support the listing of the parent of every directory whose
+  `DELE` failed and on servers without it the listing of every directory
+  it removes, and fails if the library dropped one, other than an empty
+  line or the `total N` line of `ls -l`. On servers without MLST support
+  the listing of the parent directory, which tells whether the passed path
+  itself is a directory, is not counted. FTP servers on Windows (IIS with
   listings in the DOS format, and FileZilla Server or IIS with listings in
   the Unix format, which list junctions and links to directories as
   directories) and ProFTPD with `ShowSymlinks off` list a link to a

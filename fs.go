@@ -112,7 +112,7 @@ func JoinCleanFilePath(uriParts ...string) File {
 // time and permissions of source, which may be source on a case-insensitive
 // server. A move between a SubFileSystem and its parent that is not local
 // uses the native Move of the parent if it has one, except for a symbolic
-// link to a file. The root directory of a SubFileSystem is never moved,
+// link. The root directory of a SubFileSystem is never moved,
 // that is an error wrapping [os.ErrInvalid].
 //
 // The copy-then-delete fallback replaces a symbolic link at destination,
