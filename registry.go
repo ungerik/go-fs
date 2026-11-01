@@ -104,12 +104,6 @@ func Register(fileSystem FileSystem) error {
 	if prefixes[0] == "" {
 		return fmt.Errorf("can't register file system with empty prefix: %s", fileSystem)
 	}
-	for _, prefix := range prefixes {
-		if strings.Contains(prefix, PrefixSeparator) && !hasURIScheme(prefix) {
-			// After Unregister its URIs would be local paths, see hasURIScheme
-			return fmt.Errorf("%w: can't register the prefix %s with a separator before %q", os.ErrInvalid, fsimpl.RedactURI(prefix), PrefixSeparator)
-		}
-	}
 
 	registryMtx.Lock()
 	defer registryMtx.Unlock()
@@ -117,7 +111,23 @@ func Register(fileSystem FileSystem) error {
 	return registerLocked(&registryEntry{fs: fileSystem}, prefixes)
 }
 
+// validateRegisterPrefix returns an error wrapping os.ErrInvalid
+// for a prefix with a slash or backslash before its "://".
+// While the file system is registered such a prefix would match,
+// but after Unregister its URIs would be local paths, see hasURIScheme.
+func validateRegisterPrefix(prefix string) error {
+	if strings.Contains(prefix, PrefixSeparator) && !hasURIScheme(prefix) {
+		return fmt.Errorf("%w: can't register the prefix %s with a separator before %q", os.ErrInvalid, fsimpl.RedactURI(prefix), PrefixSeparator)
+	}
+	return nil
+}
+
 func registerLocked(entry *registryEntry, prefixes []string) error {
+	for _, prefix := range prefixes {
+		if err := validateRegisterPrefix(prefix); err != nil {
+			return err
+		}
+	}
 	for _, prefix := range prefixes {
 		if existing, ok := registry[prefix]; ok {
 			if sameFileSystem(existing.fs, entry.fs) {
@@ -175,6 +185,8 @@ func unregisterLocked(fileSystem FileSystem) bool {
 // unless it failed after the ctx of its caller ended: then a waiting
 // call whose ctx is still alive calls create itself.
 // The file system returned by create must have the passed prefix.
+// A prefix with a slash or backslash before its "://" is an error
+// wrapping os.ErrInvalid like for Register, returned before create is called.
 //
 // Every successful call must be paired with a call of the returned free function,
 // which is safe to call more than once. When the last reference is freed,
@@ -185,6 +197,9 @@ func unregisterLocked(fileSystem FileSystem) bool {
 func EnsureRegistered(ctx context.Context, prefix string, create func(context.Context) (FileSystem, error)) (fileSystem FileSystem, free func() error, err error) {
 	if prefix == "" {
 		return nil, nil, fmt.Errorf("EnsureRegistered: empty prefix")
+	}
+	if err = validateRegisterPrefix(prefix); err != nil {
+		return nil, nil, err
 	}
 	for {
 		if err = ctx.Err(); err != nil {

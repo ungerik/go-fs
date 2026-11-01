@@ -11,6 +11,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -566,4 +567,38 @@ func Test_isConnectionError(t *testing.T) {
 	assert.True(t, isConnectionError(io.EOF))
 	assert.True(t, isConnectionError(fmt.Errorf("read: %w", net.ErrClosed)))
 	assert.True(t, isConnectionError(os.ErrDeadlineExceeded))
+}
+
+// TestLineCounter checks that lineCounter counts the lines of a listing
+// like bufio.ScanLines splits them, also when a read ends inside a line,
+// without empty lines and the "total N" line of "ls -l", and with the last
+// line that has no line feed.
+func TestLineCounter(t *testing.T) {
+	long := strings.Repeat("x", maxIgnoredLine+1)
+	for _, tc := range []struct {
+		name   string
+		chunks []string
+		want   int
+	}{
+		{name: "empty listing", want: 0},
+		{name: "CRLF lines", chunks: []string{"a\r\nb\r\n"}, want: 2},
+		{name: "last line without line feed", chunks: []string{"a\nb"}, want: 2},
+		{name: "reads end inside lines", chunks: []string{"drwx", "r-xr-x a\r", "\n-rw", "-r--r-- b\r\n"}, want: 2},
+		{name: "total line", chunks: []string{"total 8\r\na\r\n"}, want: 1},
+		{name: "total line split over reads", chunks: []string{"tot", "al 12", "\r\na\r\n"}, want: 1},
+		{name: "empty and blank lines", chunks: []string{"\r\n  \r\na\n\n"}, want: 1},
+		{name: "total without digits", chunks: []string{"total \r\ntotal x\r\n"}, want: 2},
+		{name: "long line", chunks: []string{long + "\r\n"}, want: 1},
+		{name: "long line that starts like a total line", chunks: []string{"total 1", long, "\r\n"}, want: 1},
+		{name: "long line without line feed", chunks: []string{long}, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var lines lineCounter
+			for _, chunk := range tc.chunks {
+				lines.write([]byte(chunk))
+			}
+			lines.endLine()
+			assert.Equal(t, tc.want, lines.count)
+		})
+	}
 }

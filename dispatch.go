@@ -610,6 +610,9 @@ func fsMove(ctx context.Context, fileSystem FileSystem, srcPath, destPath string
 // and removing the source after the copy completely succeeded,
 // so a failed or canceled copy never deletes the source.
 // The partial copy of a failed directory copy is left at destPath.
+// A write-only destFS is an error wrapping [ErrWriteOnlyFileSystem],
+// because a copy into it, like into an archive writer, is only complete
+// when destFS is closed, after the source would have been removed.
 //
 // destPath is the final path with the overwrite semantics of
 // [MoveFileSystem.Move]: an existing file is replaced
@@ -691,6 +694,28 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	if _, err := fsWritable(destFS); err != nil {
 		return err
 	}
+	if readable, _ := destFS.ReadableWritable(); !readable {
+		// Like a zipfs or tarfs Writer, which completes the archive only
+		// in its Close, so the source would be removed before its copy is
+		// written, and a failing Close would lose it
+		return fmt.Errorf("%s: %w: can't move %s into it, copy it and remove the source after the file system is closed", destFS.Name(), ErrWriteOnlyFileSystem, errSubject(fsFile(srcFS, srcPath)))
+	}
+	// The root directory of a SubFileSystem can't be moved like by
+	// SubFileSystem.Move, also not by copying it before its removal fails
+	for fileSystem, filePath := srcFS, srcPath; ; {
+		sub, isSub := fileSystem.(*SubFileSystem)
+		if !isSub {
+			break
+		}
+		parentPath, err := sub.parentPath(filePath)
+		if err != nil {
+			break
+		}
+		if parentPath == sub.dir {
+			return fmt.Errorf("%w: can't move the root directory of %s", os.ErrInvalid, sub)
+		}
+		fileSystem, filePath = sub.parent, parentPath
+	}
 	srcInfo, err := fsLstat(srcFS, srcPath)
 	if err != nil {
 		return err
@@ -730,7 +755,27 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	// The entry that the source shows, see fsReadTarget, for all checks
 	// below: through an OverlayFileSystem it costs Lstats of the layers
 	srcRead, srcReadPath, srcViaOverlay, readOK := fsReadTarget(srcFS, srcPath)
-	if _, srcIsLocal := srcRead.(*LocalFileSystem); readOK && srcIsLocal {
+	_, srcIsLocal := srcRead.(*LocalFileSystem)
+	if _, nativeMove := srcRead.(MoveFileSystem); readOK && !srcIsLocal && !srcViaOverlay && !srcIsLink && nativeMove {
+		// Between SubFileSystems of a file system that is not local and its
+		// parent, the native Move of the parent renames on the server, which
+		// tells another name of the same directory entry from another file,
+		// like another case or Unicode normalization of the name, also
+		// through a link to a parent directory, which a copy can't tell, see
+		// copyFileTo, and removing the source would remove such a copy.
+		// A symbolic link is handled like between other file systems: a link
+		// to a file is copied as file, a link to a directory is an error.
+		if destTarget, destTargetPath, destViaOverlay, ok := writeTarget(destFS, destPath); ok && !destViaOverlay && srcRead == destTarget {
+			// Like Move checks the parent directories of a native move
+			if dir, _ := fsSplitDirAndName(destFS, destPath); dir != "" {
+				if err := validateNewDirs(destFS, dir); err != nil {
+					return fmt.Errorf("can't move %.200q to %.200q: %w", errSubject(src), errSubject(dest), err)
+				}
+			}
+			return fsMove(ctx, srcRead, srcReadPath, destTargetPath)
+		}
+	}
+	if readOK && srcIsLocal {
 		// The local paths of both, like fsLocalPaths tells them
 		srcLocal := srcReadPath
 		destLocal, destViaOverlay, destIsLocal := fsLocalPath(destFS, destPath)
@@ -792,31 +837,49 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	case srcIsDir:
 		return NewErrIsNotDirectory(dest)
 	case !destInfo.IsSymlink:
-		if srcIsLink {
-			// A move of the link onto the file that it points to would replace
-			// the file with the link: the link would then point to itself and
-			// the file would be gone, so mv refuses to move them as the same
-			// file. Local paths, also of the
-			// local layers of an OverlayFileSystem, are compared like by
-			// LocalFileSystem.Move, see isLocalLinkOntoTarget, because the local
-			// file system can resolve the link to another path than the overlay,
-			// a file with other hard links is kept by them and replaced like any
-			// other file. Within one other file system the paths are compared
-			// with every symbolic link resolved, see fsEvalSymlinks, a link that
-			// can't be resolved doesn't point to destPath.
-			linkOntoTarget := false
-			if srcLocal, destLocal, _, bothLocal := fsLocalPaths(srcFS, srcPath, destFS, destPath); bothLocal {
+		// A move of a link onto the file that it points to would replace
+		// the file with the link: the link would then point to itself and
+		// the file would be gone, so mv refuses to move them as the same
+		// file. Local paths, also of the
+		// local layers of an OverlayFileSystem, are compared like by
+		// LocalFileSystem.Move, see isLocalLinkOntoTarget, because the local
+		// file system can resolve the link to another path than the overlay,
+		// a file with other hard links is kept by them and replaced like any
+		// other file. Within one other file system the paths are compared
+		// with every symbolic link resolved, see fsEvalSymlinks, a link that
+		// can't be resolved doesn't point to destPath. There also a file that
+		// destPath reaches through a link to a parent directory is the same
+		// file, also through SubFileSystems, which copyFileTo would take for
+		// a copy onto itself, so the source would be removed.
+		sameFile := false
+		if srcLocal, destLocal, _, bothLocal := fsLocalPaths(srcFS, srcPath, destFS, destPath); bothLocal {
+			if srcIsLink {
 				destLocalInfo, lstatErr := os.Lstat(destLocal)
-				linkOntoTarget = lstatErr == nil && isLocalLinkOntoTarget(srcLocal, destLocalInfo)
-			} else if srcFS == destFS {
-				if srcResolved, srcResolvedOK := fsEvalSymlinks(srcFS, srcPath); srcResolvedOK {
-					destResolved, destResolvedOK := fsEvalSymlinks(destFS, destPath)
-					linkOntoTarget = destResolvedOK && srcResolved == destResolved
+				sameFile = lstatErr == nil && isLocalLinkOntoTarget(srcLocal, destLocalInfo)
+			}
+		} else {
+			// One file system that is not local, also through SubFileSystems
+			var evalFS FileSystem
+			evalSrc, evalDest := srcPath, destPath
+			if srcFS == destFS {
+				evalFS = srcFS
+			} else if destTarget, destTargetPath, _, ok := writeTarget(destFS, destPath); ok && readOK && srcRead == destTarget {
+				evalFS, evalSrc, evalDest = srcRead, srcReadPath, destTargetPath
+			}
+			if evalFS != nil {
+				sameFile = isSameEvaluatedPath(evalFS, evalSrc, evalDest)
+				if !sameFile && !moveLink && strings.EqualFold(evalSrc, evalDest) && isSameFileInfo(srcInfo, destInfo) {
+					// Another case of the name on a case-insensitive server,
+					// which removing the source would remove, can't be told
+					// from another file with the same size, modification time
+					// and permissions. Another hard link of the file keeps the
+					// copy, which copyFileTo writes next to it, see mayBeSrc.
+					return fmt.Errorf("%w: %s and %s may be the same file under another case of its name", os.ErrInvalid, errSubject(src), errSubject(dest))
 				}
 			}
-			if linkOntoTarget {
-				return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
-			}
+		}
+		if sameFile {
+			return fmt.Errorf("%w: %s and %s are the same file", os.ErrInvalid, errSubject(src), errSubject(dest))
 		}
 		if !moveLink && isSpecialFile(dest, destInfo) {
 			// A link replaces it like os.Rename, a copy would write into it
@@ -841,8 +904,13 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 				return err
 			}
 		}
-		// The Lstat above told that dest is no directory
-		err = copyFileTo(ctx, src, srcInfo.Permissions, dest, &c.buf, nil, true, true)
+		// The Lstat above told that dest is no directory,
+		// and a removed link leaves no file
+		fileInfo := destInfo
+		if restoreLink != nil {
+			fileInfo = nil
+		}
+		err = copyFileTo(ctx, src, srcInfo, dest, &c.buf, nil, true, fileInfo, true)
 		if err != nil && restoreLink != nil {
 			err = errors.Join(err, restoreLink())
 		}
@@ -917,6 +985,18 @@ func fsEvalSymlinks(fileSystem FileSystem, filePath string) (string, bool) {
 		pending = append(elems, pending...)
 	}
 	return resolved, true
+}
+
+// isSameEvaluatedPath reports if the paths a and b of fileSystem are one
+// path with every symbolic link resolved, see fsEvalSymlinks.
+// A path whose links can't be resolved is no path of the other.
+func isSameEvaluatedPath(fileSystem FileSystem, a, b string) bool {
+	aResolved, ok := fsEvalSymlinks(fileSystem, a)
+	if !ok {
+		return false
+	}
+	bResolved, ok := fsEvalSymlinks(fileSystem, b)
+	return ok && aResolved == bResolved
 }
 
 // isSubPath reports if filePath is inside the directory dirPath

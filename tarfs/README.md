@@ -101,10 +101,13 @@ err = out.Close()
   a backslash, which is rejected so archives stay portable, with a NUL
   character, which a tar header can't hold, or that is not valid UTF-8, which
   the PAX format requires, returns an error wrapping `os.ErrInvalid`. The
-  writer implements `fs.ValidateNameFileSystem`, so a copy or move into it
+  writer implements `fs.ValidateNameFileSystem`, so a copy into it
   checks the names it writes first and fails before it writes anything.
   `Close` writes the end-of-archive marker and closes the gzip stream — an
-  archive whose writer was not closed is incomplete.
+  archive whose writer was not closed is incomplete. So `fs.Move` into the
+  writer fails with `fs.ErrWriteOnlyFileSystem` before it copies anything,
+  it would remove the source before `Close`: copy, close, then remove the
+  source.
 - **Permissions and times.** Written entries get the current time and the
   passed permissions, or `tarfs.DefaultPermissions` /
   `tarfs.DefaultDirPermissions`. Read entries report the permissions and

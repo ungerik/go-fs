@@ -9,7 +9,7 @@ built on [github.com/pkg/sftp](https://github.com/pkg/sftp) and
 Get the backend together with the go-fs core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.3 github.com/ungerik/go-fs/sftpfs@v1.0.0-rc.3
+go get github.com/ungerik/go-fs@v1.0.0-rc.4 github.com/ungerik/go-fs/sftpfs@v1.0.0-rc.4
 ```
 
 ## Usage
@@ -178,7 +178,9 @@ they are.
   generic emulation of the `fs` package. Append writers start at the end
   of the file, also on servers that write at the offset the client sends.
 - **Move.** An existing file at the destination is replaced, atomically
-  with the `posix-rename@openssh.com` extension (OpenSSH). Without the
+  with the `posix-rename@openssh.com` extension (OpenSSH). With the
+  extension, a move of a file onto another hard link of it returns nil and
+  leaves both names, like rename(2). Without the
   extension the destination file is removed before the rename, so for a
   moment neither file exists there, and if the rename fails the destination
   is gone. If the destination may be the source under another name, like

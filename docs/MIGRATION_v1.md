@@ -197,6 +197,10 @@ exact signatures. Changes compared to v0.1:
   Moving a directory into itself fails with an error wrapping `os.ErrInvalid`.
 - A failed or canceled copy aborts uploads that commit on `Close`, returns
   the error of `Close`, and never deletes the source of a move.
+- `fs.Move` into a write-only file system, like a zipfs writer, fails with
+  an error wrapping `fs.ErrWriteOnlyFileSystem` before it copies anything;
+  v0.1 removed the source before `Close` wrote the archive. Copy with
+  `fs.CopyRecursive`, close the writer, then remove the source.
 - `fs.CopyRecursive` patterns filter only files, sub-directories are always
   copied.
 - A copy from a read-only file system (`CopyFile`, `CopyRecursive`, moves

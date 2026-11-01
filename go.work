@@ -2,12 +2,12 @@ go 1.26.0
 
 use (
 	.
+	./azureblobfs
 	./dropboxfs
 	./ftpfs
 	./s3fs
 	./sftpfs
+	./smbfs
 	./tools
 	./webdavfs
-	./smbfs
-	./azureblobfs
 )

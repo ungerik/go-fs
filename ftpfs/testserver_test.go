@@ -63,9 +63,12 @@ type testFTPServer struct {
 	listOmits        string            // LIST, not MLSD, of the parent directory leaves out the entry at this path
 	listForged       map[string]int    // LIST, not MLSD, of the parent directory adds this many lines that list the entry at the path as a directory, like a file whose name contains a line feed followed by such a line
 	listForgedFirst  bool              // the lines of listForged come before the lines of the entries, like for a file whose name sorts first
+	listUnparsable   string            // LIST, not MLSD, of the parent directory lists the entry at this path with a five-digit year, a line that the FTP client library drops
+	listTotal        bool              // LIST of a directory starts with a "total N" line like "ls -l"
 	globArgs         bool              // LIST expands glob characters in its path argument like ProFTPD with UseGlobbing and lists the first directory that matches
 	listArgPaths     bool              // LIST takes its argument for a path without parsing options like "-a", like ftpserverlib with DisableLISTArgs
 	pwdReply         string            // PWD is answered with this reply if not empty, like a 550 or a 257 with a relative path
+	refuseCWD        string            // CWD to this clean absolute path is refused with 550
 	mlstReplies      map[string]string // MLST of the clean absolute path is answered with this failure reply
 	dropBefore       map[string]int    // the next commands with the verb close the connection without executing them
 	dropAt           map[string]int    // the command with the verb that the server receives as the nth one, counted in commands, closes the connection without executing it
@@ -567,7 +570,8 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 		rntoNoReplace := s.rntoNoReplace
 		dotEntries, lsArgs, statArgs := s.dotEntries, s.lsArgs, s.statArgs
 		listOmits, globArgs, listArgPaths := s.listOmits, s.globArgs, s.listArgPaths
-		pwdReply := s.pwdReply
+		listUnparsable, listTotal := s.listUnparsable, s.listTotal
+		pwdReply, refuseCWD := s.pwdReply, s.refuseCWD
 		if target, ok := s.linkBefore[verb+" "+abs(arg)]; ok {
 			delete(s.linkBefore, verb+" "+abs(arg))
 			s.replaceWithLink(abs(arg), target)
@@ -630,6 +634,10 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			cwd = path.Dir(cwd)
 			reply("250 ok")
 		case "CWD":
+			if refuseCWD != "" && abs(arg) == refuseCWD {
+				reply("550 permission denied")
+				continue
+			}
 			s.mu.Lock()
 			p := s.follow(abs(arg))
 			node, ok := s.nodes[p]
@@ -810,6 +818,9 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 			p = s.follow(p)
 			node, ok := s.nodes[p]
 			var lines []string
+			if ok && node.isDir && verb == "LIST" && listTotal {
+				lines = append(lines, "total 8")
+			}
 			if ok && node.isDir && dotEntries {
 				parent := s.nodes[path.Dir(p)]
 				if verb == "MLSD" {
@@ -826,6 +837,11 @@ func (s *testFTPServer) handle(rawConn net.Conn) {
 					}
 					if verb == "MLSD" {
 						lines = append(lines, fmt.Sprintf("%s %s", s.mlsdFact(path.Join(p, name), child), name))
+					} else if path.Join(p, name) == listUnparsable {
+						// A modification time in the year 10000
+						line := listLine(child, name)
+						date := child.modified.UTC().Format("Jan _2 15:04")
+						lines = append(lines, strings.Replace(line, date, date[:7]+"10000", 1))
 					} else {
 						lines = append(lines, listLine(child, name))
 					}

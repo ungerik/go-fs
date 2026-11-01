@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"net/textproto"
+	"path"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +33,7 @@ type conn struct {
 	sent   bool // a command that must not run twice was sent in the current operation
 	broken bool // the connection must not be used anymore
 	reads  int64
+	home   string // the working directory after the login, read by list with PWD
 
 	mtx      sync.Mutex
 	ctx      context.Context // of the running operation, for dialing data connections
@@ -38,6 +41,7 @@ type conn struct {
 	data     net.Conn
 	dataHost string
 	aborted  bool
+	lines    *lineCounter // counts the lines of the data connections of listChecked
 }
 
 // ctrlConn is the TCP control connection below TLS.
@@ -147,11 +151,17 @@ func (c *conn) dialFunc(network, addr string) (net.Conn, error) {
 	if c.aborted {
 		_ = netConn.SetDeadline(pastDeadline)
 	}
+	lines := c.lines
 	c.mtx.Unlock()
+	dataConn := netConn
 	if c.cfg.secure {
-		return tls.Client(netConn, c.cfg.tlsConfig), nil
+		dataConn = tls.Client(netConn, c.cfg.tlsConfig)
 	}
-	return netConn, nil
+	if lines != nil {
+		// The lines that the client library reads, after TLS
+		dataConn = &lineCountConn{Conn: dataConn, lines: lines}
+	}
+	return dataConn, nil
 }
 
 // dialControl dials the control connection.
@@ -253,6 +263,142 @@ func (c *conn) run(ctx context.Context, op func() error) error {
 		c.broken = true
 	}
 	return err
+}
+
+// globChars are the characters that servers like wu-ftpd and ProFTPD with
+// UseGlobbing expand in the path argument of LIST: the glob characters, the
+// braces and the tilde of csh, and the backslash that escapes them.
+const globChars = "*?[{~\\"
+
+// list lists the directory dirPath with List. On a server without MLST
+// support, which lists with LIST, a path with one of the globChars, which
+// servers like wu-ftpd and ProFTPD with UseGlobbing but without mod_facts
+// expand to another directory, or with a first character '-', which servers
+// can take for options, is listed after a CWD to it with LIST without a path
+// argument, and the working directory is changed back to the one after the
+// login with CWD, which relative paths resolve against. The CWD is sent with
+// the absolute path, so a relative one resolves against that directory, which
+// list reads with PWD on its first use. If the CWD back fails, the
+// connection is aborted and the error is a connection error. A CWD to a path that is no directory fails like
+// LIST of a missing directory, which the callers handle like before.
+// Servers with MLST support list with MLSD, whose argument is no pattern.
+func (c *conn) list(dirPath string) ([]*ftp.Entry, error) {
+	if c.hasMLST() || (!strings.ContainsAny(dirPath, globChars) && !strings.HasPrefix(dirPath, "-")) {
+		return c.List(dirPath)
+	}
+	if c.home == "" {
+		home, err := c.CurrentDir()
+		if err != nil {
+			return nil, err
+		}
+		if !path.IsAbs(home) {
+			return nil, fmt.Errorf("ftpfs: PWD replied %q, which is no absolute path to resolve %s against", home, dirPath)
+		}
+		c.home = home
+	}
+	absDir := dirPath
+	if !path.IsAbs(absDir) {
+		absDir = path.Join(c.home, dirPath)
+	}
+	if err := c.ChangeDir(absDir); err != nil {
+		return nil, err
+	}
+	entries, err := c.List("")
+	if cwdErr := c.ChangeDir(c.home); cwdErr != nil {
+		// The next relative paths would resolve against absDir, so every
+		// following command fails, like for a lost connection, which ends
+		// the operation and replaces the connection
+		c.abort()
+		return nil, fmt.Errorf("ftpfs: changing back to the working directory %s after listing %s failed, the connection is closed: %w", c.home, absDir, errors.Join(cwdErr, net.ErrClosed))
+	}
+	return entries, err
+}
+
+// listChecked lists dirPath with list, like with LIST, and returns an error
+// if the FTP client library dropped a line of the listing, which it does
+// without an error for a line that it can't parse, like the line of a FIFO,
+// a device or a socket, or one whose year doesn't have four digits. A client
+// that can write into the directory could hide the line of its symbolic link
+// that way, see remover.removeFolder. Empty lines and the "total N" line of
+// "ls -l" list no entry and are not counted, see lineCounter.
+func (c *conn) listChecked(dirPath string) ([]*ftp.Entry, error) {
+	lines := new(lineCounter)
+	c.mtx.Lock()
+	c.lines = lines
+	c.mtx.Unlock()
+	defer func() {
+		c.mtx.Lock()
+		c.lines = nil
+		c.mtx.Unlock()
+	}()
+	entries, err := c.list(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	lines.endLine()
+	if lines.count != len(entries) {
+		return nil, fmt.Errorf("ftpfs: the listing has %d lines that are not empty and not \"total N\", but the FTP client library parsed %d entries: it drops lines that it can't parse, like the line of a FIFO or one whose year doesn't have four digits", lines.count, len(entries))
+	}
+	return entries, nil
+}
+
+// lineCountConn is a data connection that counts
+// the lines that are read from it with lines.
+type lineCountConn struct {
+	net.Conn
+	lines *lineCounter
+}
+
+func (c *lineCountConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	c.lines.write(b[:n])
+	return n, err
+}
+
+// lineCounter counts the lines of a listing like the FTP client library
+// splits it, with bufio.ScanLines at every line feed, without the lines
+// that list no entry: empty lines and the "total N" line of "ls -l".
+type lineCounter struct {
+	count int
+	start []byte // the start of the current line, up to maxIgnoredLine bytes
+	long  bool   // the current line is longer than maxIgnoredLine bytes
+}
+
+// maxIgnoredLine is the number of bytes that lineCounter keeps of a line,
+// a longer line is never one of the lines that list no entry.
+const maxIgnoredLine = 64
+
+func (l *lineCounter) write(b []byte) {
+	for len(b) > 0 {
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			l.add(b)
+			return
+		}
+		l.add(b[:i])
+		l.endLine()
+		b = b[i+1:]
+	}
+}
+
+func (l *lineCounter) add(b []byte) {
+	if len(l.start)+len(b) > maxIgnoredLine {
+		l.long = true
+		return
+	}
+	l.start = append(l.start, b...)
+}
+
+// endLine counts the current line, also the last one without a line feed,
+// unless it lists no entry, and starts the next one.
+func (l *lineCounter) endLine() {
+	line := bytes.TrimSpace(l.start)
+	digits, isTotal := bytes.CutPrefix(line, []byte("total "))
+	isTotal = isTotal && len(digits) > 0 && len(bytes.Trim(digits, "0123456789")) == 0
+	if l.long || (len(line) > 0 && !isTotal) {
+		l.count++
+	}
+	l.start, l.long = l.start[:0], false
 }
 
 // beforeMutation must be called by an operation right before it sends a

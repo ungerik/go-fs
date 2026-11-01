@@ -44,7 +44,17 @@ move the bytes through your process. Copying a file onto itself is a no-op,
 on every file system also through a `SubFileSystem` or the layer of an
 `OverlayFileSystem` that holds the file, compared by path, and for a local
 file also through another path to it, like a symbolic link or a hard link,
-which would otherwise truncate the file while it is read. Like the other checks of
+which would otherwise truncate the file while it is read. Within one other
+file system with symbolic links, like `sftpfs` or `smbfs`, an existing
+destination is compared with every link resolved, so a link to the file or
+a path through a link to a parent directory is a no-op too. Within one file
+system that is not local and has no native `CopyFile`, like `sftpfs`,
+`smbfs` and `ftpfs`, a hard link or another case of the name can't be told
+from another file: a destination with the size, modification time and
+permissions of the source is written as a new file in its directory that
+then replaces it, so the source is never truncated. That needs the
+permission to create, rename and remove files in that directory, and the
+replaced file gets the owner and permissions of a new file. Like the other checks of
 the destination it is done by path before the destination is opened, so it
 assumes that nobody else changes the destination during the copy.
 
@@ -173,9 +183,15 @@ systems:
 - Same file system: the native `Move` if the backend has one, otherwise copy
   then delete.
 - Different file systems: copy then delete.
+- A `SubFileSystem` and its parent that is not local: the native `Move` of
+  the parent if it has one, which renames on the server, except for
+  a symbolic link, which is handled like between different file systems.
 
 The source is only deleted after the copy completely succeeded, so a failed or
-canceled copy never loses the source.
+canceled copy never loses the source. A write-only destination, like a
+`zipfs` or `tarfs` writer, is an error wrapping `fs.ErrWriteOnlyFileSystem`
+before anything is copied, because the archive is only written by `Close`,
+after `Move` would have removed the source.
 
 The destination rules:
 
@@ -224,7 +240,15 @@ More behaviours to rely on:
   disk. Only a local file with other hard links, which keep it, is
   replaced by the link. On Windows, where the link count is unknown, the move
   is always refused, and so it is over SFTP and SMB, which report no link
-  count either.
+  count either. Within one other file system, also through a `SubFileSystem`
+  and its parent, the copy then delete fallback also refuses a file that the
+  other path reaches through a link to a parent directory, on `sftpfs` and
+  `smbfs`, and a destination that only differs in case and has the size,
+  modification time and permissions of the source, which may be the source
+  on a case-insensitive server, also on `s3fs`, which has no native `Move`.
+- **The root directory of a `SubFileSystem` is never moved:** `Move` of it
+  is an error wrapping `os.ErrInvalid` before anything is copied, also to
+  another file system.
 - **Moving a directory into itself** or one of its sub-directories is an error
   wrapping `os.ErrInvalid`, like `os.Rename`, on every file system also
   through a `SubFileSystem` or into either layer of an `OverlayFileSystem`

@@ -649,3 +649,62 @@ func TestValidateName(t *testing.T) {
 		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%q", name)
 	}
 }
+
+// TestCopyFile_HardLinkAndCaseAlias is a regression test: fs.CopyFile of
+// a file onto another hard link of it, or onto another case of its name,
+// which Samba matches to the same file, truncated the file before it was
+// read, because SMB reports no file identities that go-smb2 exposes. The
+// copy is written to a new file that replaces the destination.
+func TestCopyFile_HardLinkAndCaseAlias(t *testing.T) {
+	if !dockerSMBAvailable {
+		t.Skip("Docker Samba server not available")
+	}
+	ctx := t.Context()
+	smbFS, err := Dial(ctx, testSMBAddress, &Options{Username: testUsername, Password: testPassword})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = smbFS.Close() })
+	require.NoError(t, fs.Register(smbFS))
+	dir := smbFS.RootDir().Join("hardlink-test")
+	require.NoError(t, dir.MakeAllDirs())
+	t.Cleanup(func() { _ = dir.RemoveRecursive(context.WithoutCancel(ctx)) })
+	file := dir.Join("file.txt")
+	require.NoError(t, file.WriteAllString(ctx, "content"))
+	hardLink := dir.Join("hardlink.txt")
+	link := func() {
+		t.Helper()
+		out, err := exec.CommandContext(ctx, "docker", "exec", testContainerName, "ln", "-f", "/share/hardlink-test/file.txt", "/share/hardlink-test/hardlink.txt").CombinedOutput()
+		require.NoError(t, err, "ln: %s", out)
+	}
+	link()
+
+	require.NoError(t, fs.CopyFile(ctx, file, hardLink))
+	requireSMBContent(t, file, "content")
+	requireSMBContent(t, hardLink, "content")
+	require.NoError(t, fs.CopyFile(ctx, file, dir.Join("FILE.TXT")), "another case of the name")
+	requireSMBContent(t, file, "content")
+	assert.ElementsMatch(t, []string{"file.txt", "hardlink.txt"}, smbNames(t, dir), "no temporary file is left")
+
+	// Samba refuses to rename a file onto another hard link of it,
+	// the move fails and keeps both names
+	link()
+	require.Error(t, fs.Move(ctx, file, hardLink))
+	requireSMBContent(t, file, "content")
+	requireSMBContent(t, hardLink, "content")
+}
+
+func requireSMBContent(t *testing.T, file fs.File, want string) {
+	t.Helper()
+	data, err := file.ReadAllString(t.Context())
+	require.NoError(t, err, "reading %s", file)
+	require.Equal(t, want, data, "content of %s", file)
+}
+
+func smbNames(t *testing.T, dir fs.File) []string {
+	t.Helper()
+	var names []string
+	require.NoError(t, dir.ListDir(t.Context(), func(file fs.File) error {
+		names = append(names, file.Name())
+		return nil
+	}))
+	return names
+}

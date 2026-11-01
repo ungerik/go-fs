@@ -348,6 +348,30 @@ func TestZipReader_CP437Names(t *testing.T) {
 	assert.Equal(t, []string{"dir/", "dir/Müller.pdf"}, zipEntryNames(t, copied))
 }
 
+// TestZipWriter_MoveRefused is a regression test: fs.Move into a Writer
+// removed the source as soon as its entry was in the stream of the
+// writer, so a failing Close, which writes the archive, lost the moved
+// files. The move is refused before anything is written.
+func TestZipWriter_MoveRefused(t *testing.T) {
+	ctx := t.Context()
+	memFS := newMemFS(t)
+	src := memFS.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	require.NoError(t, src.Join("a.txt").WriteAllString(ctx, "a"))
+	zipFile := memFS.RootDir().Join("moved.zip")
+	zipWriter, err := NewWriter(zipFile, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(zipWriter))
+
+	err = fs.Move(ctx, src, zipWriter.RootDir().Join("src"))
+	require.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem)
+	assert.ErrorContains(t, err, "/src", "the error names the source")
+	require.ErrorIs(t, src.Join("a.txt").MoveTo(ctx, zipWriter.RootDir().Join("a.txt")), fs.ErrWriteOnlyFileSystem)
+	assert.True(t, src.Join("a.txt").Exists(), "the source is kept")
+	require.NoError(t, zipWriter.Close())
+	assert.Empty(t, zipEntryNames(t, zipFile), "nothing was written")
+}
+
 // TestZipWriter_ValidateName is a regression test: a copy or move into a
 // zipfs.Writer failed at the first name that the writer rejects, like a
 // name with a colon, and left the files copied until then in the archive.
@@ -379,14 +403,14 @@ func TestZipWriter_ValidateName(t *testing.T) {
 	err = fs.CopyRecursive(ctx, src, zipWriter.RootDir().Join("copy"))
 	assert.ErrorIs(t, err, os.ErrInvalid)
 	assert.ErrorContains(t, err, "contains a colon")
-	assert.ErrorIs(t, fs.Move(ctx, src, zipWriter.RootDir().Join("moved")), os.ErrInvalid)
+	assert.ErrorIs(t, fs.Move(ctx, src, zipWriter.RootDir().Join("moved")), fs.ErrWriteOnlyFileSystem, "a move into the archive is refused")
 	err = fs.CopyFile(ctx, src.Join("a.txt"), zipWriter.RootDir().Join("bad:dir", "x.txt"))
 	assert.ErrorIs(t, err, os.ErrInvalid)
 	assert.ErrorContains(t, err, "contains a colon")
 	assert.True(t, src.Join("a.txt").Exists(), "the source of a failed move is kept")
 	// A new path is checked before its parent directories are written
 	assert.ErrorIs(t, fs.CopyFile(ctx, src.Join("a.txt"), zipWriter.RootDir().Join("newdir", "x:y.txt")), os.ErrInvalid)
-	assert.ErrorIs(t, fs.Move(ctx, src.Join("a.txt"), zipWriter.RootDir().Join("moved", "c:d.txt")), os.ErrInvalid)
+	assert.ErrorIs(t, fs.Move(ctx, src.Join("a.txt"), zipWriter.RootDir().Join("moved", "c:d.txt")), fs.ErrWriteOnlyFileSystem)
 	require.NoError(t, zipWriter.Close())
 	assert.Empty(t, zipEntryNames(t, zipFile), "nothing was written before the failures")
 }

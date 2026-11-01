@@ -374,6 +374,29 @@ func TestWriter_MakeAllDirs(t *testing.T) {
 	assertEntryNames(t, tarFile, "a/", "a/b/", "a/b/c/", "a/b/d/", "a/f.txt")
 }
 
+// TestWriter_MoveRefused is a regression test: fs.Move into a Writer
+// removed the source as soon as its entry was in the stream of the
+// writer, so a failing Close, which completes the archive, lost the moved
+// files. The move is refused before anything is written.
+func TestWriter_MoveRefused(t *testing.T) {
+	ctx := t.Context()
+	memFS := newMemFS(t, "/")
+	src := memFS.RootDir().Join("src")
+	require.NoError(t, src.MakeDir())
+	require.NoError(t, src.Join("a.txt").WriteAllString(ctx, "a"))
+	tarFile := memFS.RootDir().Join("moved.tar")
+	writer, err := NewWriter(tarFile, "")
+	require.NoError(t, err)
+	require.NoError(t, fs.Register(writer))
+
+	err = fs.Move(ctx, src, writer.RootDir().Join("src"))
+	require.ErrorIs(t, err, fs.ErrWriteOnlyFileSystem)
+	require.ErrorIs(t, src.Join("a.txt").MoveTo(ctx, writer.RootDir().Join("a.txt")), fs.ErrWriteOnlyFileSystem)
+	assert.True(t, src.Join("a.txt").Exists(), "the source is kept")
+	require.NoError(t, writer.Close())
+	assertEntryNames(t, tarFile)
+}
+
 // TestWriter_ValidateName verifies that the writer rejects the names that
 // a tar archive can't hold, also with ValidateName, so a copy into the
 // archive fails before it writes anything.
@@ -405,7 +428,7 @@ func TestWriter_ValidateName(t *testing.T) {
 	err = fs.CopyRecursive(ctx, src, writer.RootDir().Join("copy"))
 	assert.ErrorIs(t, err, os.ErrInvalid)
 	assert.ErrorContains(t, err, "NUL character", "the error tells why")
-	assert.ErrorIs(t, fs.Move(ctx, src, writer.RootDir().Join("moved")), os.ErrInvalid)
+	assert.ErrorIs(t, fs.Move(ctx, src, writer.RootDir().Join("moved")), fs.ErrWriteOnlyFileSystem, "a move into the archive is refused")
 	assert.True(t, src.Join("a.txt").Exists(), "the source of a failed move is kept")
 	assert.ErrorIs(t, fs.CopyFile(ctx, src.Join("a.txt"), writer.RootDir().Join("dir\xff", "a.txt")), os.ErrInvalid)
 	require.NoError(t, writer.Close())

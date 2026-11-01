@@ -1048,6 +1048,7 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 		failLists string // LIST and MLSD of paths containing it fail
 		listOmits string // LIST of its parent leaves out this path
 		forged    int    // LIST of its parent adds this many lines that list the link as a directory
+		dropped   bool   // LIST of its parent lists the link with a line that the client library drops
 	}{
 		{name: "link below the removed directory", removed: "/tree", link: "/tree/link"},
 		{name: "link in a subdirectory", removed: "/tree", link: "/tree/sub/link"},
@@ -1059,6 +1060,11 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 		{name: "forged directory line for the link", removed: "/tree", link: "/tree/link", forged: 1},
 		{name: "forged directory line for the link at the removed path", removed: "/tree/link", link: "/tree/link", forged: 1},
 		{name: "two directory lines for the link", removed: "/tree", link: "/tree/link", listOmits: "/tree/link", forged: 2},
+		// Regression: the client library dropped the line of the link,
+		// which a year with five digits makes unparsable, so the forged
+		// line was the only entry with its name
+		{name: "dropped link line with a forged directory line", removed: "/tree", link: "/tree/link", dropped: true, forged: 1},
+		{name: "dropped link line with a forged directory line at the removed path", removed: "/tree/link", link: "/tree/link", dropped: true, forged: 1},
 		{name: "link name with an arrow", removed: "/tree", link: "/tree/a -> b"},
 		{name: "forged directory line for a link name with an arrow", removed: "/tree", link: "/tree/a -> b", forged: 1},
 		{name: "forged directory line for a link name with an arrow at the removed path", removed: "/tree/a -> b", link: "/tree/a -> b", forged: 1},
@@ -1075,6 +1081,9 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 				s.failListContains = tc.failLists
 				s.listOmits = tc.listOmits
 				s.listForged[tc.link] = tc.forged
+				if tc.dropped {
+					s.listUnparsable = tc.link
+				}
 			})
 			ftpFS := dialInProcess(t, srv)
 
@@ -1100,6 +1109,7 @@ func TestSymbolicLinks_MLSDRemoveAllRefusedDelete(t *testing.T) {
 				s.failListContains = ""
 				s.listOmits = ""
 				s.listForged = map[string]int{}
+				s.listUnparsable = ""
 			})
 			require.NoError(t, ftpFS.RemoveAll(t.Context(), tc.removed))
 			assert.False(t, srv.exists(tc.removed))
@@ -1594,7 +1604,8 @@ func TestSymbolicLinks_MLSTRemoveRefusedDangling(t *testing.T) {
 // with MLST support changes to the parent directory of every removed
 // directory and lists it with LIST again for every directory, also for
 // several directories in it, see TestRemoveAll_DirectoryReplacedByLink,
-// but checks a directory for an entry named -a only once.
+// and checks the directory for an entry named -a after every listing, so
+// that the check is as fresh as the listing.
 func TestRemoveAll_ListingPerConfirmation(t *testing.T) {
 	srv := newTestFTPServer(t)
 	for _, dir := range []string{"a", "b", "c"} {
@@ -1606,7 +1617,7 @@ func TestRemoveAll_ListingPerConfirmation(t *testing.T) {
 	assert.Empty(t, srv.paths())
 	assert.Equal(t, 4, srv.count("LIST"), "LIST of / for /tree and of /tree for each of /tree/a, /tree/b and /tree/c")
 	assert.Equal(t, []string{"/", "/tree", "/tree", "/tree"}, srv.argsOf("CWD"))
-	assert.Equal(t, []string{"/tree", "/-a", "/tree/-a"}, srv.argsOf("MLST"), "MLST of /tree and one check of each directory for an entry -a")
+	assert.Equal(t, []string{"/tree", "/-a", "/tree/-a", "/tree/-a", "/tree/-a"}, srv.argsOf("MLST"), "MLST of /tree and a check for an entry -a after every listing")
 }
 
 // TestRemoveAll_DirectoryReplacedByLink is the regression test for the LIST
@@ -1642,29 +1653,122 @@ func TestRemoveAll_DirectoryReplacedByLink(t *testing.T) {
 	assert.Equal(t, 3, srv.count("LIST"), "LIST of / for /tree, and of /tree for /tree/d1 and again for /tree/d2")
 }
 
-// TestRemoveAll_GlobbedLISTKnownLimitation documents a known limitation, see
-// the package documentation: on a server without MLST support that expands
-// glob characters in the path argument of LIST, like wu-ftpd or ProFTPD with
-// UseGlobbing but without mod_facts, LIST of /tree/a[b] lists /tree/ab, so
-// RemoveAll takes the symbolic link /tree/a[b]/L to /victim for the directory
-// /tree/ab/L and deletes the file /victim/keep.txt that the link points to.
-// Change the test when RemoveAll lists without a path argument there too.
-func TestRemoveAll_GlobbedLISTKnownLimitation(t *testing.T) {
+// TestGlobbedLISTWithoutMLST is a regression test: on a server without MLST
+// support that expands glob characters in the path argument of LIST, like
+// wu-ftpd or ProFTPD with UseGlobbing but without mod_facts, LIST of
+// /tree/a[b] listed /tree/ab, so RemoveAll took the symbolic link
+// /tree/a[b]/L to /victim for the directory /tree/ab/L and deleted the file
+// /victim/keep.txt that the link points to, and Stat and ListDir described
+// the entries of /tree/ab. A path with glob characters is listed after a CWD
+// to it without a path argument, and the working directory is changed back,
+// so relative paths still resolve against the directory after the login.
+// So is a relative path that begins with '-'.
+func TestGlobbedLISTWithoutMLST(t *testing.T) {
+	const home = "/home/testuser"
 	srv := newTestFTPServer(t)
 	srv.writeFile("/victim/keep.txt", "keep")
 	srv.writeFile("/tree/ab/L/keep.txt", "data")
+	srv.writeFile("/tree/ab/only-in-ab.txt", "ab")
+	srv.writeFile("/tree/a[b]/file.txt", "a[b]")
 	srv.symlink("/victim", "/tree/a[b]/L")
+	srv.writeFile(home+"/rel.txt", "rel")
+	srv.writeFile(home+"/-l/opt.txt", "opt")
 	srv.configure(func(s *testFTPServer) {
 		s.noMLST = true
 		s.globArgs = true
+		s.home = home
 	})
 	ftpFS := dialInProcess(t, srv)
 
-	err := ftpFS.RemoveAll(t.Context(), "/tree")
-	assert.Error(t, err, "RMD of the link fails")
-	assert.False(t, srv.exists("/victim/keep.txt"), "known limitation: RemoveAll deletes the file that the link points to")
-	assert.True(t, srv.exists("/tree/ab/L/keep.txt"), "the file that the listing showed is kept")
-	assert.True(t, srv.exists("/tree/a[b]/L"), "the link is kept")
+	// A relative path that begins with '-', which servers can take for options
+	var optNames []string
+	require.NoError(t, ftpFS.ListDir(t.Context(), "-l", nil, func(info *fs.FileInfo) error {
+		optNames = append(optNames, info.Name)
+		return nil
+	}))
+	assert.Equal(t, []string{"opt.txt"}, optNames)
+	assert.NotContains(t, srv.argsOf("LIST"), "-l", "LIST is sent without the path")
+
+	var names []string
+	require.NoError(t, ftpFS.ListDir(t.Context(), "/tree/a[b]", nil, func(info *fs.FileInfo) error {
+		names = append(names, info.Name)
+		return nil
+	}))
+	assert.ElementsMatch(t, []string{"L", "file.txt"}, names, "the entries of /tree/a[b], not of /tree/ab")
+	info, err := ftpFS.Stat("/tree/a[b]/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, int64(len("a[b]")), info.Size)
+	_, err = ftpFS.Stat("/tree/a[b]/only-in-ab.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "a file of /tree/ab is not in /tree/a[b]")
+	info, err = ftpFS.Stat("rel.txt")
+	require.NoError(t, err, "a relative path resolves against the directory after the login")
+	assert.Equal(t, int64(len("rel")), info.Size)
+
+	require.NoError(t, ftpFS.RemoveAll(t.Context(), "/tree"), "the link is deleted itself")
+	assert.False(t, srv.exists("/tree"))
+	assert.Equal(t, "keep", string(srv.fileContent("/victim/keep.txt")), "RemoveAll keeps the file that the link points to")
+	for _, arg := range srv.argsOf("LIST") {
+		assert.False(t, strings.ContainsAny(arg, "[]"), "LIST %q is sent without a path with glob characters", arg)
+	}
+	info, err = ftpFS.Stat("rel.txt")
+	require.NoError(t, err, "the working directory is changed back after the listings")
+	assert.Equal(t, int64(len("rel")), info.Size)
+}
+
+// TestGlobbedLISTWithoutMLST_Errors checks the listing of a path with glob
+// characters on a server without MLST support when it fails: a missing
+// directory is reported as missing like by LIST, and the working directory
+// stays the one after the login. Without an absolute working directory
+// from PWD, which the listing changes back to, the listing fails.
+func TestGlobbedLISTWithoutMLST_Errors(t *testing.T) {
+	const home = "/home/testuser"
+	srv := newTestFTPServer(t)
+	srv.writeFile("/a[b]/file.txt", "data")
+	srv.writeFile(home+"/rel.txt", "rel")
+	srv.configure(func(s *testFTPServer) {
+		s.noMLST = true
+		s.home = home
+	})
+	ftpFS := dialInProcess(t, srv)
+
+	_, err := ftpFS.Stat("/no[pe]/file.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "Stat in a missing directory")
+	err = ftpFS.ListDir(t.Context(), "/no[pe]", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, os.ErrNotExist, "ListDir of a missing directory")
+	_, err = ftpFS.Stat("rel.txt")
+	require.NoError(t, err, "the working directory is still the one after the login")
+
+	for _, reply := range []string{"550 not allowed", `257 "relative"`} {
+		srv2 := newTestFTPServer(t)
+		srv2.writeFile("/a[b]/file.txt", "data")
+		srv2.configure(func(s *testFTPServer) {
+			s.noMLST = true
+			s.pwdReply = reply
+		})
+		ftpFS2 := dialInProcess(t, srv2)
+		err := ftpFS2.ListDir(t.Context(), "/a[b]", nil, func(*fs.FileInfo) error { return nil })
+		require.Error(t, err, "PWD reply %q", reply)
+		assert.Empty(t, srv2.argsOf("CWD"), "no CWD without a directory to change back to, PWD reply %q", reply)
+	}
+}
+
+// TestGlobbedLISTWithoutMLST_RestoreFails checks that a connection whose
+// working directory can't be changed back after a listing of a path with
+// glob characters is not used again, because relative paths would resolve
+// against the listed directory.
+func TestGlobbedLISTWithoutMLST_RestoreFails(t *testing.T) {
+	srv := newTestFTPServer(t)
+	srv.writeFile("/a[b]/file.txt", "data")
+	srv.configure(func(s *testFTPServer) { s.noMLST = true })
+	ftpFS := dialInProcess(t, srv)
+	_, err := ftpFS.Stat("/a[b]/file.txt")
+	require.NoError(t, err)
+
+	srv.configure(func(s *testFTPServer) { s.refuseCWD = "/" })
+	_, err = ftpFS.Stat("/a[b]/file.txt")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "changing back to the working directory")
+	assert.Nil(t, ftpFS.conn, "the connection is not kept")
 }
 
 // TestRemoveAll_ForgedDirectoryWithoutMLST checks RemoveAll on a server
@@ -1694,6 +1798,43 @@ func TestRemoveAll_ForgedDirectoryWithoutMLST(t *testing.T) {
 			assert.True(t, srv.exists("/outside/keep.txt"), "the file below the link's target is kept")
 		})
 	}
+}
+
+// TestRemoveAll_DroppedLineWithoutMLST is a regression test: on a server
+// without MLST support, the client library dropped the LIST line of a link
+// to a directory outside of the tree that it can't parse, like one with
+// a year with five digits, so one forged line that lists a directory with
+// the name of the link was the only entry with that name, and RemoveAll
+// deleted the files below the link's target. A listing with a dropped line
+// is an error now; an empty line and the "total N" line of "ls -l" list no
+// entry and are no dropped lines.
+func TestRemoveAll_DroppedLineWithoutMLST(t *testing.T) {
+	srv := newTestFTPServer(t)
+	srv.writeFile("/outside/keep.txt", "keep")
+	srv.writeFile("/tree/file.txt", "data")
+	srv.symlink("/outside", "/tree/link")
+	srv.configure(func(s *testFTPServer) {
+		s.noMLST = true
+		s.listTotal = true
+		s.listUnparsable = "/tree/link"
+		s.listForged["/tree/link"] = 1
+	})
+	ftpFS := dialInProcess(t, srv)
+
+	err := ftpFS.RemoveAll(t.Context(), "/tree")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "can't parse")
+	assert.True(t, srv.exists("/outside/keep.txt"), "the file below the link's target is kept")
+	assert.True(t, srv.exists("/tree/file.txt"), "nothing is deleted from a listing with a dropped line")
+
+	// Without the dropped line, the "total N" lines don't fail the listings
+	srv.configure(func(s *testFTPServer) {
+		s.listUnparsable = ""
+		s.listForged = map[string]int{}
+	})
+	require.NoError(t, ftpFS.RemoveAll(t.Context(), "/tree"))
+	assert.False(t, srv.exists("/tree"))
+	assert.True(t, srv.exists("/outside/keep.txt"), "the link is deleted itself")
 }
 
 // TestRemoveAll_RelativePath checks RemoveAll of a relative path on a

@@ -16,10 +16,10 @@ Install
 -------
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.3
+go get github.com/ungerik/go-fs@v1.0.0-rc.4
 ```
 
-Requires Go 1.26 or newer. v1.0.0-rc.3 is the release candidate for v1.0.0,
+Requires Go 1.26 or newer. v1.0.0-rc.4 is the release candidate for v1.0.0,
 which freezes the v1 API. Until v1.0.0 is tagged, `go get` without a version
 installs v0.1.0, whose API differs; [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md)
 covers the upgrade from v0.x.
@@ -29,7 +29,7 @@ network backends are modules of their own: get the ones you use together
 with the core module, at the same version.
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.3 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.3 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.4 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.4 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
 ```
 
 Example
@@ -170,7 +170,12 @@ covers, and where it can before anything is written.
   `os.Create(p)` truncates the file before it is read. `fs.CopyFile` of a
   file onto itself is a no-op, on every file system also through
   `SubFileSystem`s, and for a local file also through a symbolic link, a
-  hard link or a bind mount.
+  hard link or a bind mount. Within sftpfs and smbfs it is a no-op through
+  a symbolic link too, and within sftpfs, smbfs, ftpfs and other file
+  systems that are not local and have no native `CopyFile`, a destination
+  that may be another hard link or another case of the file, which these
+  servers can't tell, is replaced through a new file instead of being
+  truncated.
 - **Copying a directory into itself fails.** A copy of `/data` into
   `/data/backup` is an error wrapping `os.ErrInvalid` instead of a copy that
   keeps copying its own output.
@@ -179,6 +184,12 @@ covers, and where it can before anything is written.
   paths. go-fs recognizes that through `SubFileSystem`s, and for local files
   through bind mounts, symbolic links and case-insensitive names, and makes
   the move a no-op, a rename to the new case of the name, or an error.
+  Within sftpfs, smbfs and other file systems that are not local, the
+  fallback also refuses a path through a link to a parent directory and
+  another case of the name with the same size, modification time and
+  permissions, and a move between a `SubFileSystem` and its parent uses
+  the native `Move` of the parent if it has one, like the server-side
+  rename of sftpfs and smbfs.
   Moving a symbolic link onto the file it points to is an error on the local
   and in-memory file systems, with sftpfs and smbfs and in the copy then
   delete fallback, like `mv` reports "are the same file", instead of a link
@@ -234,8 +245,8 @@ covers, and where it can before anything is written.
   another host or port or from https to http unless the `CheckRedirect` of
   `Options.Client` allows it, and then without credentials.
 - **Credentials stay out of errors.** The invalid file system names a URI
-  with its password redacted, and the sftpfs, ftpfs, smbfs and webdavfs
-  backends redact the passwords in the addresses of their errors.
+  with its password redacted, and so do httpfs and the sftpfs, ftpfs, smbfs
+  and webdavfs backends in the addresses of their errors.
 
 The details and documented limits are in
 [Copy, move and compare](docs/howto-copy-move-and-compare.md),
@@ -1305,7 +1316,10 @@ err = out.Close() // finishes the archive
 A reader indexes the archive once and reads file content on demand; a
 gzip compressed archive is decompressed into memory. A writer buffers each
 file until its writer is closed, because tar needs the size before the
-content. [tarfs/README.md](tarfs/README.md) has the details.
+content. `fs.Move` into a zip or tar writer fails with
+`fs.ErrWriteOnlyFileSystem`, because the archive is only complete after
+`Close`: copy, close, then remove the source.
+[tarfs/README.md](tarfs/README.md) has the details.
 
 ### multipartfs
 

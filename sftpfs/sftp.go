@@ -527,7 +527,8 @@ func (f *fileSystem) SetPermissions(filePath string, perm fs.Permissions) error 
 // so a destination with the size, mode, owner and modification time of the
 // file that the link points to is taken for that file, see isLinkOntoTarget.
 // Unlike LocalFileSystem.Move, a move onto another hard link of the file
-// is refused too.
+// is refused too. With the posix-rename extension, a move of a file onto
+// another hard link of it leaves both names, see rename(2).
 func (f *fileSystem) Move(ctx context.Context, filePath string, destPath string) error {
 	// Checked here, because the checks before f.run already answer
 	if err := f.checkPath(filePath, destPath); err != nil {

@@ -53,7 +53,7 @@ compared directly or with `errors.Is`.
 | Constant                   | Message                                 | Returned when                                      |
 | -------------------------- | --------------------------------------- | -------------------------------------------------- |
 | `ErrReadOnlyFileSystem`    | `file system is read-only`              | A write is attempted on a file system whose `ReadableWritable` reports `writable == false`, or that does not implement `WriteFileSystem`. |
-| `ErrWriteOnlyFileSystem`   | `file system is write-only`             | A read is attempted on a file system whose `ReadableWritable` reports `readable == false`, such as `zipfs.Writer`. |
+| `ErrWriteOnlyFileSystem`   | `file system is write-only`             | A read is attempted on a file system whose `ReadableWritable` reports `readable == false`, such as `zipfs.Writer`, or `Move` would copy into one, refused before anything is copied because the source would be removed before the file system is closed. |
 | `ErrInvalidFileSystem`     | `invalid file system`                   | Every operation on a file of the invalid file system, see below. |
 | `ErrFileSystemClosed`      | `file system is closed`                 | Any method is called after `Close`.                |
 | `ErrEmptyPath`             | `empty file path`                       | An operation is called with an empty path.         |

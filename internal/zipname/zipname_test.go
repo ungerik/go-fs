@@ -191,6 +191,36 @@ func TestDecode(t *testing.T) {
 			"ア.txt",
 		},
 		{
+			// Regression: the leftmost match of the middle "A" was the
+			// second byte of "ア" (83 41), so the run of "日" started with
+			// the "A" and the field was ignored
+			"Unicode Path field of a double-byte character whose second byte repeats the next letter",
+			zip.FileHeader{Name: "\x83AA\x93\xfa.txt", NonUTF8: true, Extra: unicodePathExtra("\x83AA\x93\xfa.txt", "アA日.txt")},
+			"アA日.txt",
+		},
+		{
+			"Unicode Path field of a Shift-JIS name with a letter between words",
+			zip.FileHeader{Name: "\x83G\x83\x8a\x83AA\x8cv\x89\xe6.xlsx", NonUTF8: true, Extra: unicodePathExtra("\x83G\x83\x8a\x83AA\x8cv\x89\xe6.xlsx", "エリアA計画.xlsx")},
+			"エリアA計画.xlsx",
+		},
+		{
+			"Unicode Path field of a Shift-JIS name whose second byte repeats the next letter",
+			zip.FileHeader{Name: "\x83P\x81[\x83XX\x8ed\x97l.pdf", NonUTF8: true, Extra: unicodePathExtra("\x83P\x81[\x83XX\x8ed\x97l.pdf", "ケースX仕様.pdf")},
+			"ケースX仕様.pdf",
+		},
+		{
+			// A dot or slash after a byte from 0x80 is no second byte
+			// of a double-byte character, so a run can't stand for it
+			"Unicode Path field that removes a dot after a byte of another code page",
+			zip.FileHeader{Name: "\x84.txt", NonUTF8: true, Extra: unicodePathExtra("\x84.txt", "日txt")},
+			"ä.txt",
+		},
+		{
+			"Unicode Path field that removes a slash after a byte of another code page",
+			zip.FileHeader{Name: "a\x84/b.txt", NonUTF8: true, Extra: unicodePathExtra("a\x84/b.txt", "a日b.txt")},
+			"aä/b.txt",
+		},
+		{
 			"Unicode Path field with substitutes between ASCII parts",
 			zip.FileHeader{Name: "a_b?c.txt", Extra: unicodePathExtra("a_b?c.txt", "a日b本c.txt")},
 			"a日b本c.txt",
@@ -340,6 +370,10 @@ func FuzzKeepsASCII(f *testing.F) {
 	f.Add(`a\b.txt`, "a日b.txt")
 	f.Add("photo.exe", "photo.јрɡ")
 	f.Add("\x83AB.txt", "アイ.txt")
+	f.Add("\x83AA\x93\xfa.txt", "アA日.txt")
+	f.Add("\x83P\x81[\x83XX\x8ed\x97l.pdf", "ケースX仕様.pdf")
+	f.Add("\x84.txt", "日txt")
+	f.Add("a\x84/b.txt", "a日b.txt")
 	f.Fuzz(func(t *testing.T, stored, unicodeName string) {
 		if !utf8.ValidString(unicodeName) || !keepsASCII(stored, unicodeName) {
 			return

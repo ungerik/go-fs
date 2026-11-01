@@ -102,6 +102,11 @@ the archive's central directory is written by `Close`, so swallowing that error
 gives you a truncated file. Calling `Close` twice is safe. Files whose writers
 are still open when the archive is closed are not written.
 
+`fs.Move` into a writer fails with `fs.ErrWriteOnlyFileSystem` before it copies
+anything: the archive is only complete after `Close`, and `Move` would have
+removed the source by then. Copy the files with `fs.CopyRecursive`, close the
+writer, and remove the source only if `Close` succeeded.
+
 ## Read and write tar archives
 
 `tarfs` mirrors `zipfs`. A gzip compressed archive is recognized by its
