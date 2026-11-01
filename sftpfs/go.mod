@@ -16,6 +16,6 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/pkg/xattr v0.4.12 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 )
