@@ -54,7 +54,14 @@ through a link, and mojibake for some Shift-JIS zip names.
   keeps the link, and when the move onto the destination fails after it
   removed the destination, the new file is kept and the error names it.
   The copy then delete fallback of `fs.Move` refuses a destination that
-  only differs in case and has those attributes.
+  only differs in case and has those attributes, and a move between
+  a `SubFileSystem` and its parent that is not local uses the native
+  `Move` of the parent, which renames on the server, except for a symbolic
+  link to a file, which is still copied as file.
+- `fs.Move` of the root directory of a `SubFileSystem` to another file
+  system copied the whole directory before it failed to remove the root;
+  it is refused with an error wrapping `os.ErrInvalid` before anything is
+  copied, like `SubFileSystem.Move` refuses it.
 - An ftpfs `RemoveAll` could delete the files that a symbolic link points
   to: a client that could write into the directory could make the client
   library drop the line of its link and add a forged directory line with

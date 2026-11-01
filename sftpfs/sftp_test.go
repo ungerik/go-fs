@@ -526,8 +526,9 @@ func TestCopyFileLinkOntoTarget(t *testing.T) {
 // a file onto another hard link of it, or onto another case of its name on
 // a case-insensitive disk, truncated the file before it was read, because
 // SFTP reports no inode numbers that would tell them from another file.
-// The copy is written to a new file that replaces the destination, also
-// by the copy then delete of a move between a SubFileSystem and its parent.
+// The copy is written to a new file that replaces the destination. A move
+// between a SubFileSystem and its parent onto another hard link uses the
+// native Move of the parent, which renames on the server.
 func TestCopyFileHardLinkAndCaseAlias(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	require.NoError(t, os.WriteFile(root+"/file.txt", []byte("content"), 0o600))
@@ -559,9 +560,11 @@ func TestCopyFileHardLinkAndCaseAlias(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, fs.Register(sub))
 	t.Cleanup(func() { fs.Unregister(sub) })
+	// The posix-rename of the test server leaves both names of the file,
+	// see TestMoveOntoHardLink, a copy then delete would leave one
 	require.NoError(t, fs.Move(t.Context(), sub.RootDir().Join("file.txt"), f.JoinCleanFile(root, "hardlink.txt")))
 	assert.Equal(t, "content", readFile("hardlink.txt"))
-	assert.Equal(t, []string{"hardlink.txt"}, dirNames(t, root))
+	assert.Equal(t, []string{"file.txt", "hardlink.txt"}, dirNames(t, root), "moved with the native Move of the parent")
 }
 
 // TestMoveOntoHardLink checks Move of a file onto another hard link of it.

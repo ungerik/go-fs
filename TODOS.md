@@ -66,6 +66,37 @@ review.
 **Priority:** P0
 **Depends on:** None
 
+### Close the how-to gaps of the v1.0 features
+
+**What:** Several v1.0 behaviours are documented only in the reference docs,
+the module READMEs and `docs/MIGRATION_v1.md`, not in the how-tos:
+`ReadHeader(ctx, …)`, `fsimpl.CheckNoBackslash` (the tutorial for
+implementing a file system), `Options.AllowBackslashInNames` of sftpfs,
+ftpfs and webdavfs (the connect-a-backend how-to), the native azureblobfs
+`Move`, `Options.DeleteSnapshots` and `ErrSnapshotsPresent` (the Azure
+section of that how-to and of the README), the `os.ErrInvalid` of `CopyFile`
+and `Move` for a source name that is invalid in the destination directory,
+troubleshooting for the collision, special-file and invalid-name errors of
+copies and moves, and the refusal of `Register` for a separator before
+`://` (the Registration section of the path explanation).
+
+**Why:** Readers of the how-tos don't learn them where they need them.
+
+**Context:** Found by the documentation audit of v1.0.0-rc.1. Also fix two
+older docs problems: `docs/reference-filesystem-interfaces.md` says only
+sftpfs and ftpfs return a default-port prefix alias, but smbfs returns the
+`:445` alias too, and the `multipartfs/README.md` example registers before
+`defer formFS.Close()`, so a failed `Register` leaks the temporary files
+(`docs/howto-handle-form-uploads.md` has the right order). And state the
+prefix rule, a scheme followed by `://` with no separator before it, in the
+Options section of `s3fs/README.md` and in the `Prefix` row of
+`docs/reference-filesystem-interfaces.md`, which says only "Must not be
+empty" while the conformance suite requires the scheme.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
 ### Check the release verification list
 
 **What:** Confirm the release checklist on the final commit.
@@ -109,37 +140,6 @@ release from the CHANGELOG section.
 **Effort:** S
 **Priority:** P0
 **Depends on:** The other release items
-
-### Close the how-to gaps of the v1.0 features
-
-**What:** Several v1.0 behaviours are documented only in the reference docs,
-the module READMEs and `docs/MIGRATION_v1.md`, not in the how-tos:
-`ReadHeader(ctx, …)`, `fsimpl.CheckNoBackslash` (the tutorial for
-implementing a file system), `Options.AllowBackslashInNames` of sftpfs,
-ftpfs and webdavfs (the connect-a-backend how-to), the native azureblobfs
-`Move`, `Options.DeleteSnapshots` and `ErrSnapshotsPresent` (the Azure
-section of that how-to and of the README), the `os.ErrInvalid` of `CopyFile`
-and `Move` for a source name that is invalid in the destination directory,
-troubleshooting for the collision, special-file and invalid-name errors of
-copies and moves, and the refusal of `Register` for a separator before
-`://` (the Registration section of the path explanation).
-
-**Why:** Readers of the how-tos don't learn them where they need them.
-
-**Context:** Found by the documentation audit of v1.0.0-rc.1. Also fix two
-older docs problems: `docs/reference-filesystem-interfaces.md` says only
-sftpfs and ftpfs return a default-port prefix alias, but smbfs returns the
-`:445` alias too, and the `multipartfs/README.md` example registers before
-`defer formFS.Close()`, so a failed `Register` leaks the temporary files
-(`docs/howto-handle-form-uploads.md` has the right order). And state the
-prefix rule, a scheme followed by `://` with no separator before it, in the
-Options section of `s3fs/README.md` and in the `Prefix` row of
-`docs/reference-filesystem-interfaces.md`, which says only "Must not be
-empty" while the conformance suite requires the scheme.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** None
 
 ## fs (core)
 
@@ -346,7 +346,8 @@ truncation. The single-file case is done: `CopyFile` and the copy then
 delete fallback of `Move` compare an existing destination with every link
 resolved, also between a `SubFileSystem` and its parent, a destination
 that may be another hard link or case of the source is replaced through
-a new file. Left are the into-itself checks of directories
+a new file, and moves between a `SubFileSystem` and its parent use the
+native `Move` of the parent. Left are the into-itself checks of directories
 (`isCopyIntoItself`, `isInsideDirView`).
 
 **Effort:** M
@@ -817,7 +818,7 @@ attributes of the source like `maybeSameAttrs` (an error, not a no-op, since
 equal attributes don't prove the same file), or copying through a temporary
 file in the destination directory that is renamed over the destination.
 
-Done: `copyFileTo` writes a copy within one non-local file system without native `CopyFile` onto an existing destination with the size, modification time and permissions of the source (`isSameFileInfo`) to `gofs-copy-<random>.tmp` in its directory, closes the source and moves the new file onto the destination; a false positive only costs the extra file and move. A copy onto a symbolic link replaces the file it points to, and a temporary copy is kept and named in the error when the failed move already removed the destination. The copy then delete fallback of `Move` refuses a case-only destination with the same attributes. Found while testing: sftpfs `Move` with posix-rename onto another hard link leaves both names (see "Remove the source of an sftpfs move onto another hard link"); Samba refuses the native smbfs `Move` onto another hard link with an error and keeps both names. The pre-landing review of rc.4 dropped a native `Move` shortcut between a `SubFileSystem` and its parent, which skipped the root guard of `SubFileSystem.Move`.
+Done: `copyFileTo` writes a copy within one non-local file system without native `CopyFile` onto an existing destination with the size, modification time and permissions of the source (`isSameFileInfo`) to `gofs-copy-<random>.tmp` in its directory, closes the source and moves the new file onto the destination; a false positive only costs the extra file and move. A copy onto a symbolic link replaces the file it points to, and a temporary copy is kept and named in the error when the failed move already removed the destination. The copy then delete fallback of `Move` refuses a case-only destination with the same attributes. Found while testing: sftpfs `Move` with posix-rename onto another hard link leaves both names (see "Remove the source of an sftpfs move onto another hard link"); Samba refuses the native smbfs `Move` onto another hard link with an error and keeps both names. A move between a `SubFileSystem` and its non-local parent uses the native `Move` of the parent (not for links to files), and the root directory of a `SubFileSystem` is refused up front like by `SubFileSystem.Move`, after the pre-landing review of rc.4 found that the first version of that shortcut renamed the root.
 
 **Effort:** M
 **Priority:** P2

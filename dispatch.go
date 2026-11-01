@@ -700,6 +700,22 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 		// written, and a failing Close would lose it
 		return fmt.Errorf("%s: %w: can't move %s into it, copy it and remove the source after the file system is closed", destFS.Name(), ErrWriteOnlyFileSystem, errSubject(fsFile(srcFS, srcPath)))
 	}
+	// The root directory of a SubFileSystem can't be moved like by
+	// SubFileSystem.Move, also not by copying it before its removal fails
+	for fileSystem, filePath := srcFS, srcPath; ; {
+		sub, isSub := fileSystem.(*SubFileSystem)
+		if !isSub {
+			break
+		}
+		parentPath, err := sub.parentPath(filePath)
+		if err != nil {
+			break
+		}
+		if parentPath == sub.dir {
+			return fmt.Errorf("%w: can't move the root directory of %s", os.ErrInvalid, sub)
+		}
+		fileSystem, filePath = sub.parent, parentPath
+	}
 	srcInfo, err := fsLstat(srcFS, srcPath)
 	if err != nil {
 		return err
@@ -739,7 +755,26 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 	// The entry that the source shows, see fsReadTarget, for all checks
 	// below: through an OverlayFileSystem it costs Lstats of the layers
 	srcRead, srcReadPath, srcViaOverlay, readOK := fsReadTarget(srcFS, srcPath)
-	if _, srcIsLocal := srcRead.(*LocalFileSystem); readOK && srcIsLocal {
+	_, srcIsLocal := srcRead.(*LocalFileSystem)
+	if _, nativeMove := srcRead.(MoveFileSystem); readOK && !srcIsLocal && !srcViaOverlay && !srcIsLink && nativeMove {
+		// Between SubFileSystems of a file system that is not local and its
+		// parent, the native Move of the parent renames on the server, which
+		// tells another name of the same directory entry from another file,
+		// like another case or Unicode normalization of the name, also
+		// through a link to a parent directory, which a copy can't tell, see
+		// copyFileTo, and removing the source would remove such a copy.
+		// A link to a file is copied as file like between other file systems.
+		if destTarget, destTargetPath, destViaOverlay, ok := writeTarget(destFS, destPath); ok && !destViaOverlay && srcRead == destTarget {
+			// Like Move checks the parent directories of a native move
+			if dir, _ := fsSplitDirAndName(destFS, destPath); dir != "" {
+				if err := validateNewDirs(destFS, dir); err != nil {
+					return fmt.Errorf("can't move %.200q to %.200q: %w", errSubject(src), errSubject(dest), err)
+				}
+			}
+			return fsMove(ctx, srcRead, srcReadPath, destTargetPath)
+		}
+	}
+	if readOK && srcIsLocal {
 		// The local paths of both, like fsLocalPaths tells them
 		srcLocal := srcReadPath
 		destLocal, destViaOverlay, destIsLocal := fsLocalPath(destFS, destPath)

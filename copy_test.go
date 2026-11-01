@@ -1031,14 +1031,65 @@ func TestCopyFile_MayBeSourceThroughLink(t *testing.T) {
 // a SubFileSystem and its parent that is not local used the native Move of
 // the parent, which renamed the root directory of the SubFileSystem that
 // SubFileSystem.Move refuses to move, and the registered SubFileSystem then
-// had no root.
+// had no root. The copy then delete fallback copied the whole root before
+// its removal failed. The move is refused before anything is copied.
 func TestMove_SubFileSystemRootIntoParent(t *testing.T) {
 	mem := newLinkMemFS(t, fs.NewMemFile("/a/x.txt", []byte("x")))
 	sub := newRegisteredSubFS(t, mem, "/a")
 
-	// The copy then delete fallback fails at the removal of the root
-	require.Error(t, fs.Move(t.Context(), sub.RootDir(), mem.RootDir().Join("b")))
+	require.ErrorIs(t, fs.Move(t.Context(), sub.RootDir(), mem.RootDir().Join("b")), os.ErrInvalid)
 	requireContent(t, mem.RootDir().Join("a", "x.txt"), "x")
+	requireMissing(t, mem.RootDir().Join("b"))
+
+	local := newRegisteredSubFS(t, fs.Local, t.TempDir())
+	require.ErrorIs(t, fs.Move(t.Context(), local.RootDir(), fs.File(t.TempDir()).Join("b")), os.ErrInvalid, "also of a local SubFileSystem")
+}
+
+// renameFileSystem is a symlinkFileSystem over the local file system
+// whose native Move renames like the posix-rename of sftpfs.
+type renameFileSystem struct{ symlinkFileSystem }
+
+func (r renameFileSystem) Move(_ context.Context, filePath, destPath string) error {
+	return os.Rename(filePath, destPath)
+}
+
+// TestMove_SubFileSystemAliasOfSource is a regression test: a move between
+// a SubFileSystem and its parent that is not local, onto another name of
+// the source's directory entry, here another case through a link to its
+// directory, copied the file onto itself and removed the source, the only
+// copy, because only the raw paths were compared without case. The native
+// Move of the parent renames on the server instead. A symbolic link to
+// a file is still copied as file.
+func TestMove_SubFileSystemAliasOfSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("minimalFileSystem doesn't support local Windows paths")
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	r := renameFileSystem{symlinkFileSystem{newMinimalFileSystem(fsimpl.RandomString(), fs.Local)}}
+	register(t, r)
+	root := fs.File(r.Prefix() + dir)
+	data := root.Join("data")
+	require.NoError(t, data.MakeDir())
+	require.NoError(t, data.Join("a.txt").WriteAllString(t.Context(), "precious"))
+	require.NoError(t, r.CreateSymbolicLink(data.Path(), root.Join("dirlink").Path()))
+	sub := newRegisteredSubFS(t, r, data.Path())
+
+	if _, err := os.Stat(data.Join("A.TXT").Path()); err == nil {
+		require.NoError(t, fs.Move(t.Context(), sub.RootDir().Join("a.txt"), root.Join("dirlink", "A.TXT")))
+		entries, err := os.ReadDir(data.Path())
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "the file is kept")
+		requireContent(t, data.Join(entries[0].Name()), "precious")
+	}
+
+	require.NoError(t, r.CreateSymbolicLink(data.Join("a.txt").Path(), data.Join("link.txt").Path()))
+	require.NoError(t, fs.Move(t.Context(), sub.RootDir().Join("link.txt"), root.Join("copy.txt")))
+	info, err := os.Lstat(root.Join("copy.txt").Path())
+	require.NoError(t, err)
+	require.Zero(t, info.Mode()&os.ModeSymlink, "the link is followed and the file copied")
+	requireContent(t, root.Join("copy.txt"), "precious")
+	requireMissing(t, data.Join("link.txt"))
 }
 
 // TestMove_HardLinkAndCaseAlias checks the copy then delete fallback of Move
