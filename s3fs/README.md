@@ -243,6 +243,10 @@ What else to know about the services:
   refuses the copy with `501 Not Implemented` or `413`, like Cloudflare R2 and
   Backblaze B2 the conditions of `UploadPartCopy`, gets the object downloaded
   and uploaded, with the metadata of the source but without its tags.
+  A download that differs from the object in `Content-Length` or
+  `Content-Encoding`, like the decompressed data that Google Cloud Storage
+  sends of an object with `Content-Encoding: gzip`, is not uploaded and
+  `CopyFile` returns an `fs.ErrUnsupported` error.
   `Touch` of an existing object copies it onto itself, because S3 can't
   update `LastModified` in place. It keeps the `Content-Type` and the other content
   headers, the user metadata, the storage class and the encryption; it

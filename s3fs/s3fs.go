@@ -1169,7 +1169,8 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, s)
 	}
 	var batch []types.ObjectIdentifier
-	batchBody := 0 // the most bytes that the objects of batch take in the body
+	batchBody := 0  // the most bytes that the objects of batch take in the body
+	perKey := false // DeleteObjects answered 501 Not Implemented
 	deleteBatch := func() error {
 		if len(batch) == 0 {
 			return nil
@@ -1186,13 +1187,19 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		// If a service does, add Content-MD5 to this request with
 		// s3.WithAPIOptions(smithyhttp.AddContentChecksumMiddleware),
 		// AWS accepts both headers.
-		out, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: &s.bucketName,
-			Delete: &types.Delete{Objects: batch, Quiet: new(true)},
-		})
-		if httpStatusCode(err) == http.StatusNotImplemented {
+		var out *s3.DeleteObjectsOutput
+		var err error
+		if !perKey {
+			out, err = client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+				Bucket: &s.bucketName,
+				Delete: &types.Delete{Objects: batch, Quiet: new(true)},
+			})
+			perKey = httpStatusCode(err) == http.StatusNotImplemented
+		}
+		if perKey {
 			// A service without DeleteObjects, like the XML API of
-			// Google Cloud Storage, gets the keys deleted one by one
+			// Google Cloud Storage, gets the keys deleted one by one,
+			// also the batches after the first one that it refused
 			for _, obj := range batch {
 				_, err = client.DeleteObject(ctx, &s3.DeleteObjectInput{
 					Bucket: &s.bucketName,
@@ -1315,7 +1322,9 @@ func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 // with the metadata of head like copyObjectInParts and like it without
 // the tags of the source. The download reads
 // the version of head, so it fails with a "PreconditionFailed" error if the
-// object changed. The upload only commits the object if it read all data.
+// object changed, and fails with an fs.ErrUnsupported error if its
+// Content-Length or Content-Encoding differs from head. The upload only
+// commits the object if it read all data.
 func (s *fileSystem) copyObject(ctx context.Context, client *s3.Client, srcKey, destKey string, head *s3.HeadObjectOutput, touch bool) error {
 	var err error
 	if aws.ToInt64(head.ContentLength) > s.maxCopyObjectSize {
@@ -1348,6 +1357,7 @@ func (s *fileSystem) copyObject(ctx context.Context, client *s3.Client, srcKey, 
 	if touch || !isRefusedCopy(err) {
 		return err
 	}
+	refused := err
 	out, err := client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket:  &s.bucketName,
 		Key:     &srcKey,
@@ -1357,6 +1367,13 @@ func (s *fileSystem) copyObject(ctx context.Context, client *s3.Client, srcKey, 
 		return err
 	}
 	defer out.Body.Close()
+	if out.ContentLength == nil || *out.ContentLength != aws.ToInt64(head.ContentLength) ||
+		aws.ToString(out.ContentEncoding) != aws.ToString(head.ContentEncoding) {
+		// Like the decompressed data of an object with Content-Encoding
+		// gzip that Google Cloud Storage sends to a client that doesn't
+		// accept gzip, which the SDK doesn't, without a Content-Length
+		return fmt.Errorf("%w: the download of %s is not the stored object: %w", fs.NewErrUnsupported(s, "CopyFile of an object that the service refuses to copy"), s.file(srcKey), refused)
+	}
 	_, err = s.transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket: &s.bucketName,
 		Key:    &destKey,

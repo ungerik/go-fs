@@ -1694,7 +1694,8 @@ func TestCopyInPartsWithoutChecksums(t *testing.T) {
 // the server, like Cloudflare R2 and Backblaze B2 the conditions of
 // UploadPartCopy with 501 Not Implemented, or Google Cloud Storage a copy
 // that takes too long with 413: CopyFile downloads and uploads the object
-// with its metadata, Touch returns an fs.ErrUnsupported error.
+// with its metadata, unless the download differs from the object,
+// Touch returns an fs.ErrUnsupported error.
 func TestRefusedCopy(t *testing.T) {
 	const mib = 1 << 20
 	for _, status := range []int{http.StatusNotImplemented, http.StatusRequestEntityTooLarge} {
@@ -1746,6 +1747,31 @@ func TestRefusedCopy(t *testing.T) {
 		assert.True(t, hasErrorCode(err, "PreconditionFailed"), "the download reads the version of head: %v", err)
 		_, ok := st.object("dest.bin")
 		assert.False(t, ok, "a changed source must not be copied")
+	})
+
+	// Google Cloud Storage sends the decompressed data of an object with
+	// Content-Encoding gzip to a client that doesn't accept gzip, like the
+	// SDK, whose upload would store it as gzip
+	t.Run("TranscodedSource", func(t *testing.T) {
+		data := []byte("the decompressed data of the gzip object")
+		for name, head := range map[string]*s3.HeadObjectOutput{
+			"Content-Length":   {ContentLength: new(int64(10)), ContentEncoding: new("gzip")},
+			"Content-Encoding": {ContentLength: new(int64(len(data))), ContentEncoding: new("gzip")},
+		} {
+			t.Run(name, func(t *testing.T) {
+				st := newFakeStore()
+				st.copyStatus = http.StatusRequestEntityTooLarge
+				f, err := New(httptestClient(t, st.handler), "bucket", nil)
+				require.NoError(t, err)
+				s := f.(*fileSystem)
+				st.objects["src.bin"] = fakeObject{data: data}
+				head.ETag = new(etag(data))
+				err = s.copyObject(t.Context(), s.client, "src.bin", "dest.bin", head, false)
+				assert.ErrorIs(t, err, errors.ErrUnsupported, "a download that differs from head")
+				_, ok := st.object("dest.bin")
+				assert.False(t, ok, "other data must not be copied")
+			})
+		}
 	})
 }
 
@@ -1813,11 +1839,14 @@ func TestRemoveAllBodySize(t *testing.T) {
 
 // TestRemoveAllWithoutDeleteObjects checks that RemoveAll deletes the
 // objects one by one on a service that answers DeleteObjects with
-// 501 Not Implemented, like the XML API of Google Cloud Storage.
+// 501 Not Implemented, like the XML API of Google Cloud Storage,
+// and doesn't send DeleteObjects again for the batches after the first.
 func TestRemoveAllWithoutDeleteObjects(t *testing.T) {
 	st := newFakeStore()
 	st.deleteObjectsStatus = http.StatusNotImplemented
-	for i := range 3 {
+	// More keys than one batch of DeleteObjects
+	const numKeys = deleteBatchSize + 500
+	for i := range numKeys {
 		st.objects[fmt.Sprintf("dir/%d.txt", i)] = fakeObject{}
 	}
 	st.objects["other.txt"] = fakeObject{}
@@ -1828,4 +1857,15 @@ func TestRemoveAllWithoutDeleteObjects(t *testing.T) {
 	st.mtx.Lock()
 	defer st.mtx.Unlock()
 	assert.Equal(t, []string{"other.txt"}, slices.Collect(maps.Keys(st.objects)), "every object below dir is deleted")
+	var deleteObjects, deleteObject int
+	for _, r := range st.requests {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+			deleteObjects++
+		case r.Method == http.MethodDelete:
+			deleteObject++
+		}
+	}
+	assert.Equal(t, 1, deleteObjects, "only the first batch tries DeleteObjects")
+	assert.Equal(t, numKeys+1, deleteObject, "one DeleteObject per key, and for dir itself")
 }

@@ -19,11 +19,15 @@ see the client settings for each in the s3fs README.
   also for a client of `s3.New` without checksum options, which sends none,
   so on services without these checksums, like Backblaze B2 and Google Cloud
   Storage, uploads of `MultipartUploadThreshold` bytes or more failed while
-  smaller ones worked.
+  smaller ones worked. Downloads of a client whose response checksum
+  validation is not set are no longer validated.
 - s3fs `CopyFile` downloads and uploads an object that the service refuses
   to copy with `501 Not Implemented` or `413`, like Cloudflare R2 and
   Backblaze B2 the conditions of `UploadPartCopy` for objects above 5 GiB,
-  with the metadata of the source but without its tags. `Touch` returns an
+  with the metadata of the source but without its tags. A download whose
+  `Content-Length` or `Content-Encoding` differs from the object, like the
+  decompressed data of a gzip object on Google Cloud Storage, is not uploaded,
+  `CopyFile` returns an `fs.ErrUnsupported` error then. `Touch` returns an
   `fs.ErrUnsupported` error for such a service. On Google Cloud Storage
   endpoints, which have no `UploadPartCopy`, objects of every size are
   copied with `CopyObject`.
@@ -45,7 +49,8 @@ see the client settings for each in the s3fs README.
   another client deleted after `Remove` found it, like Google Cloud Storage
   does where S3 succeeds.
 - s3fs `RemoveAll` deletes the objects one by one on a service that answers
-  `DeleteObjects` with `501 Not Implemented`, like Google Cloud Storage.
+  `DeleteObjects` with `501 Not Implemented`, like Google Cloud Storage,
+  and sends `DeleteObjects` only for the first batch then.
 - s3fs `RemoveAll` keeps the body of every `DeleteObjects` request below the
   1 MiB that Ceph RGW accepts, the server of Hetzner and DigitalOcean Spaces,
   which 1000 long keys exceeded.
