@@ -781,28 +781,13 @@ func (f *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 	}), nil
 }
 
-// blobItem returns the listed item of the blob name with its metadata,
-// or nil if the blob doesn't exist. A listing returns the metadata names
-// as stored, GetProperties returns them in the canonical case of HTTP
-// headers ("Owner" for "owner"), so setting them again would rename them.
-// The blob itself is the first one listed with its name as prefix,
-// because a name sorts before all names it is a prefix of.
-func (f *fileSystem) blobItem(ctx context.Context, name string) (*container.BlobItem, error) {
-	item, err := firstBlob(ctx, f.client.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
-		Prefix:     new(name),
-		MaxResults: new(int32(1)),
-		Include:    container.ListBlobsInclude{Metadata: true},
-	}))
-	if err != nil || item == nil || deref(item.Name) != name {
-		return nil, err
-	}
-	return item, nil
-}
-
 // Touch updates the modification time of an existing blob by setting
-// its metadata again, which keeps the metadata, the content headers and
-// the content. It creates an empty blob for a missing path, but never
-// overwrites a blob that was created in the meantime,
+// its content headers again (Set Blob Properties), which keeps them, the
+// metadata and the content. Setting the metadata again would rename them:
+// the SDK returns their names in lower case from a listing and in the
+// canonical case of HTTP headers from GetProperties, while Azure keeps
+// the case they were set with. It creates an empty blob for a missing
+// path, but never overwrites a blob that was created in the meantime,
 // and does nothing for a directory.
 func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	if err := f.checkWritable(); err != nil {
@@ -816,34 +801,40 @@ func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 		return nil // Root directory
 	}
 	ctx := context.Background()
-	item, err := f.blobItem(ctx, name)
-	if err != nil {
-		return err
-	}
-	if item == nil {
+	blobClient := f.client.NewBlobClient(name)
+	props, err := blobClient.GetProperties(ctx, nil)
+	if isNotFound(err) {
 		isDir, _, err := f.dirExists(ctx, name)
 		if err != nil || isDir {
 			return err
 		}
 		_, err = f.client.NewBlockBlobClient(name).UploadBuffer(ctx, nil, &blockblob.UploadBufferOptions{
-			// Don't replace a blob that was created after the listing
+			// Don't replace a blob that was created in the meantime
 			AccessConditions: &blob.AccessConditions{
 				ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfNoneMatch: new(azcore.ETagAny)},
 			},
 		})
 		if bloberror.HasCode(err, bloberror.BlobAlreadyExists, bloberror.ConditionNotMet) {
-			return nil // Created after the listing, so modified anyway
+			return nil // Created in the meantime, so modified anyway
 		}
 		return redactErr(err)
 	}
-	opts := &blob.SetMetadataOptions{}
-	if item.Properties != nil {
-		// Don't replace the metadata of a blob that changed after the listing
-		opts.AccessConditions = ifMatch(item.Properties.ETag)
+	if err != nil {
+		return redactErr(err)
 	}
-	_, err = f.client.NewBlobClient(name).SetMetadata(ctx, item.Metadata, opts)
+	// Every content header that the request doesn't set is cleared,
+	// also Content-MD5, so all of them are set to their current values.
+	// Don't replace the headers of a blob that changed in the meantime.
+	_, err = blobClient.SetHTTPHeaders(ctx, blob.HTTPHeaders{
+		BlobCacheControl:       props.CacheControl,
+		BlobContentType:        props.ContentType,
+		BlobContentMD5:         props.ContentMD5,
+		BlobContentEncoding:    props.ContentEncoding,
+		BlobContentLanguage:    props.ContentLanguage,
+		BlobContentDisposition: props.ContentDisposition,
+	}, &blob.SetHTTPHeadersOptions{AccessConditions: ifMatch(props.ETag)})
 	if bloberror.HasCode(err, bloberror.ConditionNotMet) {
-		return nil // Changed after the listing, so modified anyway
+		return nil // Changed in the meantime, so modified anyway
 	}
 	return redactErr(err)
 }
@@ -1233,12 +1224,14 @@ func (f *fileSystem) moveBlobs(ctx context.Context, blobs []listedBlob, src, des
 		case b.etag != nil && bloberror.HasCode(err, bloberror.SourceConditionNotMet):
 			return f.changedError(b.name, "moved", err)
 		case destCond != nil && bloberror.HasCode(err, bloberror.BlobAlreadyExists, bloberror.TargetConditionNotMet):
-			// Azurite answers If-None-Match: * for an existing
-			// destination with 409 BlobAlreadyExists
+			// Azure and Azurite answer If-None-Match: * for an existing
+			// destination with 409 BlobAlreadyExists, Azure a failed
+			// If-Match with 412 TargetConditionNotMet
 		case (b.etag != nil || destCond != nil) && bloberror.HasCode(err, bloberror.ConditionNotMet):
-			// A failed destination condition is answered with ConditionNotMet,
-			// by Azurite also a failed source condition, which Azure answers
-			// with SourceConditionNotMet. Then the source tells which failed:
+			// Azurite answers a failed destination condition, and also a
+			// failed source condition, with ConditionNotMet, which Azure
+			// answers with TargetConditionNotMet and SourceConditionNotMet
+			// (also if both failed). Then the source tells which failed:
 			// without destCond it is the source condition, else the source
 			// failed if it no longer has its ETag: it was replaced or deleted,
 			// or its properties can't be requested.
@@ -1375,8 +1368,9 @@ func sameBlobURL(a, b string) bool {
 // to that version of src (x-ms-source-if-match), Azure copies nothing
 // if src changed since and answers 412 with SourceConditionNotMet.
 // A non-nil destCond are the conditions (If-Match, If-None-Match) that
-// dest must meet, else Azure copies nothing and answers 412 (Azurite
-// 409 BlobAlreadyExists for If-None-Match: * and an existing dest).
+// dest must meet, else Azure copies nothing and answers 412
+// TargetConditionNotMet (409 BlobAlreadyExists for If-None-Match: * and
+// an existing dest).
 func (f *fileSystem) copyBlob(ctx context.Context, src string, srcETag *azcore.ETag, dest string, destCond *blob.ModifiedAccessConditions) error {
 	destBlob := f.client.NewBlobClient(dest)
 	opts := &blob.StartCopyFromURLOptions{}

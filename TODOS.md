@@ -8,34 +8,6 @@ reference docs in `docs/`.
 
 ## Release v1.0.0
 
-### Verify azureblobfs against real Azure
-
-**What:** Run the azureblobfs tests and conformance suite against a real
-Azure storage account.
-
-**Why:** The SDK sends x-ms-version 2026-12-06, which only Azurite with
-`--skipApiVersionCheck` accepts, so the real service has not answered this
-version yet. The snapshot handling, the ETag-pinned readers and the
-ETag-pinned native `Move` were only tested against Azurite.
-
-**Context:** Azurite 3.37 rejects the API version without the flag. Check
-the snapshot listing order and paging (Azurite drops a blob's snapshots at a
-page boundary), the 412 codes of failed source conditions (`ConditionNotMet`
-on Azurite, `SourceConditionNotMet` documented for Azure), the codes of
-failed destination conditions of Copy Blob (`If-None-Match: *` on an
-existing blob: 409 `BlobAlreadyExists` on Azurite; `If-Match`:
-`TargetConditionNotMet` or `ConditionNotMet`), which `moveBlobs` tells apart
-with a `GetProperties` of the source, the copy properties that `Move` reads
-to recognize its own copy after a retried request (and that
-`x-ms-copy-source` keeps a `snapshot` or `versionid` query), the answer to a
-delete pinned with `If-Match` of a missing blob (412 `ConditionNotMet` on
-Azurite, which `Move` checks with `GetProperties`), and the deletes of blobs
-with snapshots.
-
-**Effort:** S
-**Priority:** P0
-**Depends on:** An Azure storage account and credentials
-
 ### Verify dropboxfs with a real token
 
 **What:** Run the dropboxfs tests with `DROPBOX_ACCESS_TOKEN` set.
@@ -859,6 +831,53 @@ a raw `@` in the path.
 **Depends on:** None
 
 ## Completed
+
+### Verify azureblobfs against real Azure
+
+**What:** Run the azureblobfs tests and conformance suite against a real
+Azure storage account.
+
+**Why:** The SDK sends x-ms-version 2026-12-06, which only Azurite with
+`--skipApiVersionCheck` accepts, so the real service has not answered this
+version yet. The snapshot handling, the ETag-pinned readers and the
+ETag-pinned native `Move` were only tested against Azurite.
+
+**Context:** Azurite 3.37 rejects the API version without the flag. Check
+the snapshot listing order and paging (Azurite drops a blob's snapshots at a
+page boundary), the 412 codes of failed source conditions (`ConditionNotMet`
+on Azurite, `SourceConditionNotMet` documented for Azure), the codes of
+failed destination conditions of Copy Blob (`If-None-Match: *` on an
+existing blob: 409 `BlobAlreadyExists` on Azurite; `If-Match`:
+`TargetConditionNotMet` or `ConditionNotMet`), which `moveBlobs` tells apart
+with a `GetProperties` of the source, the copy properties that `Move` reads
+to recognize its own copy after a retried request (and that
+`x-ms-copy-source` keeps a `snapshot` or `versionid` query), the answer to a
+delete pinned with `If-Match` of a missing blob (412 `ConditionNotMet` on
+Azurite, which `Move` checks with `GetProperties`), and the deletes of blobs
+with snapshots.
+
+Done: the azureblobfs tests run against a real storage account with
+`GOFS_AZURE_TEST_CONNECTION_STRING` (a new container per run, deleted
+afterwards). On a StorageV2 account without hierarchical namespace, with
+blob and container soft delete, the conformance suite and every Move,
+snapshot and ETag test pass with x-ms-version 2026-12-06. Azure answers a
+failed source condition of Copy Blob with 412 `SourceConditionNotMet`
+(also when the destination condition failed too), `If-None-Match: *` on an
+existing blob with 409 `BlobAlreadyExists` like Azurite, a failed or
+missing `If-Match` destination with 412 `TargetConditionNotMet`, and a
+delete pinned with `If-Match` of a missing blob with 404 `BlobNotFound`
+(Azurite: 412 `ConditionNotMet`), which `Move` already took as deleted.
+`x-ms-copy-source` keeps the `snapshot` query of a copied snapshot. Azure
+lists the snapshots of a blob before the blob, oldest first, and drops none
+at a page boundary. The tests expect the answer of the server they run
+against. One bug: `TestTouchKeepsMetadata` with upper-case metadata names
+showed that `Touch` set them again in lower case, as the SDK lists them;
+`Touch` now sets the content headers again instead.
+
+**Effort:** S
+**Priority:** P0
+**Depends on:** An Azure storage account and credentials
+**Completed:** 2026-11-02 (for v1.0.0)
 
 ### Don't trust the S3 paginator on a truncated page without a token
 

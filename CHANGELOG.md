@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+### Added
+
+- The azureblobfs tests run against a real storage account when
+  `GOFS_AZURE_TEST_CONNECTION_STRING` is set, in a new container that is
+  deleted afterwards. They pass on Azure with x-ms-version 2026-12-06,
+  which until now was only tested against Azurite.
+
+### Fixed
+
+- azureblobfs `Touch` renamed the metadata of a blob on Azure to lower case:
+  it set the metadata again with the names as the SDK lists them, in lower
+  case, while Azure keeps the case they were set with. `Touch` now sets the
+  content headers of the blob again (Set Blob Properties), which updates the
+  modification time as well and leaves the metadata alone. It needs the read
+  permission (`GetProperties`) instead of the list permission for an
+  existing blob.
+
 ## [1.0.0-rc.6] - 2026-11-03
 
 Sixth release candidate: the conformance suite now checks that copies and
