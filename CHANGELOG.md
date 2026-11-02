@@ -5,11 +5,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## [Unreleased]
+## [1.0.0-rc.5] - 2026-11-02
 
-s3fs works with more S3-compatible services: Cloudflare R2, Backblaze B2,
-Wasabi, DigitalOcean Spaces, Google Cloud Storage and Hetzner Object Storage,
-see the client settings for each in the s3fs README.
+Fifth release candidate: s3fs works with more S3-compatible services:
+Cloudflare R2, Backblaze B2, Wasabi, DigitalOcean Spaces, Google Cloud
+Storage and Hetzner Object Storage, see the client settings for each in the
+s3fs README. A move between two Unicode normalizations of a file name, which
+R2 stores as one object, is refused instead of deleting the file.
 
 ### Changed
 

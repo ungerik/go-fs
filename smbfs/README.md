@@ -11,7 +11,7 @@ works on every platform.
 Get the backend together with the go-fs core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.4 github.com/ungerik/go-fs/smbfs@v1.0.0-rc.4
+go get github.com/ungerik/go-fs@v1.0.0-rc.5 github.com/ungerik/go-fs/smbfs@v1.0.0-rc.5
 ```
 
 ## Usage

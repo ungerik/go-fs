@@ -127,7 +127,7 @@ empty" while the conformance suite requires the scheme.
 
 **What:** CHANGELOG `[1.0.0]`, `VERSION` = `v1.0.0`, the MIGRATION intro
 names v1.0.0 instead of the rc, the `go get` lines in the Markdown files
-drop their `@v1.0.0-rc.4` pins (`grep -rn '@v1.0.0-rc.4' --include='*.md'`)
+drop their `@v1.0.0-rc.5` pins (`grep -rn '@v1.0.0-rc.5' --include='*.md'`)
 and the README drops the note that plain `go get` installs v0.1.0, then tag
 all modules with
 `tag-release.sh` after the merge (never the `tools` module).
@@ -695,22 +695,6 @@ check that the destination is no directory.
 **Priority:** P3
 **Depends on:** None
 
-### Don't trust the S3 paginator on a truncated page without a token
-
-**What:** s3fs `ListDir`, `ListDirRecursive` and `RemoveAll` use the SDK
-paginator, which ends silently at a truncated page without a continuation
-token.
-
-**Why:** A broken S3-compatible store can make them return an incomplete
-result, or leave objects behind, without an error.
-
-**Context:** `findObject` already checks this for `Stat` and `Remove`; a
-three-line check per paginator loop.
-
-**Effort:** S
-**Priority:** P3
-**Depends on:** None
-
 ### Bound the memory and parallelize the requests of a directory Move
 
 **What:** The native `Move` of an azureblobfs directory keeps the name of
@@ -837,6 +821,25 @@ a raw `@` in the path.
 **Depends on:** None
 
 ## Completed
+
+### Don't trust the S3 paginator on a truncated page without a token
+
+**What:** s3fs `ListDir`, `ListDirRecursive` and `RemoveAll` use the SDK
+paginator, which ends silently at a truncated page without a continuation
+token.
+
+**Why:** A broken S3-compatible store can make them return an incomplete
+result, or leave objects behind, without an error.
+
+**Context:** `findObject` already checks this for `Stat` and `Remove`; a
+three-line check per paginator loop.
+
+Done: `ListDir`, `ListDirRecursive` and `RemoveAll` read the pages with `ListObjectsV2` and `continueListing`, which returns an error wrapping `errTruncatedWithoutToken` for a truncated page without a new continuation token, also for a token of an earlier page.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+**Completed:** v1.0.0-rc.5 (2026-11-02)
 
 ### Detect hard links and case aliases before an in-place copy
 
