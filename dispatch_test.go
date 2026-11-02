@@ -1212,3 +1212,65 @@ func TestMoveEmulation_InvalidLocalName(t *testing.T) {
 	requireNames(t, dir)
 	requireContent(t, src, "data")
 }
+
+// nfcFileSystem is the backing of a minimalFileSystem that matches the
+// names "e" followed by the combining acute accent and "é" as one name,
+// like a server that normalizes names, for example Cloudflare R2.
+type nfcFileSystem struct {
+	fs.WriteFileSystem
+}
+
+func (n nfcFileSystem) normalize(filePath string) string {
+	return strings.ReplaceAll(filePath, "é", "é")
+}
+
+func (n nfcFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
+	return n.WriteFileSystem.Stat(n.normalize(filePath))
+}
+
+func (n nfcFileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
+	return n.WriteFileSystem.OpenReader(n.normalize(filePath))
+}
+
+func (n nfcFileSystem) OpenWriter(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+	return n.WriteFileSystem.OpenWriter(n.normalize(filePath), perm)
+}
+
+func (n nfcFileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
+	return n.WriteFileSystem.MakeDir(n.normalize(dirPath), perm)
+}
+
+func (n nfcFileSystem) Remove(filePath string) error {
+	return n.WriteFileSystem.Remove(n.normalize(filePath))
+}
+
+// TestMoveEmulation_UnicodeAlias checks the copy then delete emulation of
+// Move on a server that normalizes names: a move onto another Unicode
+// normalization of the name, which removing the source would remove, is
+// refused as maybe the same file. Files with the same size, modification
+// time and permissions whose names differ in other than case and runes
+// that are not ASCII are moved.
+func TestMoveEmulation_UnicodeAlias(t *testing.T) {
+	// MemFiles created together have the same modification time
+	m := newMinimalFileSystem(fsimpl.RandomString(), nfcFileSystem{newMemBacking(t,
+		fs.NewMemFile("/café.txt", []byte("precious")),
+		fs.NewMemFile("/a.txt", []byte("aaaaaaaa")),
+		fs.NewMemFile("/b.txt", []byte("bbbbbbbb")),
+		fs.NewMemFile("/x/ü.txt", []byte("xxxxxxxx")),
+		fs.NewMemFile("/y/ü.txt", []byte("yyyyyyyy")),
+	)})
+	register(t, m)
+	root := m.RootDir()
+	ctx := t.Context()
+
+	nfc, nfd := root.Join("café.txt"), root.Join("café.txt")
+	err := fs.Move(ctx, nfd, nfc)
+	require.ErrorIs(t, err, os.ErrInvalid, "another Unicode normalization of the name")
+	require.ErrorContains(t, err, "may be the same file")
+	requireContent(t, nfc, "precious")
+
+	require.NoError(t, fs.Move(ctx, root.Join("a.txt"), root.Join("b.txt")), "other ASCII names")
+	requireContent(t, root.Join("b.txt"), "aaaaaaaa")
+	require.NoError(t, fs.Move(ctx, root.Join("x", "ü.txt"), root.Join("y", "ü.txt")), "other ASCII directories")
+	requireContent(t, root.Join("y", "ü.txt"), "xxxxxxxx")
+}

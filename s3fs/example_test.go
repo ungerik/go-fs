@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
@@ -63,7 +62,7 @@ func ExampleNewAndRegister() {
 	client := s3.New(s3.Options{
 		Region:       "us-east-1",
 		Credentials:  credentials.NewStaticCredentialsProvider("access-key", "secret-key", ""),
-		BaseEndpoint: aws.String("https://minio.example.com"),
+		BaseEndpoint: new("https://minio.example.com"),
 		UsePathStyle: true,
 	})
 	err := s3fs.NewAndRegister(client, "backup", &s3fs.Options{

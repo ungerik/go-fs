@@ -5,6 +5,54 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+s3fs works with more S3-compatible services: Cloudflare R2, Backblaze B2,
+Wasabi, DigitalOcean Spaces, Google Cloud Storage and Hetzner Object Storage,
+see the client settings for each in the s3fs README.
+
+### Changed
+
+- s3fs multipart uploads and ranged downloads use checksums only if the
+  client is configured with `WhenSupported`, which `config.LoadDefaultConfig`
+  sets. The transfer manager sent CRC32 checksums and validated downloads
+  also for a client of `s3.New` without checksum options, which sends none,
+  so on services without these checksums, like Backblaze B2 and Google Cloud
+  Storage, uploads of `MultipartUploadThreshold` bytes or more failed while
+  smaller ones worked.
+- s3fs `CopyFile` downloads and uploads an object that the service refuses
+  to copy with `501 Not Implemented` or `413`, like Cloudflare R2 and
+  Backblaze B2 the conditions of `UploadPartCopy` for objects above 5 GiB,
+  with the metadata of the source. `Touch` returns an `fs.ErrUnsupported`
+  error for such a service. On Google Cloud Storage endpoints, which have no
+  `UploadPartCopy`, objects of every size are copied with `CopyObject`.
+
+### Fixed
+
+- s3fs `ListDir`, `ListDirRecursive` and `RemoveAll` return an error for
+  a truncated listing page without a new continuation token. The SDK
+  paginator ended such a listing early, so `ListDir` returned a part of the
+  directory and `RemoveAll` reported success after deleting a part of it,
+  or repeated pages for a token it had sent before.
+- s3fs multipart uploads and copies into Wasabi buckets with an
+  `AbortIncompleteMultipartUpload` lifecycle rule failed, because the SDK
+  can't parse the ISO 8601 date that Wasabi sends in `x-amz-abort-date`.
+- s3fs copies above 5 GiB sent the part checksums that a service returned
+  for an upload created without a checksum algorithm, which services that
+  check them can refuse as a mismatch of the checksum type.
+- s3fs `Remove` succeeds when `DeleteObject` answers `404` for an object that
+  another client deleted after `Remove` found it, like Google Cloud Storage
+  does where S3 succeeds.
+- s3fs `RemoveAll` keeps the body of every `DeleteObjects` request below the
+  1 MiB that Ceph RGW accepts, the server of Hetzner and DigitalOcean Spaces,
+  which 1000 long keys exceeded.
+- The copy then delete fallback of `fs.Move` within a file system that is not
+  local and has no native `Move`, like s3fs, refuses a destination that may be
+  another Unicode normalization of the source name and has its size,
+  modification time and permissions, like it refuses another case of the name.
+  On Cloudflare R2, which matches keys by their Unicode normalization, the
+  move copied the object onto itself and then deleted it.
+
 ## [1.0.0-rc.4] - 2026-11-01
 
 Fourth release candidate: copies and moves within sftpfs, smbfs, ftpfs and

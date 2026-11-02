@@ -1,8 +1,8 @@
 # S3 File System
 
 A [go-fs](https://github.com/ungerik/go-fs) file system for Amazon S3 and
-S3-compatible object stores (DigitalOcean Spaces, Wasabi, Backblaze B2,
-...).
+S3-compatible object stores (Cloudflare R2, Backblaze B2, Wasabi,
+DigitalOcean Spaces, Google Cloud Storage, Hetzner Object Storage, ...).
 
 ## Installation
 
@@ -106,21 +106,91 @@ See the [AWS SDK for Go v2 configuration guide](https://aws.github.io/aws-sdk-go
 
 ### S3-compatible services
 
-Point the client at the service endpoint. Most self-hosted services need
-path-style URLs, and services that don't support the checksums the SDK sends
-by default need `RequestChecksumCalculation` set to `WhenRequired`, which
-s3fs also applies to multipart uploads:
+Point the client at the service endpoint. Services that don't verify the
+checksums the SDK sends by default, or reject them, need the checksum
+options set to `WhenRequired`. s3fs applies the options of the client to
+its multipart uploads and ranged downloads too. A client of `s3.New`
+without these options sends no checksums; `config.LoadDefaultConfig` turns
+them on, set `config.WithRequestChecksumCalculation` and
+`config.WithResponseChecksumValidation` there instead.
 
 ```go
 client := s3.New(s3.Options{
-    Region:       "us-east-1",
+    Region:       "auto",
     Credentials:  credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
-    BaseEndpoint: aws.String("http://localhost:9000"),
-    UsePathStyle: true,
+    BaseEndpoint: new("https://ACCOUNT_ID.r2.cloudflarestorage.com"),
     // Only for services without support for the default checksums
     RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+    ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 })
 ```
+
+| Service | `BaseEndpoint` | `Region` | `UsePathStyle` | Checksums |
+|---|---|---|---|---|
+| Amazon S3 | not set | bucket region | `false` | SDK default |
+| Cloudflare R2 | `https://ACCOUNT_ID.r2.cloudflarestorage.com` | `auto` | either | `WhenRequired` |
+| Backblaze B2 | `https://s3.REGION.backblazeb2.com` | the region of the endpoint, like `us-west-004` | `true` for bucket names with dots | `WhenRequired`, required |
+| Wasabi | `https://s3.REGION.wasabisys.com`, the region of the bucket | the region of the bucket | `true` | `WhenRequired` |
+| DigitalOcean Spaces | `https://REGION.digitaloceanspaces.com` | `us-east-1` | `true` for bucket names with dots | `WhenRequired` |
+| Google Cloud Storage | `https://storage.googleapis.com` | `auto` | `true` | `WhenRequired`, required, plus the signing fix below |
+| Hetzner Object Storage | `https://LOCATION.your-objectstorage.com`, like `fsn1` | the location, like `fsn1` | `false` | `WhenRequired` |
+
+What else to know about the services:
+
+- **Cloudflare R2** allows one write per second to the same key and answers
+  more with `429 TooManyRequests`, which the SDK doesn't retry by default:
+  set `Retryer: retry.AddWithErrorCodes(retry.NewStandard(), "TooManyRequests")`
+  (`github.com/aws/aws-sdk-go-v2/aws/retry`). R2 matches keys by their Unicode
+  normalization, so `"café"` written with a combining accent and without one
+  is the same object; `Move` between the two spellings is refused, because
+  removing the source would remove the moved file.
+- **Backblaze B2** keeps every version of an object: overwrites, `Touch` and
+  deletes leave old versions that are billed until a lifecycle rule removes them.
+- **Wasabi** bills objects for 90 days (30 days with reserved capacity),
+  also when they are deleted or overwritten before: `Touch`, `Move` and
+  overwrites of younger objects cost the remaining days. Keys with
+  characters outside the Basic Multilingual Plane, like emoji, are rejected.
+- **DigitalOcean Spaces** Cold Storage buckets allow 25 listings per second,
+  and every write lists the key once to check that it is no directory.
+- **Google Cloud Storage** changes the `Accept-Encoding` header after the SDK
+  signed it, so every request fails with `403 SignatureDoesNotMatch` unless
+  the header is left out of the signature. Add this middleware to the
+  `APIOptions` of the client:
+
+  ```go
+  type acceptEncodingKey struct{}
+
+  // excludeAcceptEncodingFromSignature removes Accept-Encoding before
+  // the request is signed and restores it after.
+  func excludeAcceptEncodingFromSignature(stack *middleware.Stack) error {
+      err := stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc("RemoveAcceptEncoding",
+          func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
+              if req, ok := in.Request.(*smithyhttp.Request); ok {
+                  ctx = middleware.WithStackValue(ctx, acceptEncodingKey{}, req.Header.Get("Accept-Encoding"))
+                  req.Header.Del("Accept-Encoding")
+              }
+              return next.HandleFinalize(ctx, in)
+          }), "Signing", middleware.Before)
+      if err != nil {
+          return err
+      }
+      return stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc("RestoreAcceptEncoding",
+          func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
+              if req, ok := in.Request.(*smithyhttp.Request); ok {
+                  if value, _ := middleware.GetStackValue(ctx, acceptEncodingKey{}).(string); value != "" {
+                      req.Header.Set("Accept-Encoding", value)
+                  }
+              }
+              return next.HandleFinalize(ctx, in)
+          }), "Signing", middleware.After)
+  }
+  ```
+
+  `middleware` is `github.com/aws/smithy-go/middleware`, `smithyhttp` is
+  `github.com/aws/smithy-go/transport/http`. Use HMAC keys as credentials.
+  Google Cloud Storage has no `UploadPartCopy`; s3fs recognizes its endpoints
+  and copies objects of every size with `CopyObject`. Incomplete multipart
+  uploads never expire there, a lifecycle rule should delete them.
 
 ## How S3 concepts map to the file system
 
@@ -162,7 +232,10 @@ client := s3.New(s3.Options{
   memory and uploads it on `Close`.
 - **Copy and touch.** `CopyFile` is a server-side `CopyObject`, objects
   above 5 GiB are copied in parts with `UploadPartCopy`. The copy keeps the
-  storage class and the server-side encryption of the source. `Touch` of an
+  storage class and the server-side encryption of the source. A service that
+  refuses the copy with `501 Not Implemented` or `413`, like Cloudflare R2 and
+  Backblaze B2 the conditions of `UploadPartCopy`, gets the object downloaded
+  and uploaded, with the metadata of the source. `Touch` of an
   existing object copies it onto itself, because S3 can't update
   `LastModified` in place. It keeps the `Content-Type` and the other content
   headers, the user metadata, the storage class and the encryption; it
@@ -191,8 +264,8 @@ copy or a tool like [rclone](https://rclone.org).
 ```go
 func migrateLeadingSlashKeys(ctx context.Context, client *s3.Client, bucket string) error {
     paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-        Bucket: aws.String(bucket),
-        Prefix: aws.String("/"),
+        Bucket: new(bucket),
+        Prefix: new("/"),
     })
     for paginator.HasMorePages() {
         page, err := paginator.NextPage(ctx)
@@ -205,9 +278,9 @@ func migrateLeadingSlashKeys(ctx context.Context, client *s3.Client, bucket stri
             // The copy source is URL-encoded, S3 decodes a "+" as space
             source := bucket + "/" + strings.ReplaceAll(url.PathEscape(oldKey), "+", "%2B")
             _, err = client.CopyObject(ctx, &s3.CopyObjectInput{
-                Bucket:     aws.String(bucket),
-                Key:        aws.String(newKey),
-                CopySource: aws.String(source),
+                Bucket:     new(bucket),
+                Key:        new(newKey),
+                CopySource: new(source),
             })
             if err != nil {
                 return fmt.Errorf("copying %q: %w", oldKey, err)
@@ -240,7 +313,9 @@ unavailable, meaning the `docker` command is not installed or its daemon
 doesn't answer `docker info`. When Docker is available but the container
 can't be started, the test run fails instead of skipping, except on Windows,
 where Docker usually can't run the Linux image and the tests are skipped.
-The offline tests (constructors, escaping, writers) always run.
+The offline tests (constructors, escaping, writers, and the provider quirks
+against a fake store in memory: checksums, abort dates, refused copies,
+broken listing pages, delete batches) always run.
 
 ```bash
 go test ./...

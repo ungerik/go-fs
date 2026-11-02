@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -85,6 +86,32 @@ func fsSplitDirAndName(fileSystem FileSystem, filePath string) (dir, name string
 func fsSplitPath(fileSystem FileSystem, filePath string) []string {
 	filePath = strings.TrimPrefix(filePath, fileSystem.Prefix())
 	return fsimpl.SplitPath(filePath[fsVolumeLen(fileSystem, filePath):], fileSystem.Separator())
+}
+
+// mayBeOtherSpelling reports if the paths a and b of fileSystem may name the
+// same entry on a server that matches names by case, like a case-insensitive
+// disk, or by Unicode normalization, like Cloudflare R2 and macOS: their
+// volumes are equal ignoring case, they have the same number of elements,
+// and every pair of elements is equal ignoring case or has a rune that is
+// not ASCII. Other Unicode normalizations of a name only differ in such
+// runes, without the normalization tables nothing more can be told.
+func mayBeOtherSpelling(fileSystem FileSystem, a, b string) bool {
+	if !strings.EqualFold(a[:fsVolumeLen(fileSystem, a)], b[:fsVolumeLen(fileSystem, b)]) {
+		return false
+	}
+	aElems, bElems := fsSplitPath(fileSystem, a), fsSplitPath(fileSystem, b)
+	if len(aElems) != len(bElems) {
+		return false
+	}
+	isASCII := func(s string) bool {
+		return !strings.ContainsFunc(s, func(r rune) bool { return r > unicode.MaxASCII })
+	}
+	for i, aElem := range aElems {
+		if !strings.EqualFold(aElem, bElems[i]) && isASCII(aElem) && isASCII(bElems[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // fsIsHidden returns if filePath is hidden using HiddenFileSystem
@@ -868,13 +895,15 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 			}
 			if evalFS != nil {
 				sameFile = isSameEvaluatedPath(evalFS, evalSrc, evalDest)
-				if !sameFile && !moveLink && strings.EqualFold(evalSrc, evalDest) && isSameFileInfo(srcInfo, destInfo) {
+				if !sameFile && !moveLink && mayBeOtherSpelling(evalFS, evalSrc, evalDest) && isSameFileInfo(srcInfo, destInfo) {
 					// Another case of the name on a case-insensitive server,
-					// which removing the source would remove, can't be told
-					// from another file with the same size, modification time
-					// and permissions. Another hard link of the file keeps the
-					// copy, which copyFileTo writes next to it, see mayBeSrc.
-					return fmt.Errorf("%w: %s and %s may be the same file under another case of its name", os.ErrInvalid, errSubject(src), errSubject(dest))
+					// or another Unicode normalization of it on a server that
+					// normalizes names, like Cloudflare R2, which removing the
+					// source would remove, can't be told from another file with
+					// the same size, modification time and permissions. Another
+					// hard link of the file keeps the copy, which copyFileTo
+					// writes next to it, see mayBeSrc.
+					return fmt.Errorf("%w: %s and %s may be the same file under another case or Unicode normalization of its name", os.ErrInvalid, errSubject(src), errSubject(dest))
 				}
 			}
 		}
