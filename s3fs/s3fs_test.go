@@ -2,17 +2,22 @@ package s3fs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"crypto/md5" // #nosec G501 -- like the ETag of S3
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -147,7 +153,7 @@ func setupS3MockServer(ctx context.Context) bool {
 		}
 
 		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
-			Bucket: aws.String(testBucketName),
+			Bucket: new(testBucketName),
 		})
 		if err == nil {
 			log.Printf("S3Mock server is ready and bucket '%s' created", testBucketName)
@@ -156,7 +162,7 @@ func setupS3MockServer(ctx context.Context) bool {
 
 		// Check if bucket already exists (which is also OK)
 		_, headErr := client.HeadBucket(ctx, &s3.HeadBucketInput{
-			Bucket: aws.String(testBucketName),
+			Bucket: new(testBucketName),
 		})
 		if headErr == nil {
 			log.Printf("S3Mock server is ready (bucket already exists)")
@@ -204,7 +210,7 @@ func createS3Client(optFns ...func(*s3.Options)) *s3.Client {
 			testSecretKey,
 			"",
 		),
-		BaseEndpoint: aws.String(testS3Endpoint),
+		BaseEndpoint: new(testS3Endpoint),
 		UsePathStyle: true, // S3Mock serves buckets as path elements
 		// S3Mock doesn't return the part checksums of a multipart upload
 		// that the default CRC32 checksums require for completing it
@@ -231,8 +237,8 @@ func newTestFileSystem(t *testing.T, opts *Options) (*fileSystem, *s3.Client) {
 func putObject(t *testing.T, client *s3.Client, k, content string) {
 	t.Helper()
 	_, err := client.PutObject(t.Context(), &s3.PutObjectInput{
-		Bucket: aws.String(testBucketName),
-		Key:    aws.String(k),
+		Bucket: new(testBucketName),
+		Key:    new(k),
 		Body:   strings.NewReader(content),
 	})
 	require.NoError(t, err, "PutObject(%q)", k)
@@ -271,8 +277,8 @@ func cleanupTestDir(ctx context.Context, t *testing.T, client *s3.Client, dirPat
 
 	// List all objects with the test directory prefix
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(testBucketName),
-		Prefix: aws.String(dirPath),
+		Bucket: new(testBucketName),
+		Prefix: new(dirPath),
 	})
 
 	for paginator.HasMorePages() {
@@ -285,7 +291,7 @@ func cleanupTestDir(ctx context.Context, t *testing.T, client *s3.Client, dirPat
 		for _, obj := range page.Contents {
 			if obj.Key != nil {
 				_, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{
-					Bucket: aws.String(testBucketName),
+					Bucket: new(testBucketName),
 					Key:    obj.Key,
 				})
 				if err != nil {
@@ -317,8 +323,8 @@ func Test_fileSystem_MultipartUploadDownload(t *testing.T) {
 		require.NoError(t, err, "WriteAll should succeed for large file")
 
 		head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
-			Bucket: aws.String(testBucketName),
-			Key:    aws.String(key(testFilePath)),
+			Bucket: new(testBucketName),
+			Key:    new(key(testFilePath)),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, int64(len(data)), aws.ToInt64(head.ContentLength), "object size")
@@ -466,18 +472,19 @@ func TestNew_InvalidPrefixRedacted(t *testing.T) {
 
 // httptestClient returns an S3 client without retries for a test server
 // with handler that stands in for S3, so that a test runs offline.
-func httptestClient(t *testing.T, handler http.HandlerFunc) *s3.Client {
+// optFns change its options.
+func httptestClient(t *testing.T, handler http.HandlerFunc, optFns ...func(*s3.Options)) *s3.Client {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	return s3.New(s3.Options{
 		Region:                     testRegion,
 		Credentials:                credentials.NewStaticCredentialsProvider(testAccessKey, testSecretKey, ""),
-		BaseEndpoint:               aws.String(server.URL),
+		BaseEndpoint:               new(server.URL),
 		UsePathStyle:               true,
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		RetryMaxAttempts:           1,
-	})
+	}, optFns...)
 }
 
 // TestRemoveRootOffline checks that Remove and RemoveAll refuse the root
@@ -690,10 +697,11 @@ func (st *shortPageStore) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	maxKeys := cmp.Or(query.Get("max-keys"), "1000") // the default of S3
 	result := listBucketResult{
 		Name:              "bucket",
 		Prefix:            prefix,
-		MaxKeys:           query.Get("max-keys"),
+		MaxKeys:           maxKeys,
 		ContinuationToken: token,
 		IsTruncated:       n < 2*len(keys),
 	}
@@ -798,6 +806,17 @@ func TestShortTruncatedListingPages(t *testing.T) {
 		st.mtx.Unlock()
 	})
 
+	t.Run("ListDir", func(t *testing.T) {
+		_, f := newStore(t, "", 0)
+		var names []string
+		err := f.ListDir(t.Context(), "/dir", nil, func(info *fs.FileInfo) error {
+			names = append(names, info.Name)
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"file.txt"}, names, "the keys of all short pages")
+	})
+
 	// The first page asks for the keys the check needs, the pages after a
 	// truncated page without a match for the most keys a page returns
 	t.Run("FollowUpPagesAskForMaxKeys", func(t *testing.T) {
@@ -833,6 +852,23 @@ func TestShortTruncatedListingPages(t *testing.T) {
 			defer st.mtx.Unlock()
 			assert.Empty(t, st.deleted, "nothing must be deleted")
 			assert.Zero(t, st.writes, "nothing must be written")
+		})
+
+		// ListDir, ListDirRecursive and RemoveAll read every page, so the
+		// broken page 2 is an error instead of a listing that ends early,
+		// which the SDK paginator made of a missing token, or that repeats
+		// pages until the store fails, which it made of a repeated one
+		t.Run("BrokenToken/"+brokenToken+"/Listings", func(t *testing.T) {
+			st, f := newStore(t, brokenToken, 2)
+			ctx := t.Context()
+			ignore := func(*fs.FileInfo) error { return nil }
+			assert.ErrorIs(t, f.ListDir(ctx, "/dir", nil, ignore), errTruncatedWithoutToken, "ListDir")
+			assert.ErrorIs(t, f.ListDirRecursive(ctx, "/dir", nil, ignore), errTruncatedWithoutToken, "ListDirRecursive")
+			assert.ErrorIs(t, f.RemoveAll(ctx, "/dir"), errTruncatedWithoutToken, "RemoveAll")
+			st.mtx.Lock()
+			defer st.mtx.Unlock()
+			assert.Zero(t, st.writes, "RemoveAll must not delete a part of the listing")
+			assert.Empty(t, st.deleted, "RemoveAll must not delete a part of the listing")
 		})
 
 		// Page 1 has the marker, so Stat decides before the broken page 2,
@@ -916,8 +952,8 @@ func TestSpecialKeyNames(t *testing.T) {
 		// S3Mock refuses to copy an object onto itself without user metadata,
 		// AWS accepts it with the REPLACE directive that Touch uses
 		_, err := client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:   aws.String(testBucketName),
-			Key:      aws.String(key(src)),
+			Bucket:   new(testBucketName),
+			Key:      new(key(src)),
 			Body:     strings.NewReader(name),
 			Metadata: map[string]string{"name": "special"},
 		})
@@ -930,8 +966,8 @@ func TestSpecialKeyNames(t *testing.T) {
 		assert.NoError(t, f.Touch(src, 0), "Touch(%q)", src)
 	}
 	_, err := client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(testBucketName),
-		Key:    aws.String(key(dir + "/a b.txt")),
+		Bucket: new(testBucketName),
+		Key:    new(key(dir + "/a b.txt")),
 	})
 	assert.True(t, isNotFound(err), "copying a+b.txt must not create a b.txt")
 }
@@ -946,12 +982,12 @@ func TestTouchKeepsMetadata(t *testing.T) {
 	t.Cleanup(func() { _ = f.RemoveAll(context.Background(), "/"+testDataDir+"/touch") })
 
 	_, err := client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:             aws.String(testBucketName),
-		Key:                aws.String(k),
+		Bucket:             new(testBucketName),
+		Key:                new(k),
 		Body:               strings.NewReader("<p>"),
-		ContentType:        aws.String("text/html"),
-		ContentDisposition: aws.String(`attachment; filename="meta.html"`),
-		CacheControl:       aws.String("no-cache"),
+		ContentType:        new("text/html"),
+		ContentDisposition: new(`attachment; filename="meta.html"`),
+		CacheControl:       new("no-cache"),
 		Metadata:           map[string]string{"owner": "erik"},
 	})
 	require.NoError(t, err)
@@ -962,8 +998,8 @@ func TestTouchKeepsMetadata(t *testing.T) {
 	require.NoError(t, f.Touch("/"+k, 0))
 
 	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(testBucketName),
-		Key:    aws.String(k),
+		Bucket: new(testBucketName),
+		Key:    new(k),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "text/html", aws.ToString(head.ContentType), "Content-Type")
@@ -997,8 +1033,8 @@ func TestListDirSkipsKeysWithoutPath(t *testing.T) {
 	t.Cleanup(func() {
 		_ = f.RemoveAll(context.Background(), "/"+dir)
 		_, _ = client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
-			Bucket: aws.String(testBucketName),
-			Key:    aws.String("/" + dir + "/legacy.txt"),
+			Bucket: new(testBucketName),
+			Key:    new("/" + dir + "/legacy.txt"),
 		})
 	})
 	putObject(t, client, dir+"/d//x.txt", "x")
@@ -1041,8 +1077,8 @@ func TestListDirSkipsKeysWithoutPath(t *testing.T) {
 // for the keys with a leading slash that go-fs v0 wrote.
 func migrateLeadingSlashKeys(ctx context.Context, client *s3.Client, bucket string) error {
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket),
-		Prefix: aws.String("/"),
+		Bucket: new(bucket),
+		Prefix: new("/"),
 	})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -1055,9 +1091,9 @@ func migrateLeadingSlashKeys(ctx context.Context, client *s3.Client, bucket stri
 			// The copy source is URL-encoded, S3 decodes a "+" as space
 			source := bucket + "/" + strings.ReplaceAll(url.PathEscape(oldKey), "+", "%2B")
 			_, err = client.CopyObject(ctx, &s3.CopyObjectInput{
-				Bucket:     aws.String(bucket),
-				Key:        aws.String(newKey),
-				CopySource: aws.String(source),
+				Bucket:     new(bucket),
+				Key:        new(newKey),
+				CopySource: new(source),
 			})
 			if err != nil {
 				return fmt.Errorf("copying %q: %w", oldKey, err)
@@ -1145,10 +1181,10 @@ func TestCopyFileInParts(t *testing.T) {
 
 	data := largeData(11 * mib)
 	_, err := client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(testBucketName),
-		Key:         aws.String(dir + "/src.bin"),
+		Bucket:      new(testBucketName),
+		Key:         new(dir + "/src.bin"),
 		Body:        bytes.NewReader(data),
-		ContentType: aws.String("application/x-test"),
+		ContentType: new("application/x-test"),
 		Metadata:    map[string]string{"owner": "erik"},
 	})
 	require.NoError(t, err)
@@ -1158,8 +1194,8 @@ func TestCopyFileInParts(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(data, copied), "copied content")
 	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(testBucketName),
-		Key:    aws.String(dir + "/dest.bin"),
+		Bucket: new(testBucketName),
+		Key:    new(dir + "/dest.bin"),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "application/x-test", aws.ToString(head.ContentType), "Content-Type of the copy")
@@ -1180,14 +1216,14 @@ func TestCopyFileInParts(t *testing.T) {
 	// copy fails after the upload was created: the ETag of the source
 	// changed, so S3 answers UploadPartCopy with 412 Precondition Failed
 	stale := *head
-	stale.ETag = aws.String(`"00000000000000000000000000000000"`)
+	stale.ETag = new(`"00000000000000000000000000000000"`)
 	err = f.copyObjectInParts(ctx, client, dir+"/src.bin", dir+"/stale.bin", &stale)
 	assert.True(t, hasErrorCode(err, "PreconditionFailed"), "copy of a changed source: %v", err)
 	_, err = f.Stat("/" + dir + "/stale.bin")
 	assert.ErrorIs(t, err, os.ErrNotExist, "a failed copy must not create the object")
 	uploads, err := client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
-		Bucket: aws.String(testBucketName),
-		Prefix: aws.String(dir + "/"),
+		Bucket: new(testBucketName),
+		Prefix: new(dir + "/"),
 	})
 	require.NoError(t, err)
 	assert.Empty(t, uploads.Uploads, "a failed copy must abort its multipart upload")
@@ -1231,4 +1267,605 @@ func TestValidateName(t *testing.T) {
 	for _, name := range []string{"\xff.txt", `a\b`, "a\x01b", "a\nb", strings.Repeat("a", 1025), strings.Repeat("ä", 513)} {
 		assert.ErrorIs(t, f.ValidateName(name), os.ErrInvalid, "%.20q", name)
 	}
+}
+
+// fakeObject is an object of a fakeStore.
+type fakeObject struct {
+	data        []byte
+	contentType string
+	metadata    http.Header // the x-amz-meta- headers
+}
+
+// fakeMultipartUpload is a multipart upload of a fakeStore.
+type fakeMultipartUpload struct {
+	key    string
+	object fakeObject // without data
+	parts  map[int][]byte
+}
+
+// fakeStore stands in for an S3-compatible store with objects in memory,
+// so that tests of the requests s3fs sends run offline: HeadObject,
+// GetObject with Range and If-Match, ListObjectsV2 with pages of max-keys,
+// PutObject, CopyObject, multipart uploads with UploadPart and
+// UploadPartCopy, DeleteObject and DeleteObjects. The fields before mtx
+// configure the answers of the store and must not change during a test.
+type fakeStore struct {
+	// copyStatus answers CopyObject and UploadPartCopy with this
+	// HTTP status if it is not zero
+	copyStatus int
+	// abortDate is the x-amz-abort-date header of CreateMultipartUpload
+	abortDate string
+	// partChecksum is the ChecksumCRC32 of every CopyPartResult
+	partChecksum string
+	// deleteStatus answers DeleteObject with this HTTP status if it is not zero
+	deleteStatus int
+	// deleteObjectsStatus answers DeleteObjects with this HTTP status if it is not zero
+	deleteObjectsStatus int
+
+	mtx       sync.Mutex
+	objects   map[string]fakeObject
+	uploads   map[string]*fakeMultipartUpload
+	requests  []*http.Request // without body
+	completes []string        // the bodies of CompleteMultipartUpload
+	deletes   []string        // the bodies of DeleteObjects
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{objects: map[string]fakeObject{}, uploads: map[string]*fakeMultipartUpload{}}
+}
+
+// etag returns the quoted ETag of data.
+func etag(data []byte) string {
+	return fmt.Sprintf(`"%x"`, md5.Sum(data)) // #nosec G401 -- like the ETag of S3
+}
+
+// writeError answers with an S3 error.
+func writeError(w http.ResponseWriter, status int, code string) {
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, "<Error><Code>%s</Code><Message>%s</Message></Error>", code, code)
+}
+
+// objectOfRequest returns the content type and user metadata of an upload request.
+func objectOfRequest(r *http.Request) fakeObject {
+	object := fakeObject{contentType: r.Header.Get("Content-Type"), metadata: http.Header{}}
+	for name, values := range r.Header {
+		if strings.HasPrefix(name, "X-Amz-Meta-") {
+			object.metadata[name] = values
+		}
+	}
+	return object
+}
+
+// copyRange returns the data of the x-amz-copy-source of r and its range,
+// or false after answering with an error.
+func (st *fakeStore) copyRange(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	if st.copyStatus != 0 {
+		writeError(w, st.copyStatus, http.StatusText(st.copyStatus))
+		return nil, false
+	}
+	srcKey, err := url.PathUnescape(strings.TrimPrefix(r.Header.Get("X-Amz-Copy-Source"), "bucket/"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "InvalidArgument")
+		return nil, false
+	}
+	src, ok := st.objects[srcKey]
+	if !ok {
+		writeError(w, http.StatusNotFound, "NoSuchKey")
+		return nil, false
+	}
+	if ifMatch := r.Header.Get("X-Amz-Copy-Source-If-Match"); ifMatch != "" && ifMatch != etag(src.data) {
+		writeError(w, http.StatusPreconditionFailed, "PreconditionFailed")
+		return nil, false
+	}
+	var start, end int
+	if _, err := fmt.Sscanf(r.Header.Get("X-Amz-Copy-Source-Range"), "bytes=%d-%d", &start, &end); err == nil {
+		return src.data[start : end+1], true
+	}
+	return src.data, true
+}
+
+func (st *fakeStore) handler(w http.ResponseWriter, r *http.Request) {
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "IncompleteBody")
+		return
+	}
+	st.requests = append(st.requests, r.Clone(context.Background()))
+	query := r.URL.Query()
+	k := strings.TrimPrefix(r.URL.Path, "/bucket/")
+	isCopy := r.Header.Get("X-Amz-Copy-Source") != ""
+	switch {
+	case r.Method == http.MethodGet && query.Has("list-type"):
+		st.list(w, query)
+
+	case r.Method == http.MethodHead, r.Method == http.MethodGet:
+		object, ok := st.objects[k]
+		if !ok {
+			writeError(w, http.StatusNotFound, "NoSuchKey")
+			return
+		}
+		if ifMatch := r.Header.Get("If-Match"); ifMatch != "" && ifMatch != etag(object.data) {
+			writeError(w, http.StatusPreconditionFailed, "PreconditionFailed")
+			return
+		}
+		for name, values := range object.metadata {
+			w.Header()[name] = values
+		}
+		w.Header().Set("Content-Type", object.contentType)
+		w.Header().Set("ETag", etag(object.data))
+		w.Header().Set("Last-Modified", time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC).Format(http.TimeFormat))
+		data, status := object.data, http.StatusOK
+		var start, end int
+		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end); err == nil {
+			end = min(end, len(data)-1)
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(data)))
+			data, status = data[start:end+1], http.StatusPartialContent
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.WriteHeader(status)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(data)
+		}
+
+	case r.Method == http.MethodPost && query.Has("uploads"):
+		id := strconv.Itoa(len(st.requests))
+		st.uploads[id] = &fakeMultipartUpload{key: k, object: objectOfRequest(r), parts: map[int][]byte{}}
+		if st.abortDate != "" {
+			w.Header().Set("X-Amz-Abort-Date", st.abortDate)
+		}
+		_, _ = fmt.Fprintf(w, "<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>%s</Key><UploadId>%s</UploadId></InitiateMultipartUploadResult>", k, id)
+
+	case r.Method == http.MethodPut && query.Has("uploadId"):
+		upload, ok := st.uploads[query.Get("uploadId")]
+		partNum, err := strconv.Atoi(query.Get("partNumber"))
+		if !ok || err != nil {
+			writeError(w, http.StatusNotFound, "NoSuchUpload")
+			return
+		}
+		if !isCopy {
+			upload.parts[partNum] = body
+			w.Header().Set("ETag", etag(body))
+			return
+		}
+		data, ok := st.copyRange(w, r)
+		if !ok {
+			return
+		}
+		upload.parts[partNum] = slices.Clone(data)
+		checksum := ""
+		if st.partChecksum != "" {
+			checksum = "<ChecksumCRC32>" + st.partChecksum + "</ChecksumCRC32>"
+		}
+		_, _ = fmt.Fprintf(w, "<CopyPartResult><ETag>%s</ETag>%s</CopyPartResult>", etag(data), checksum)
+
+	case r.Method == http.MethodPost && query.Has("uploadId"):
+		upload, ok := st.uploads[query.Get("uploadId")]
+		if !ok {
+			writeError(w, http.StatusNotFound, "NoSuchUpload")
+			return
+		}
+		st.completes = append(st.completes, string(body))
+		object := upload.object
+		for i := 1; i <= len(upload.parts); i++ {
+			object.data = append(object.data, upload.parts[i]...)
+		}
+		st.objects[upload.key] = object
+		delete(st.uploads, query.Get("uploadId"))
+		_, _ = fmt.Fprintf(w, "<CompleteMultipartUploadResult><ETag>%s</ETag></CompleteMultipartUploadResult>", etag(object.data))
+
+	case r.Method == http.MethodDelete && query.Has("uploadId"):
+		delete(st.uploads, query.Get("uploadId"))
+		w.WriteHeader(http.StatusNoContent)
+
+	case r.Method == http.MethodPut && isCopy:
+		data, ok := st.copyRange(w, r)
+		if !ok {
+			return
+		}
+		object := objectOfRequest(r)
+		object.data = slices.Clone(data)
+		st.objects[k] = object
+		_, _ = fmt.Fprintf(w, "<CopyObjectResult><ETag>%s</ETag></CopyObjectResult>", etag(data))
+
+	case r.Method == http.MethodPut:
+		object := objectOfRequest(r)
+		object.data = body
+		st.objects[k] = object
+		w.Header().Set("ETag", etag(body))
+
+	case r.Method == http.MethodDelete:
+		if st.deleteStatus != 0 {
+			writeError(w, st.deleteStatus, "NoSuchKey")
+			return
+		}
+		delete(st.objects, k)
+		w.WriteHeader(http.StatusNoContent)
+
+	case r.Method == http.MethodPost && query.Has("delete"):
+		if st.deleteObjectsStatus != 0 {
+			writeError(w, st.deleteObjectsStatus, http.StatusText(st.deleteObjectsStatus))
+			return
+		}
+		st.deletes = append(st.deletes, string(body))
+		var request struct {
+			Objects []struct{ Key string } `xml:"Object"`
+		}
+		if err := xml.Unmarshal(body, &request); err != nil {
+			writeError(w, http.StatusBadRequest, "MalformedXML")
+			return
+		}
+		for _, object := range request.Objects {
+			delete(st.objects, object.Key)
+		}
+		_, _ = io.WriteString(w, "<DeleteResult></DeleteResult>")
+
+	default:
+		writeError(w, http.StatusNotImplemented, "NotImplemented")
+	}
+}
+
+// list answers a ListObjectsV2 request without delimiter
+// with pages of max-keys keys, the continuation token
+// is the last key of the page, so that deleting the listed
+// keys doesn't change the next page, like on S3.
+func (st *fakeStore) list(w http.ResponseWriter, query url.Values) {
+	prefix := query.Get("prefix")
+	var keys []string
+	for k := range st.objects {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	start := 0
+	if token := query.Get("continuation-token"); token != "" {
+		start, _ = slices.BinarySearch(keys, token)
+		if start < len(keys) && keys[start] == token {
+			start++
+		}
+	}
+	maxKeys := 1000
+	if n, err := strconv.Atoi(query.Get("max-keys")); err == nil {
+		maxKeys = n
+	}
+	end := min(start+maxKeys, len(keys))
+	result := listBucketResult{Name: "bucket", Prefix: prefix, MaxKeys: strconv.Itoa(maxKeys), IsTruncated: end < len(keys)}
+	if result.IsTruncated {
+		result.NextContinuationToken = keys[end-1]
+	}
+	for _, k := range keys[start:end] {
+		result.Contents = append(result.Contents, listedObject{Key: k, LastModified: "2026-11-02T12:00:00Z", Size: len(st.objects[k].data)})
+	}
+	result.KeyCount = len(result.Contents)
+	w.Header().Set("Content-Type", "application/xml")
+	_, _ = io.WriteString(w, xml.Header)
+	_ = xml.NewEncoder(w).Encode(result)
+}
+
+// requestsWithHeader returns "METHOD query" of the requests
+// to the store that have one of the headers.
+func (st *fakeStore) requestsWithHeader(headers ...string) []string {
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+	var found []string
+	for _, r := range st.requests {
+		for _, header := range headers {
+			if r.Header.Get(header) != "" {
+				found = append(found, r.Method+" "+r.URL.RawQuery+" "+header)
+			}
+		}
+	}
+	return found
+}
+
+// object returns the object k of the store.
+func (st *fakeStore) object(k string) (fakeObject, bool) {
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+	object, ok := st.objects[k]
+	return object, ok
+}
+
+// checksumHeaders are the request headers of the checksums of the SDK.
+var checksumHeaders = []string{
+	"X-Amz-Checksum-Algorithm",
+	"X-Amz-Sdk-Checksum-Algorithm",
+	"X-Amz-Checksum-Crc32",
+	"X-Amz-Trailer",
+	"X-Amz-Checksum-Mode",
+}
+
+// TestTransferChecksums checks that the multipart uploads and the ranged
+// downloads of the transfer manager use checksums like the client: a client
+// of s3.New that leaves the checksum options unset uses none, the transfer
+// manager used CRC32 checksums and validation for it, which services
+// without them refuse, so that only uploads below the multipart threshold
+// worked. A client with WhenSupported, the default of
+// config.LoadDefaultConfig, sends them in every request of a transfer.
+func TestTransferChecksums(t *testing.T) {
+	const mib = 1 << 20
+	data := largeData(6*mib + 17)
+	opts := &Options{MultipartUploadThreshold: 5 * mib, MultipartDownloadThreshold: 5 * mib, PartSize: 5 * mib}
+	transfer := func(t *testing.T, optFn func(*s3.Options)) *fakeStore {
+		t.Helper()
+		st := newFakeStore()
+		f, err := New(httptestClient(t, st.handler, optFn), "bucket", opts)
+		require.NoError(t, err)
+		require.NoError(t, f.(fs.WriteAllFileSystem).WriteAll(t.Context(), "/data.bin", data, 0))
+		read, err := f.(fs.ReadAllFileSystem).ReadAll(t.Context(), "/data.bin")
+		require.NoError(t, err)
+		require.True(t, bytes.Equal(data, read), "content")
+		return st
+	}
+
+	t.Run("Unset", func(t *testing.T) {
+		st := transfer(t, func(o *s3.Options) {
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationUnset
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationUnset
+		})
+		assert.Empty(t, st.requestsWithHeader(checksumHeaders...), "a client without checksums")
+	})
+
+	t.Run("WhenRequired", func(t *testing.T) {
+		st := transfer(t, func(o *s3.Options) {
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		})
+		assert.Empty(t, st.requestsWithHeader(checksumHeaders...), "a client with checksums only when required")
+	})
+
+	t.Run("WhenSupported", func(t *testing.T) {
+		st := transfer(t, func(o *s3.Options) {
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenSupported
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenSupported
+		})
+		assert.NotEmpty(t, st.requestsWithHeader("X-Amz-Checksum-Algorithm"), "CreateMultipartUpload with the algorithm")
+		assert.NotEmpty(t, st.requestsWithHeader("X-Amz-Checksum-Crc32"), "UploadPart with the checksum")
+		assert.NotEmpty(t, st.requestsWithHeader("X-Amz-Checksum-Mode"), "ranged GetObject with validation")
+	})
+}
+
+// TestInvalidAbortDate checks that multipart uploads and copies succeed
+// with a CreateMultipartUpload response whose x-amz-abort-date is no HTTP
+// date, like the ISO 8601 date of Wasabi for a bucket with an
+// AbortIncompleteMultipartUpload lifecycle rule, which the SDK fails to
+// parse after the server created the upload.
+func TestInvalidAbortDate(t *testing.T) {
+	const mib = 1 << 20
+	for _, abortDate := range []string{"2026-12-01T00:00:00Z", "Tue, 01 Dec 2026 00:00:00 GMT"} {
+		t.Run(abortDate, func(t *testing.T) {
+			st := newFakeStore()
+			st.abortDate = abortDate
+			f, err := New(httptestClient(t, st.handler), "bucket", &Options{MultipartUploadThreshold: 5 * mib, PartSize: 5 * mib})
+			require.NoError(t, err)
+			s := f.(*fileSystem)
+			s.maxCopyObjectSize = mib
+			s.copyPartSize = 5 * mib
+			ctx := t.Context()
+
+			data := largeData(6 * mib)
+			require.NoError(t, s.WriteAll(ctx, "/data.bin", data, 0), "upload in parts")
+			require.NoError(t, s.CopyFile(ctx, "/data.bin", "/copy.bin"), "copy in parts")
+			copied, ok := st.object("copy.bin")
+			require.True(t, ok)
+			assert.True(t, bytes.Equal(data, copied.data), "content of the copy")
+		})
+	}
+}
+
+// TestCopyInPartsWithoutChecksums checks that CompleteMultipartUpload of a
+// copy in parts sends no part checksums: the upload is created without a
+// checksum algorithm, and a service that returns a checksum in the
+// CopyPartResult anyway can refuse it as a mismatch of the checksum type.
+func TestCopyInPartsWithoutChecksums(t *testing.T) {
+	const mib = 1 << 20
+	st := newFakeStore()
+	st.partChecksum = "AAAAAA=="
+	f, err := New(httptestClient(t, st.handler), "bucket", nil)
+	require.NoError(t, err)
+	s := f.(*fileSystem)
+	s.maxCopyObjectSize = mib
+	s.copyPartSize = 5 * mib
+	ctx := t.Context()
+	data := largeData(11 * mib)
+	st.objects["src.bin"] = fakeObject{data: data}
+
+	require.NoError(t, s.CopyFile(ctx, "/src.bin", "/dest.bin"))
+	copied, ok := st.object("dest.bin")
+	require.True(t, ok)
+	assert.True(t, bytes.Equal(data, copied.data), "content of the copy")
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+	require.Len(t, st.completes, 1)
+	assert.Equal(t, 3, strings.Count(st.completes[0], "<ETag>"), "the ETag of every part")
+	assert.NotContains(t, st.completes[0], "Checksum", "no part checksums for an upload without an algorithm")
+
+	// With the algorithm of the upload the checksums are sent
+	part := completedPart(new(int32(1)), &types.CopyPartResult{ETag: new(`"e"`), ChecksumCRC32: new("AAAAAA==")}, true)
+	assert.Equal(t, "AAAAAA==", aws.ToString(part.ChecksumCRC32))
+	part = completedPart(new(int32(1)), &types.CopyPartResult{ETag: new(`"e"`), ChecksumCRC32: new("AAAAAA==")}, false)
+	assert.Nil(t, part.ChecksumCRC32)
+	assert.Equal(t, `"e"`, aws.ToString(part.ETag))
+}
+
+// TestRefusedCopy checks the copies of a service that refuses to copy on
+// the server, like Cloudflare R2 and Backblaze B2 the conditions of
+// UploadPartCopy with 501 Not Implemented, or Google Cloud Storage a copy
+// that takes too long with 413: CopyFile downloads and uploads the object
+// with its metadata, unless the download differs from the object,
+// Touch returns an fs.ErrUnsupported error.
+func TestRefusedCopy(t *testing.T) {
+	const mib = 1 << 20
+	for _, status := range []int{http.StatusNotImplemented, http.StatusRequestEntityTooLarge} {
+		for _, size := range []int{17, 6 * mib} {
+			t.Run(fmt.Sprintf("%d/%d", status, size), func(t *testing.T) {
+				st := newFakeStore()
+				st.copyStatus = status
+				f, err := New(httptestClient(t, st.handler), "bucket", &Options{MultipartUploadThreshold: 5 * mib, PartSize: 5 * mib})
+				require.NoError(t, err)
+				s := f.(*fileSystem)
+				// The larger object is copied in parts with UploadPartCopy
+				s.maxCopyObjectSize = mib
+				s.copyPartSize = 5 * mib
+				ctx := t.Context()
+				data := largeData(size)
+				st.objects["src.bin"] = fakeObject{
+					data:        data,
+					contentType: "application/x-test",
+					metadata:    http.Header{"X-Amz-Meta-Owner": {"erik"}},
+				}
+
+				require.NoError(t, s.CopyFile(ctx, "/src.bin", "/dest.bin"))
+				copied, ok := st.object("dest.bin")
+				require.True(t, ok, "the copy")
+				assert.True(t, bytes.Equal(data, copied.data), "content of the copy")
+				assert.Equal(t, "application/x-test", copied.contentType, "Content-Type of the copy")
+				assert.Equal(t, []string{"erik"}, copied.metadata["X-Amz-Meta-Owner"], "metadata of the copy")
+				st.mtx.Lock()
+				assert.Empty(t, st.uploads, "the refused copy in parts must be aborted")
+				st.mtx.Unlock()
+
+				err = s.Touch("/src.bin", 0)
+				assert.ErrorIs(t, err, errors.ErrUnsupported, "Touch")
+				src, _ := st.object("src.bin")
+				assert.True(t, bytes.Equal(data, src.data), "Touch must not change the object")
+			})
+		}
+	}
+
+	t.Run("ChangedSource", func(t *testing.T) {
+		st := newFakeStore()
+		st.copyStatus = http.StatusNotImplemented
+		f, err := New(httptestClient(t, st.handler), "bucket", nil)
+		require.NoError(t, err)
+		s := f.(*fileSystem)
+		st.objects["src.bin"] = fakeObject{data: []byte("new")}
+		head := &s3.HeadObjectOutput{ContentLength: new(int64(3)), ETag: new(etag([]byte("old")))}
+		err = s.copyObject(t.Context(), s.client, "src.bin", "dest.bin", head, false)
+		assert.True(t, hasErrorCode(err, "PreconditionFailed"), "the download reads the version of head: %v", err)
+		_, ok := st.object("dest.bin")
+		assert.False(t, ok, "a changed source must not be copied")
+	})
+
+	// Google Cloud Storage sends the decompressed data of an object with
+	// Content-Encoding gzip to a client that doesn't accept gzip, like the
+	// SDK, whose upload would store it as gzip
+	t.Run("TranscodedSource", func(t *testing.T) {
+		data := []byte("the decompressed data of the gzip object")
+		for name, head := range map[string]*s3.HeadObjectOutput{
+			"Content-Length":   {ContentLength: new(int64(10)), ContentEncoding: new("gzip")},
+			"Content-Encoding": {ContentLength: new(int64(len(data))), ContentEncoding: new("gzip")},
+		} {
+			t.Run(name, func(t *testing.T) {
+				st := newFakeStore()
+				st.copyStatus = http.StatusRequestEntityTooLarge
+				f, err := New(httptestClient(t, st.handler), "bucket", nil)
+				require.NoError(t, err)
+				s := f.(*fileSystem)
+				st.objects["src.bin"] = fakeObject{data: data}
+				head.ETag = new(etag(data))
+				err = s.copyObject(t.Context(), s.client, "src.bin", "dest.bin", head, false)
+				assert.ErrorIs(t, err, errors.ErrUnsupported, "a download that differs from head")
+				_, ok := st.object("dest.bin")
+				assert.False(t, ok, "other data must not be copied")
+			})
+		}
+	})
+}
+
+// TestGoogleCloudStorageCopySize checks that a file system of a client for
+// Google Cloud Storage copies objects of every size with CopyObject,
+// because it has no UploadPartCopy.
+func TestGoogleCloudStorageCopySize(t *testing.T) {
+	for endpoint, want := range map[string]int64{
+		"https://storage.googleapis.com":                      math.MaxInt64,
+		"https://storage.europe-west3.rep.googleapis.com":     math.MaxInt64,
+		"https://Storage.GoogleAPIs.com":                      math.MaxInt64,
+		"https://s3.amazonaws.com":                            maxCopyObjectSize,
+		"https://fsn1.your-objectstorage.com":                 maxCopyObjectSize,
+		"https://storage.googleapis.com.example.com":          maxCopyObjectSize,
+		"https://my-account.r2.cloudflarestorage.com":         maxCopyObjectSize,
+		"https://notstorage.googleapis.com/storage.googleapi": maxCopyObjectSize,
+	} {
+		client := s3.New(s3.Options{Region: "auto", BaseEndpoint: new(endpoint)})
+		f, err := New(client, "bucket", nil)
+		require.NoError(t, err)
+		assert.Equal(t, want, f.(*fileSystem).maxCopyObjectSize, endpoint)
+	}
+}
+
+// TestRemoveDeletedObject checks that Remove of an object that another
+// client deletes after Remove found it succeeds also on a service that
+// answers DeleteObject of a missing object with 404, like Google Cloud
+// Storage, where S3 succeeds.
+func TestRemoveDeletedObject(t *testing.T) {
+	st := newFakeStore()
+	st.deleteStatus = http.StatusNotFound
+	st.objects["file.txt"] = fakeObject{data: []byte("x")}
+	st.objects["dir/"] = fakeObject{}
+	f, err := New(httptestClient(t, st.handler), "bucket", nil)
+	require.NoError(t, err)
+	assert.NoError(t, f.(fs.WriteFileSystem).Remove("/file.txt"), "object")
+	assert.NoError(t, f.(fs.WriteFileSystem).Remove("/dir"), "directory marker")
+	assert.ErrorIs(t, f.(fs.WriteFileSystem).Remove("/missing.txt"), os.ErrNotExist, "a missing object is still an error")
+}
+
+// TestRemoveAllBodySize checks that RemoveAll deletes long keys with
+// DeleteObjects requests whose body stays below the 1 MiB that Ceph RGW
+// accepts, the server of Hetzner and DigitalOcean Spaces: 1000 keys of
+// 1000 bytes take more.
+func TestRemoveAllBodySize(t *testing.T) {
+	st := newFakeStore()
+	for i := range 1500 {
+		st.objects[fmt.Sprintf("dir/%04d-%s", i, strings.Repeat("&", 990))] = fakeObject{}
+	}
+	st.objects["dir/short.txt"] = fakeObject{}
+	st.objects["other.txt"] = fakeObject{}
+	f, err := New(httptestClient(t, st.handler), "bucket", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, f.(fs.RemoveAllFileSystem).RemoveAll(t.Context(), "/dir"))
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+	assert.Equal(t, []string{"other.txt"}, slices.Collect(maps.Keys(st.objects)), "every object below dir is deleted")
+	require.Greater(t, len(st.deletes), 2, "the long keys need more batches")
+	for _, body := range st.deletes {
+		assert.LessOrEqual(t, len(body), 1<<20, "body of DeleteObjects")
+		assert.LessOrEqual(t, strings.Count(body, "<Object>"), deleteBatchSize, "keys of DeleteObjects")
+	}
+}
+
+// TestRemoveAllWithoutDeleteObjects checks that RemoveAll deletes the
+// objects one by one on a service that answers DeleteObjects with
+// 501 Not Implemented, like the XML API of Google Cloud Storage,
+// and doesn't send DeleteObjects again for the batches after the first.
+func TestRemoveAllWithoutDeleteObjects(t *testing.T) {
+	st := newFakeStore()
+	st.deleteObjectsStatus = http.StatusNotImplemented
+	// More keys than one batch of DeleteObjects
+	const numKeys = deleteBatchSize + 500
+	for i := range numKeys {
+		st.objects[fmt.Sprintf("dir/%d.txt", i)] = fakeObject{}
+	}
+	st.objects["other.txt"] = fakeObject{}
+	f, err := New(httptestClient(t, st.handler), "bucket", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, f.(fs.RemoveAllFileSystem).RemoveAll(t.Context(), "/dir"))
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+	assert.Equal(t, []string{"other.txt"}, slices.Collect(maps.Keys(st.objects)), "every object below dir is deleted")
+	var deleteObjects, deleteObject int
+	for _, r := range st.requests {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+			deleteObjects++
+		case r.Method == http.MethodDelete:
+			deleteObject++
+		}
+	}
+	assert.Equal(t, 1, deleteObjects, "only the first batch tries DeleteObjects")
+	assert.Equal(t, numKeys+1, deleteObject, "one DeleteObject per key, and for dir itself")
 }

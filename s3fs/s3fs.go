@@ -1,5 +1,6 @@
 // Package s3fs implements a go-fs file system for Amazon S3 and
-// S3-compatible object stores like MinIO.
+// S3-compatible object stores like Cloudflare R2, Backblaze B2, Wasabi,
+// DigitalOcean Spaces, Google Cloud Storage and Hetzner Object Storage.
 //
 // S3 has no directories: an object key like "docs/readme.txt" is a file
 // whose "directory" docs exists implicitly. MakeDir creates a zero-byte
@@ -39,6 +40,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
+	smithytime "github.com/aws/smithy-go/time"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	fs "github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
@@ -60,6 +64,12 @@ const (
 	// deleteBatchSize is the maximum number of keys
 	// a single DeleteObjects request accepts.
 	deleteBatchSize = 1000
+
+	// maxDeleteBodySize limits the XML body of a DeleteObjects request
+	// below the 1 MiB that Ceph RGW accepts, the server of Hetzner and
+	// DigitalOcean Spaces, which 1000 long keys can exceed. The KiB left
+	// is for the Delete element around the objects.
+	maxDeleteBodySize = 1<<20 - 1<<10
 
 	// maxListKeys is the most keys one ListObjectsV2 page returns.
 	maxListKeys = 1000
@@ -156,8 +166,9 @@ type fileSystem struct {
 	downloadThreshold int64
 	concurrency       int
 
-	// maxCopyObjectSize and copyPartSize are fields
-	// so that tests can copy small objects in parts.
+	// maxCopyObjectSize and copyPartSize are fields so that tests can
+	// copy small objects in parts, and Google Cloud Storage copies
+	// objects of every size with CopyObject, see New.
 	maxCopyObjectSize int64
 	copyPartSize      int64
 }
@@ -201,18 +212,35 @@ func New(client *s3.Client, bucketName string, opts *Options) (fs.FileSystem, er
 	concurrency := cmp.Or(opts.Concurrency, defaultConcurrency)
 	uploadThreshold := cmp.Or(opts.MultipartUploadThreshold, defaultMultipartUploadThreshold)
 	clientOpts := client.Options()
-	transfer := transfermanager.New(client, func(o *transfermanager.Options) {
+	transfer := transfermanager.New(transferClient{client}, func(o *transfermanager.Options) {
 		o.PartSizeBytes = partSize
 		o.MultipartUploadThreshold = uploadThreshold
 		o.Concurrency = concurrency
 		o.FailTimeout = failTimeout
 		o.GetObjectType = tmtypes.GetObjectRanges
-		// The transfer manager defaults to CRC32 checksums regardless
-		// of the client, so a client configured for services that
-		// don't support them could not complete a multipart upload
-		o.RequestChecksumCalculation = clientOpts.RequestChecksumCalculation
-		o.DisableChecksumValidation = clientOpts.ResponseChecksumValidation == aws.ResponseChecksumValidationWhenRequired
+		// The transfer manager defaults to CRC32 checksums and validates
+		// the checksums of downloads regardless of the client, so a client
+		// configured for services that don't support them could not complete
+		// a multipart upload. The client only uses checksums when they are
+		// WhenSupported, which config.LoadDefaultConfig sets, a client of
+		// s3.New without them leaves them unset and uses none.
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		if clientOpts.RequestChecksumCalculation == aws.RequestChecksumCalculationWhenSupported {
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenSupported
+		}
+		o.DisableChecksumValidation = clientOpts.ResponseChecksumValidation != aws.ResponseChecksumValidationWhenSupported
 	})
+	copySize := int64(maxCopyObjectSize)
+	endpoint, err := url.Parse(aws.ToString(clientOpts.BaseEndpoint))
+	if err == nil {
+		// Google Cloud Storage (storage.googleapis.com or a regional endpoint
+		// like storage.europe-west3.rep.googleapis.com) has no UploadPartCopy,
+		// but copies objects of every size with CopyObject
+		host := strings.ToLower(endpoint.Hostname())
+		if strings.HasPrefix(host, "storage.") && strings.HasSuffix(host, ".googleapis.com") {
+			copySize = math.MaxInt64
+		}
+	}
 	return &fileSystem{
 		PathHelper:        fsimpl.PathHelper{URIPrefix: prefix, Rooted: true},
 		client:            client,
@@ -223,7 +251,7 @@ func New(client *s3.Client, bucketName string, opts *Options) (fs.FileSystem, er
 		uploadThreshold:   uploadThreshold,
 		downloadThreshold: cmp.Or(opts.MultipartDownloadThreshold, defaultMultipartDownloadThreshold),
 		concurrency:       concurrency,
-		maxCopyObjectSize: maxCopyObjectSize,
+		maxCopyObjectSize: copySize,
 		copyPartSize:      copyPartSize,
 	}, nil
 }
@@ -252,6 +280,49 @@ func NewLoadDefaultConfig(ctx context.Context, bucketName string, opts *Options)
 		return nil, err
 	}
 	return New(s3.NewFromConfig(cfg), bucketName, opts)
+}
+
+// transferClient is the client of the transfer manager,
+// its CreateMultipartUpload ignores an invalid abort date,
+// see invalidAbortDateRemover.
+type transferClient struct {
+	*s3.Client
+}
+
+func (c transferClient) CreateMultipartUpload(ctx context.Context, params *s3.CreateMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
+	// The full slice expression makes append copy optFns
+	// instead of writing into the array of the caller
+	return c.Client.CreateMultipartUpload(ctx, params, append(optFns[:len(optFns):len(optFns)], s3.WithAPIOptions(addInvalidAbortDateRemover))...)
+}
+
+// addInvalidAbortDateRemover adds an invalidAbortDateRemover to the
+// deserialize step of stack, after the deserializer of the operation,
+// so that it gets the response before the deserializer reads it.
+func addInvalidAbortDateRemover(stack *middleware.Stack) error {
+	return stack.Deserialize.Add(invalidAbortDateRemover{}, middleware.After)
+}
+
+// invalidAbortDateRemover removes an x-amz-abort-date header that is
+// no HTTP date from the response of CreateMultipartUpload. Wasabi sends
+// the date of an AbortIncompleteMultipartUpload lifecycle rule in ISO 8601,
+// which the SDK can't parse, so every multipart upload into such a bucket
+// would fail after the server created it. s3fs doesn't use the date.
+type invalidAbortDateRemover struct{}
+
+func (invalidAbortDateRemover) ID() string {
+	return "S3FSInvalidAbortDateRemover"
+}
+
+func (invalidAbortDateRemover) HandleDeserialize(ctx context.Context, in middleware.DeserializeInput, next middleware.DeserializeHandler) (middleware.DeserializeOutput, middleware.Metadata, error) {
+	out, metadata, err := next.HandleDeserialize(ctx, in)
+	if response, ok := out.RawResponse.(*smithyhttp.Response); ok {
+		if date := response.Header.Get("X-Amz-Abort-Date"); date != "" {
+			if _, parseErr := smithytime.ParseHTTPDate(strings.TrimSpace(date)); parseErr != nil {
+				response.Header.Del("X-Amz-Abort-Date")
+			}
+		}
+	}
+	return out, metadata, err
 }
 
 // getClient returns the S3 client or fs.ErrFileSystemClosed after Close.
@@ -387,13 +458,28 @@ func isNotFound(err error) bool {
 
 // isAccessDenied reports whether err is a 403 Forbidden response.
 func isAccessDenied(err error) bool {
+	return httpStatusCode(err) == http.StatusForbidden
+}
+
+// isRefusedCopy reports whether err is the answer of a service that doesn't
+// make a copy on the server: 501 Not Implemented, like Cloudflare R2 and
+// Backblaze B2 answer the conditions they don't support, or 413 Request
+// Entity Too Large, like Google Cloud Storage answers a copy that takes
+// longer than 30 seconds.
+func isRefusedCopy(err error) bool {
+	status := httpStatusCode(err)
+	return status == http.StatusNotImplemented || status == http.StatusRequestEntityTooLarge
+}
+
+// httpStatusCode returns the HTTP status code of the response of err, or 0.
+func httpStatusCode(err error) int {
 	if respErr, ok := errors.AsType[interface {
 		error
 		HTTPStatusCode() int
 	}](err); ok {
-		return respErr.HTTPStatusCode() == http.StatusForbidden
+		return respErr.HTTPStatusCode()
 	}
-	return false
+	return 0
 }
 
 // hasErrorCode reports whether err is an S3 API error with one of codes.
@@ -487,7 +573,7 @@ func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix s
 		Prefix:  &prefix,
 		MaxKeys: &maxKeys,
 	}
-	var tokens map[string]bool // the continuation tokens of the listed pages
+	tokens := make(map[string]bool)
 	for pages := 1; ; pages++ {
 		if pages > maxListingPages {
 			return nil, fmt.Errorf("listing %s: %w", s.file(prefix), errListingTooLong)
@@ -501,20 +587,32 @@ func (s *fileSystem) findObject(ctx context.Context, client *s3.Client, prefix s
 				return &page.Contents[i], nil
 			}
 		}
-		if !aws.ToBool(page.IsTruncated) {
-			return nil, nil
+		more, err := s.continueListing(input, page, tokens)
+		if !more {
+			return nil, err
 		}
-		token := aws.ToString(page.NextContinuationToken)
-		if token == "" || tokens[token] {
-			return nil, fmt.Errorf("listing %s: %w", s.file(prefix), errTruncatedWithoutToken)
-		}
-		if tokens == nil {
-			tokens = make(map[string]bool)
-		}
-		tokens[token] = true
-		input.ContinuationToken = &token
-		input.MaxKeys = aws.Int32(maxListKeys)
+		input.MaxKeys = new(int32(maxListKeys))
 	}
+}
+
+// continueListing sets the ContinuationToken of input for the page after
+// page of a ListObjectsV2 listing and returns true, or false if page was
+// the last one. A truncated page without a new continuation token, also
+// with a token of an earlier page, is an error wrapping
+// errTruncatedWithoutToken. tokens holds the continuation tokens of the
+// listing, continueListing adds the new one. The SDK paginator ends such a
+// listing without an error or repeats it, so listings don't use it.
+func (s *fileSystem) continueListing(input *s3.ListObjectsV2Input, page *s3.ListObjectsV2Output, tokens map[string]bool) (bool, error) {
+	if !aws.ToBool(page.IsTruncated) {
+		return false, nil
+	}
+	token := aws.ToString(page.NextContinuationToken)
+	if token == "" || tokens[token] {
+		return false, fmt.Errorf("listing %s: %w", s.file(aws.ToString(input.Prefix)), errTruncatedWithoutToken)
+	}
+	tokens[token] = true
+	input.ContinuationToken = &token
+	return true, nil
 }
 
 // dirExists reports if k is a directory: a marker object "k/" exists
@@ -631,16 +729,16 @@ func (s *fileSystem) listDir(ctx context.Context, dirPath string, patterns []str
 	prefix := dirKey(dirPath)
 	input := &s3.ListObjectsV2Input{
 		Bucket: &s.bucketName,
-		Prefix: aws.String(prefix),
+		Prefix: new(prefix),
 	}
 	if !recursive {
-		input.Delimiter = aws.String(Separator)
+		input.Delimiter = new(Separator)
 	}
 	// Any key below the prefix, the marker included, makes it a directory
 	found := prefix == ""
-	paginator := s3.NewListObjectsV2Paginator(client, input)
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+	tokens := make(map[string]bool)
+	for more := true; more; {
+		page, err := client.ListObjectsV2(ctx, input)
 		if err != nil {
 			return err
 		}
@@ -685,6 +783,10 @@ func (s *fileSystem) listDir(ctx context.Context, dirPath string, patterns []str
 			if err != nil {
 				return err
 			}
+		}
+		more, err = s.continueListing(input, page, tokens)
+		if err != nil {
+			return err
 		}
 	}
 	if !found {
@@ -913,7 +1015,8 @@ func (s *fileSystem) OpenReadWriter(filePath string, perm fs.Permissions) (fs.Re
 // above 5 GiB it doesn't keep the tags.
 //
 // It returns an fs.ErrUnsupported error if the service refuses to copy an
-// object onto itself, like some S3-compatible services do.
+// object onto itself, like some S3-compatible services do, see also
+// isRefusedCopy.
 // Touch of a directory does nothing.
 func (s *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	client, err := s.getWriteClient()
@@ -953,7 +1056,7 @@ func (s *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 		// The object was replaced after HeadObject,
 		// so it has a new modification time anyway
 		return nil
-	case hasErrorCode(err, "InvalidRequest"):
+	case hasErrorCode(err, "InvalidRequest"), isRefusedCopy(err):
 		return fmt.Errorf("%w: %w", fs.NewErrUnsupported(s, "Touch of an existing object"), err)
 	}
 	return err
@@ -1009,7 +1112,7 @@ func (s *fileSystem) Remove(filePath string) error {
 			Bucket: &s.bucketName,
 			Key:    &k,
 		})
-		return err
+		return ignoreNotFound(err)
 	}
 	if k == "" {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, s)
@@ -1029,11 +1132,24 @@ func (s *fileSystem) Remove(filePath string) error {
 		Bucket: &s.bucketName,
 		Key:    &marker,
 	})
+	return ignoreNotFound(err)
+}
+
+// ignoreNotFound returns nil for a "not found" error of DeleteObject, which
+// Google Cloud Storage returns for a missing object where S3 succeeds,
+// like for an object that another client deleted after Remove found it.
+func ignoreNotFound(err error) error {
+	if isNotFound(err) {
+		return nil
+	}
 	return err
 }
 
 // RemoveAll deletes the object at filePath and every object below it
-// (including directory markers) with batched DeleteObjects requests.
+// (including directory markers) with batched DeleteObjects requests
+// of at most 1000 keys and a body below 1 MiB, see maxDeleteBodySize,
+// or one DeleteObject request per key on a service that answers
+// DeleteObjects with 501 Not Implemented.
 // A missing path is not an error. The root directory can't be removed,
 // that would delete every object of the bucket, it is an error
 // wrapping os.ErrInvalid.
@@ -1052,15 +1168,51 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 	if k == "" {
 		return fmt.Errorf("%w: can't remove root directory of %s", os.ErrInvalid, s)
 	}
-	batch := []types.ObjectIdentifier{{Key: aws.String(k)}}
+	var batch []types.ObjectIdentifier
+	batchBody := 0  // the most bytes that the objects of batch take in the body
+	perKey := false // DeleteObjects answered 501 Not Implemented
 	deleteBatch := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
-		out, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: &s.bucketName,
-			Delete: &types.Delete{Objects: batch, Quiet: aws.Bool(true)},
-		})
+		// The SDK sends DeleteObjects with a CRC32 checksum and without
+		// Content-MD5, also with RequestChecksumCalculation WhenRequired,
+		// so servers that only accept Content-MD5, which the S3 API used to
+		// require, refuse it with "Missing required header for this request:
+		// Content-MD5". None of the services that s3fs documents is known
+		// to need it (2026-11): Cloudflare R2 refused CRC32 alone in
+		// January 2025 and accepts it since February 2025, Ceph RGW
+		// (Hetzner, DigitalOcean Spaces) doesn't require it, nothing
+		// says that Wasabi or Backblaze B2 do.
+		// If a service does, add Content-MD5 to this request with
+		// s3.WithAPIOptions(smithyhttp.AddContentChecksumMiddleware),
+		// AWS accepts both headers.
+		var out *s3.DeleteObjectsOutput
+		var err error
+		if !perKey {
+			out, err = client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+				Bucket: &s.bucketName,
+				Delete: &types.Delete{Objects: batch, Quiet: new(true)},
+			})
+			perKey = httpStatusCode(err) == http.StatusNotImplemented
+		}
+		if perKey {
+			// A service without DeleteObjects, like the XML API of
+			// Google Cloud Storage, gets the keys deleted one by one,
+			// also the batches after the first one that it refused
+			for _, obj := range batch {
+				_, err = client.DeleteObject(ctx, &s3.DeleteObjectInput{
+					Bucket: &s.bucketName,
+					Key:    obj.Key,
+				})
+				err = ignoreNotFound(err)
+				if err != nil {
+					return err
+				}
+			}
+			batch, batchBody = batch[:0], 0
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -1069,25 +1221,46 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 				return fmt.Errorf("deleting %s: %s: %s", s.file(aws.ToString(e.Key)), code, aws.ToString(e.Message))
 			}
 		}
-		batch = batch[:0]
+		batch, batchBody = batch[:0], 0
 		return nil
 	}
-	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+	addToBatch := func(objKey *string) error {
+		// An escaped byte of the key, like "&" as "&amp;", takes at most 5 bytes
+		size := len("<Object><Key></Key></Object>") + 5*len(*objKey)
+		if len(batch) == deleteBatchSize || batchBody+size > maxDeleteBodySize {
+			err := deleteBatch()
+			if err != nil {
+				return err
+			}
+		}
+		batch = append(batch, types.ObjectIdentifier{Key: objKey})
+		batchBody += size
+		return nil
+	}
+	// The object at filePath, deleted with the objects below it
+	err = addToBatch(&k)
+	if err != nil {
+		return err
+	}
+	input := &s3.ListObjectsV2Input{
 		Bucket: &s.bucketName,
-		Prefix: aws.String(k + Separator),
-	})
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+		Prefix: new(k + Separator),
+	}
+	tokens := make(map[string]bool)
+	for more := true; more; {
+		page, err := client.ListObjectsV2(ctx, input)
 		if err != nil {
 			return err
 		}
 		for _, obj := range page.Contents {
-			batch = append(batch, types.ObjectIdentifier{Key: obj.Key})
-			if len(batch) == deleteBatchSize {
-				if err := deleteBatch(); err != nil {
-					return err
-				}
+			err = addToBatch(obj.Key)
+			if err != nil {
+				return err
 			}
+		}
+		more, err = s.continueListing(input, page, tokens)
+		if err != nil {
+			return err
 		}
 	}
 	return deleteBatch()
@@ -1095,6 +1268,8 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 
 // CopyFile copies an object within the bucket server-side,
 // objects above 5 GiB in parts. Copying an object onto itself is a no-op.
+// An object that the service refuses to copy, see isRefusedCopy,
+// is downloaded and uploaded, without its tags.
 // It returns an fs.ErrIsDirectory error if srcFile or destFile is a directory.
 func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	client, err := s.getWriteClient()
@@ -1141,33 +1316,83 @@ func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 // With touch true the copy replaces the metadata, which a copy of an
 // object onto itself needs, with the metadata of head, and fails with a
 // "PreconditionFailed" error if the object changed after HeadObject.
+//
+// Without touch, a copy that the service refuses to make, see
+// isRefusedCopy, is made by downloading and uploading the object,
+// with the metadata of head like copyObjectInParts and like it without
+// the tags of the source. The download reads
+// the version of head, so it fails with a "PreconditionFailed" error if the
+// object changed, and fails with an fs.ErrUnsupported error if its
+// Content-Length or Content-Encoding differs from head. The upload only
+// commits the object if it read all data.
 func (s *fileSystem) copyObject(ctx context.Context, client *s3.Client, srcKey, destKey string, head *s3.HeadObjectOutput, touch bool) error {
+	var err error
 	if aws.ToInt64(head.ContentLength) > s.maxCopyObjectSize {
-		return s.copyObjectInParts(ctx, client, srcKey, destKey, head)
+		err = s.copyObjectInParts(ctx, client, srcKey, destKey, head)
+	} else {
+		input := &s3.CopyObjectInput{
+			Bucket:     &s.bucketName,
+			CopySource: new(s.copySource(srcKey)),
+			Key:        &destKey,
+			// Without them the copy would get the defaults of the bucket
+			StorageClass:         head.StorageClass,
+			ServerSideEncryption: head.ServerSideEncryption,
+			SSEKMSKeyId:          head.SSEKMSKeyId,
+			BucketKeyEnabled:     head.BucketKeyEnabled,
+		}
+		if touch {
+			input.CopySourceIfMatch = head.ETag
+			input.MetadataDirective = types.MetadataDirectiveReplace
+			input.Metadata = head.Metadata
+			input.ContentType = head.ContentType
+			input.ContentEncoding = head.ContentEncoding
+			input.ContentDisposition = head.ContentDisposition
+			input.ContentLanguage = head.ContentLanguage
+			input.CacheControl = head.CacheControl
+			input.Expires = expires(head)
+			input.WebsiteRedirectLocation = head.WebsiteRedirectLocation
+		}
+		_, err = client.CopyObject(ctx, input)
 	}
-	input := &s3.CopyObjectInput{
-		Bucket:     &s.bucketName,
-		CopySource: aws.String(s.copySource(srcKey)),
-		Key:        &destKey,
-		// Without them the copy would get the defaults of the bucket
-		StorageClass:         head.StorageClass,
-		ServerSideEncryption: head.ServerSideEncryption,
-		SSEKMSKeyId:          head.SSEKMSKeyId,
-		BucketKeyEnabled:     head.BucketKeyEnabled,
+	if touch || !isRefusedCopy(err) {
+		return err
 	}
-	if touch {
-		input.CopySourceIfMatch = head.ETag
-		input.MetadataDirective = types.MetadataDirectiveReplace
-		input.Metadata = head.Metadata
-		input.ContentType = head.ContentType
-		input.ContentEncoding = head.ContentEncoding
-		input.ContentDisposition = head.ContentDisposition
-		input.ContentLanguage = head.ContentLanguage
-		input.CacheControl = head.CacheControl
-		input.Expires = expires(head)
-		input.WebsiteRedirectLocation = head.WebsiteRedirectLocation
+	refused := err
+	out, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket:  &s.bucketName,
+		Key:     &srcKey,
+		IfMatch: head.ETag,
+	})
+	if err != nil {
+		return err
 	}
-	_, err := client.CopyObject(ctx, input)
+	defer out.Body.Close()
+	if out.ContentLength == nil || *out.ContentLength != aws.ToInt64(head.ContentLength) ||
+		aws.ToString(out.ContentEncoding) != aws.ToString(head.ContentEncoding) {
+		// Like the decompressed data of an object with Content-Encoding
+		// gzip that Google Cloud Storage sends to a client that doesn't
+		// accept gzip, which the SDK doesn't, without a Content-Length
+		return fmt.Errorf("%w: the download of %s is not the stored object: %w", fs.NewErrUnsupported(s, "CopyFile of an object that the service refuses to copy"), s.file(srcKey), refused)
+	}
+	_, err = s.transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{
+		Bucket: &s.bucketName,
+		Key:    &destKey,
+		Body:   out.Body,
+		// The size makes the parts large enough for the 10000 parts
+		ContentLength:           head.ContentLength,
+		Metadata:                head.Metadata,
+		ContentType:             head.ContentType,
+		ContentEncoding:         head.ContentEncoding,
+		ContentDisposition:      head.ContentDisposition,
+		ContentLanguage:         head.ContentLanguage,
+		CacheControl:            head.CacheControl,
+		Expires:                 expires(head),
+		WebsiteRedirectLocation: head.WebsiteRedirectLocation,
+		StorageClass:            tmtypes.StorageClass(head.StorageClass),
+		ServerSideEncryption:    tmtypes.ServerSideEncryption(head.ServerSideEncryption),
+		SSEKMSKeyID:             head.SSEKMSKeyId,
+		BucketKeyEnabled:        head.BucketKeyEnabled,
+	})
 	return err
 }
 
@@ -1207,7 +1432,7 @@ func (s *fileSystem) copyObjectInParts(ctx context.Context, client *s3.Client, s
 		ServerSideEncryption:    head.ServerSideEncryption,
 		SSEKMSKeyId:             head.SSEKMSKeyId,
 		BucketKeyEnabled:        head.BucketKeyEnabled,
-	})
+	}, s3.WithAPIOptions(addInvalidAbortDateRemover))
 	if err != nil {
 		return err
 	}
@@ -1225,6 +1450,9 @@ func (s *fileSystem) copyObjectInParts(ctx context.Context, client *s3.Client, s
 		err = errors.Join(err, abortErr)
 	}()
 
+	// The parts have checksums only with the algorithm of the upload, a
+	// service that returns its own anyway could refuse them as mismatch
+	withChecksums := created.ChecksumAlgorithm != ""
 	numParts := (size + partSize - 1) / partSize
 	parts := make([]types.CompletedPart, numParts)
 	partCtx, cancel := context.WithCancelCause(ctx)
@@ -1236,21 +1464,21 @@ func (s *fileSystem) copyObjectInParts(ctx context.Context, client *s3.Client, s
 			for i := range partNums {
 				start := i * partSize
 				end := min(start+partSize, size) - 1
-				partNum := aws.Int32(int32(i + 1)) // #nosec G115 -- at most maxUploadParts
+				partNum := new(int32(i + 1)) // #nosec G115 -- at most maxUploadParts
 				out, err := client.UploadPartCopy(partCtx, &s3.UploadPartCopyInput{
 					Bucket:            &s.bucketName,
 					Key:               &destKey,
 					UploadId:          created.UploadId,
 					PartNumber:        partNum,
-					CopySource:        aws.String(s.copySource(srcKey)),
-					CopySourceRange:   aws.String(fmt.Sprintf("bytes=%d-%d", start, end)),
+					CopySource:        new(s.copySource(srcKey)),
+					CopySourceRange:   new(fmt.Sprintf("bytes=%d-%d", start, end)),
 					CopySourceIfMatch: head.ETag,
 				})
 				if err != nil {
 					cancel(err)
 					continue
 				}
-				parts[i] = completedPart(partNum, out.CopyPartResult)
+				parts[i] = completedPart(partNum, out.CopyPartResult, withChecksums)
 			}
 		})
 	}
@@ -1276,12 +1504,15 @@ feed:
 	return err
 }
 
-// completedPart returns the CompletedPart of a copied part
-// with the checksums that CompleteMultipartUpload needs
-// if the client calculated them.
-func completedPart(partNum *int32, result *types.CopyPartResult) types.CompletedPart {
+// completedPart returns the CompletedPart of a copied part, with the
+// checksums of result that CompleteMultipartUpload needs for an upload
+// with a checksum algorithm if withChecksums is true.
+func completedPart(partNum *int32, result *types.CopyPartResult, withChecksums bool) types.CompletedPart {
 	if result == nil {
 		return types.CompletedPart{PartNumber: partNum}
+	}
+	if !withChecksums {
+		return types.CompletedPart{PartNumber: partNum, ETag: result.ETag}
 	}
 	return types.CompletedPart{
 		PartNumber:        partNum,

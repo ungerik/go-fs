@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/ungerik/go-fs/fsimpl"
 )
@@ -868,13 +869,32 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 			}
 			if evalFS != nil {
 				sameFile = isSameEvaluatedPath(evalFS, evalSrc, evalDest)
-				if !sameFile && !moveLink && strings.EqualFold(evalSrc, evalDest) && isSameFileInfo(srcInfo, destInfo) {
-					// Another case of the name on a case-insensitive server,
-					// which removing the source would remove, can't be told
-					// from another file with the same size, modification time
-					// and permissions. Another hard link of the file keeps the
+				// The paths may name the same file on a server that matches
+				// names by case, like a case-insensitive disk, or by Unicode
+				// normalization, like Cloudflare R2 and macOS, if their volumes
+				// are equal ignoring case, they have the same number of
+				// elements, and every pair of elements is equal ignoring case
+				// or has a rune that is not ASCII. Other Unicode normalizations
+				// of a name only differ in such runes, without the
+				// normalization tables nothing more can be told.
+				otherSpelling := !sameFile && !moveLink && isSameFileInfo(srcInfo, destInfo) &&
+					strings.EqualFold(evalSrc[:fsVolumeLen(evalFS, evalSrc)], evalDest[:fsVolumeLen(evalFS, evalDest)])
+				if otherSpelling {
+					srcElems, destElems := fsSplitPath(evalFS, evalSrc), fsSplitPath(evalFS, evalDest)
+					otherSpelling = len(srcElems) == len(destElems)
+					isNonASCII := func(r rune) bool { return r > unicode.MaxASCII }
+					for i := 0; otherSpelling && i < len(srcElems); i++ {
+						otherSpelling = strings.EqualFold(srcElems[i], destElems[i]) ||
+							strings.ContainsFunc(srcElems[i], isNonASCII) || strings.ContainsFunc(destElems[i], isNonASCII)
+					}
+				}
+				if otherSpelling {
+					// Another case or Unicode normalization of the name, which
+					// removing the source would remove, can't be told from
+					// another file with the same size, modification time and
+					// permissions. Another hard link of the file keeps the
 					// copy, which copyFileTo writes next to it, see mayBeSrc.
-					return fmt.Errorf("%w: %s and %s may be the same file under another case of its name", os.ErrInvalid, errSubject(src), errSubject(dest))
+					return fmt.Errorf("%w: %s and %s may be the same file under another case or Unicode normalization of its name", os.ErrInvalid, errSubject(src), errSubject(dest))
 				}
 			}
 		}

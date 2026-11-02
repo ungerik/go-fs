@@ -15,7 +15,7 @@ from anywhere in your program.
 Get the backend together with the core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.4 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.4 # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.5 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.5 # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs
 ```
 
 ## The constructor rule every backend follows

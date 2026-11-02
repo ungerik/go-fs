@@ -170,8 +170,8 @@ func TestOpenWriterStreaming(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(data, read), "streamed content")
 	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(testBucketName),
-		Key:    aws.String(dir + "/large.bin"),
+		Bucket: new(testBucketName),
+		Key:    new(dir + "/large.bin"),
 	})
 	require.NoError(t, err)
 	assert.True(t, strings.HasSuffix(strings.Trim(aws.ToString(head.ETag), `"`), "-3"), "streamed in 3 parts: ETag %s", aws.ToString(head.ETag))
@@ -192,8 +192,8 @@ func TestOpenWriterStreaming(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(data, read), "Close must replace the existing object")
 	head, err = client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(testBucketName),
-		Key:    aws.String(dir + "/replaced.bin"),
+		Bucket: new(testBucketName),
+		Key:    new(dir + "/replaced.bin"),
 	})
 	require.NoError(t, err)
 	assert.True(t, strings.HasSuffix(strings.Trim(aws.ToString(head.ETag), `"`), "-3"), "replaced in 3 parts: ETag %s", aws.ToString(head.ETag))
@@ -210,8 +210,8 @@ func TestOpenWriterStreaming(t *testing.T) {
 	_, err = f.Stat("/" + dir + "/aborted.bin")
 	assert.ErrorIs(t, err, os.ErrNotExist, "Abort must not create the object")
 	uploads, err := client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
-		Bucket: aws.String(testBucketName),
-		Prefix: aws.String(dir + "/"),
+		Bucket: new(testBucketName),
+		Prefix: new(dir + "/"),
 	})
 	require.NoError(t, err)
 	assert.Empty(t, uploads.Uploads, "Abort must abort the multipart upload")

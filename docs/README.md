@@ -57,7 +57,7 @@ tests.
 
 | Document                                           | Contents                                           |
 | -------------------------------------------------- | -------------------------------------------------- |
-| [s3fs](../s3fs/README.md)                          | S3 credentials, S3-compatible services, concept mapping |
+| [s3fs](../s3fs/README.md)                          | S3 credentials, settings for R2, B2, Wasabi, Spaces, GCS and Hetzner, concept mapping |
 | [azureblobfs](../azureblobfs/README.md)            | Azure credentials, blob name mapping, Azurite tests |
 | [sftpfs](../sftpfs/README.md)                      | Host keys, reconnects, shared connections          |
 | [ftpfs](../ftpfs/README.md)                        | FTPS TLS options, control connection behaviour     |

@@ -16,10 +16,10 @@ Install
 -------
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.4
+go get github.com/ungerik/go-fs@v1.0.0-rc.5
 ```
 
-Requires Go 1.26 or newer. v1.0.0-rc.4 is the release candidate for v1.0.0,
+Requires Go 1.26 or newer. v1.0.0-rc.5 is the release candidate for v1.0.0,
 which freezes the v1 API. Until v1.0.0 is tagged, `go get` without a version
 installs v0.1.0, whose API differs; [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md)
 covers the upgrade from v0.x.
@@ -29,7 +29,7 @@ network backends are modules of their own: get the ones you use together
 with the core module, at the same version.
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.4 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.4 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.5 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.5 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
 ```
 
 Example
@@ -76,6 +76,10 @@ Features
 - **Change the storage, keep the code** — every backend answers the same
   `File` methods, and an operation a backend can't do natively runs on a
   generic implementation built on its core methods.
+- **Use S3-compatible stores** — the [s3fs README](s3fs/README.md) has the
+  client settings for Cloudflare R2, Backblaze B2, Wasabi, DigitalOcean
+  Spaces, Google Cloud Storage and Hetzner Object Storage, and s3fs copies
+  large objects also where the service refuses to copy them on the server.
 - **Copy and move between any two file systems** — `fs.CopyFile` and
   `fs.Move` take files on different backends, and use the server-side copy or
   move when both are on one backend that has it.
@@ -186,10 +190,10 @@ covers, and where it can before anything is written.
   the move a no-op, a rename to the new case of the name, or an error.
   Within sftpfs, smbfs and other file systems that are not local, the
   fallback also refuses a path through a link to a parent directory and
-  another case of the name with the same size, modification time and
-  permissions, and a move between a `SubFileSystem` and its parent uses
-  the native `Move` of the parent if it has one, like the server-side
-  rename of sftpfs and smbfs.
+  another case or Unicode normalization of the name with the same size,
+  modification time and permissions, and a move between a `SubFileSystem`
+  and its parent uses the native `Move` of the parent if it has one, like
+  the server-side rename of sftpfs and smbfs.
   Moving a symbolic link onto the file it points to is an error on the local
   and in-memory file systems, with sftpfs and smbfs and in the copy then
   delete fallback, like `mv` reports "are the same file", instead of a link
@@ -1069,8 +1073,8 @@ from `Options.MultipartDownloadThreshold` (16 MiB) on with concurrent range
 requests, and writers from `OpenWriter` upload the parts while they are
 written. Directories are object key prefixes; `MakeDir` creates a zero-byte
 marker object so empty directories exist too.
-[s3fs/README.md](s3fs/README.md) has the credential setup, the
-S3-compatible service configuration and the full concept mapping.
+[s3fs/README.md](s3fs/README.md) has the credential setup, the client
+settings for each S3-compatible service and the full concept mapping.
 
 ### sftpfs
 
