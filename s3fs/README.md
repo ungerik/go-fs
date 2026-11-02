@@ -13,7 +13,7 @@ service refuses to copy them on the server.
 Get the backend together with the go-fs core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.4 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.4
+go get github.com/ungerik/go-fs@v1.0.0-rc.5 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.5
 ```
 
 ## Usage
@@ -147,8 +147,8 @@ What else to know about the services:
   set `Retryer: retry.AddWithErrorCodes(retry.NewStandard(), "TooManyRequests")`
   (`github.com/aws/aws-sdk-go-v2/aws/retry`). R2 matches keys by their Unicode
   normalization, so `"café"` written with a combining accent and without one
-  is the same object; `Move` between the two spellings is refused, because
-  removing the source would remove the moved file.
+  is the same object; `Move` of a file between the two spellings is refused,
+  because removing the source would remove the moved file.
 - **Backblaze B2** keeps every version of an object: overwrites, `Touch` and
   deletes leave old versions that are billed until a lifecycle rule removes them.
 - **Wasabi** bills objects for 90 days (30 days with reserved capacity),

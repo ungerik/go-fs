@@ -243,9 +243,11 @@ More behaviours to rely on:
   count either. Within one other file system, also through a `SubFileSystem`
   and its parent, the copy then delete fallback also refuses a file that the
   other path reaches through a link to a parent directory, on `sftpfs` and
-  `smbfs`, and a destination that only differs in case and has the size,
-  modification time and permissions of the source, which may be the source
-  on a case-insensitive server, also on `s3fs`, which has no native `Move`.
+  `smbfs`, and a destination that may be another case or Unicode
+  normalization of the source's name and has its size, modification time
+  and permissions, which may be the source on a server that matches names
+  by case or by normalization, like Cloudflare R2, also on `s3fs`, which has
+  no native `Move`.
 - **The root directory of a `SubFileSystem` is never moved:** `Move` of it
   is an error wrapping `os.ErrInvalid` before anything is copied, also to
   another file system.

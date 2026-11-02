@@ -108,9 +108,10 @@ func JoinCleanFilePath(uriParts ...string) File {
 // for a local file with other hard links that keep it. Within one file system
 // that is not local, also through SubFileSystems, the fallback also refuses
 // a file that the other path reaches through a link to a parent directory,
-// and a destination that only differs in case and has the size, modification
-// time and permissions of source, which may be source on a case-insensitive
-// server. A move between a SubFileSystem and its parent that is not local
+// and a destination that may be another case or Unicode normalization of the
+// name and has the size, modification time and permissions of source, which
+// may be source on a server that matches names by case or by normalization,
+// like Cloudflare R2. A move between a SubFileSystem and its parent that is not local
 // uses the native Move of the parent if it has one, except for a symbolic
 // link. The root directory of a SubFileSystem is never moved,
 // that is an error wrapping [os.ErrInvalid].
