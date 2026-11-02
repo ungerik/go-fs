@@ -76,6 +76,10 @@ Features
 - **Change the storage, keep the code** — every backend answers the same
   `File` methods, and an operation a backend can't do natively runs on a
   generic implementation built on its core methods.
+- **Use S3-compatible stores** — the [s3fs README](s3fs/README.md) has the
+  client settings for Cloudflare R2, Backblaze B2, Wasabi, DigitalOcean
+  Spaces, Google Cloud Storage and Hetzner Object Storage, and s3fs copies
+  large objects also where the service refuses to copy them on the server.
 - **Copy and move between any two file systems** — `fs.CopyFile` and
   `fs.Move` take files on different backends, and use the server-side copy or
   move when both are on one backend that has it.
@@ -1069,8 +1073,8 @@ from `Options.MultipartDownloadThreshold` (16 MiB) on with concurrent range
 requests, and writers from `OpenWriter` upload the parts while they are
 written. Directories are object key prefixes; `MakeDir` creates a zero-byte
 marker object so empty directories exist too.
-[s3fs/README.md](s3fs/README.md) has the credential setup, the
-S3-compatible service configuration and the full concept mapping.
+[s3fs/README.md](s3fs/README.md) has the credential setup, the client
+settings for each S3-compatible service and the full concept mapping.
 
 ### sftpfs
 

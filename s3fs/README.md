@@ -1,8 +1,12 @@
 # S3 File System
 
-A [go-fs](https://github.com/ungerik/go-fs) file system for Amazon S3 and
-S3-compatible object stores (Cloudflare R2, Backblaze B2, Wasabi,
-DigitalOcean Spaces, Google Cloud Storage, Hetzner Object Storage, ...).
+Objects in Amazon S3 and S3-compatible stores as
+[go-fs](https://github.com/ungerik/go-fs) files: `s3://bucket/report.pdf` is
+read, written, listed, copied and moved like a local path.
+[S3-compatible services](#s3-compatible-services) has the client settings for
+Cloudflare R2, Backblaze B2, Wasabi, DigitalOcean Spaces, Google Cloud Storage
+and Hetzner Object Storage, and s3fs copies large objects also where the
+service refuses to copy them on the server.
 
 ## Installation
 
