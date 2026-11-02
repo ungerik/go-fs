@@ -110,7 +110,8 @@ See the [AWS SDK for Go v2 configuration guide](https://aws.github.io/aws-sdk-go
 
 ### S3-compatible services
 
-Point the client at the service endpoint. Services that don't verify the
+Point the client at the service endpoint. Self-hosted services like MinIO
+or Ceph RGW usually need `UsePathStyle: true`. Services that don't verify the
 checksums the SDK sends by default, or reject them, need the checksum
 options set to `WhenRequired`. s3fs applies the options of the client to
 its multipart uploads and ranged downloads too. A client of `s3.New`
@@ -193,8 +194,10 @@ What else to know about the services:
   `middleware` is `github.com/aws/smithy-go/middleware`, `smithyhttp` is
   `github.com/aws/smithy-go/transport/http`. Use HMAC keys as credentials.
   Google Cloud Storage has no `UploadPartCopy`; s3fs recognizes its endpoints
-  and copies objects of every size with `CopyObject`. Incomplete multipart
-  uploads never expire there, a lifecycle rule should delete them.
+  and copies objects of every size with `CopyObject`. It has no
+  `DeleteObjects` either, `RemoveAll` deletes the objects one by one there.
+  Incomplete multipart uploads never expire there, a lifecycle rule should
+  delete them.
 
 ## How S3 concepts map to the file system
 
@@ -239,9 +242,9 @@ What else to know about the services:
   storage class and the server-side encryption of the source. A service that
   refuses the copy with `501 Not Implemented` or `413`, like Cloudflare R2 and
   Backblaze B2 the conditions of `UploadPartCopy`, gets the object downloaded
-  and uploaded, with the metadata of the source. `Touch` of an
-  existing object copies it onto itself, because S3 can't update
-  `LastModified` in place. It keeps the `Content-Type` and the other content
+  and uploaded, with the metadata of the source but without its tags.
+  `Touch` of an existing object copies it onto itself, because S3 can't
+  update `LastModified` in place. It keeps the `Content-Type` and the other content
   headers, the user metadata, the storage class and the encryption; it
   doesn't keep ACLs, and for objects above 5 GiB not the tags. Services that
   refuse such a copy make it return an `fs.ErrUnsupported` error.

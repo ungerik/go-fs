@@ -1221,7 +1221,7 @@ type nfcFileSystem struct {
 }
 
 func (n nfcFileSystem) normalize(filePath string) string {
-	return strings.ReplaceAll(filePath, "é", "é")
+	return strings.ReplaceAll(filePath, "e\u0301", "\u00e9")
 }
 
 func (n nfcFileSystem) Stat(filePath string) (*fs.FileInfo, error) {
@@ -1253,7 +1253,7 @@ func (n nfcFileSystem) Remove(filePath string) error {
 func TestMoveEmulation_UnicodeAlias(t *testing.T) {
 	// MemFiles created together have the same modification time
 	m := newMinimalFileSystem(fsimpl.RandomString(), nfcFileSystem{newMemBacking(t,
-		fs.NewMemFile("/café.txt", []byte("precious")),
+		fs.NewMemFile("/caf\u00e9.txt", []byte("precious")),
 		fs.NewMemFile("/a.txt", []byte("aaaaaaaa")),
 		fs.NewMemFile("/b.txt", []byte("bbbbbbbb")),
 		fs.NewMemFile("/x/ü.txt", []byte("xxxxxxxx")),
@@ -1263,7 +1263,7 @@ func TestMoveEmulation_UnicodeAlias(t *testing.T) {
 	root := m.RootDir()
 	ctx := t.Context()
 
-	nfc, nfd := root.Join("café.txt"), root.Join("café.txt")
+	nfc, nfd := root.Join("caf\u00e9.txt"), root.Join("cafe\u0301.txt")
 	err := fs.Move(ctx, nfd, nfc)
 	require.ErrorIs(t, err, os.ErrInvalid, "another Unicode normalization of the name")
 	require.ErrorContains(t, err, "may be the same file")

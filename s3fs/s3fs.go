@@ -231,11 +231,13 @@ func New(client *s3.Client, bucketName string, opts *Options) (fs.FileSystem, er
 		o.DisableChecksumValidation = clientOpts.ResponseChecksumValidation != aws.ResponseChecksumValidationWhenSupported
 	})
 	copySize := int64(maxCopyObjectSize)
-	if endpoint, err := url.Parse(aws.ToString(clientOpts.BaseEndpoint)); err == nil {
+	endpoint, err := url.Parse(aws.ToString(clientOpts.BaseEndpoint))
+	if err == nil {
 		// Google Cloud Storage (storage.googleapis.com or a regional endpoint
 		// like storage.europe-west3.rep.googleapis.com) has no UploadPartCopy,
 		// but copies objects of every size with CopyObject
-		if host := endpoint.Hostname(); strings.HasPrefix(host, "storage.") && strings.HasSuffix(host, ".googleapis.com") {
+		host := strings.ToLower(endpoint.Hostname())
+		if strings.HasPrefix(host, "storage.") && strings.HasSuffix(host, ".googleapis.com") {
 			copySize = math.MaxInt64
 		}
 	}
@@ -288,7 +290,9 @@ type transferClient struct {
 }
 
 func (c transferClient) CreateMultipartUpload(ctx context.Context, params *s3.CreateMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
-	return c.Client.CreateMultipartUpload(ctx, params, append(optFns, s3.WithAPIOptions(addInvalidAbortDateRemover))...)
+	// The full slice expression makes append copy optFns
+	// instead of writing into the array of the caller
+	return c.Client.CreateMultipartUpload(ctx, params, append(optFns[:len(optFns):len(optFns)], s3.WithAPIOptions(addInvalidAbortDateRemover))...)
 }
 
 // addInvalidAbortDateRemover adds an invalidAbortDateRemover to the
@@ -1143,7 +1147,9 @@ func ignoreNotFound(err error) error {
 
 // RemoveAll deletes the object at filePath and every object below it
 // (including directory markers) with batched DeleteObjects requests
-// of at most 1000 keys and a body below 1 MiB, see maxDeleteBodySize.
+// of at most 1000 keys and a body below 1 MiB, see maxDeleteBodySize,
+// or one DeleteObject request per key on a service that answers
+// DeleteObjects with 501 Not Implemented.
 // A missing path is not an error. The root directory can't be removed,
 // that would delete every object of the bucket, it is an error
 // wrapping os.ErrInvalid.
@@ -1176,7 +1182,7 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		// to need it (2026-11): Cloudflare R2 refused CRC32 alone in
 		// January 2025 and accepts it since February 2025, Ceph RGW
 		// (Hetzner, DigitalOcean Spaces) doesn't require it, nothing
-		// says that Wasabi, Backblaze B2 or Google Cloud Storage do.
+		// says that Wasabi or Backblaze B2 do.
 		// If a service does, add Content-MD5 to this request with
 		// s3.WithAPIOptions(smithyhttp.AddContentChecksumMiddleware),
 		// AWS accepts both headers.
@@ -1184,6 +1190,22 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 			Bucket: &s.bucketName,
 			Delete: &types.Delete{Objects: batch, Quiet: new(true)},
 		})
+		if httpStatusCode(err) == http.StatusNotImplemented {
+			// A service without DeleteObjects, like the XML API of
+			// Google Cloud Storage, gets the keys deleted one by one
+			for _, obj := range batch {
+				_, err = client.DeleteObject(ctx, &s3.DeleteObjectInput{
+					Bucket: &s.bucketName,
+					Key:    obj.Key,
+				})
+				err = ignoreNotFound(err)
+				if err != nil {
+					return err
+				}
+			}
+			batch, batchBody = batch[:0], 0
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -1199,7 +1221,8 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		// An escaped byte of the key, like "&" as "&amp;", takes at most 5 bytes
 		size := len("<Object><Key></Key></Object>") + 5*len(*objKey)
 		if len(batch) == deleteBatchSize || batchBody+size > maxDeleteBodySize {
-			if err := deleteBatch(); err != nil {
+			err := deleteBatch()
+			if err != nil {
 				return err
 			}
 		}
@@ -1208,7 +1231,8 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		return nil
 	}
 	// The object at filePath, deleted with the objects below it
-	if err := addToBatch(&k); err != nil {
+	err = addToBatch(&k)
+	if err != nil {
 		return err
 	}
 	input := &s3.ListObjectsV2Input{
@@ -1222,7 +1246,8 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 			return err
 		}
 		for _, obj := range page.Contents {
-			if err := addToBatch(obj.Key); err != nil {
+			err = addToBatch(obj.Key)
+			if err != nil {
 				return err
 			}
 		}
@@ -1237,7 +1262,7 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 // CopyFile copies an object within the bucket server-side,
 // objects above 5 GiB in parts. Copying an object onto itself is a no-op.
 // An object that the service refuses to copy, see isRefusedCopy,
-// is downloaded and uploaded.
+// is downloaded and uploaded, without its tags.
 // It returns an fs.ErrIsDirectory error if srcFile or destFile is a directory.
 func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile string) error {
 	client, err := s.getWriteClient()
@@ -1287,7 +1312,8 @@ func (s *fileSystem) CopyFile(ctx context.Context, srcFile string, destFile stri
 //
 // Without touch, a copy that the service refuses to make, see
 // isRefusedCopy, is made by downloading and uploading the object,
-// with the metadata of head like copyObjectInParts. The download reads
+// with the metadata of head like copyObjectInParts and like it without
+// the tags of the source. The download reads
 // the version of head, so it fails with a "PreconditionFailed" error if the
 // object changed. The upload only commits the object if it read all data.
 func (s *fileSystem) copyObject(ctx context.Context, client *s3.Client, srcKey, destKey string, head *s3.HeadObjectOutput, touch bool) error {

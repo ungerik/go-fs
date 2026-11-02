@@ -1299,6 +1299,8 @@ type fakeStore struct {
 	partChecksum string
 	// deleteStatus answers DeleteObject with this HTTP status if it is not zero
 	deleteStatus int
+	// deleteObjectsStatus answers DeleteObjects with this HTTP status if it is not zero
+	deleteObjectsStatus int
 
 	mtx       sync.Mutex
 	objects   map[string]fakeObject
@@ -1483,6 +1485,10 @@ func (st *fakeStore) handler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodPost && query.Has("delete"):
+		if st.deleteObjectsStatus != 0 {
+			writeError(w, st.deleteObjectsStatus, http.StatusText(st.deleteObjectsStatus))
+			return
+		}
 		st.deletes = append(st.deletes, string(body))
 		var request struct {
 			Objects []struct{ Key string } `xml:"Object"`
@@ -1750,6 +1756,7 @@ func TestGoogleCloudStorageCopySize(t *testing.T) {
 	for endpoint, want := range map[string]int64{
 		"https://storage.googleapis.com":                      math.MaxInt64,
 		"https://storage.europe-west3.rep.googleapis.com":     math.MaxInt64,
+		"https://Storage.GoogleAPIs.com":                      math.MaxInt64,
 		"https://s3.amazonaws.com":                            maxCopyObjectSize,
 		"https://fsn1.your-objectstorage.com":                 maxCopyObjectSize,
 		"https://storage.googleapis.com.example.com":          maxCopyObjectSize,
@@ -1802,4 +1809,23 @@ func TestRemoveAllBodySize(t *testing.T) {
 		assert.LessOrEqual(t, len(body), 1<<20, "body of DeleteObjects")
 		assert.LessOrEqual(t, strings.Count(body, "<Object>"), deleteBatchSize, "keys of DeleteObjects")
 	}
+}
+
+// TestRemoveAllWithoutDeleteObjects checks that RemoveAll deletes the
+// objects one by one on a service that answers DeleteObjects with
+// 501 Not Implemented, like the XML API of Google Cloud Storage.
+func TestRemoveAllWithoutDeleteObjects(t *testing.T) {
+	st := newFakeStore()
+	st.deleteObjectsStatus = http.StatusNotImplemented
+	for i := range 3 {
+		st.objects[fmt.Sprintf("dir/%d.txt", i)] = fakeObject{}
+	}
+	st.objects["other.txt"] = fakeObject{}
+	f, err := New(httptestClient(t, st.handler), "bucket", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, f.(fs.RemoveAllFileSystem).RemoveAll(t.Context(), "/dir"))
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+	assert.Equal(t, []string{"other.txt"}, slices.Collect(maps.Keys(st.objects)), "every object below dir is deleted")
 }
