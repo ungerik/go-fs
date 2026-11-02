@@ -1168,6 +1168,18 @@ func (s *fileSystem) RemoveAll(ctx context.Context, filePath string) error {
 		if len(batch) == 0 {
 			return nil
 		}
+		// The SDK sends DeleteObjects with a CRC32 checksum and without
+		// Content-MD5, also with RequestChecksumCalculation WhenRequired,
+		// so servers that only accept Content-MD5, which the S3 API used to
+		// require, refuse it with "Missing required header for this request:
+		// Content-MD5". None of the services that s3fs documents is known
+		// to need it (2026-11): Cloudflare R2 refused CRC32 alone in
+		// January 2025 and accepts it since February 2025, Ceph RGW
+		// (Hetzner, DigitalOcean Spaces) doesn't require it, nothing
+		// says that Wasabi, Backblaze B2 or Google Cloud Storage do.
+		// If a service does, add Content-MD5 to this request with
+		// s3.WithAPIOptions(smithyhttp.AddContentChecksumMiddleware),
+		// AWS accepts both headers.
 		out, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: &s.bucketName,
 			Delete: &types.Delete{Objects: batch, Quiet: new(true)},
