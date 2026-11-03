@@ -105,6 +105,12 @@ var aliases = []alias{
 		c.symlink(t, dir+"real", dir+"link")
 		return dir + "real/src.txt", dir + "LINK/SRC.TXT"
 	}},
+	{name: "SourceThroughParentLinkOtherCase", setup: func(c *conformance, t *testing.T, dir string) (string, string) {
+		// The source through the link, the destination its real path under another case
+		c.put(t, dir+"real/src.txt", srcContent)
+		c.symlink(t, dir+"real", dir+"link")
+		return dir + "link/src.txt", dir + "REAL/SRC.TXT"
+	}},
 
 	{name: "LinkToSourceDir", dir: true, setup: func(c *conformance, t *testing.T, dir string) (string, string) {
 		c.put(t, dir+"srcdir/child.txt", childContent)
