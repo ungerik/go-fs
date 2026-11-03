@@ -5,7 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## [Unreleased]
+## [1.0.0-rc.6] - 2026-11-03
+
+Sixth release candidate: the conformance suite now checks that copies and
+moves never lose data when the destination is another name of the source,
+and covers the optional path, hidden, ownership and watch interfaces, the
+listing and write helpers of `File` and its `io/fs` view. The new checks
+found a move through a linked directory under another case that deleted
+the file; it is refused now.
 
 ### Fixed
 
@@ -15,26 +22,32 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
   to `LINK/SRC.TXT`, or of `link/src.txt` to `REAL/SRC.TXT`, with `link`
   pointing to `real`. The fallback runs within a file system that is not
   local, has symbolic links and no native `Move`, also through
-  a `SubFileSystem` of one; sftpfs and smbfs move natively on the server.
-  It compared the spellings of the paths before resolving their links,
-  took the destination for another file, copied the file onto itself and
-  removed it. It now refuses such a move with an error wrapping
-  `os.ErrInvalid`.
+  a `SubFileSystem` of one, and through an `OverlayFileSystem`, also one
+  with an sftpfs or smbfs layer; sftpfs and smbfs on their own move
+  natively on the server. It compared the spellings of the paths before
+  resolving their links, took the destination for another file, copied the
+  file onto itself and removed it. It now refuses such a move with an error
+  wrapping `os.ErrInvalid`.
 
 ### Added
 
 - `fstest.RunConformance` checks that copies and moves never lose data when
   the destination names the source another way (`Aliases`): a link to the
   source or to a parent directory, another hard link, another case or Unicode
-  normalization of the name, and the root of a `SubFileSystem`. The new
-  `Config.HardLink` lets a file system with hard links run those checks.
+  normalization of the name, also through a linked directory, and the root
+  of a `SubFileSystem`. The new `Config.HardLink` lets a file system with
+  hard links run those checks; sftpfs and smbfs run them against their test
+  servers.
 - `fstest.RunConformance` also checks `URIFileSystem`, `VolumeNameFileSystem`,
   `AbsPathFileSystem` (`PathInterfaces`), `HiddenFileSystem` (`Hidden`),
   `UserFileSystem` and `GroupFileSystem` (`Ownership`), `WatchFileSystem`
   (`Watch`), the listing helpers of `File` and its `io/fs` view `File.StdFS`
   with `testing/fstest.TestFS` (`ListingHelpers`), and the write helpers of
   `File` (`WriteHelpers`). A file system that doesn't pass a new check yet can
-  skip it with `Config.Skip`.
+  skip it with `Config.Skip`; s3fs and azureblobfs skip
+  `ListingHelpers/StdFS` for now: their listings and `Stat` report
+  different modification times for some entries, and azureblobfs opens
+  a path with a backslash like one with a slash.
 
 ## [1.0.0-rc.5] - 2026-11-02
 
