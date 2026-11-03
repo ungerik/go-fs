@@ -401,6 +401,23 @@ func TestGenericEmulations_Conformance(t *testing.T) {
 	})
 }
 
+// TestInPlaceLinks_Conformance runs the conformance suite against a file
+// system that is not local, has symbolic links, writes in place like the
+// writers of sftpfs and smbfs and has no native CopyFile and Move, backed
+// by a local directory that can have hard links and may match names by
+// case. That is where a copy or move onto another name of the source can't
+// be told from one onto another file, see the Aliases checks.
+func TestInPlaceLinks_Conformance(t *testing.T) {
+	links, root := newInPlaceLocalFS(t)
+	fstest.RunConformance(t, links, fstest.Config{
+		TestDir:  root.Path(),
+		HardLink: os.Link,
+		// The minimal file system forwards Close to nothing,
+		// fs.Local can't be closed
+		SkipClose: true,
+	})
+}
+
 // requireContent requires file to exist with content.
 func requireContent(t *testing.T, file fs.File, content string) {
 	t.Helper()

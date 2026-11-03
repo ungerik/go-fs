@@ -2,6 +2,7 @@ package fs_test
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,9 +19,10 @@ func TestLocalFileSystem_Conformance(t *testing.T) {
 	})
 
 	fstest.RunConformance(t, fs.Local, fstest.Config{
-		Name:    "local file system",
-		Prefix:  "file://",
-		TestDir: testDir.LocalPath(),
+		Name:     "local file system",
+		Prefix:   "file://",
+		TestDir:  testDir.LocalPath(),
+		HardLink: os.Link,
 	})
 }
 

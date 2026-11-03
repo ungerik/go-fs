@@ -72,6 +72,7 @@ type Config struct {
 | `NoDirectories`  | Set for read-only file systems without a directory concept (`httpfs`): `Stat` of `TestDir`, directory listings and the directory error checks are skipped. The write checks need directories. |
 | `SkipClose`      | Keeps the suite from calling `Close` at the end.   |
 | `PermissionMask` | The permission bits the file system actually stores. `SetPermissions` is only checked for these bits. Zero means all bits. SMB shares keep only a read-only flag, so their mask is `fs.UserWrite`. |
+| `HardLink`       | Creates another hard link of a file, given two paths of the file system. Set it for a file system whose files can have hard links, like sftpfs or smbfs on a server with a local disk, so that `Aliases` copies and moves onto another hard link of the source. Nil skips those checks. |
 | `Skip`           | Called with the name of every sub-test before it runs, relative to the test that called `RunConformance` (`"Close"`, `"Rename/Overwrite"`). Returning true skips the sub-test and everything below it. Nil runs everything. |
 
 An empty `TestDir` fails the test immediately.
@@ -146,11 +147,14 @@ Every check is a named sub-test, so `go test -run` can select one,
 | ---------------- | -------------------------- | -------------------------------------------------- |
 | `Metadata`       | always                     | `ID`, `Prefix`, `Name`, `String`, `Separator`, `ReadableWritable`, `RootDir` |
 | `Paths`          | always                     | `CleanPath`, the derived path methods, escaped names, prefix aliases, and that URIs match the prefix at a boundary and round-trip through `fs.ParseRawURI` |
+| `PathInterfaces` | always                     | `URIFileSystem`: `PathFromURI` inverts `URIFromPath`, `SplitDirAndName`; `VolumeName`: a prefix of the path, the volume of `TestDir`, `File.VolumeName`; `AbsPath`: the paths below `TestDir` are absolute, `AbsPath`, `RelPath` joins back to the target and is `.` for identical paths, `File.AbsPath`; `FileHelpers`: `ExtLower`, `TrimExt`, `DirAndName`, `Joinf`, `PathWithSlashes`, `RawURI` |
 | `WriteSeed`      | writable                   | Creates the seed tree                              |
 | `ReadSeed`       | readable                   | Reads the seed through the `FileSystem` methods    |
 | `ReadErrors`     | readable                   | `NotExist`: `os.ErrNotExist` from `Stat`, `OpenReader`, `ReadAll` and `ListDir` of a missing path; `ListFile`: listing a file; `IsDirectory`: `fs.ErrIsDirectory` for reading a directory |
 | `ListDir`        | readable, `!NoDirectories` | Listing, patterns, the callback error, `ListDirMax`, `ListDirRecursive`, the URIs of the listed files |
 | `FileAPI`        | readable                   | The reads through the high level `File` API, `iotest.TestReader` and reads past the end on `OpenReadSeeker` |
+| `ListingHelpers` | readable, `!NoDirectories` | `File.ListDirInfo`, `ListDirRecursiveIter`, `ListDirRecursiveMax`, `Glob` (`*`, `*/`, the empty pattern, a seed path, a missing directory), `testing/fstest.TestFS` of `File.StdFS`, `File.StdDirEntry` |
+| `Hidden`         | readable, `fs.HiddenFileSystem` | `IsHidden` agrees with the `IsHidden` of the `FileInfo` of `Stat` |
 | `Lstat`          | readable, `fs.SymbolicLinkFileSystem` | `Lstat` of the seed and of a missing path |
 | `Canceled`       | readable                   | One sub-test per method with a context (`ListDir`, `ReadAll`, `File.ReadAll`, ..., and for writable file systems `WriteAll`, `Move`, `File.Rename`, `fs.CopyFile`, ...): a canceled context returns an error matching `context.Canceled` and changes nothing |
 | `WriteOnly`      | not readable               | Reads return `ErrWriteOnlyFileSystem`              |
@@ -164,8 +168,12 @@ Every check is a named sub-test, so `go test -run` can select one,
 | `ValidateName`   | writable `fs.ValidateNameFileSystem` | `ValidateName` accepts names that every file system writes and wraps `os.ErrInvalid` for the others; `Rejected`: `fs.CopyFile` to such a name fails with `os.ErrInvalid` before it writes anything; `Accepted` (readable only): every name it accepts is written, read back and listed with that name |
 | `MoveTo`         | readable + writable        | `File.MoveTo`: `Self`, `Overwrite`, `IntoDirectory`, `DirectoryOntoFile`, `IntoItself` |
 | `CopyFile`       | readable + writable        | `fs.CopyFile`: `Self`, `Overwrite`, `IntoDirectory`, `MissingParents` |
+| `Aliases`        | readable + writable        | `fs.CopyFile`, `fs.Move` (`CopyFile`, `Move`) onto a destination that names the source file another way: `LinkToSource`, `LinkOntoTarget`, `ThroughParentLink`, `HardLink`, `OtherCase`, `OtherNormalization`, `OtherCaseThroughParentLink`; `fs.CopyRecursive` and `fs.Move` of a directory (`CopyRecursive`, `MoveDir`): `LinkToSourceDir`, `ThroughParentLinkDir`, `OtherCaseDir`, `HardLinkedChild`. The operation may fail, be a no-op or replace, but the data must survive: after an error at the source, after a copy at both, after a move at the destination. An alias the file system can't make or doesn't resolve to the source is skipped (links need `fs.SymbolicLinkFileSystem`, hard links `Config.HardLink`). `SubFileSystemRoot`: `fs.Move` of the root of a `SubFileSystem` of the file system fails with `os.ErrInvalid` and keeps it |
 | `Abort`          | readable + writable        | Writers that implement `fs.WriteAborter` (`OpenWriter`, `OpenAppendWriter`, `File.OpenAppendWriter`, each with `NewFile` and `ExistingFile`): `Abort` leaves nothing behind, `Close` after `Abort` returns nil |
 | `HighLevelWrite` | readable + writable        | Writes through the `File` API, including the copy to and move to another file system |
+| `WriteHelpers`   | readable + writable        | `File.WriteAllString`/`ReadAllString`, `WriteJSONIndent`/`ReadJSON`, `WriteXMLIndent`/`ReadXML`, `Renamef`, `RemoveDirContents` with and without a pattern, which keeps sub-directories |
+| `Ownership`      | readable + writable        | `User` and `Group` of a `fs.UserFileSystem` and `fs.GroupFileSystem`: setting the reported owner again changes nothing, a missing file is `os.ErrNotExist` |
+| `Watch`          | readable + writable, `fs.WatchFileSystem` | A file created in a watched directory is reported within 10 s, the cancel function returns nil |
 | `Cleanup`        | readable + writable        | Removes everything the suite created               |
 | `ReadOnly`       | not writable               | Writes return `ErrReadOnlyFileSystem`              |
 | `Close`          | `!SkipClose`               | `Close` twice, unregistering, then one sub-test per method (`Close/Stat`, `Close/OpenWriter`, ...) that must return `ErrFileSystemClosed` |

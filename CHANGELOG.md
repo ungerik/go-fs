@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+### Fixed
+
+- `fs.Move` within sftpfs, smbfs and other file systems that are not local
+  and have symbolic links no longer deletes a file that the destination
+  reaches through a link to a parent directory under another case of its
+  name on a case-insensitive server, like `LINK/SRC.TXT` for `real/src.txt`
+  with `link` pointing to `real`. The copy-then-delete fallback compared the
+  spellings of the paths before resolving their links, took the destination
+  for another file, copied the file onto itself and removed it. It now
+  refuses such a move with an error wrapping `os.ErrInvalid`.
+
+### Added
+
+- `fstest.RunConformance` checks that copies and moves never lose data when
+  the destination names the source another way (`Aliases`): a link to the
+  source or to a parent directory, another hard link, another case or Unicode
+  normalization of the name, and the root of a `SubFileSystem`. The new
+  `Config.HardLink` lets a file system with hard links run those checks.
+- `fstest.RunConformance` also checks `URIFileSystem`, `VolumeNameFileSystem`,
+  `AbsPathFileSystem` (`PathInterfaces`), `HiddenFileSystem` (`Hidden`),
+  `UserFileSystem` and `GroupFileSystem` (`Ownership`), `WatchFileSystem`
+  (`Watch`), the listing helpers of `File` and its `io/fs` view `File.StdFS`
+  with `testing/fstest.TestFS` (`ListingHelpers`), and the write helpers of
+  `File` (`WriteHelpers`). A file system that doesn't pass a new check yet can
+  skip it with `Config.Skip`.
+
 ## [1.0.0-rc.5] - 2026-11-02
 
 Fifth release candidate: s3fs works with more S3-compatible services:

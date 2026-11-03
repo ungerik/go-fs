@@ -741,6 +741,44 @@ blob, and nothing stops it under a context without a deadline. The native
 **Priority:** P4
 **Depends on:** None
 
+### Agree on the modification times of listings and Stat in s3fs
+
+**What:** A listing reports the `LastModified` of `ListObjectsV2` with
+milliseconds, `Stat` the HTTP `Last-Modified` of `HeadObject` in whole
+seconds, and a listed directory (a common prefix) has a zero modification
+time while `Stat` of it reports one.
+
+**Why:** `File.StdFS` fails `testing/fstest.TestFS`, whose `DirEntry.Info`
+must match `Stat`, and code that compares a listed time with a `Stat` time,
+like a sync, sees every file as changed.
+
+**Context:** Found by the conformance check `ListingHelpers/StdFS`, which
+`s3fs` skips until this is decided. Options: truncate listed times to
+seconds, or take the time of `Stat` from the `x-amz-meta` of the upload;
+for directories, report no time in `Stat` either.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
+### Agree on the directories of listings and Stat in azureblobfs
+
+**What:** A listed directory (a blob prefix) has a zero modification time
+while `Stat` of it reports one, and a path with a backslash opens the blob
+of the path with a slash, because Azure stores `\` as `/`.
+
+**Why:** `File.StdFS` fails `testing/fstest.TestFS`: `DirEntry.Info` must
+match `Stat`, and `Open("sub\\nested.txt")` must fail, a backslash is part
+of an `io/fs` name.
+
+**Context:** Found by the conformance check `ListingHelpers/StdFS`, which
+`azureblobfs` skips until this is decided. For the backslash, `ValidateName`
+could reject it, like the names Azure can't store.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
 ## sftpfs, smbfs, webdavfs, uuiddir
 
 ### Remove the source of an sftpfs move onto another hard link

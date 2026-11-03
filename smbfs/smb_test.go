@@ -155,6 +155,14 @@ func Test_fileSystem(t *testing.T) {
 		TestDir: "/conformance",
 		// SMB only stores a read-only attribute
 		PermissionMask: fs.UserWrite,
+		// The share is the directory /share of the container
+		HardLink: func(existingPath, newPath string) error {
+			out, err := exec.CommandContext(t.Context(), "docker", "exec", testContainerName, "ln", "/share"+existingPath, "/share"+newPath).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("ln: %w: %s", err, out)
+			}
+			return nil
+		},
 	})
 }
 

@@ -268,6 +268,14 @@ func Test_fileSystem(t *testing.T) {
 		Name:    "SFTP",
 		Prefix:  expectedPrefix,
 		TestDir: testDataDir,
+		// The paths of the server are the paths in the container
+		HardLink: func(existingPath, newPath string) error {
+			out, err := exec.CommandContext(ctx, "docker", "exec", testContainerName, "ln", existingPath, newPath).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("ln: %w: %s", err, out)
+			}
+			return nil
+		},
 	})
 }
 
@@ -325,6 +333,10 @@ func Test_fileSystemInProcess(t *testing.T) {
 		Name:    "SFTP",
 		Prefix:  "sftp://" + testServerUser + "@" + s.addr,
 		TestDir: root + "/testdata",
+		// The paths of the server are local paths
+		HardLink: func(existingPath, newPath string) error {
+			return os.Link(filepath.FromSlash(existingPath), filepath.FromSlash(newPath))
+		},
 	}
 	if runtime.GOOS == "windows" {
 		// The in-process server stores the files on the Windows host,

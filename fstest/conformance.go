@@ -210,6 +210,13 @@ type Config struct {
 	// mask is fs.UserWrite.
 	PermissionMask fs.Permissions
 
+	// HardLink creates newPath as another hard link of the file at
+	// existingPath, both paths of the file system under test. Set it for
+	// a file system whose files can have several hard links, like sftpfs
+	// or smbfs on a server with a local disk, so that the Aliases checks
+	// copy and move onto another hard link of the source. Nil skips them.
+	HardLink func(existingPath, newPath string) error
+
 	// Skip is called with the name of every sub-test before it runs,
 	// relative to the test that called RunConformance, like "Close"
 	// or "Rename/Overwrite". The sub-test and everything below it
@@ -238,7 +245,12 @@ type Config struct {
 // read-only file systems, fs.ErrWriteOnlyFileSystem for read operations
 // on write-only file systems and fs.ErrFileSystemClosed for every
 // operation after Close, as well as the overwrite semantics of Move,
-// Rename and CopyFile.
+// Rename and CopyFile, and that copies and moves never lose data when
+// the destination names the source another way, through a symbolic link,
+// another hard link (see Config.HardLink) or another case or Unicode
+// normalization of the name. The optional path, hidden, ownership and
+// watch interfaces, the listing and write helpers of fs.File and its
+// io/fs view fs.File.StdFS are checked too.
 //
 // Every check is a named sub-test, see Config.Skip.
 func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
@@ -272,6 +284,7 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 
 	c.run(t, "Metadata", c.testMetadata)
 	c.run(t, "Paths", c.testPaths)
+	c.run(t, "PathInterfaces", c.testPathInterfaces)
 
 	if c.writable && !c.run(t, "WriteSeed", c.writeSeed) {
 		// Every later sub-test needs the seed and would only
@@ -285,6 +298,10 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 			c.run(t, "ListDir", c.testListDir)
 		}
 		c.run(t, "FileAPI", c.testFileAPI)
+		if !cfg.NoDirectories {
+			c.run(t, "ListingHelpers", c.testListingHelpers)
+		}
+		c.run(t, "Hidden", c.testHidden)
 		c.run(t, "Lstat", c.testLstat)
 		c.run(t, "Canceled", c.testCanceled)
 	} else {
@@ -304,8 +321,12 @@ func RunConformance(t *testing.T, fileSystem fs.FileSystem, cfg Config) {
 			c.run(t, "Rename", c.testRename)
 			c.run(t, "MoveTo", c.testMoveTo)
 			c.run(t, "CopyFile", c.testCopyFile)
+			c.run(t, "Aliases", c.testAliases)
 			c.run(t, "Abort", c.testAbort)
 			c.run(t, "HighLevelWrite", c.testHighLevelWrite)
+			c.run(t, "WriteHelpers", c.testWriteHelpers)
+			c.run(t, "Ownership", c.testOwnership)
+			c.run(t, "Watch", c.testWatch)
 			c.run(t, "Cleanup", c.cleanup)
 		}
 	} else {
