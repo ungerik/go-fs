@@ -9,14 +9,17 @@ and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
 ### Fixed
 
-- `fs.Move` within sftpfs, smbfs and other file systems that are not local
-  and have symbolic links no longer deletes a file that the destination
-  reaches through a link to a parent directory under another case of its
-  name on a case-insensitive server, like `LINK/SRC.TXT` for `real/src.txt`
-  with `link` pointing to `real`. The copy-then-delete fallback compared the
-  spellings of the paths before resolving their links, took the destination
-  for another file, copied the file onto itself and removed it. It now
-  refuses such a move with an error wrapping `os.ErrInvalid`.
+- The copy-then-delete fallback of `fs.Move` no longer deletes a file that
+  one path reaches through a link to a parent directory under another case
+  of its name on a case-insensitive server, like a move of `real/src.txt`
+  to `LINK/SRC.TXT`, or of `link/src.txt` to `REAL/SRC.TXT`, with `link`
+  pointing to `real`. The fallback runs within a file system that is not
+  local, has symbolic links and no native `Move`, also through
+  a `SubFileSystem` of one; sftpfs and smbfs move natively on the server.
+  It compared the spellings of the paths before resolving their links,
+  took the destination for another file, copied the file onto itself and
+  removed it. It now refuses such a move with an error wrapping
+  `os.ErrInvalid`.
 
 ### Added
 
