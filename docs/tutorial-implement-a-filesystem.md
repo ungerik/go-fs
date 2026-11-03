@@ -351,11 +351,14 @@ go test -run TestConformance -v ./...
 --- PASS: TestConformance (0.05s)
     --- PASS: TestConformance/Metadata (0.00s)
     --- PASS: TestConformance/Paths (0.00s)
+    --- PASS: TestConformance/PathInterfaces (0.00s)
     --- PASS: TestConformance/WriteSeed (0.00s)
     --- PASS: TestConformance/ReadSeed (0.00s)
     --- PASS: TestConformance/ReadErrors (0.00s)
     --- PASS: TestConformance/ListDir (0.00s)
     --- PASS: TestConformance/FileAPI (0.01s)
+    --- PASS: TestConformance/ListingHelpers (0.00s)
+    --- SKIP: TestConformance/Hidden (0.00s)
     --- SKIP: TestConformance/Lstat (0.00s)
     --- PASS: TestConformance/Canceled (0.00s)
     --- PASS: TestConformance/Write (0.00s)
@@ -367,17 +370,22 @@ go test -run TestConformance -v ./...
     --- PASS: TestConformance/Rename (0.01s)
     --- PASS: TestConformance/MoveTo (0.00s)
     --- PASS: TestConformance/CopyFile (0.00s)
+    --- PASS: TestConformance/Aliases (0.06s)
     --- PASS: TestConformance/Abort (0.00s)
     --- PASS: TestConformance/HighLevelWrite (0.00s)
+    --- PASS: TestConformance/WriteHelpers (0.00s)
+    --- PASS: TestConformance/Ownership (0.00s)
+    --- SKIP: TestConformance/Watch (0.00s)
     --- PASS: TestConformance/Cleanup (0.02s)
     --- PASS: TestConformance/Close (0.00s)
 PASS
 ```
 
-The skipped groups test interfaces you didn't implement: `Lstat` needs
-`fs.SymbolicLinkFileSystem`, `MoveFileSystem` and `CopyFileSystem` the native
-`Move` and `CopyFile`. The sub-tests of `OptionalWrite` are skipped for the
-same reason.
+The skipped groups test interfaces you didn't implement: `Hidden` needs
+`fs.HiddenFileSystem`, `Lstat` `fs.SymbolicLinkFileSystem`, `MoveFileSystem`
+and `CopyFileSystem` the native `Move` and `CopyFile`, and `Watch`
+`fs.WatchFileSystem`. The sub-tests of `OptionalWrite` and `Ownership`, and
+the link and hard link rows of `Aliases`, are skipped for the same reason.
 
 Now look at `Rename`, `MoveTo`, `CopyFile` and `HighLevelWrite`. You did not
 implement a single optional interface, and they passed — the moves, copies,

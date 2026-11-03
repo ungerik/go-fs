@@ -59,6 +59,7 @@ type Config struct {
     NoDirectories  bool
     SkipClose      bool
     PermissionMask fs.Permissions
+    HardLink       func(existingPath, newPath string) error
     Skip           func(testName string) bool
 }
 ```

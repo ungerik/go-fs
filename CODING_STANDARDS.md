@@ -1,7 +1,7 @@
 # go-fs coding standards
 
 Rules a reviewer applies to every diff. They are judgement calls that no
-linter checks; `./test-workspace.sh` covers the mechanical ones (gofmt, go vet,
+linter checks; `./test-workspace.sh` covers the mechanical ones (go vet,
 staticcheck, gosec, govulncheck, `go mod tidy -diff`, cross-compiles).
 `AGENTS.md` holds the repo rules every agent needs while writing code.
 
