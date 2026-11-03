@@ -4,12 +4,12 @@ import (
 	"errors"
 	iofs "io/fs"
 	"os"
+	"os/user"
 	"sort"
 	"strings"
+	"testing"
 	stdfstest "testing/fstest"
 	"time"
-
-	"testing"
 
 	fs "github.com/ungerik/go-fs"
 )
@@ -218,15 +218,16 @@ func (c *conformance) testOwnership(t *testing.T) {
 		}
 		c.put(t, "ownership/user.txt", "user")
 		path := c.wpath("ownership/user.txt")
-		user, err := u.User(path)
-		if errors.Is(err, errors.ErrUnsupported) {
+		owner, err := u.User(path)
+		if errors.Is(err, errors.ErrUnsupported) || errors.As(err, new(user.UnknownUserIdError)) {
+			// Also a local file whose uid has no passwd entry, like in a container
 			t.Skipf("User not available: %v", err)
 		}
 		mustNoError(t, err, "User")
-		if checkNoError(t, u.SetUser(path, user), "SetUser to the reported user %q", user) {
+		if checkNoError(t, u.SetUser(path, owner), "SetUser to the reported user %q", owner) {
 			got, err := u.User(path)
 			if checkNoError(t, err, "User after SetUser") {
-				checkEqual(t, user, got, "User after SetUser to the same user")
+				checkEqual(t, owner, got, "User after SetUser to the same user")
 			}
 		}
 		_, err = u.User(c.wpath("ownership/missing.txt"))
@@ -241,7 +242,8 @@ func (c *conformance) testOwnership(t *testing.T) {
 		c.put(t, "ownership/group.txt", "group")
 		path := c.wpath("ownership/group.txt")
 		group, err := g.Group(path)
-		if errors.Is(err, errors.ErrUnsupported) {
+		if errors.Is(err, errors.ErrUnsupported) || errors.As(err, new(user.UnknownGroupIdError)) {
+			// Also a local file whose gid has no group entry, like in a container
 			t.Skipf("Group not available: %v", err)
 		}
 		mustNoError(t, err, "Group")
@@ -261,7 +263,7 @@ func (c *conformance) testOwnership(t *testing.T) {
 var watchTimeout = 10 * time.Second
 
 // testWatch checks that a fs.WatchFileSystem reports a file created in
-// a watched directory and stops reporting after the watch is canceled.
+// a watched directory and that the cancel function of the watch succeeds.
 func (c *conformance) testWatch(t *testing.T) {
 	w, ok := c.fs.(fs.WatchFileSystem)
 	if !ok {

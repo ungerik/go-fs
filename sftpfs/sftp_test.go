@@ -333,9 +333,16 @@ func Test_fileSystemInProcess(t *testing.T) {
 		Name:    "SFTP",
 		Prefix:  "sftp://" + testServerUser + "@" + s.addr,
 		TestDir: root + "/testdata",
-		// The paths of the server are local paths
+		// The paths of the server are local paths with slashes, on Windows
+		// with a slash before the drive letter that the server strips too
 		HardLink: func(existingPath, newPath string) error {
-			return os.Link(filepath.FromSlash(existingPath), filepath.FromSlash(newPath))
+			local := func(p string) string {
+				if runtime.GOOS == "windows" {
+					p = strings.TrimPrefix(p, "/")
+				}
+				return filepath.FromSlash(p)
+			}
+			return os.Link(local(existingPath), local(newPath))
 		},
 	}
 	if runtime.GOOS == "windows" {
