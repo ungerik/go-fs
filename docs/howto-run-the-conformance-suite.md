@@ -105,6 +105,7 @@ fstest.RunConformance(t, myFS, fstest.Config{
 | No directories at all, like `httpfs`         | `NoDirectories: true`          |
 | The file system is shared and must stay open | `SkipClose: true`              |
 | Only some permission bits survive, like SMB  | `PermissionMask: fs.UserWrite` |
+| Files can have hard links                    | `HardLink`, see the [reference](reference-fstest.md#config) |
 | A check fails that you can't fix right now   | `Skip`, see step 5             |
 
 ### 4. Run it

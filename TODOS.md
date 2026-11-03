@@ -127,7 +127,7 @@ empty" while the conformance suite requires the scheme.
 
 **What:** CHANGELOG `[1.0.0]`, `VERSION` = `v1.0.0`, the MIGRATION intro
 names v1.0.0 instead of the rc, the `go get` lines in the Markdown files
-drop their `@v1.0.0-rc.5` pins (`grep -rn '@v1.0.0-rc.5' --include='*.md'`)
+drop their `@v1.0.0-rc.6` pins (`grep -rn '@v1.0.0-rc.6' --include='*.md'`)
 and the README drops the note that plain `go get` installs v0.1.0, then tag
 all modules with
 `tag-release.sh` after the merge (never the `tools` module).
@@ -739,6 +739,44 @@ blob, and nothing stops it under a context without a deadline. The native
 
 **Effort:** S
 **Priority:** P4
+**Depends on:** None
+
+### Agree on the modification times of listings and Stat in s3fs
+
+**What:** A listing reports the `LastModified` of `ListObjectsV2` with
+milliseconds, `Stat` the HTTP `Last-Modified` of `HeadObject` in whole
+seconds, and a listed directory (a common prefix) has a zero modification
+time while `Stat` of it reports one.
+
+**Why:** `File.StdFS` fails `testing/fstest.TestFS`, whose `DirEntry.Info`
+must match `Stat`, and code that compares a listed time with a `Stat` time,
+like a sync, sees every file as changed.
+
+**Context:** Found by the conformance check `ListingHelpers/StdFS`, which
+`s3fs` skips until this is decided. Options: truncate listed times to
+seconds, or take the time of `Stat` from the `x-amz-meta` of the upload;
+for directories, report no time in `Stat` either.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
+### Agree on the directories of listings and Stat in azureblobfs
+
+**What:** A listed directory (a blob prefix) has a zero modification time
+while `Stat` of it reports one, and a path with a backslash opens the blob
+of the path with a slash, because Azure stores `\` as `/`.
+
+**Why:** `File.StdFS` fails `testing/fstest.TestFS`: `DirEntry.Info` must
+match `Stat`, and `Open("sub\\nested.txt")` must fail, a backslash is part
+of an `io/fs` name.
+
+**Context:** Found by the conformance check `ListingHelpers/StdFS`, which
+`azureblobfs` skips until this is decided. For the backslash, `ValidateName`
+could reject it, like the names Azure can't store.
+
+**Effort:** S
+**Priority:** P2
 **Depends on:** None
 
 ## sftpfs, smbfs, webdavfs, uuiddir

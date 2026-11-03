@@ -16,10 +16,10 @@ Install
 -------
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.5
+go get github.com/ungerik/go-fs@v1.0.0-rc.6
 ```
 
-Requires Go 1.26 or newer. v1.0.0-rc.5 is the release candidate for v1.0.0,
+Requires Go 1.26 or newer. v1.0.0-rc.6 is the release candidate for v1.0.0,
 which freezes the v1 API. Until v1.0.0 is tagged, `go get` without a version
 installs v0.1.0, whose API differs; [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md)
 covers the upgrade from v0.x.
@@ -29,7 +29,7 @@ network backends are modules of their own: get the ones you use together
 with the core module, at the same version.
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.5 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.5 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.6 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.6 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
 ```
 
 Example
@@ -188,12 +188,14 @@ covers, and where it can before anything is written.
   paths. go-fs recognizes that through `SubFileSystem`s, and for local files
   through bind mounts, symbolic links and case-insensitive names, and makes
   the move a no-op, a rename to the new case of the name, or an error.
-  Within sftpfs, smbfs and other file systems that are not local, the
-  fallback also refuses a path through a link to a parent directory and
-  another case or Unicode normalization of the name with the same size,
-  modification time and permissions, and a move between a `SubFileSystem`
-  and its parent uses the native `Move` of the parent if it has one, like
-  the server-side rename of sftpfs and smbfs.
+  Within a file system that is not local and has no native `Move`, like
+  s3fs, also through a `SubFileSystem` of one and through an
+  `OverlayFileSystem`, the fallback also refuses a path through a link to
+  a parent directory and another case or Unicode normalization of the name
+  with the same size, modification time and permissions. sftpfs and smbfs
+  don't need it: they rename on the server, which tells another name of
+  the file from another file, and a move between a `SubFileSystem` and its
+  parent uses the native `Move` of the parent if it has one.
   Moving a symbolic link onto the file it points to is an error on the local
   and in-memory file systems, with sftpfs and smbfs and in the copy then
   delete fallback, like `mv` reports "are the same file", instead of a link

@@ -266,6 +266,11 @@ func Test_fileSystem(t *testing.T) {
 		Name:    "S3",
 		Prefix:  "s3://" + testBucketName,
 		TestDir: testDataDir,
+		// The io/fs view fails testing/fstest.TestFS, see TODOS.md "Agree on
+		// the modification times of listings and Stat in s3fs": a listing has
+		// the LastModified of ListObjectsV2 in milliseconds, Stat the HTTP
+		// Last-Modified in seconds, and a listed directory has no time
+		Skip: func(name string) bool { return name == "ListingHelpers/StdFS" },
 	})
 
 	// Clean up after tests

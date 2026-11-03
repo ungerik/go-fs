@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	fs "github.com/ungerik/go-fs"
 )
@@ -228,6 +229,56 @@ var violations = map[string]struct {
 			return base.OpenWriter(strings.TrimSuffix(filePath, "."), perm)
 		}
 	}},
+	"MoveRemovesCaseAlias": {"Aliases/Move/OtherCase", func(ref *MockFullyFeaturedFileSystem) {
+		// A server that matches names ignoring case and moves by copying
+		// and removing the source, which removes the copy onto itself
+		base := *ref
+		lower := strings.ToLower
+		ref.MockStat = func(filePath string) (*fs.FileInfo, error) { return base.Stat(lower(filePath)) }
+		ref.MockOpenReader = func(filePath string) (io.ReadCloser, error) { return base.MockOpenReader(lower(filePath)) }
+		ref.MockOpenWriter = func(filePath string, perm fs.Permissions) (io.WriteCloser, error) {
+			return base.OpenWriter(lower(filePath), perm)
+		}
+		ref.MockMakeDir = func(dirPath string, perm fs.Permissions) error { return base.MakeDir(lower(dirPath), perm) }
+		ref.MockRemove = func(filePath string) error { return base.Remove(lower(filePath)) }
+		ref.MockMove = func(ctx context.Context, filePath, destPath string) error {
+			r, err := ref.OpenReader(filePath)
+			if err != nil {
+				return err
+			}
+			data, err := io.ReadAll(r)
+			if err = errors.Join(err, r.Close()); err != nil {
+				return err
+			}
+			w, err := ref.OpenWriter(destPath, 0)
+			if err != nil {
+				return err
+			}
+			_, err = w.Write(data)
+			if err = errors.Join(err, w.Close()); err != nil {
+				return err
+			}
+			return ref.Remove(filePath)
+		}
+	}},
+	"WatchSilent": {"Watch", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockWatch = func(string, func(fs.File, fs.Event)) (func() error, error) {
+			return func() error { return nil }, nil
+		}
+	}},
+	"SetUserFails": {"Ownership/User", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockUser = func(string) (string, error) { return "user", nil }
+		ref.MockSetUser = func(string, string) error { return errors.New("denied") }
+	}},
+	"IsHiddenDisagrees": {"Hidden", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockIsHidden = func(string) bool { return false }
+	}},
+	"RelPathWrong": {"PathInterfaces/AbsPath", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockRelPath = func(string, string) (string, error) { return "wrong", nil }
+	}},
+	"VolumeNameNotPrefix": {"PathInterfaces/VolumeName", func(ref *MockFullyFeaturedFileSystem) {
+		ref.MockVolumeName = func(string) string { return "X:" }
+	}},
 	"StatAfterCloseNotExist": {"Close/Stat", func(ref *MockFullyFeaturedFileSystem) {
 		base := *ref
 		closed := false
@@ -295,5 +346,6 @@ func TestViolationHelper(t *testing.T) {
 	mustTrue(t, ok, "unknown violation %q", name)
 	ref, testDir := newMemMock("/")
 	violation.apply(ref)
+	watchTimeout = 100 * time.Millisecond
 	RunConformance(t, ref, Config{TestDir: testDir, Skip: onlyRun(violation.subTest)})
 }

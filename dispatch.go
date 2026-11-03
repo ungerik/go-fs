@@ -868,7 +868,17 @@ func moveByCopy(ctx context.Context, srcFS FileSystem, srcPath string, destFS Fi
 				evalFS, evalSrc, evalDest = srcRead, srcReadPath, destTargetPath
 			}
 			if evalFS != nil {
-				sameFile = isSameEvaluatedPath(evalFS, evalSrc, evalDest)
+				// The paths with every symbolic link resolved, see
+				// fsEvalSymlinks, are also the ones whose spellings are
+				// compared below, so that a link to a parent directory under
+				// another case, like "LINK/SRC.TXT" for "real/src.txt" with
+				// "link" pointing to "real", is compared as "real/SRC.TXT"
+				resolvedSrc, srcResolved := fsEvalSymlinks(evalFS, evalSrc)
+				resolvedDest, destResolved := fsEvalSymlinks(evalFS, evalDest)
+				if srcResolved && destResolved {
+					sameFile = resolvedSrc == resolvedDest
+					evalSrc, evalDest = resolvedSrc, resolvedDest
+				}
 				// The paths may name the same file on a server that matches
 				// names by case, like a case-insensitive disk, or by Unicode
 				// normalization, like Cloudflare R2 and macOS, if their volumes
@@ -1005,18 +1015,6 @@ func fsEvalSymlinks(fileSystem FileSystem, filePath string) (string, bool) {
 		pending = append(elems, pending...)
 	}
 	return resolved, true
-}
-
-// isSameEvaluatedPath reports if the paths a and b of fileSystem are one
-// path with every symbolic link resolved, see fsEvalSymlinks.
-// A path whose links can't be resolved is no path of the other.
-func isSameEvaluatedPath(fileSystem FileSystem, a, b string) bool {
-	aResolved, ok := fsEvalSymlinks(fileSystem, a)
-	if !ok {
-		return false
-	}
-	bResolved, ok := fsEvalSymlinks(fileSystem, b)
-	return ok && aResolved == bResolved
 }
 
 // isSubPath reports if filePath is inside the directory dirPath

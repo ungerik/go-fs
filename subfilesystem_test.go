@@ -35,6 +35,10 @@ func TestSubFileSystem_Conformance(t *testing.T) {
 		fstest.RunConformance(t, subFS, fstest.Config{
 			Prefix:  "sub://sub-local",
 			TestDir: "/conformance",
+			HardLink: func(existingPath, newPath string) error {
+				root := tempDir.Join("root").LocalPath()
+				return os.Link(filepath.Join(root, filepath.FromSlash(existingPath)), filepath.Join(root, filepath.FromSlash(newPath)))
+			},
 		})
 	})
 

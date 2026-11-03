@@ -91,6 +91,7 @@ useful when something surprises you.
 | [SECURITY](../SECURITY.md)   | Supported versions, reporting a vulnerability|
 | [TODOS](../TODOS.md)         | Open work for v1.0.0 and after          |
 | [AGENTS.md](../AGENTS.md)    | Repository conventions for contributors |
+| [CODING_STANDARDS](../CODING_STANDARDS.md) | Review rules for every diff |
 
 ## Finding your way
 
