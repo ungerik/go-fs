@@ -188,12 +188,14 @@ covers, and where it can before anything is written.
   paths. go-fs recognizes that through `SubFileSystem`s, and for local files
   through bind mounts, symbolic links and case-insensitive names, and makes
   the move a no-op, a rename to the new case of the name, or an error.
-  Within sftpfs, smbfs and other file systems that are not local, the
-  fallback also refuses a path through a link to a parent directory and
-  another case or Unicode normalization of the name with the same size,
-  modification time and permissions, and a move between a `SubFileSystem`
-  and its parent uses the native `Move` of the parent if it has one, like
-  the server-side rename of sftpfs and smbfs.
+  Within a file system that is not local and has no native `Move`, like
+  s3fs, also through a `SubFileSystem` of one and through an
+  `OverlayFileSystem`, the fallback also refuses a path through a link to
+  a parent directory and another case or Unicode normalization of the name
+  with the same size, modification time and permissions. sftpfs and smbfs
+  don't need it: they rename on the server, which tells another name of
+  the file from another file, and a move between a `SubFileSystem` and its
+  parent uses the native `Move` of the parent if it has one.
   Moving a symbolic link onto the file it points to is an error on the local
   and in-memory file systems, with sftpfs and smbfs and in the copy then
   delete fallback, like `mv` reports "are the same file", instead of a link
