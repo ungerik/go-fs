@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+### Added
+
+- `cmd/gofs`, a command line tool for every file system: `ls`, `stat`,
+  `cat`, `put`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `hash` and `cmp`, also
+  across file systems, like `gofs cp -r s3://bucket/dir sftp://host/dir`.
+  The remote file systems connect on first use with credentials from
+  environment variables, `gofs env` lists them. It is a module of its own,
+  so the core module and the backends get no new dependencies.
+
 ## [1.0.0-rc.6] - 2026-11-03
 
 Sixth release candidate: the conformance suite now checks that copies and

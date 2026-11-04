@@ -106,6 +106,18 @@ Features
   pkg/xattr and golang.org/x/sys; each network backend is a module of its
   own, so the AWS SDK only arrives with `s3fs`.
 
+Command line tool
+-----------------
+
+[gofs](cmd/gofs/README.md) brings `ls`, `cp`, `mv`, `rm`, `cat` and `cmp` to
+every file system of go-fs and copies between them. It logs in with
+environment variables and the keys and profiles of `ssh`, the AWS CLI and
+`az login`:
+
+```bash
+gofs cp -r s3://my-bucket/reports sftp://alice@example.com/backup
+```
+
 Documentation
 -------------
 
