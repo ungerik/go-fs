@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -292,6 +293,28 @@ func TestPut_Failure(t *testing.T) {
 	assert.Equal(t, 1, code)
 	code, _, _ = gofs(t, env, "", "stat", "webdav:///new.txt")
 	assert.Equal(t, 1, code, "the upload was aborted")
+}
+
+// TestPut_StatError checks that put writes nothing when it can't tell
+// if the file exists, so it never truncates or removes an existing file.
+func TestPut_StatError(t *testing.T) {
+	handler := &webdav.Handler{FileSystem: webdav.NewMemFS(), LockSystem: webdav.NewMemLS()}
+	var writes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/broken.txt" {
+			if r.Method != "PROPFIND" {
+				writes.Add(1)
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	code, stderr := runStdin(t.Context(), map[string]string{"GOFS_WEBDAV_URL": srv.URL}, strings.NewReader("new"), "put", "webdav:///broken.txt")
+	assert.Equal(t, 1, code, stderr)
+	assert.Zero(t, writes.Load(), "no PUT or DELETE after the failed stat")
 }
 
 func TestMkdirTouch(t *testing.T) {

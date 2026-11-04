@@ -586,7 +586,7 @@ func (c *connector) azureContainerClient(host, containerName string) (*container
 	// The credentials go only to the storage account of the environment,
 	// so a URI from elsewhere can't send them to another host
 	hostAccount, ok := strings.CutSuffix(strings.ToLower(host), azureBlobHostSuffix)
-	if !ok || strings.Contains(hostAccount, ".") || (account != "" && hostAccount != strings.ToLower(account)) {
+	if !ok || !isAzureAccountName(hostAccount) || (account != "" && hostAccount != strings.ToLower(account)) {
 		return nil, fmt.Errorf("the Azure credentials of the environment are only sent to the storage account host ACCOUNT%s of AZURE_STORAGE_ACCOUNT, not to %s; use AZURE_STORAGE_CONNECTION_STRING for other endpoints", azureBlobHostSuffix, host)
 	}
 	containerURL := "https://" + host + "/" + containerName
@@ -608,6 +608,15 @@ func (c *connector) azureContainerClient(host, containerName string) (*container
 		return nil, err
 	}
 	return container.NewClient(containerURL, cred, nil)
+}
+
+// isAzureAccountName reports if name is a valid name of an Azure storage
+// account: 3 to 24 lowercase letters and digits. So a host made of it and
+// azureBlobHostSuffix has no port, user info, query or fragment that would
+// send a request to another host.
+func isAzureAccountName(name string) bool {
+	return len(name) >= 3 && len(name) <= 24 &&
+		!strings.ContainsFunc(name, func(r rune) bool { return (r < 'a' || r > 'z') && (r < '0' || r > '9') })
 }
 
 func (c *connector) dropboxFile(ctx context.Context, uri, rest string) (fs.File, error) {

@@ -241,11 +241,16 @@ func (c *cli) put(ctx context.Context, flags *flag.FlagSet, args []string) error
 	if err != nil {
 		return err
 	}
-	if file.Exists() {
+	_, err = file.Stat()
+	switch {
+	case err == nil:
 		// The writers of file systems without fs.WriteAborter, like the
 		// local one and SFTP, truncate the file when they are opened,
 		// so stdin is read completely before the file is written
 		return putSpooled(ctx, file, c.stdin)
+	case !errors.Is(err, os.ErrNotExist):
+		// Only a file that doesn't exist is removed if writing fails
+		return err
 	}
 	// Like fs.CopyFile, which cp uses
 	if dir := file.Dir(); !dir.Exists() {

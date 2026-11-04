@@ -291,6 +291,24 @@ func TestAzureContainerClient(t *testing.T) {
 			err:  "only sent to the storage account host",
 		},
 		{
+			name: "SAS token for a host with a query",
+			host: "[2001:db8::1]?.blob.core.windows.net",
+			env:  map[string]string{"AZURE_STORAGE_SAS_TOKEN": "sv=2024&sig=S3cret"},
+			err:  "only sent to the storage account host",
+		},
+		{
+			name: "account key for a host with a fragment",
+			host: "localhost:8443#.blob.core.windows.net",
+			env:  map[string]string{"AZURE_STORAGE_KEY": "a2V5"},
+			err:  "only sent to the storage account host",
+		},
+		{
+			name: "default credentials for a host with a port",
+			host: "myaccount.blob.core.windows.net:8443",
+			env:  map[string]string{},
+			err:  "only sent to the storage account host",
+		},
+		{
 			name: "account key for the account in another case",
 			host: "MyAccount.blob.core.windows.net",
 			env:  map[string]string{"AZURE_STORAGE_ACCOUNT": "myaccount", "AZURE_STORAGE_KEY": "a2V5"},
