@@ -12,6 +12,7 @@ use (
 	./dropboxfs
 	./ftpfs
 	./gitfs
+	./onedrivefs
 	./s3fs
 	./sftpfs
 	./smbfs
