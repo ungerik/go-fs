@@ -10,7 +10,7 @@ of a SharePoint site.
 Get the backend together with the go-fs core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.6 github.com/ungerik/go-fs/onedrivefs@v1.0.0-rc.6
+go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/onedrivefs@v1.0.0-rc.7
 ```
 
 ## Usage
@@ -147,8 +147,9 @@ get the token, and upload sessions reject it. Pass a plain client as
   `fs.ErrDoesNotExist`.
 - **Remove.** Graph deletes folders recursively, so `Remove` checks the type
   and the child count of the item first and returns an
-  `fs.ErrDirectoryNotEmpty` for a folder with content. Only the checked
-  version (eTag) is deleted. `RemoveAll` deletes a folder with one request.
+  `fs.ErrDirectoryNotEmpty` for a folder with content and for a OneNote
+  notebook, which has no child count. Only the checked version (eTag) is
+  deleted. `RemoveAll` deletes a folder with one request.
   Deleted items go to the recycle bin of the drive.
 - **Touch.** `Touch` creates an empty file, or sets the modification time
   of the `fileSystemInfo` of an existing item, which `FileInfo.Modified`
