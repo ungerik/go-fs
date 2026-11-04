@@ -44,8 +44,12 @@ jobs:
           go-version: stable
           cache: false
 
-      # go.work builds gofs with the modules of the tagged commit
+      # Without go.work, like "go install github.com/ungerik/go-fs/cmd/gofs@<version>",
+      # with the go-fs modules that cmd/gofs/go.mod requires, so the binaries
+      # are the same build as go install
       - name: Build
+        env:
+          GOWORK: 'off'
         run: |
           name="gofs_${VERSION#v}_${GOOS}_${GOARCH}"
           exe=gofs

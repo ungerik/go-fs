@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
+	"os"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -142,6 +143,17 @@ func (c *cli) ls(ctx context.Context, flags *flag.FlagSet, args []string) error 
 	return w.Flush()
 }
 
+// endsWithDotElem reports if the last element of the path of arg is
+// "." or "..", also percent-encoded in a URI like ".../%2E%2E", because
+// the file systems decode the path of a URI before they clean it.
+func endsWithDotElem(arg string) bool {
+	if _, rest, ok := cutScheme(arg); ok {
+		arg = fsimpl.UnescapeURIPath(rest)
+	}
+	elems := strings.FieldsFunc(arg, isPathSeparator)
+	return len(elems) > 0 && (elems[len(elems)-1] == "." || elems[len(elems)-1] == "..")
+}
+
 // inHiddenDir reports if one of the directories of the relative path rel
 // has a name that begins with a dot, like ".git" of ".git/config".
 func inHiddenDir(rel string) bool {
@@ -229,6 +241,12 @@ func (c *cli) put(ctx context.Context, flags *flag.FlagSet, args []string) error
 	if err != nil {
 		return err
 	}
+	if file.Exists() {
+		// The writers of file systems without fs.WriteAborter, like the
+		// local one and SFTP, truncate the file when they are opened,
+		// so stdin is read completely before the file is written
+		return putSpooled(ctx, file, c.stdin)
+	}
 	// Like fs.CopyFile, which cp uses
 	if dir := file.Dir(); !dir.Exists() {
 		err = dir.MakeAllDirs()
@@ -236,19 +254,53 @@ func (c *cli) put(ctx context.Context, flags *flag.FlagSet, args []string) error
 			return err
 		}
 	}
+	aborted, err := writeAll(ctx, file, c.stdin)
+	if err != nil && !aborted {
+		// Don't leave a partial new file
+		return errors.Join(err, fs.RemoveErrDoesNotExist(file.Remove()))
+	}
+	return err
+}
+
+// writeAll writes everything that r reads to file. If reading or writing
+// fails, a writer that implements fs.WriteAborter discards the written data
+// and aborted is true, other writers leave the data written so far.
+func writeAll(ctx context.Context, file fs.File, r io.Reader) (aborted bool, err error) {
 	writer, err := file.OpenWriter()
+	if err != nil {
+		return false, err
+	}
+	_, err = io.Copy(writer, ctxReader{ctx, r})
+	if err != nil {
+		if aborter, ok := writer.(fs.WriteAborter); ok {
+			return true, errors.Join(err, aborter.Abort())
+		}
+		return false, errors.Join(err, writer.Close())
+	}
+	return false, writer.Close()
+}
+
+// putSpooled writes everything that r reads to the existing file, after
+// reading it into a temporary file, so the file keeps its content if
+// reading fails or ctx is canceled before the reading is complete.
+func putSpooled(ctx context.Context, file fs.File, r io.Reader) (err error) {
+	spool, err := os.CreateTemp("", "gofs-put-*")
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(writer, ctxReader{ctx, c.stdin})
+	defer func() {
+		err = errors.Join(err, spool.Close(), os.Remove(spool.Name()))
+	}()
+	_, err = io.Copy(spool, ctxReader{ctx, r})
 	if err != nil {
-		// Don't commit a partial upload
-		if aborter, ok := writer.(fs.WriteAborter); ok {
-			return errors.Join(err, aborter.Abort())
-		}
-		return errors.Join(err, writer.Close())
+		return err
 	}
-	return writer.Close()
+	_, err = spool.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+	_, err = writeAll(ctx, file, spool)
+	return err
 }
 
 // destination returns the files of the sources and the destination
@@ -332,9 +384,8 @@ func (c *cli) rm(ctx context.Context, flags *flag.FlagSet, args []string) error 
 	for _, arg := range flags.Args() {
 		// Like rm, before anything is removed: the file systems clean
 		// "dir/.." to the parent directory, which would be removed
-		elems := strings.FieldsFunc(arg, isPathSeparator)
-		if len(elems) > 0 && (elems[len(elems)-1] == "." || elems[len(elems)-1] == "..") {
-			return fmt.Errorf("refusing to remove %s, a path that ends with '.' or '..'", arg)
+		if endsWithDotElem(arg) {
+			return fmt.Errorf("refusing to remove %s, a path that ends with '.' or '..'", fsimpl.RedactURI(arg))
 		}
 	}
 	files, err := c.files(ctx, flags.Args())

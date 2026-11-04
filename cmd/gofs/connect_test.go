@@ -267,6 +267,36 @@ func TestAzureContainerClient(t *testing.T) {
 			url:  "https://other.blob.core.windows.net/container",
 		},
 		{
+			name: "SAS token for another host",
+			host: "attacker.example",
+			env:  map[string]string{"AZURE_STORAGE_SAS_TOKEN": "sv=2024&sig=S3cret"},
+			err:  "only sent to the storage account host",
+		},
+		{
+			name: "account key for a host below another domain",
+			host: "myaccount.blob.core.windows.net.attacker.example",
+			env:  map[string]string{"AZURE_STORAGE_KEY": "a2V5"},
+			err:  "only sent to the storage account host",
+		},
+		{
+			name: "account key for another account than AZURE_STORAGE_ACCOUNT",
+			host: "other.blob.core.windows.net",
+			env:  map[string]string{"AZURE_STORAGE_ACCOUNT": "myaccount", "AZURE_STORAGE_KEY": "a2V5"},
+			err:  "only sent to the storage account host",
+		},
+		{
+			name: "default credentials for another host",
+			host: "attacker.example",
+			env:  map[string]string{},
+			err:  "only sent to the storage account host",
+		},
+		{
+			name: "account key for the account in another case",
+			host: "MyAccount.blob.core.windows.net",
+			env:  map[string]string{"AZURE_STORAGE_ACCOUNT": "myaccount", "AZURE_STORAGE_KEY": "a2V5"},
+			url:  "https://MyAccount.blob.core.windows.net/container",
+		},
+		{
 			name: "invalid account key",
 			host: "other.blob.core.windows.net",
 			env:  map[string]string{"AZURE_STORAGE_KEY": "not base64"},

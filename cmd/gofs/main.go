@@ -261,6 +261,14 @@ func (c *cli) version(ctx context.Context, flags *flag.FlagSet, args []string) e
 	if !ok {
 		return errors.New("no build information")
 	}
-	fmt.Fprintf(c.stdout, "gofs %s (%s)\n", cmp.Or(releaseVersion, info.Main.Version), info.GoVersion)
+	// The version of the go-fs modules that gofs was built with,
+	// the previous release for a release of gofs, see go.mod
+	libVersion := "unknown"
+	for _, dep := range info.Deps {
+		if dep.Path == "github.com/ungerik/go-fs" {
+			libVersion = cmp.Or(dep.Version, "(devel)")
+		}
+	}
+	fmt.Fprintf(c.stdout, "gofs %s (go-fs %s, %s)\n", cmp.Or(releaseVersion, info.Main.Version), libVersion, info.GoVersion)
 	return nil
 }

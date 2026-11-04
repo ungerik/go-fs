@@ -40,6 +40,10 @@ import (
 	"github.com/ungerik/go-fs/webdavfs"
 )
 
+// azureBlobHostSuffix follows the account name in the host
+// of the Azure Blob Storage endpoint of a storage account
+const azureBlobHostSuffix = ".blob.core.windows.net"
+
 // dropboxTokenURL is the OAuth 2 endpoint that refreshes Dropbox access tokens
 const dropboxTokenURL = "https://api.dropboxapi.com/oauth2/token" //#nosec G101 -- a URL, no credentials
 
@@ -577,7 +581,13 @@ func (c *connector) azureContainerClient(host, containerName string) (*container
 		if account == "" {
 			return nil, errors.New("azblob:///CONTAINER URIs need AZURE_STORAGE_ACCOUNT or AZURE_STORAGE_CONNECTION_STRING")
 		}
-		host = account + ".blob.core.windows.net"
+		host = account + azureBlobHostSuffix
+	}
+	// The credentials go only to the storage account of the environment,
+	// so a URI from elsewhere can't send them to another host
+	hostAccount, ok := strings.CutSuffix(strings.ToLower(host), azureBlobHostSuffix)
+	if !ok || strings.Contains(hostAccount, ".") || (account != "" && hostAccount != strings.ToLower(account)) {
+		return nil, fmt.Errorf("the Azure credentials of the environment are only sent to the storage account host ACCOUNT%s of AZURE_STORAGE_ACCOUNT, not to %s; use AZURE_STORAGE_CONNECTION_STRING for other endpoints", azureBlobHostSuffix, host)
 	}
 	containerURL := "https://" + host + "/" + containerName
 	if sas := c.getenv("AZURE_STORAGE_SAS_TOKEN"); sas != "" {

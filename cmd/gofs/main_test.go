@@ -101,5 +101,5 @@ func TestVersion(t *testing.T) {
 	t.Cleanup(func() { releaseVersion = "" })
 	code, stdout, _ = gofs(t, nil, "", "version")
 	assert.Equal(t, 0, code)
-	assert.True(t, strings.HasPrefix(stdout, "gofs v1.2.3 ("), stdout)
+	assert.True(t, strings.HasPrefix(stdout, "gofs v1.2.3 (go-fs "), stdout)
 }

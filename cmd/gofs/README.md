@@ -24,8 +24,10 @@ Or build it with Go 1.26 or newer:
 go install github.com/ungerik/go-fs/cmd/gofs@latest
 ```
 
-`go install` builds `gofs` with the go-fs modules of the latest release.
-To build it with the code of a clone, run `go install ./cmd/gofs` in it.
+A release of `gofs` is built with the go-fs modules of the release before
+it, which its `go.mod` requires; `gofs version` prints both versions. The
+release archives are the same build as `go install`. To build `gofs` with the
+code of a clone, run `go install ./cmd/gofs` in it.
 
 ## What it does
 

@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,9 +212,14 @@ func TestRm(t *testing.T) {
 	code, _, _ = gofs(t, nil, "", "rm", "-r", missing)
 	assert.Equal(t, 1, code, "rm -r of a missing file fails without -f")
 
-	// Not filepath.Join, which cleans the dots away
+	// Not filepath.Join, which cleans the dots away.
+	// The file systems decode the path of a URI before they clean it.
 	sub := filepath.Join(dir, "sub")
-	for _, arg := range []string{".", sub + "/..", sub + "/./"} {
+	subURI := "file://" + filepath.ToSlash(sub)
+	if !strings.HasPrefix(subURI, "file:///") {
+		subURI = "file:///" + strings.TrimPrefix(subURI, "file://") // C:/... on Windows
+	}
+	for _, arg := range []string{".", sub + "/..", sub + "/./", subURI + "/%2E%2E", subURI + "/.%2e", subURI + "%2F..", subURI + "/%2e/"} {
 		code, _, stderr = gofs(t, nil, "", "rm", "-rf", arg)
 		assert.Equal(t, 1, code, arg)
 		assert.Contains(t, stderr, "refusing to remove", arg)
@@ -219,6 +228,70 @@ func TestRm(t *testing.T) {
 	code, _, stderr = gofs(t, nil, "", "rm", "-rf", filepath.Join(dir, "sub"), missing)
 	require.Equal(t, 0, code, stderr)
 	assert.NoDirExists(t, filepath.Join(dir, "sub"))
+}
+
+// failingReader returns data, then err.
+type failingReader struct {
+	data string
+	err  error
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.data == "" {
+		return 0, r.err
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+// runStdin runs the command line args with ctx and stdin and returns
+// the exit code and stderr.
+func runStdin(ctx context.Context, env map[string]string, stdin io.Reader, args ...string) (code int, stderr string) {
+	var out, errOut strings.Builder
+	code = run(ctx, args, stdin, &out, &errOut, func(name string) string { return env[name] })
+	return code, errOut.String()
+}
+
+// TestPut_Failure checks that put keeps an existing file when stdin fails
+// or the command is canceled, also on the local file system, whose writer
+// truncates the file and can't abort, and leaves no partial new file.
+func TestPut_Failure(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "existing.txt")
+	writeFiles(t, dir, map[string]string{"existing.txt": "original"})
+	readErr := errors.New("stdin broke")
+
+	code, stderr := runStdin(t.Context(), nil, &failingReader{"partial", readErr}, "put", existing)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "stdin broke")
+	assert.Equal(t, "original", readFile(t, existing), "stdin failed")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	code, _ = runStdin(ctx, nil, strings.NewReader("new"), "put", existing)
+	assert.Equal(t, 1, code)
+	assert.Equal(t, "original", readFile(t, existing), "canceled")
+
+	code, stderr = runStdin(t.Context(), nil, strings.NewReader("replaced"), "put", existing)
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "replaced", readFile(t, existing), "an existing file is replaced")
+
+	newFile := filepath.Join(dir, "new.txt")
+	code, _ = runStdin(t.Context(), nil, &failingReader{"partial", readErr}, "put", newFile)
+	assert.Equal(t, 1, code)
+	assert.NoFileExists(t, newFile, "no partial new file")
+
+	// WebDAV writers abort instead
+	env := map[string]string{
+		"GOFS_WEBDAV_URL":      newWebDAVServer(t).URL,
+		"GOFS_WEBDAV_USER":     "alice",
+		"GOFS_WEBDAV_PASSWORD": "secret",
+	}
+	code, _ = runStdin(t.Context(), env, &failingReader{"partial", readErr}, "put", "webdav:///new.txt")
+	assert.Equal(t, 1, code)
+	code, _, _ = gofs(t, env, "", "stat", "webdav:///new.txt")
+	assert.Equal(t, 1, code, "the upload was aborted")
 }
 
 func TestMkdirTouch(t *testing.T) {
@@ -239,6 +312,18 @@ func TestMkdirTouch(t *testing.T) {
 	code, _, stderr = gofs(t, nil, "", "touch", file)
 	require.Equal(t, 0, code, stderr)
 	assert.Empty(t, readFile(t, file))
+
+	// touch of an existing file updates the time and keeps the content
+	existing := filepath.Join(deep, "existing")
+	writeFiles(t, deep, map[string]string{"existing": "content"})
+	past := time.Now().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(existing, past, past))
+	code, _, stderr = gofs(t, nil, "", "touch", existing)
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "content", readFile(t, existing))
+	info, err := os.Stat(existing)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().After(past), "modification time updated")
 }
 
 func TestHash(t *testing.T) {
@@ -360,6 +445,28 @@ func TestWebDAV(t *testing.T) {
 	code, _, stderr = gofs(t, env, "", "ls", "webdav://bob@other.example.com/dav")
 	assert.Equal(t, 1, code)
 	assert.Contains(t, stderr, "is not on "+prefix)
+}
+
+// TestRm_Root checks that rm -r never removes the root directory of a
+// file system, which the file systems refuse, on WebDAV and not on the
+// local root, which the test would remove if the refusal failed.
+func TestRm_Root(t *testing.T) {
+	env := map[string]string{
+		"GOFS_WEBDAV_URL":      newWebDAVServer(t).URL,
+		"GOFS_WEBDAV_USER":     "alice",
+		"GOFS_WEBDAV_PASSWORD": "secret",
+	}
+	code, _, stderr := gofs(t, env, "x", "put", "webdav:///dir/x.txt")
+	require.Equal(t, 0, code, stderr)
+
+	for _, uri := range []string{"webdav:///", "webdav://"} {
+		code, _, stderr = gofs(t, env, "", "rm", "-rf", uri)
+		assert.Equal(t, 1, code, uri)
+		assert.Contains(t, stderr, "root directory", uri)
+	}
+	code, stdout, _ := gofs(t, env, "", "ls", "-r", "webdav:///")
+	require.Equal(t, 0, code)
+	assert.Equal(t, "dir/x.txt\n", stdout, "nothing removed")
 }
 
 func TestWebDAV_Credentials(t *testing.T) {
