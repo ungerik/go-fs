@@ -86,6 +86,10 @@ type APIError struct {
 
 	// Message is the error message of the response.
 	Message string
+
+	// preAuthenticated marks the response of a pre-authenticated URL,
+	// whose status is about the session or monitor, not about a path
+	preAuthenticated bool
 }
 
 func (e *APIError) Error() string {
@@ -152,6 +156,10 @@ func (f *fileSystem) do(ctx context.Context, method, rawURL string, header http.
 		}
 		req, err := http.NewRequestWithContext(ctx, method, rawURL, reqBody)
 		if err != nil {
+			if !auth {
+				// The error would contain the pre-authenticated URL
+				return nil, fmt.Errorf("onedrivefs: %s %s: invalid URL", method, errURL)
+			}
 			return nil, fmt.Errorf("onedrivefs: %s %s: %w", method, errURL, err)
 		}
 		for name, values := range header {
@@ -175,6 +183,7 @@ func (f *fileSystem) do(ctx context.Context, method, rawURL string, header http.
 			return resp, nil
 		}
 		apiErr := readAPIError(resp, method, errURL)
+		apiErr.preAuthenticated = !auth
 		retry := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable
 		if !retry || attempt == maxRetries {
 			return nil, apiErr

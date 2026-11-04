@@ -38,6 +38,8 @@ func TestErrors(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrIsNotDirectory{})
 	assert.ErrorIs(t, f.MakeDir("/dir/file.txt/sub", 0), fs.ErrIsNotDirectory{})
 	assert.ErrorIs(t, f.MakeDir("/missing/sub", 0), os.ErrNotExist)
+	assert.ErrorIs(t, f.MakeDir("/dir/missing/sub", 0), os.ErrNotExist, "a missing parent below an existing folder")
+	assert.ErrorIs(t, f.CopyFile(ctx, "/dir/file.txt", "/dir/missing/x.txt"), os.ErrNotExist)
 	assert.ErrorIs(t, f.MakeDir("/DIR", 0), os.ErrExist, "names are case-insensitive")
 	assert.ErrorIs(t, f.WriteAll(ctx, "/dir/file.txt/sub/x.txt", []byte("x"), 0), fs.ErrIsNotDirectory{})
 	assert.ErrorIs(t, f.WriteAll(ctx, "/dir", []byte("x"), 0), fs.ErrIsDirectory{})

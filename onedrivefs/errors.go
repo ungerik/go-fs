@@ -23,11 +23,12 @@ func isConflict(err error) bool {
 //   - a name conflict to fs.ErrAlreadyExists.
 //
 // All other errors, including transport errors, an expired access
-// token and throttling, are returned unchanged, so they are never
-// mistaken for a missing file.
+// token, throttling and the responses of the pre-authenticated URLs
+// of upload sessions and copy monitors, are returned unchanged,
+// so they are never mistaken for a missing file.
 func (f *fileSystem) wrapErr(p string, err error) error {
 	switch e := apiErrorOf(err); {
-	case e == nil:
+	case e == nil, e.preAuthenticated:
 		return err
 	case e.StatusCode == http.StatusNotFound:
 		return fs.NewErrDoesNotExist(f.file(p))

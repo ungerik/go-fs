@@ -15,7 +15,7 @@ import (
 // can't be created fails in Write and Close without uploading the part
 // it kept in memory, which would replace the file with its beginning.
 func TestOpenWriter_NoTempFile(t *testing.T) {
-	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	setTempDir(t, filepath.Join(t.TempDir(), "missing"))
 	f, g := newTestFS(t)
 	g.put("/file.bin", []byte("old"))
 
@@ -33,6 +33,14 @@ func TestOpenWriter_NoTempFile(t *testing.T) {
 	assert.Zero(t, g.callCount("CreateUploadSession"))
 }
 
+// setTempDir makes os.TempDir return dir for the test:
+// it reads TMPDIR on Unix and TMP or TEMP on Windows.
+func setTempDir(t *testing.T, dir string) {
+	t.Setenv("TMPDIR", dir)
+	t.Setenv("TMP", dir)
+	t.Setenv("TEMP", dir)
+}
+
 // TestUploadSession_NotCommitted checks that an upload whose last
 // fragment the server doesn't answer with the item is an error,
 // and that its session is canceled.
@@ -46,6 +54,13 @@ func TestUploadSession_NotCommitted(t *testing.T) {
 	assert.ErrorContains(t, err, "answered the last fragment with 202")
 	assert.Equal(t, "old", string(g.get("/file.bin").data))
 	assert.Equal(t, 1, g.callCount("CancelUploadSession"))
+
+	// An expired session is not a missing file
+	g.setFailNext("UploadFragment", fakeFailure{status: http.StatusNotFound, code: "itemNotFound"})
+	err = f.WriteAll(t.Context(), "/file.bin", data, 0)
+	assert.Equal(t, http.StatusNotFound, statusOf(err))
+	assert.NotErrorIs(t, err, os.ErrNotExist)
+	assert.Equal(t, "old", string(g.get("/file.bin").data))
 }
 
 // TestOpenWriter checks that a writer keeps a small file in memory,
@@ -53,7 +68,7 @@ func TestUploadSession_NotCommitted(t *testing.T) {
 // and that an aborted or failed upload doesn't change the file.
 func TestOpenWriter(t *testing.T) {
 	tempDir := t.TempDir()
-	t.Setenv("TMPDIR", tempDir)
+	setTempDir(t, tempDir)
 	f, g := newTestFS(t)
 	g.put("/file.bin", []byte("old"))
 	data := make([]byte, testMaxSimple+2*testFragmentSize+10)
