@@ -18,6 +18,7 @@ go get github.com/ungerik/go-fs@v1.0.0-rc.6 github.com/ungerik/go-fs/onedrivefs@
 ```go
 import (
     "context"
+    "os"
 
     "golang.org/x/oauth2/clientcredentials"
 
@@ -30,9 +31,10 @@ func main() {
 
     // An app of Microsoft Entra ID with the application permission
     // Sites.Selected, Sites.ReadWrite.All or Files.ReadWrite.All
+    secret := os.Getenv("ONEDRIVE_CLIENT_SECRET")
     credentials := &clientcredentials.Config{
         ClientID:     clientID,
-        ClientSecret: clientSecret,
+        ClientSecret: secret,
         TokenURL:     "https://login.microsoftonline.com/" + tenantID + "/oauth2/v2.0/token",
         Scopes:       []string{"https://graph.microsoft.com/.default"},
     }

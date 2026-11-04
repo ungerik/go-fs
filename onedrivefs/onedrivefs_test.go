@@ -209,7 +209,104 @@ func TestMove_CaseOnly(t *testing.T) {
 	assert.Equal(t, "/NAME.txt", g.get("/name.txt").path)
 	assert.Len(t, g.items, 2, "no temporary file is left behind")
 
-	require.NoError(t, f.Move(ctx, "/Dir/../NAME.txt", "/name.TXT"), "a different case of a parent")
+	// Only the case of a parent differs: the same item, nothing to rename
+	g.put("/dir/a.txt", []byte("a"))
+	patches := g.callCount("Patch")
+	require.NoError(t, f.Move(ctx, "/dir/a.txt", "/DIR/a.txt"))
+	assert.Equal(t, patches, g.callCount("Patch"))
+	assert.Equal(t, "/dir/a.txt", g.get("/dir/a.txt").path)
+}
+
+// TestCopyFileAndMove_Errors checks the errors of CopyFile and Move
+// that the conformance suite doesn't reach, and that nothing is copied
+// or moved for them.
+func TestCopyFileAndMove_Errors(t *testing.T) {
+	ctx := t.Context()
+	f, g := newTestFS(t)
+	g.put("/dir/a.txt", []byte("a"))
+	g.put("/file.txt", []byte("file"))
+
+	assert.ErrorIs(t, f.CopyFile(ctx, "/missing.txt", "/new.txt"), os.ErrNotExist)
+	assert.ErrorIs(t, f.CopyFile(ctx, "/dir", "/new"), fs.ErrIsDirectory{}, "Graph would copy the whole folder")
+	assert.ErrorIs(t, f.CopyFile(ctx, "/file.txt", "/"), fs.ErrIsDirectory{})
+	assert.ErrorIs(t, f.CopyFile(ctx, "/file.txt", "/dir/a.txt/x"), fs.ErrIsNotDirectory{})
+	assert.ErrorIs(t, f.CopyFile(ctx, "/file.txt", "/missing/x"), os.ErrNotExist)
+	assert.Zero(t, g.callCount("Copy"))
+
+	assert.ErrorIs(t, f.Move(ctx, "/missing.txt", "/new.txt"), os.ErrNotExist)
+	assert.ErrorIs(t, f.Move(ctx, "/file.txt", "/"), os.ErrExist)
+	assert.ErrorIs(t, f.Move(ctx, "/file.txt", "/dir/a.txt/x"), fs.ErrIsNotDirectory{})
+	assert.Equal(t, "file", string(g.get("/file.txt").data))
+	assert.Equal(t, "a", string(g.get("/dir/a.txt").data))
+}
+
+// TestNotebookAndShortcut checks that a OneNote notebook, which has
+// children but no folder facet, is a directory that Remove never
+// deletes, because Graph deletes it with its sections, and that
+// a shortcut is neither a file nor a directory.
+func TestNotebookAndShortcut(t *testing.T) {
+	ctx := t.Context()
+	f, g := newTestFS(t)
+	g.put("/Notebook/Section.one", []byte("section"))
+	g.get("/Notebook").kind = "package"
+	g.put("/Shared", nil)
+	g.get("/Shared").kind = "remoteItem"
+
+	info, err := f.Stat("/Notebook")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir)
+	assert.ErrorIs(t, f.Remove("/Notebook"), fs.ErrDirectoryNotEmpty{})
+	assert.Zero(t, g.callCount("Delete"))
+	assert.NotNil(t, g.get("/Notebook/Section.one"))
+
+	var listed []string
+	require.NoError(t, f.ListDir(ctx, "/Notebook", nil, func(info *fs.FileInfo) error {
+		listed = append(listed, info.Name)
+		return nil
+	}))
+	assert.Equal(t, []string{"Section.one"}, listed)
+
+	info, err = f.Stat("/Shared")
+	require.NoError(t, err)
+	assert.False(t, info.IsDir, "a shortcut is not a directory of this drive")
+	assert.False(t, info.IsRegular, "a shortcut is not a file")
+}
+
+// TestRootAndEmptyPath checks that the root is reported without
+// a request, that the methods refuse an empty path, which would
+// otherwise clean to the root, and that the root is not a file.
+func TestRootAndEmptyPath(t *testing.T) {
+	ctx := t.Context()
+	f, g := newTestFS(t)
+
+	info, err := f.Stat("/")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir)
+	assert.Equal(t, f.RootDir(), info.File)
+	assert.Empty(t, g.calls, "the root is reported without a request")
+
+	_, err = f.Stat("")
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.ListDir(ctx, "", nil, func(*fs.FileInfo) error { return nil }), fs.ErrEmptyPath)
+	_, err = f.OpenReader("")
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	_, err = f.OpenWriter("", 0)
+	assert.ErrorIs(t, err, fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.WriteAll(ctx, "", nil, 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.MakeDir("", 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.Touch("", 0), fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.Remove(""), fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.RemoveAll(ctx, ""), fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.CopyFile(ctx, "", "/x"), fs.ErrEmptyPath)
+	assert.ErrorIs(t, f.Move(ctx, "/x", ""), fs.ErrEmptyPath)
+	assert.Empty(t, g.calls, "no request for an empty path")
+
+	_, err = f.OpenReader("/")
+	assert.ErrorIs(t, err, fs.ErrIsDirectory{})
+	_, err = f.OpenWriter("/", 0)
+	assert.ErrorIs(t, err, fs.ErrIsDirectory{})
+	assert.ErrorIs(t, f.WriteAll(ctx, "/", []byte("x"), 0), fs.ErrIsDirectory{})
+	assert.ErrorIs(t, f.MakeDir("/", 0), os.ErrExist)
 }
 
 // TestRemove checks that Remove refuses folders with content,
@@ -258,6 +355,10 @@ func TestTouch(t *testing.T) {
 	})
 	require.NoError(t, f.Touch("/race.txt", 0))
 	assert.Equal(t, "other", string(g.get("/race.txt").data), "Touch must not truncate a file")
+
+	// Below a file the upload is refused, and the file stays
+	assert.ErrorIs(t, f.Touch("/existing.txt/x", 0), fs.ErrIsNotDirectory{})
+	assert.Equal(t, "keep", string(g.get("/existing.txt").data))
 }
 
 // TestClosedFileSystem verifies that after Close every method

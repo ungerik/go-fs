@@ -3,12 +3,50 @@ package onedrivefs
 import (
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestOpenWriter_NoTempFile checks that a writer whose temporary file
+// can't be created fails in Write and Close without uploading the part
+// it kept in memory, which would replace the file with its beginning.
+func TestOpenWriter_NoTempFile(t *testing.T) {
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	f, g := newTestFS(t)
+	g.put("/file.bin", []byte("old"))
+
+	w, err := f.OpenWriter("/file.bin", 0)
+	require.NoError(t, err)
+	_, err = w.Write(make([]byte, testMaxSimple))
+	require.NoError(t, err, "the first part fits into memory")
+	_, err = w.Write([]byte("more"))
+	require.Error(t, err, "the temporary file can't be created")
+	_, err = w.Write([]byte("more"))
+	require.Error(t, err, "the error sticks")
+	require.Error(t, w.Close())
+	assert.Equal(t, "old", string(g.get("/file.bin").data))
+	assert.Zero(t, g.callCount("PutContent"))
+	assert.Zero(t, g.callCount("CreateUploadSession"))
+}
+
+// TestUploadSession_NotCommitted checks that an upload whose last
+// fragment the server doesn't answer with the item is an error,
+// and that its session is canceled.
+func TestUploadSession_NotCommitted(t *testing.T) {
+	f, g := newTestFS(t)
+	g.put("/file.bin", []byte("old"))
+	data := make([]byte, testMaxSimple+1) // two fragments
+	g.setFailNext("UploadFragment", fakeFailure{}, fakeFailure{status: http.StatusAccepted})
+
+	err := f.WriteAll(t.Context(), "/file.bin", data, 0)
+	assert.ErrorContains(t, err, "answered the last fragment with 202")
+	assert.Equal(t, "old", string(g.get("/file.bin").data))
+	assert.Equal(t, 1, g.callCount("CancelUploadSession"))
+}
 
 // TestOpenWriter checks that a writer keeps a small file in memory,
 // writes a large one to a temporary file, which Close and Abort remove,

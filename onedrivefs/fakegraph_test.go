@@ -67,6 +67,7 @@ type fakeGraph struct {
 type fakeItem struct {
 	path       string // in the case of its creation
 	isDir      bool
+	kind       string // "package" for a OneNote notebook, "remoteItem" for a shortcut, else empty
 	data       []byte
 	id         string
 	version    int
@@ -490,6 +491,10 @@ func (g *fakeGraph) itemJSON(it *fakeItem) map[string]any {
 		m["name"] = "root"
 		m["root"] = map[string]any{}
 		m["folder"] = map[string]any{"childCount": len(g.children(it))}
+	case it.kind != "":
+		// A notebook has children but no folder facet,
+		// a shortcut neither a file nor a folder facet
+		m[it.kind] = map[string]any{}
 	case it.isDir:
 		m["folder"] = map[string]any{"childCount": len(g.children(it))}
 	default:

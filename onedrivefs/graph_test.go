@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,10 +83,45 @@ func TestRetry(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, statusOf(err))
 	assert.Equal(t, calls+1, g.callCount("GetItem"))
 
-	// A canceled context ends the wait
-	ctx, cancel := context.WithCancel(t.Context())
-	g.onCall("ListChildren", cancel)
+	// The end of the context ends the wait for a long Retry-After
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
 	g.setFailNext("ListChildren", fakeFailure{status: http.StatusTooManyRequests, retryAfter: "60"})
+	start := time.Now()
 	err = f.ListDir(ctx, "/", nil, func(*fs.FileInfo) error { return nil })
-	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 5*time.Second, "the wait must end with the context, not after Retry-After")
+	assert.Equal(t, 1, g.callCount("ListChildren"))
+}
+
+// TestTokenSourceError checks that a failing token source fails the
+// request before it is sent, with an error that wraps the cause.
+func TestTokenSourceError(t *testing.T) {
+	g := newFakeGraph(t, "b!drive-id")
+	errExpired := errors.New("refresh token expired")
+	tokens := tokenSourceFunc(func() (*oauth2.Token, error) { return nil, errExpired })
+	_, err := New(t.Context(), "me/drive", tokens, &Options{HTTPClient: g.srv.Client(), GraphURL: g.graphURL()})
+	assert.ErrorIs(t, err, errExpired)
+	assert.Zero(t, g.callCount("GetDrive"), "no request without a token")
+}
+
+type tokenSourceFunc func() (*oauth2.Token, error)
+
+func (f tokenSourceFunc) Token() (*oauth2.Token, error) { return f() }
+
+// TestTransportErrorRedacted checks that a failed connection to the
+// pre-authenticated download URL doesn't put that URL into the error,
+// because its path and query grant access to the file.
+func TestTransportErrorRedacted(t *testing.T) {
+	f, g := newTestFS(t)
+	g.put("/file.txt", []byte("x"))
+	// Port 1 refuses the connection to the download URL
+	g.onCall("GetContent", func() { g.srv.URL = "http://127.0.0.1:1" })
+	defer func(url string) { g.srv.URL = url }(g.srv.URL)
+
+	_, err := f.OpenReader("/file.txt")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "tempauth")
+	assert.NotContains(t, err.Error(), "/download/")
+	assert.Contains(t, err.Error(), "http://127.0.0.1:1/...", "the error names the host")
 }
