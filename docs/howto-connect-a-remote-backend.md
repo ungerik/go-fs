@@ -393,15 +393,18 @@ for callers that know the account id.
 
 ```go
 import (
+    "os"
+
     "golang.org/x/oauth2/clientcredentials"
 
     fs "github.com/ungerik/go-fs"
     "github.com/ungerik/go-fs/onedrivefs"
 )
 
+secret := os.Getenv("ONEDRIVE_CLIENT_SECRET")
 credentials := &clientcredentials.Config{
     ClientID:     clientID,
-    ClientSecret: clientSecret,
+    ClientSecret: secret,
     TokenURL:     "https://login.microsoftonline.com/" + tenantID + "/oauth2/v2.0/token",
     Scopes:       []string{"https://graph.microsoft.com/.default"},
 }

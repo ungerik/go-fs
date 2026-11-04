@@ -3,6 +3,7 @@ package onedrivefs_test
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"golang.org/x/oauth2/clientcredentials"
 
@@ -18,9 +19,10 @@ import (
 func ExampleNew() {
 	ctx := context.Background()
 
+	secret := os.Getenv("ONEDRIVE_CLIENT_SECRET")
 	credentials := &clientcredentials.Config{
 		ClientID:     "app-client-id",
-		ClientSecret: "app-client-secret",
+		ClientSecret: secret,
 		TokenURL:     "https://login.microsoftonline.com/my-tenant-id/oauth2/v2.0/token",
 		Scopes:       []string{"https://graph.microsoft.com/.default"},
 	}
