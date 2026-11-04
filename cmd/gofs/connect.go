@@ -572,7 +572,7 @@ func (c *connector) azureContainerClient(host, containerName string) (*container
 		}
 		u, err := url.Parse(client.URL())
 		if err != nil || (host != "" && !strings.EqualFold(u.Host, host)) {
-			return nil, fmt.Errorf("AZURE_STORAGE_CONNECTION_STRING is not for the storage account at %s, use azblob:///%s/path", host, containerName)
+			return nil, fmt.Errorf("AZURE_STORAGE_CONNECTION_STRING is not for the storage account at %s, use azblob:///%s/path", fsimpl.RedactAddress(host), containerName)
 		}
 		return client, nil
 	}
@@ -587,7 +587,7 @@ func (c *connector) azureContainerClient(host, containerName string) (*container
 	// so a URI from elsewhere can't send them to another host
 	hostAccount, ok := strings.CutSuffix(strings.ToLower(host), azureBlobHostSuffix)
 	if !ok || !isAzureAccountName(hostAccount) || (account != "" && hostAccount != strings.ToLower(account)) {
-		return nil, fmt.Errorf("the Azure credentials of the environment are only sent to the storage account host ACCOUNT%s of AZURE_STORAGE_ACCOUNT, not to %s; use AZURE_STORAGE_CONNECTION_STRING for other endpoints", azureBlobHostSuffix, host)
+		return nil, fmt.Errorf("the Azure credentials of the environment are only sent to the storage account host ACCOUNT%s of AZURE_STORAGE_ACCOUNT, not to %s; use AZURE_STORAGE_CONNECTION_STRING for other endpoints", azureBlobHostSuffix, fsimpl.RedactAddress(host))
 	}
 	containerURL := "https://" + host + "/" + containerName
 	if sas := c.getenv("AZURE_STORAGE_SAS_TOKEN"); sas != "" {

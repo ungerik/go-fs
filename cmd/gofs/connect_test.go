@@ -309,6 +309,18 @@ func TestAzureContainerClient(t *testing.T) {
 			err:  "only sent to the storage account host",
 		},
 		{
+			name: "host with user info",
+			host: "alice:S3cret@attacker.example",
+			env:  map[string]string{"AZURE_STORAGE_KEY": "a2V5"},
+			err:  "only sent to the storage account host",
+		},
+		{
+			name: "connection string for a host with user info",
+			host: "alice:S3cret@other.blob.core.windows.net",
+			env:  map[string]string{"AZURE_STORAGE_CONNECTION_STRING": connStr},
+			err:  "AZURE_STORAGE_CONNECTION_STRING is not for the storage account",
+		},
+		{
 			name: "account key for the account in another case",
 			host: "MyAccount.blob.core.windows.net",
 			env:  map[string]string{"AZURE_STORAGE_ACCOUNT": "myaccount", "AZURE_STORAGE_KEY": "a2V5"},

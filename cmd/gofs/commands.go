@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/md5" //#nosec G501 -- MD5 is only a content checksum for backward compatibility, see hashFuncs
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"flag"
@@ -241,13 +242,13 @@ func (c *cli) put(ctx context.Context, flags *flag.FlagSet, args []string) error
 	if err != nil {
 		return err
 	}
-	_, err = file.Stat()
+	info, err := file.Stat()
 	switch {
+	case err == nil && info.IsDir():
+		// Before stdin is read
+		return fs.NewErrIsDirectory(file)
 	case err == nil:
-		// The writers of file systems without fs.WriteAborter, like the
-		// local one and SFTP, truncate the file when they are opened,
-		// so stdin is read completely before the file is written
-		return putSpooled(ctx, file, c.stdin)
+		return putReplace(ctx, file, fs.PermissionsFromStdFileInfo(info), c.stdin)
 	case !errors.Is(err, os.ErrNotExist):
 		// Only a file that doesn't exist is removed if writing fails
 		return err
@@ -285,27 +286,37 @@ func writeAll(ctx context.Context, file fs.File, r io.Reader) (aborted bool, err
 	return false, writer.Close()
 }
 
-// putSpooled writes everything that r reads to the existing file, after
-// reading it into a temporary file, so the file keeps its content if
-// reading fails or ctx is canceled before the reading is complete.
-func putSpooled(ctx context.Context, file fs.File, r io.Reader) (err error) {
-	spool, err := os.CreateTemp("", "gofs-put-*")
+// putReplace writes everything that r reads to the existing file,
+// which keeps its content if reading or writing fails or ctx is canceled.
+// A writer that implements fs.WriteAborter doesn't change the file before
+// it is closed, so it writes the file directly. The writers of other file
+// systems, like the local one and SFTP, truncate the file when they are
+// opened, so a temporary file with the permissions perm is written in the
+// same directory and moved over the file once it is complete, which
+// renames it on the server without copying the data again.
+func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, r io.Reader) error {
+	temp := file.Dir().Join(".gofs-put-" + rand.Text())
+	writer, err := temp.OpenWriter(perm)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		err = errors.Join(err, spool.Close(), os.Remove(spool.Name()))
-	}()
-	_, err = io.Copy(spool, ctxReader{ctx, r})
-	if err != nil {
+	if aborter, ok := writer.(fs.WriteAborter); ok {
+		err = aborter.Abort()
+		if err != nil {
+			return err
+		}
+		_, err = writeAll(ctx, file, r)
 		return err
 	}
-	_, err = spool.Seek(0, io.SeekStart)
-	if err != nil {
-		return err
+	_, err = io.Copy(writer, ctxReader{ctx, r})
+	err = errors.Join(err, writer.Close())
+	if err == nil {
+		err = fs.Move(ctx, temp, file)
 	}
-	_, err = writeAll(ctx, file, spool)
-	return err
+	if err != nil {
+		return errors.Join(err, fs.RemoveErrDoesNotExist(temp.Remove()))
+	}
+	return nil
 }
 
 // destination returns the files of the sources and the destination

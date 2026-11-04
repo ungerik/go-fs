@@ -34,8 +34,8 @@ code of a clone, run `go install ./cmd/gofs` in it.
 - **Copy and move between file systems** — `cp -r` and `mv` take any two of
   them; `mv` renames on the server where it can, else copies and deletes.
 - **Pipe** — `cat` writes files to stdout and `put` writes stdin to a file,
-  so `pg_dump mydb | gofs put smb://backup@nas/dumps/mydb.sql` needs no temp
-  file.
+  so `pg_dump mydb | gofs put smb://backup@nas/dumps/mydb.sql` needs no local
+  temp file.
 - **Check a transfer** — `cmp -r` compares two directory trees on different
   file systems and exits with 1 if they differ; `hash` prints SHA-256, MD5
   or the Dropbox content hash.
@@ -55,7 +55,7 @@ for these file systems.
 | `ls` | `[-l] [-r] [-a] [-u] [URI...]` | Lists directories, or prints the names of files. `-l` adds permissions, size and modification time, `-r` lists the files of all sub-directories, `-a` includes hidden files, `-u` prints URIs |
 | `stat` | `URI...` | Prints the URI, name, type, size, modification time and mode |
 | `cat` | `URI...` | Writes the content of files to stdout |
-| `put` | `URI` | Writes stdin to a file, creating missing parent directories. Uploads that implement `fs.WriteAborter` are discarded if stdin fails |
+| `put` | `URI` | Writes stdin to a file, creating missing parent directories. If stdin fails or the command is interrupted, an existing file keeps its content and no partial new file is left, see below |
 | `cp` | `[-r] SOURCE... DEST` | Copies files, with `-r` directories. A directory goes into an existing directory `DEST`, else it becomes `DEST` |
 | `mv` | `SOURCE... DEST` | Moves or renames files and directories, on the server when both are on one that can rename, else by copy and delete |
 | `rm` | `[-r] [-f] URI...` | Removes files and empty directories, with `-r` directories with their content. `-f` ignores missing files. Refuses paths that end with `.` or `..` |
@@ -69,6 +69,14 @@ for these file systems.
 Several sources need an existing destination directory, and so does a
 destination with a trailing slash. Short boolean flags can be combined, like
 `rm -rf`. Flags go before the other arguments.
+
+`put` streams stdin to S3, Azure Blob Storage, Dropbox and WebDAV, which
+discard an incomplete upload. On the other file systems it replaces an
+existing file like an editor saving it: it writes a hidden `.gofs-put-*` file
+next to it, with its permissions, and renames that over the file once stdin
+has ended. So a symbolic link is replaced with a file instead of written
+through, other hard links keep the old content, and the owner and group are
+those of the new file. A killed process can leave the hidden file behind.
 
 Exit codes: 0 for success, 1 for errors and for `cmp` of differing files,
 2 for invalid arguments.

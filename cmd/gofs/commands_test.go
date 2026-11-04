@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -274,9 +275,25 @@ func TestPut_Failure(t *testing.T) {
 	assert.Equal(t, 1, code)
 	assert.Equal(t, "original", readFile(t, existing), "canceled")
 
+	require.NoError(t, os.Chmod(existing, 0o640))
 	code, stderr = runStdin(t.Context(), nil, strings.NewReader("replaced"), "put", existing)
 	require.Equal(t, 0, code, stderr)
 	assert.Equal(t, "replaced", readFile(t, existing), "an existing file is replaced")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(existing)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o640), info.Mode().Perm(), "the permissions are kept")
+	}
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "no temporary file left behind")
+
+	// A directory fails before stdin is read
+	stdin := &failingReader{"never read", readErr}
+	code, stderr = runStdin(t.Context(), nil, stdin, "put", dir)
+	assert.Equal(t, 1, code)
+	assert.NotContains(t, stderr, "stdin broke")
+	assert.Equal(t, "never read", stdin.data)
 
 	newFile := filepath.Join(dir, "new.txt")
 	code, _ = runStdin(t.Context(), nil, &failingReader{"partial", readErr}, "put", newFile)
@@ -293,6 +310,17 @@ func TestPut_Failure(t *testing.T) {
 	assert.Equal(t, 1, code)
 	code, _, _ = gofs(t, env, "", "stat", "webdav:///new.txt")
 	assert.Equal(t, 1, code, "the upload was aborted")
+
+	code, stderr = runStdin(t.Context(), env, strings.NewReader("original"), "put", "webdav:///existing.txt")
+	require.Equal(t, 0, code, stderr)
+	code, _ = runStdin(t.Context(), env, &failingReader{"partial", readErr}, "put", "webdav:///existing.txt")
+	assert.Equal(t, 1, code)
+	code, stdout, _ := gofs(t, env, "", "cat", "webdav:///existing.txt")
+	require.Equal(t, 0, code)
+	assert.Equal(t, "original", stdout, "an aborted upload keeps the existing file")
+	code, stdout, _ = gofs(t, env, "", "ls", "-a", "webdav:///")
+	require.Equal(t, 0, code)
+	assert.Equal(t, "existing.txt\n", stdout, "no temporary file left behind")
 }
 
 // TestPut_StatError checks that put writes nothing when it can't tell
