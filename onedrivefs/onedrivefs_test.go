@@ -163,6 +163,59 @@ func TestMove_ReplaceOnlyCheckedVersion(t *testing.T) {
 	}
 }
 
+// TestMove_OntoOwnAlias is the regression test for a Move or CopyFile
+// onto a name that the server takes for another name of the source, like
+// another Unicode normalization of it, and refuses as a conflict:
+// the conflict handling deleted the destination item, which was the
+// source, so the only copy went to the recycle bin.
+func TestMove_OntoOwnAlias(t *testing.T) {
+	for name, relocate := range map[string]func(f *fileSystem, ctx context.Context, src, dest string) error{
+		"Move":     (*fileSystem).Move,
+		"CopyFile": (*fileSystem).CopyFile,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, g := newTestFS(t)
+			src := g.put("/caf\u00e9.txt", []byte("only copy"))
+			g.mtx.Lock()
+			g.items["/cafe\u0301.txt"] = src // the server's alias of the source
+			g.mtx.Unlock()
+			conflict := fakeFailure{status: http.StatusConflict, code: "nameAlreadyExists"}
+			g.setFailNext("Patch", conflict, conflict)
+
+			err := relocate(f, t.Context(), "/caf\u00e9.txt", "/cafe\u0301.txt")
+			require.NoError(t, err)
+			assert.Zero(t, g.callCount("Delete"), "the source must not be deleted")
+			assert.Equal(t, "only copy", string(src.data))
+			assert.Same(t, src, g.get(src.path), "the source must still be in the drive")
+		})
+	}
+}
+
+// TestCopyFile_Monitor checks the answers of the copy monitor: a redirect
+// to the new item is a completed copy, a status this version doesn't know
+// is an error instead of an endless wait, and a failure of the monitor
+// is not a missing source.
+func TestCopyFile_Monitor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	f, g := newTestFS(t)
+	g.put("/src.txt", []byte("src"))
+
+	g.setFailNext("Monitor", fakeFailure{status: http.StatusSeeOther})
+	require.NoError(t, f.CopyFile(ctx, "/src.txt", "/a.txt"))
+	assert.Equal(t, "src", string(g.get("/a.txt").data))
+
+	g.setFailNext("Monitor", fakeFailure{status: http.StatusOK, code: "unknownStatus"})
+	err := f.CopyFile(ctx, "/src.txt", "/b.txt")
+	assert.ErrorContains(t, err, "unknownStatus")
+	assert.NoError(t, ctx.Err(), "the copy must not wait for the deadline")
+
+	g.setFailNext("Monitor", fakeFailure{status: http.StatusNotFound, code: "itemNotFound"})
+	err = f.CopyFile(ctx, "/src.txt", "/c.txt")
+	assert.Equal(t, http.StatusNotFound, statusOf(err))
+	assert.NotErrorIs(t, err, os.ErrNotExist, "the monitor is gone, not the source")
+}
+
 // TestCopyFile_SourceBecameFolder checks a CopyFile whose source became
 // a folder after the check: the conflict handling checks the source again
 // before it deletes the destination file.
@@ -359,6 +412,11 @@ func TestTouch(t *testing.T) {
 	// Below a file the upload is refused, and the file stays
 	assert.ErrorIs(t, f.Touch("/existing.txt/x", 0), fs.ErrIsNotDirectory{})
 	assert.Equal(t, "keep", string(g.get("/existing.txt").data))
+
+	// A conflict without a file at the path is not a touched file
+	g.setFailNext("PutContent", fakeFailure{status: http.StatusConflict, code: "nameAlreadyExists"})
+	assert.Error(t, f.Touch("/conflict.txt", 0))
+	assert.Nil(t, g.get("/conflict.txt"))
 }
 
 // TestClosedFileSystem verifies that after Close every method

@@ -524,7 +524,8 @@ func (f *fileSystem) OpenReader(filePath string) (io.ReadCloser, error) {
 		location, err := resp.Location()
 		_ = resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("onedrivefs: downloading %s: redirect without location: %w", f.file(p), err)
+			// The error of an invalid location would contain it
+			return nil, fmt.Errorf("onedrivefs: downloading %s: redirect without a valid location", f.file(p))
 		}
 		if redirects == 10 {
 			return nil, fmt.Errorf("onedrivefs: downloading %s: too many redirects", f.file(p))
@@ -561,10 +562,15 @@ func (f *fileSystem) MakeDir(dirPath string, perm fs.Permissions) error {
 		"@microsoft.graph.conflictBehavior": "fail",
 	}
 	_, err := f.doJSON(ctx, http.MethodPost, f.itemURL(path.Dir(p), "/children"), nil, body, nil)
-	if err == nil || isConflict(err) {
-		return f.wrapErr(p, err)
+	if err == nil {
+		return nil
 	}
-	if s := statusOf(err); s == http.StatusBadRequest || s == http.StatusNotFound {
+	if isConflict(err) {
+		if _, statErr := f.item(ctx, p); statErr == nil {
+			return fs.NewErrAlreadyExists(f.file(p))
+		}
+	}
+	if s := statusOf(err); s == http.StatusBadRequest || s == http.StatusNotFound || s == http.StatusConflict {
 		if ancestorErr := f.ancestorErr(ctx, p, true); ancestorErr != nil {
 			return ancestorErr
 		}
@@ -597,7 +603,9 @@ func (f *fileSystem) Touch(filePath string, perm fs.Permissions) error {
 	case err == nil:
 		return resp.Body.Close()
 	case isConflict(err):
-		return nil // Created since the PATCH
+		if _, statErr := f.item(ctx, p); statErr == nil {
+			return nil // Created since the PATCH
+		}
 	}
 	return f.wrapUploadErr(ctx, p, err)
 }
@@ -772,6 +780,18 @@ func (f *fileSystem) relocate(ctx context.Context, move bool, src, dest string) 
 		if statErr != nil {
 			return statErr
 		}
+		srcItem, statErr := f.item(ctx, src)
+		if statErr != nil {
+			return statErr
+		}
+		if destItem.ID == srcItem.ID {
+			// The server takes dest for another name of src, like another
+			// Unicode normalization of it: rename src, never delete it
+			if move {
+				return f.moveCase(ctx, src, dest)
+			}
+			return nil
+		}
 		switch {
 		case destItem.isDir() && move:
 			return fs.NewErrAlreadyExists(f.file(dest))
@@ -779,10 +799,6 @@ func (f *fileSystem) relocate(ctx context.Context, move bool, src, dest string) 
 			return fs.NewErrIsDirectory(f.file(dest))
 		}
 		// A folder never replaces a file
-		srcItem, statErr := f.item(ctx, src)
-		if statErr != nil {
-			return statErr
-		}
 		switch {
 		case srcItem.isDir() && move:
 			return fs.NewErrIsNotDirectory(f.file(dest))
@@ -819,7 +835,7 @@ func (f *fileSystem) relocateOnce(ctx context.Context, move bool, src string, bo
 	}
 	monitor := header.Get("Location")
 	if monitor == "" {
-		return nil // Copied synchronously
+		return fmt.Errorf("onedrivefs: the copy of %s has no monitor URL to wait for", f.file(src))
 	}
 	delay := f.pollDelay
 	for {
@@ -846,8 +862,17 @@ func (f *fileSystem) relocateOnce(ctx context.Context, move bool, src string, bo
 		switch status.Status {
 		case "completed":
 			return nil
-		case "failed":
-			apiErr := &APIError{Method: http.MethodGet, URL: redactURL(monitor), StatusCode: resp.StatusCode, Message: "copy failed"}
+		case "notStarted", "inProgress", "waiting", "updating":
+			// Still running
+		default:
+			// Failed, or a status this version doesn't know
+			apiErr := &APIError{
+				Method:           http.MethodGet,
+				URL:              redactURL(monitor),
+				StatusCode:       resp.StatusCode,
+				Message:          fmt.Sprintf("copy status %q", status.Status),
+				preAuthenticated: true,
+			}
 			if status.Error != nil {
 				apiErr.Code, apiErr.Message = status.Error.Code, status.Error.Message
 			}
@@ -864,7 +889,8 @@ func (f *fileSystem) relocateOnce(ctx context.Context, move bool, src string, bo
 	}
 }
 
-// moveCase renames the clean path src to dest, which differs only in case.
+// moveCase renames the clean path src to dest, which the server takes for
+// the same name, like a name that differs only in case.
 // If the server refuses that as a name conflict, src is renamed to
 // a temporary name in the same folder first. The conflict handling of
 // relocate must never run for such a move: it would delete src.
