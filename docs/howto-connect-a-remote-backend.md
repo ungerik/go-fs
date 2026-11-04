@@ -15,7 +15,7 @@ from anywhere in your program.
 Get the backend together with the core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs, onedrivefs
 ```
 
 ## The constructor rule every backend follows
@@ -51,7 +51,8 @@ data, err := fs.File("prefix://host/path/file.txt").ReadAll(ctx)
 ```
 
 The arguments differ: `s3fs` takes a client and a bucket name, `azureblobfs` a
-container client, `dropboxfs` an access token. What is always true:
+container client, `dropboxfs` an access token, `onedrivefs` a drive and an
+`oauth2.TokenSource`. What is always true:
 
 1. **Register or you get nothing.** `New` and `Dial` create the file system
    without registering it; the `…AndRegister` variants also put it in the
@@ -387,6 +388,50 @@ account id without its `dbid:` part (`ID()` returns the account id with
 `dbid:`) — so build paths from `RootDir()` rather than hardcoding the URI. That is also
 why `New` and `fs.Register` are the usual pair; `dropboxfs.NewAndRegister` is
 for callers that know the account id.
+
+### OneDrive and SharePoint
+
+```go
+import (
+    "golang.org/x/oauth2/clientcredentials"
+
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/onedrivefs"
+)
+
+credentials := &clientcredentials.Config{
+    ClientID:     clientID,
+    ClientSecret: clientSecret,
+    TokenURL:     "https://login.microsoftonline.com/" + tenantID + "/oauth2/v2.0/token",
+    Scopes:       []string{"https://graph.microsoft.com/.default"},
+}
+driveFS, err := onedrivefs.New(ctx, "sites/"+siteID+"/drive", credentials.TokenSource(ctx), nil)
+if err != nil {
+    return err
+}
+defer driveFS.Close()
+err = fs.Register(driveFS)
+if err != nil {
+    return err
+}
+
+err = driveFS.RootDir().Join("Reports", "2026.md").WriteAllString(ctx, "...")
+```
+
+The drive is a drive id or a Graph API path like `me/drive`,
+`users/<id>/drive`, `sites/<id>/drive` or `groups/<id>/drive`, so one
+backend covers OneDrive Personal, OneDrive for Business and SharePoint
+document libraries. The token source gives the access tokens for the Graph
+API, which the file system sends only there, never to the pre-authenticated
+download and upload URLs, so `Options.HTTPClient` must be a client that
+doesn't authenticate its requests itself.
+
+The prefix is discovered at construction: `onedrive://` followed by the
+drive id, which `ID()` returns — build paths from `RootDir()`. A writer from
+`OpenWriter` writes a file larger than 4 MiB to a temporary file before it
+uploads it, because an upload session needs the size first; `WriteAll`
+uploads directly. [onedrivefs/README.md](../onedrivefs/README.md) has the
+token setup for apps and users.
 
 ### HTTP (read-only)
 

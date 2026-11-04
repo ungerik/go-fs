@@ -8,9 +8,9 @@ go-fs
 [![GitHub release](https://img.shields.io/github/v/release/ungerik/go-fs?include_prereleases)](https://github.com/ungerik/go-fs/releases)
 
 One file API for Go over the local disk, memory, S3, Azure Blob Storage,
-SFTP, FTP, SMB, WebDAV, Dropbox, HTTP, and ZIP and tar archives. A file is a
-path or URI string like `s3://bucket/report.pdf`, and the same code reads,
-writes, lists, copies and moves files on every one of them.
+SFTP, FTP, SMB, WebDAV, Dropbox, OneDrive and SharePoint, HTTP, and ZIP and tar
+archives. A file is a path or URI string like `s3://bucket/report.pdf`, and
+the same code reads, writes, lists, copies and moves files on every one of them.
 
 Install
 -------
@@ -29,7 +29,7 @@ network backends are modules of their own: get the ones you use together
 with the core module, at the same version.
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs, onedrivefs
 ```
 
 Example
@@ -85,8 +85,9 @@ Features
   move when both are on one backend that has it.
 - **Lose no data to a copy or move** — names that would land outside the
   destination directory are rejected before they are written, and a failed
-  copy to S3, Azure Blob or Dropbox discards its upload instead of committing
-  it. [All the checks](#what-go-fs-protects-against) are listed below.
+  copy to S3, Azure Blob, Dropbox or OneDrive discards its upload instead of
+  committing it. [All the checks](#what-go-fs-protects-against) are listed
+  below.
 - **Never write `s3://` URIs to the local disk** — to `os`,
   `s3://bucket/key` is the relative path `s3:/bucket/key`; in go-fs a scheme
   without a registered file system is an error.
@@ -217,9 +218,10 @@ covers, and where it can before anything is written.
 - **Copies don't take over setuid, setgid and sticky bits**, so a copy out
   of an archive can't create a setuid binary.
 - **Failed copies commit no partial upload.** The upload writers of s3fs,
-  azureblobfs, dropboxfs, webdavfs and ftpfs implement `fs.WriteAborter`,
-  and `fs.CopyFile` and the package's own copies call `Abort` when a copy
-  fails or the context is canceled, so no partial upload replaces a file.
+  azureblobfs, dropboxfs, onedrivefs, webdavfs and ftpfs implement
+  `fs.WriteAborter`, and `fs.CopyFile` and the package's own copies call
+  `Abort` when a copy fails or the context is canceled, so no partial upload
+  replaces a file.
   An FTP or WebDAV transfer that breaks off during `Close` can still leave
   a partial file.
 - **Azure Blob moves don't lose concurrent writes.** Every copy and delete of
@@ -885,9 +887,9 @@ File system implementations
 
 `go-fs` ships with the local file system and several remote / virtual
 backends. The network backends (`s3fs`, `azureblobfs`, `sftpfs`, `ftpfs`,
-`smbfs`, `dropboxfs`, `webdavfs`) are independent Go modules under their own
-sub-directory with their own dependencies; the lighter ones (`httpfs`,
-`zipfs`, `tarfs`, `multipartfs`) are packages in the root module.
+`smbfs`, `dropboxfs`, `onedrivefs`, `webdavfs`) are independent Go modules
+under their own sub-directory with their own dependencies; the lighter ones
+(`httpfs`, `zipfs`, `tarfs`, `multipartfs`) are packages in the root module.
 
 `File` values route to the file system that is registered for their URI
 prefix. The constructors follow one rule:
@@ -910,6 +912,7 @@ Only `httpfs` registers file systems when it is imported.
 | `sftpfs`      | `sftp://<user>@<host>`  | `sftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes  |
 | `ftpfs`       | `ftp://[<user>@]<host>`, `ftps://[<user>@]<host>` | `ftpfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes | yes   |
 | `dropboxfs`   | `dropbox://<account id without "dbid:">` | `dropboxfs.New`, `dropboxfs.NewAndRegister`       | yes  | yes    |
+| `onedrivefs`  | `onedrive://<drive id>` | `onedrivefs.New`, `onedrivefs.NewAndRegister`      | yes  | yes    |
 | `webdavfs`    | `webdav://[<user>@]<host><base path>` | `webdavfs.New`, `webdavfs.NewAndRegister` | yes  | yes    |
 | `smbfs`       | `smb://[<user>@]<host>/<share>` | `smbfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes  | yes    |
 | `azureblobfs` | `azblob://<host>/<container>` | `azureblobfs.New`, `NewFromConnectionString`, `NewAndRegister` | yes | yes/ro |
@@ -946,9 +949,10 @@ uniquely among the registered file systems and stays the same for its whole
 lifetime, computed at construction and never blocking.
 
 Where the backing store has an identifier of its own, that one is used. Only
-two do: the local file system has the volume's file system id, and Dropbox
-has the account id. Neither SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage
-expose one, so those use the coordinates that identify the store instead.
+three do: the local file system has the volume's file system id, Dropbox
+has the account id and OneDrive the drive id. Neither SFTP, FTP, WebDAV, SMB,
+S3 nor Azure Blob Storage expose one, so those use the coordinates that
+identify the store instead.
 
 | File system                                        | `ID()`                                             |
 | -------------------------------------------------- | -------------------------------------------------- |
@@ -963,6 +967,7 @@ expose one, so those use the coordinates that identify the store instead.
 | `smbfs`                                            | `[<user>@]<host>/<share>`                          |
 | `webdavfs`                                         | `[<user>@]<host><base path>`                       |
 | `dropboxfs`                                        | Dropbox account id with its `dbid:` part, which the prefix omits |
+| `onedrivefs`                                       | Drive id of the OneDrive or SharePoint document library |
 
 The format is specific to the implementation and promises nothing beyond
 uniqueness and stability. Use it to tell two file systems apart, to key a
@@ -985,25 +990,25 @@ implements `User`/`Group` only on Unix. `MemFileSystem` implements `Exists`,
 `ListDirRecursive` and `User`/`Group` too, and leaves out `IsHidden` and the
 absolute path methods, whose defaults fit it. For the remote backends:
 
-| Capability             | s3  | azblob | sftp | ftp | smb | dropbox | webdav | http |
-| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
-| CopyFile (server-side) | ✓   | ✓      | –    | –   | –   | ✓       | ✓      | –    |
-| Move                   | –   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | –    |
-| Exists                 | –   | –      | –    | –   | –   | –       | –      | ✓    |
-| ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | –       | ✓      | ✓    |
-| WriteAll               | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | r/o  |
-| Append                 | –   | –      | –    | ✓   | –   | –       | –      | r/o  |
-| OpenAppendWriter       | –   | –      | ✓    | ✓   | ✓   | –       | –      | r/o  |
-| OpenReadWriter         | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | –      | r/o  |
-| Touch                  | ✓   | ✓      | ✓    | ✓   | ✓   | –       | –      | r/o  |
-| Truncate               | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
-| MakeAllDirs            | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
-| RemoveAll              | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  |
-| ListDirRecursive       | ✓   | ✓      | ✓    | ✓   | –   | ✓       | –      | –    |
-| SetPermissions         | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
-| Symbolic links         | –   | –      | ✓    | –   | ✓   | –       | –      | –    |
-| Seeking reads          | –   | ✓      | ✓    | –   | ✓   | –       | ✓      | –    |
-| ValidateName           | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  |
+| Capability             | s3  | azblob | sftp | ftp | smb | dropbox | onedrive | webdav | http |
+| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :------: | :----: | :--: |
+| CopyFile (server-side) | ✓   | ✓      | –    | –   | –   | ✓       | ✓        | ✓      | –    |
+| Move                   | –   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓        | ✓      | –    |
+| Exists                 | –   | –      | –    | –   | –   | –       | –        | –      | ✓    |
+| ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | –       | –        | ✓      | ✓    |
+| WriteAll               | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓        | ✓      | r/o  |
+| Append                 | –   | –      | –    | ✓   | –   | –       | –        | –      | r/o  |
+| OpenAppendWriter       | –   | –      | ✓    | ✓   | ✓   | –       | –        | –      | r/o  |
+| OpenReadWriter         | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | –        | –      | r/o  |
+| Touch                  | ✓   | ✓      | ✓    | ✓   | ✓   | –       | ✓        | –      | r/o  |
+| Truncate               | –   | –      | ✓    | –   | ✓   | –       | –        | –      | r/o  |
+| MakeAllDirs            | –   | –      | ✓    | –   | ✓   | –       | –        | –      | r/o  |
+| RemoveAll              | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓        | ✓      | r/o  |
+| ListDirRecursive       | ✓   | ✓      | ✓    | ✓   | –   | ✓       | –        | –      | –    |
+| SetPermissions         | –   | –      | ✓    | –   | ✓   | –       | –        | –      | r/o  |
+| Symbolic links         | –   | –      | ✓    | –   | ✓   | –       | –        | –      | –    |
+| Seeking reads          | –   | ✓      | ✓    | –   | ✓   | –       | –        | ✓      | –    |
+| ValidateName           | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓        | ✓      | r/o  |
 
 `✓` native implementation · `–` falls back to the generic emulation (works the
 same, just not specialized) · `r/o` read-only backend, so the write operation
@@ -1182,6 +1187,35 @@ access tokens. The prefix depends on the account, so `New` and `fs.Register`
 are the usual pair; `NewAndRegister` is for callers that know the account id.
 [dropboxfs/README.md](dropboxfs/README.md) has the app and access token
 setup and how to run the tests against a real account.
+
+### onedrivefs
+
+```go
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/onedrivefs"
+)
+
+// tokens is an oauth2.TokenSource, like the one of a
+// golang.org/x/oauth2/clientcredentials Config for an Entra ID app
+driveFS, err := onedrivefs.New(ctx, "sites/"+siteID+"/drive", tokens, nil)
+if err != nil {
+    return err
+}
+defer driveFS.Close()
+err = fs.Register(driveFS)
+
+// The prefix is onedrive://<drive id>, so it is stable per drive
+err = driveFS.RootDir().Join("Reports", "2026.md").WriteAllString(ctx, "...")
+```
+
+One file system covers one drive: the OneDrive of a user (`me/drive`,
+`users/<id>/drive`) or a SharePoint document library (`sites/<id>/drive`,
+`drives/<id>`). The access tokens go only to the Graph API, never to the
+pre-authenticated download and upload URLs. Moves and copies run on the
+server; files larger than 4 MiB are uploaded in fragments.
+[onedrivefs/README.md](onedrivefs/README.md) has the token setup, the concept
+mapping and how to run the tests against a real drive.
 
 ### webdavfs
 

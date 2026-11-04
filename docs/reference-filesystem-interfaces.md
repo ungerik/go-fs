@@ -43,11 +43,12 @@ registered ones and never changes for its lifetime. It is computed at
 construction and must never block, so it can be read from any code path.
 
 Where the backing store has an identifier of its own, that one is used — only
-two of the backends in this repository can: the local file system uses the
-file system id of the root volume, dropboxfs the Dropbox account id. Neither
-SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage exposes such an identifier,
-so those use the coordinates that identify the store instead: the bucket, the
-container, the share, or the user and host of the connection. The in-memory
+three of the backends in this repository can: the local file system uses the
+file system id of the root volume, dropboxfs the Dropbox account id and
+onedrivefs the drive id. Neither SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob
+Storage exposes such an identifier, so those use the coordinates that identify
+the store instead: the bucket, the container, the share, or the user and host
+of the connection. The in-memory
 file system has no backing store and uses the id passed to its constructor, or
 a generated one; the archive and form file systems use their prefix with that
 id, like `zip://<id>`.
@@ -86,9 +87,10 @@ it and releases the writer; `Close` after `Abort` is a no-op returning nil.
 move abort the writer when the copy fails or the context is canceled, and
 otherwise return the error of `Close` joined with the copy error.
 
-The writers of `s3fs`, `azureblobfs`, `dropboxfs`, `webdavfs` and `ftpfs`,
-the entry writers of `zipfs` and `tarfs`, and `fsimpl.NewWriteOnCloseFileBuffer`
-and `fsimpl.ReadWriteAllSeekCloser` implement it. Writers that write through,
+The writers of `s3fs`, `azureblobfs`, `dropboxfs`, `onedrivefs`, `webdavfs`
+and `ftpfs`, the entry writers of `zipfs` and `tarfs`, and
+`fsimpl.NewWriteOnCloseFileBuffer` and `fsimpl.ReadWriteAllSeekCloser`
+implement it. Writers that write through,
 like the ones of the local, memory, SFTP and SMB file systems, don't.
 
 ## Optional interfaces and their fallbacks
@@ -129,7 +131,7 @@ are only called on file systems that report themselves as writable.
 | `RemoveAllFileSystem`    | `RemoveAll`        | Recursive listing plus `Remove`. A path that does not exist is not an error, and entries removed concurrently are ignored. |
 | `CopyFileSystem`         | `CopyFile`         | `OpenReader` streamed into `OpenWriter` through a 4 MiB buffer. `destFile` is always the final path, never a directory to copy into. |
 | `MoveFileSystem`         | `Move(ctx, filePath, destPath)` | A copy of the file or directory tree, then the removal of the source after the copy succeeded. `destPath` is always the final path, never a directory to move into. |
-| `ValidateNameFileSystem` | `ValidateName` | Every name without a separator that is not empty, `.` or `..` counts as valid. `CopyFile`, `CopyRecursive`, `Move`, `MoveTo` and `Rename` check the names they write with `ValidateName` before they write anything, also the parent directories of a new path, which `MakeAllDirs` checks before it makes the first one, with a `Stat` only for a rejected name, which an existing directory may have, and also through a `SubFileSystem` or `OverlayFileSystem` to the file system that gets the writes; `CopyRecursive` checks every directory and the files and links that match its patterns. Existing entries are read and removed with every name, and copied and moved with their names within the file system, which holds them. The write methods of the backend itself, like `OpenWriter` and `WriteAll`, are not checked with `ValidateName`. Without it a name that the backend rejects fails a copy at that file. sftpfs, ftpfs, webdavfs, smbfs, s3fs, azureblobfs, dropboxfs and the zipfs and tarfs writers implement it. |
+| `ValidateNameFileSystem` | `ValidateName` | Every name without a separator that is not empty, `.` or `..` counts as valid. `CopyFile`, `CopyRecursive`, `Move`, `MoveTo` and `Rename` check the names they write with `ValidateName` before they write anything, also the parent directories of a new path, which `MakeAllDirs` checks before it makes the first one, with a `Stat` only for a rejected name, which an existing directory may have, and also through a `SubFileSystem` or `OverlayFileSystem` to the file system that gets the writes; `CopyRecursive` checks every directory and the files and links that match its patterns. Existing entries are read and removed with every name, and copied and moved with their names within the file system, which holds them. The write methods of the backend itself, like `OpenWriter` and `WriteAll`, are not checked with `ValidateName`. Without it a name that the backend rejects fails a copy at that file. sftpfs, ftpfs, webdavfs, smbfs, s3fs, azureblobfs, dropboxfs, onedrivefs and the zipfs and tarfs writers implement it. |
 
 There is no rename interface: `File.Rename` is a `Move` within the directory,
 so it uses the native `Move` where the backend has one.
@@ -221,25 +223,25 @@ suite in `fstest` runs every native implementation against the same checks
 as the emulation. `✓` native, `–` uses the fallback (works the same, just not
 specialized), `r/o` read-only backend so the write operation does not apply.
 
-| Capability             |  s3 | azblob | sftp | ftp | smb | dropbox | webdav | http |
-| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
-| CopyFile (server-side) |  ✓  |   ✓    |  –   |  –  |  –  |    ✓    |   ✓    |  –   |
-| Move                   |  –  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |
-| Exists                 |  –  |   –    |  –   |  –  |  –  |    –    |   –    |  ✓   |
-| ReadAll                |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    –    |   ✓    |  ✓   |
-| WriteAll               |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
-| Append                 |  –  |   –    |  –   |  ✓  |  –  |    –    |   –    | r/o  |
-| OpenAppendWriter       |  –  |   –    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  |
-| OpenReadWriter         |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   –    | r/o  |
-| Touch                  |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  |
-| Truncate               |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| MakeAllDirs            |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| RemoveAll              |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
-| ListDirRecursive       |  ✓  |   ✓    |  ✓   |  ✓  |  –  |    ✓    |   –    |  –   |
-| SetPermissions         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| Symbolic links         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    |  –   |
-| Seeking reads          |  –  |   ✓    |  ✓   |  –  |  ✓  |    –    |   ✓    |  –   |
-| ValidateName           |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
+| Capability             |  s3 | azblob | sftp | ftp | smb | dropbox | onedrive | webdav | http |
+| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :------: | :----: | :--: |
+| CopyFile (server-side) |  ✓  |   ✓    |  –   |  –  |  –  |    ✓    |    ✓     |   ✓    |  –   |
+| Move                   |  –  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |    ✓     |   ✓    |  –   |
+| Exists                 |  –  |   –    |  –   |  –  |  –  |    –    |    –     |   –    |  ✓   |
+| ReadAll                |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    –    |    –     |   ✓    |  ✓   |
+| WriteAll               |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    ✓    |    ✓     |   ✓    | r/o  |
+| Append                 |  –  |   –    |  –   |  ✓  |  –  |    –    |    –     |   –    | r/o  |
+| OpenAppendWriter       |  –  |   –    |  ✓   |  ✓  |  ✓  |    –    |    –     |   –    | r/o  |
+| OpenReadWriter         |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |    –     |   –    | r/o  |
+| Touch                  |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    –    |    ✓     |   –    | r/o  |
+| Truncate               |  –  |   –    |  ✓   |  –  |  ✓  |    –    |    –     |   –    | r/o  |
+| MakeAllDirs            |  –  |   –    |  ✓   |  –  |  ✓  |    –    |    –     |   –    | r/o  |
+| RemoveAll              |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |    ✓     |   ✓    | r/o  |
+| ListDirRecursive       |  ✓  |   ✓    |  ✓   |  ✓  |  –  |    ✓    |    –     |   –    |  –   |
+| SetPermissions         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |    –     |   –    | r/o  |
+| Symbolic links         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |    –     |   –    |  –   |
+| Seeking reads          |  –  |   ✓    |  ✓   |  –  |  ✓  |    –    |    –     |   ✓    |  –   |
+| ValidateName           |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |    ✓     |   ✓    | r/o  |
 
 "Seeking reads" is not an interface: it means that the readers of
 `OpenReader` implement `fs.ReadAtSeekCloser`, so `File.OpenReadSeeker` needs
