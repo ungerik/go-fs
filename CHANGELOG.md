@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+### Added
+
+- `onedrivefs`, a backend module for OneDrive Personal, OneDrive for Business
+  and SharePoint document libraries over the Microsoft Graph API, with the
+  prefix `onedrive://<drive id>`. `onedrivefs.New` takes a drive id or a
+  Graph API path of a drive, like `me/drive` or `sites/<site id>/drive`, and
+  an `oauth2.TokenSource`, whose tokens go only to the Graph API, never to
+  the pre-authenticated URLs of downloads, upload sessions and copies.
+  It moves and copies on the server, uploads files larger than 4 MiB with
+  upload sessions, repeats throttled requests after their `Retry-After`
+  delay, deletes and replaces only the checked version (eTag) of a file,
+  and rejects the names OneDrive and SharePoint don't store with
+  `ValidateName`. The conformance suite runs against an offline fake of the
+  Graph API; it has not run against a real drive yet.
+
 ## [1.0.0-rc.8] - 2026-11-14
 
 Eighth release candidate: `gitfs`, a read-only file system for a commit of
