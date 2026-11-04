@@ -38,7 +38,7 @@ listing, plus dialing a connection.** Concretely:
 | Directory listing | `ListDir`, `ListDirInfo`, `ListDirRecursive`, `ListDirInfoRecursive`, `ListDirMax`, `ListDirRecursiveMax`, `ListDirIter`, `ListDirRecursiveIter`, `Glob`, `fs.Glob` |
 | Recursive removal | `RemoveRecursive`, `RemoveDirContents`, `RemoveDirContentsRecursive` |
 | Moves and copies  | `MoveTo`, `Rename`, `Renamef`, `fs.Move`, `fs.CopyFile`, `fs.CopyFileBuf`, `fs.CopyRecursive`, `fs.IdenticalFileContents`, `fs.IdenticalDirContents` |
-| Dialing           | `sftpfs.Dial`, `ftpfs.Dial`, `smbfs.Dial`, `webdavfs.New`, `azureblobfs.New`, `dropboxfs.New`, `s3fs.NewLoadDefaultConfig`, the `EnsureRegistered` functions, … |
+| Dialing           | `sftpfs.Dial`, `ftpfs.Dial`, `smbfs.Dial`, `webdavfs.New`, `azureblobfs.New`, `dropboxfs.New`, `onedrivefs.New`, `s3fs.NewLoadDefaultConfig`, the `EnsureRegistered` functions, … |
 
 **Does not take a context:**
 
