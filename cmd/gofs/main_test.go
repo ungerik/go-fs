@@ -95,4 +95,11 @@ func TestVersion(t *testing.T) {
 	code, stdout, _ := gofs(t, nil, "", "version")
 	assert.Equal(t, 0, code)
 	assert.True(t, strings.HasPrefix(stdout, "gofs "), stdout)
+
+	// The release workflow sets releaseVersion with -ldflags
+	releaseVersion = "v1.2.3"
+	t.Cleanup(func() { releaseVersion = "" })
+	code, stdout, _ = gofs(t, nil, "", "version")
+	assert.Equal(t, 0, code)
+	assert.True(t, strings.HasPrefix(stdout, "gofs v1.2.3 ("), stdout)
 }

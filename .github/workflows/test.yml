@@ -34,6 +34,7 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
       - name: Build all workspace modules
         run: |
@@ -72,6 +73,7 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
       # "go tool" resolves the tools of every workspace module,
       # so staticcheck and gosec can be run from any module directory.
@@ -118,6 +120,7 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
       - name: Build the root module
         env:
@@ -137,6 +140,7 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
       # The steps below report every failing module, not only the first one
 

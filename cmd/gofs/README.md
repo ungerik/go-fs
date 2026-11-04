@@ -13,14 +13,19 @@ keys and profiles that `ssh`, the AWS CLI and `az login` already set up.
 
 ## Installation
 
-Build it with Go 1.26 or newer from a clone; there are no binary releases,
-and `go install ...@latest` does not work for it:
+Download the archive for your platform from the
+[releases](https://github.com/ungerik/go-fs/releases), from v1.0.0-rc.7 on,
+and put `gofs` (`gofs.exe` on Windows) on your `PATH`. Each archive has
+a `.sha256` file with its checksum.
+
+Or build it with Go 1.26 or newer:
 
 ```bash
-git clone https://github.com/ungerik/go-fs.git
-cd go-fs
-go install ./cmd/gofs
+go install github.com/ungerik/go-fs/cmd/gofs@latest
 ```
+
+`go install` builds `gofs` with the go-fs modules of the latest release.
+To build it with the code of a clone, run `go install ./cmd/gofs` in it.
 
 ## What it does
 

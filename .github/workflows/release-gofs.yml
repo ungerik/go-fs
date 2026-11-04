@@ -1,0 +1,70 @@
+name: Release gofs
+
+# Builds the gofs command line tool for the common platforms and attaches
+# the archives and their SHA-256 checksums to the GitHub release that
+# tag-release.sh publishes, or to the release of an existing tag on demand.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag to attach the binaries to, for example v1.2.3
+        required: true
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: gofs ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    env:
+      # Passed through the environment, never interpolated into the scripts
+      VERSION: ${{ github.event.release.tag_name || inputs.version }}
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.version }}
+
+      # The latest Go release, so the binaries get its security fixes
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+
+      # go.work builds gofs with the modules of the tagged commit
+      - name: Build
+        run: |
+          name="gofs_${VERSION#v}_${GOOS}_${GOARCH}"
+          exe=gofs
+          [ "$GOOS" = windows ] && exe=gofs.exe
+          mkdir -p "dist/$name"
+          go -C cmd/gofs build -trimpath -ldflags "-s -w -X main.releaseVersion=$VERSION" -o "../../dist/$name/$exe" .
+          cp LICENSE cmd/gofs/README.md "dist/$name/"
+          cd dist
+          if [ "$GOOS" = windows ]; then
+            zip -qr "$name.zip" "$name"
+            archive="$name.zip"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            archive="$name.tar.gz"
+          fi
+          sha256sum "$archive" > "$archive.sha256"
+          echo "ARCHIVE=dist/$archive" >> "$GITHUB_ENV"
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$VERSION" "$ARCHIVE" "$ARCHIVE.sha256" --clobber

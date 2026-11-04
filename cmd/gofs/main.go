@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -22,6 +23,11 @@ import (
 	"strings"
 	"syscall"
 )
+
+// releaseVersion is the version of the release binaries, set with
+// -ldflags "-X main.releaseVersion=v1.2.3" by the release workflow.
+// A binary of "go install" has its version in the build information.
+var releaseVersion string
 
 // Errors that run turns into exit codes without printing them.
 var (
@@ -255,6 +261,6 @@ func (c *cli) version(ctx context.Context, flags *flag.FlagSet, args []string) e
 	if !ok {
 		return errors.New("no build information")
 	}
-	fmt.Fprintf(c.stdout, "gofs %s (%s)\n", info.Main.Version, info.GoVersion)
+	fmt.Fprintf(c.stdout, "gofs %s (%s)\n", cmp.Or(releaseVersion, info.Main.Version), info.GoVersion)
 	return nil
 }

@@ -1,31 +1,27 @@
 module github.com/ungerik/go-fs/cmd/gofs
 
-go 1.26.0
+// An exception to the replace pattern of the backend modules: cmd/gofs
+// requires released versions of the go-fs modules without replace
+// directives, because "go install github.com/ungerik/go-fs/cmd/gofs@<version>"
+// refuses a module whose go.mod has replace directives. Builds in the
+// repository use the modules of go.work instead of these versions.
+// Bump them to the new version after each release.
 
-replace (
-	github.com/ungerik/go-fs => ../..
-	github.com/ungerik/go-fs/azureblobfs => ../../azureblobfs
-	github.com/ungerik/go-fs/dropboxfs => ../../dropboxfs
-	github.com/ungerik/go-fs/ftpfs => ../../ftpfs
-	github.com/ungerik/go-fs/s3fs => ../../s3fs
-	github.com/ungerik/go-fs/sftpfs => ../../sftpfs
-	github.com/ungerik/go-fs/smbfs => ../../smbfs
-	github.com/ungerik/go-fs/webdavfs => ../../webdavfs
-)
+go 1.26.0
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2
 	github.com/aws/aws-sdk-go-v2/config v1.33.13
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
-	github.com/ungerik/go-fs v0.0.0-00010101000000-000000000000 // replaced
-	github.com/ungerik/go-fs/azureblobfs v0.0.0-00010101000000-000000000000 // replaced
-	github.com/ungerik/go-fs/dropboxfs v0.0.0-00010101000000-000000000000 // replaced
-	github.com/ungerik/go-fs/ftpfs v0.0.0-00010101000000-000000000000 // replaced
-	github.com/ungerik/go-fs/s3fs v0.0.0-00010101000000-000000000000 // replaced
-	github.com/ungerik/go-fs/sftpfs v0.0.0-00010101000000-000000000000 // replaced
-	github.com/ungerik/go-fs/smbfs v0.0.0-00010101000000-000000000000 // replaced
-	github.com/ungerik/go-fs/webdavfs v0.0.0-00010101000000-000000000000 // replaced
+	github.com/ungerik/go-fs v1.0.0-rc.6
+	github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.6
+	github.com/ungerik/go-fs/dropboxfs v1.0.0-rc.6
+	github.com/ungerik/go-fs/ftpfs v1.0.0-rc.6
+	github.com/ungerik/go-fs/s3fs v1.0.0-rc.6
+	github.com/ungerik/go-fs/sftpfs v1.0.0-rc.6
+	github.com/ungerik/go-fs/smbfs v1.0.0-rc.6
+	github.com/ungerik/go-fs/webdavfs v1.0.0-rc.6
 	golang.org/x/crypto v0.58.0
 	golang.org/x/oauth2 v0.37.0
 )

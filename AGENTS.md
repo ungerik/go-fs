@@ -7,10 +7,13 @@ Public, dependency-light Go library. Repo-specific rules that override the globa
   pull extra dependencies into every consumer. Sentinel and typed errors live in
   `errors.go`.
 - **Multi-module workspace:** `go.work` lists the root module and the backend modules
-  (`azureblobfs`, `dropboxfs`, `ftpfs`, `s3fs`, `sftpfs`, `smbfs`, `webdavfs`) plus
-  `tools`. Run `./test-workspace.sh` to test
+  (`azureblobfs`, `dropboxfs`, `ftpfs`, `s3fs`, `sftpfs`, `smbfs`, `webdavfs`), the
+  `cmd/gofs` command line tool and `tools`. Run `./test-workspace.sh` to test
   and lint every module. Keep the `replace github.com/ungerik/go-fs => ..` + placeholder
-  pseudo-version pattern in the backend `go.mod` files.
+  pseudo-version pattern in the backend `go.mod` files. `cmd/gofs` is the exception: it
+  requires released versions of the go-fs modules without `replace`, so that
+  `go install github.com/ungerik/go-fs/cmd/gofs@<version>` works; bump them after each release.
+  So `cmd/gofs` can only use APIs of the latest release; the `GOWORK=off` build checks that.
 - **Tests:** unit tests must run offline. Tests needing Docker (S3Mock, sshd, Samba, Azurite) must
   skip when Docker is unavailable; tests needing credentials or public internet servers
   must be gated behind an environment variable (`GOFS_ONLINE_TESTS=1`,

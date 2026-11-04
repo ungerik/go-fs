@@ -292,9 +292,7 @@ func (c *connector) sftpOptions(address string) (*sftpfs.Options, error) {
 	}
 	agentClient := c.sshAgent()
 	if agentClient != nil || len(signers) > 0 {
-		// One method for all keys: the SSH client tries
-		// every authentication method only once
-		opts.Auth = []ssh.AuthMethod{ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+		allSigners := func() ([]ssh.Signer, error) {
 			if agentClient == nil {
 				return signers, nil
 			}
@@ -303,7 +301,10 @@ func (c *connector) sftpOptions(address string) (*sftpfs.Options, error) {
 				return signers, nil // the keys of the files can still authenticate
 			}
 			return append(agentSigners, signers...), nil
-		})}
+		}
+		// One method for all keys: the SSH client tries
+		// every authentication method only once
+		opts.Auth = append(opts.Auth, ssh.PublicKeysCallback(allSigners))
 	}
 	if c.envBool("GOFS_SFTP_INSECURE_IGNORE_HOST_KEY") {
 		opts.HostKeyCallback = sftpfs.AcceptAnyHostKey
