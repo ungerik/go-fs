@@ -1018,6 +1018,30 @@ Check the rate limits before designing copy retries.
 
 ## Completed
 
+### OneDrive and SharePoint backend
+
+**What:** A backend module `onedrivefs` with the URI prefix
+`onedrive://<drive id>` for OneDrive Personal, OneDrive for Business and
+SharePoint document libraries over the Microsoft Graph API.
+
+**Why:** Microsoft 365 has over 450 million paid commercial seats, and
+SharePoint libraries hold most company files. A synced local folder does not
+help on servers, with one OAuth grant per customer of a multi-tenant
+service, or with Files On-Demand placeholders.
+
+**Context:** Path-based addressing of Graph, a thin REST client on
+`net/http` and `golang.org/x/oauth2` instead of `msgraph-sdk-go`.
+
+Done: `onedrivefs` implements `WriteAll`, `Touch`, `RemoveAll`, `CopyFile`,
+`Move` and `ValidateName` natively and passes the conformance suite against
+an offline fake of the Graph API; the verification against a real drive and
+the metadata cache are open items above.
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** None
+**Completed:** unreleased (2026-11-06)
+
 ### Don't trust the S3 paginator on a truncated page without a token
 
 **What:** s3fs `ListDir`, `ListDirRecursive` and `RemoveAll` use the SDK
