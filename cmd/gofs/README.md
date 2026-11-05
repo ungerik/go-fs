@@ -70,13 +70,17 @@ Several sources need an existing destination directory, and so does a
 destination with a trailing slash. Short boolean flags can be combined, like
 `rm -rf`. Flags go before the other arguments.
 
-`put` streams stdin to S3, Azure Blob Storage, Dropbox and WebDAV, which
-discard an incomplete upload. On the other file systems it replaces an
+`put` writes stdin directly to S3, Azure Blob Storage, Dropbox, WebDAV and
+FTP, which discard an incomplete upload; WebDAV and FTP buffer it in memory
+until stdin ends. On the local file system, SFTP and SMB it replaces an
 existing file like an editor saving it: it writes a hidden `.gofs-put-*` file
-next to it, with its permissions, and renames that over the file once stdin
-has ended. So a symbolic link is replaced with a file instead of written
-through, other hard links keep the old content, and the owner and group are
-those of the new file. A killed process can leave the hidden file behind.
+next to it with its permissions and renames that over the file once stdin has
+ended. So a symbolic link is replaced with a file instead of written through,
+other hard links keep the old content, and the owner and group are those of
+the new file. A killed process can leave the hidden file behind. A read-only
+file is refused, a named pipe or device is written directly, and so is a file
+in a directory where no hidden file can be created, which then loses its
+content if stdin fails.
 
 Exit codes: 0 for success, 1 for errors and for `cmp` of differing files,
 2 for invalid arguments.

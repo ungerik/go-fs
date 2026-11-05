@@ -247,6 +247,10 @@ func (c *cli) put(ctx context.Context, flags *flag.FlagSet, args []string) error
 	case err == nil && info.IsDir():
 		// Before stdin is read
 		return fs.NewErrIsDirectory(file)
+	case err == nil && !info.Mode().IsRegular():
+		// A named pipe or device is written, not replaced
+		_, err = writeAll(ctx, file, c.stdin)
+		return err
 	case err == nil:
 		return putReplace(ctx, file, fs.PermissionsFromStdFileInfo(info), c.stdin)
 	case !errors.Is(err, os.ErrNotExist):
@@ -286,17 +290,23 @@ func writeAll(ctx context.Context, file fs.File, r io.Reader) (aborted bool, err
 	return false, writer.Close()
 }
 
-// putReplace writes everything that r reads to the existing file,
-// which keeps its content if reading or writing fails or ctx is canceled.
-// A writer that implements fs.WriteAborter doesn't change the file before
-// it is closed, so it writes the file directly. The writers of other file
-// systems, like the local one and SFTP, truncate the file when they are
-// opened, so a temporary file with the permissions perm is written in the
-// same directory and moved over the file once it is complete, which
-// renames it on the server without copying the data again.
+// putReplace writes everything that r reads to the existing regular file
+// with the permissions perm, which keeps its content if reading or writing
+// fails or ctx is canceled. A writer that implements fs.WriteAborter
+// doesn't change the file before it is closed, so it writes the file
+// directly. The writers of other file systems, like the local one and SFTP,
+// truncate the file when they are opened, so a temporary file with the
+// permissions perm is written in the same directory and moved over the file
+// once it is complete, which renames it on the server without copying the
+// data again. Where no temporary file can be created, like in a directory
+// that only the file is writable in, the file is written directly.
 func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, r io.Reader) error {
 	temp := file.Dir().Join(".gofs-put-" + rand.Text())
 	writer, err := temp.OpenWriter(perm)
+	if errors.Is(err, os.ErrPermission) {
+		_, err = writeAll(ctx, file, r)
+		return err
+	}
 	if err != nil {
 		return err
 	}
@@ -308,13 +318,31 @@ func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, r io.Rea
 		_, err = writeAll(ctx, file, r)
 		return err
 	}
+	removeTemp := func(err error) error {
+		return errors.Join(err, fs.RemoveErrDoesNotExist(temp.Remove()))
+	}
+	if perm&fs.UserWrite == 0 {
+		// The file isn't writable, which the rename would ignore
+		return removeTemp(errors.Join(fs.NewErrPermission(file), writer.Close()))
+	}
+	// OpenWriter applies the umask to the permissions of a new file
+	err = temp.SetPermissions(perm)
+	if err != nil && !errors.Is(err, errors.ErrUnsupported) {
+		return removeTemp(errors.Join(err, writer.Close()))
+	}
 	_, err = io.Copy(writer, ctxReader{ctx, r})
 	err = errors.Join(err, writer.Close())
-	if err == nil {
-		err = fs.Move(ctx, temp, file)
-	}
 	if err != nil {
-		return errors.Join(err, fs.RemoveErrDoesNotExist(temp.Remove()))
+		return removeTemp(err)
+	}
+	err = fs.Move(ctx, temp, file)
+	if err != nil {
+		if _, statErr := file.Stat(); statErr != nil {
+			// A failed move can remove the file before it renames
+			// the temporary file, which then holds the only copy
+			return fmt.Errorf("%w, the written data is in %s", err, string(temp))
+		}
+		return removeTemp(err)
 	}
 	return nil
 }

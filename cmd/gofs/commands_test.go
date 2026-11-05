@@ -323,6 +323,49 @@ func TestPut_Failure(t *testing.T) {
 	assert.Equal(t, "existing.txt\n", stdout, "no temporary file left behind")
 }
 
+// TestPut_Replace checks that put keeps the permissions of an existing
+// local file that it replaces, refuses a read-only file and writes a file
+// directly when no temporary file can be created next to it.
+func TestPut_Replace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permissions")
+	}
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "shared.txt")
+	writeFiles(t, dir, map[string]string{"shared.txt": "old"})
+	// A mode that the usual umask 022 would change
+	require.NoError(t, os.Chmod(shared, 0o666))
+	code, stderr := runStdin(t.Context(), nil, strings.NewReader("new"), "put", shared)
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "new", readFile(t, shared))
+	info, err := os.Stat(shared)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o666), info.Mode().Perm(), "the permissions are kept")
+
+	readOnly := filepath.Join(dir, "read-only.txt")
+	writeFiles(t, dir, map[string]string{"read-only.txt": "keep"})
+	require.NoError(t, os.Chmod(readOnly, 0o444))
+	code, stderr = runStdin(t.Context(), nil, strings.NewReader("new"), "put", readOnly)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "permission")
+	assert.Equal(t, "keep", readFile(t, readOnly), "a read-only file is not replaced")
+
+	// A writable file in a directory where no file can be created
+	locked := filepath.Join(dir, "locked")
+	writeFiles(t, locked, map[string]string{"file.txt": "old"})
+	require.NoError(t, os.Chmod(locked, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	code, stderr = runStdin(t.Context(), nil, strings.NewReader("new"), "put", filepath.Join(locked, "file.txt"))
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "new", readFile(t, filepath.Join(locked, "file.txt")), "written directly")
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		assert.False(t, strings.HasPrefix(entry.Name(), ".gofs-put-"), "temporary file left behind: %s", entry.Name())
+	}
+}
+
 // TestPut_StatError checks that put writes nothing when it can't tell
 // if the file exists, so it never truncates or removes an existing file.
 func TestPut_StatError(t *testing.T) {
