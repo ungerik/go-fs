@@ -384,7 +384,7 @@ func (c *cli) destination(ctx context.Context, args []string) (sources []fs.File
 	isDir := dest.IsDir()
 	intoDir = isDir || len(sources) > 1 || strings.HasSuffix(last, "/")
 	if intoDir && !isDir {
-		return nil, "", false, fmt.Errorf("%s is not a directory", string(dest))
+		return nil, "", false, fmt.Errorf("%s is not a directory", fsimpl.RedactURI(string(dest)))
 	}
 	return sources, dest, intoDir, nil
 }
@@ -405,7 +405,7 @@ func (c *cli) cp(ctx context.Context, flags *flag.FlagSet, args []string) error 
 			// CopyFile copies into an existing directory itself
 			err = fs.CopyFile(ctx, src, dest)
 		} else if !recursive {
-			err = fmt.Errorf("%s is a directory, copy it with -r", string(src))
+			err = fmt.Errorf("%s is a directory, copy it with -r", fsimpl.RedactURI(string(src)))
 		} else if intoDir {
 			err = fs.CopyRecursive(ctx, src, dest.Join(src.Name()))
 		} else {

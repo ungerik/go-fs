@@ -179,6 +179,21 @@ func TestCp(t *testing.T) {
 	assert.Equal(t, "deep", readFile(t, filepath.Join(multi, "sub", "y.txt")))
 }
 
+// TestCp_RedactsPasswords checks that the errors of cp and mv
+// don't print the password of a URI.
+func TestCp_RedactsPasswords(t *testing.T) {
+	src := newTree(t)
+	for _, args := range [][]string{
+		{"cp", filepath.Join(src, "x.txt"), filepath.Join(src, "sub", "y.txt"), "https://alice:S3cret@example.com/x"},
+		{"mv", filepath.Join(src, "x.txt"), "https://alice:S3cret@example.com/x/"},
+		{"cp", "file://alice:S3cret@localhost" + filepath.ToSlash(src), t.TempDir()},
+	} {
+		code, _, stderr := gofs(t, nil, "", args...)
+		assert.Equal(t, 1, code, args)
+		assert.NotContains(t, stderr, "S3cret", args)
+	}
+}
+
 func TestMv(t *testing.T) {
 	dir := newTree(t)
 	code, _, stderr := gofs(t, nil, "", "mv", filepath.Join(dir, "x.txt"), filepath.Join(dir, "renamed.txt"))
