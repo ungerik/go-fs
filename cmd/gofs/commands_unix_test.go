@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	fs "github.com/ungerik/go-fs"
 )
 
 // TestPut_NamedPipe checks that put writes into a named pipe
@@ -45,4 +47,14 @@ func TestPut_NamedPipe(t *testing.T) {
 	info, err := os.Lstat(fifo)
 	require.NoError(t, err)
 	assert.Equal(t, os.ModeNamedPipe, info.Mode().Type(), "still a named pipe")
+}
+
+func TestIsSpecialFile_Unix(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+	for _, file := range []fs.File{fs.File(fifo), fs.File("/dev/null")} {
+		info, err := file.Stat()
+		require.NoError(t, err)
+		assert.True(t, isSpecialFile(file, info), file)
+	}
 }

@@ -247,7 +247,7 @@ func (c *cli) put(ctx context.Context, flags *flag.FlagSet, args []string) error
 	case err == nil && info.IsDir():
 		// Before stdin is read
 		return fs.NewErrIsDirectory(file)
-	case err == nil && !info.Mode().IsRegular():
+	case err == nil && isSpecialFile(file, info):
 		// A named pipe or device is written, not replaced
 		_, err = writeAll(ctx, file, c.stdin)
 		return err
@@ -270,6 +270,21 @@ func (c *cli) put(ctx context.Context, flags *flag.FlagSet, args []string) error
 		return errors.Join(err, fs.RemoveErrDoesNotExist(file.Remove()))
 	}
 	return err
+}
+
+// isSpecialFile reports if the existing file with info is a named pipe,
+// a socket or a device, which put writes into instead of replacing it.
+// Like fs.CopyFile it tells them by the mode of a local file, because the
+// FileInfo of go-fs reports other local files as irregular as well, like
+// the placeholder of a OneDrive file on Windows.
+func isSpecialFile(file fs.File, info iofs.FileInfo) bool {
+	if localPath := file.LocalPath(); localPath != "" {
+		localInfo, err := os.Stat(localPath)
+		if err == nil {
+			return localInfo.Mode()&(os.ModeNamedPipe|os.ModeSocket|os.ModeDevice|os.ModeCharDevice) != 0
+		}
+	}
+	return !info.Mode().IsRegular()
 }
 
 // writeAll writes everything that r reads to file. If reading or writing
@@ -304,6 +319,12 @@ func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, r io.Rea
 	temp := file.Dir().Join(".gofs-put-" + rand.Text())
 	writer, err := temp.OpenWriter(perm)
 	if errors.Is(err, os.ErrPermission) {
+		// Opening can fail after the file was created,
+		// like when an SFTP server refuses to set its permissions
+		err = fs.RemoveErrDoesNotExist(temp.Remove())
+		if err != nil {
+			return err
+		}
 		_, err = writeAll(ctx, file, r)
 		return err
 	}
@@ -325,9 +346,11 @@ func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, r io.Rea
 		// The file isn't writable, which the rename would ignore
 		return removeTemp(errors.Join(fs.NewErrPermission(file), writer.Close()))
 	}
-	// OpenWriter applies the umask to the permissions of a new file
+	// OpenWriter applies the umask to the permissions of a new file.
+	// File systems without permissions and mounts that refuse to change
+	// them, like vfat, keep the permissions that the file got.
 	err = temp.SetPermissions(perm)
-	if err != nil && !errors.Is(err, errors.ErrUnsupported) {
+	if err != nil && !errors.Is(err, errors.ErrUnsupported) && !errors.Is(err, os.ErrPermission) {
 		return removeTemp(errors.Join(err, writer.Close()))
 	}
 	_, err = io.Copy(writer, ctxReader{ctx, r})

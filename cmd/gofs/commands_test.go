@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/webdav"
+
+	fs "github.com/ungerik/go-fs"
 )
 
 // writeFiles writes the files of the map from slash separated
@@ -363,6 +365,16 @@ func TestPut_Replace(t *testing.T) {
 	require.NoError(t, err)
 	for _, entry := range entries {
 		assert.False(t, strings.HasPrefix(entry.Name(), ".gofs-put-"), "temporary file left behind: %s", entry.Name())
+	}
+}
+
+func TestIsSpecialFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"regular.txt": "x"})
+	for _, file := range []fs.File{fs.File(filepath.Join(dir, "regular.txt")), fs.File(filepath.Join(dir, "regular.txt")).ToAbsPath()} {
+		info, err := file.Stat()
+		require.NoError(t, err)
+		assert.False(t, isSpecialFile(file, info), "a regular local file is replaced: %s", file)
 	}
 }
 
