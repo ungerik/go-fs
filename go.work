@@ -11,6 +11,7 @@ use (
 	./cmd/gofs
 	./dropboxfs
 	./ftpfs
+	./gitfs
 	./s3fs
 	./sftpfs
 	./smbfs

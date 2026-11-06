@@ -1,0 +1,29 @@
+# Git smart HTTP test server: nginx with Basic authentication in front of
+# git http-backend (via fcgiwrap), serving the repositories below /srv/git
+FROM alpine:3.22.2
+
+RUN apk add --no-cache git git-daemon nginx fcgiwrap spawn-fcgi apache2-utils && \
+    htpasswd -bc /etc/nginx/htpasswd testuser testpass && \
+    git config --system safe.directory '*' && \
+    git config --system uploadpack.allowFilter true && \
+    mkdir -p /srv/git /run/nginx && \
+    printf '%s\n' \
+      'server {' \
+      '  listen 80;' \
+      '  location / {' \
+      '    auth_basic "git";' \
+      '    auth_basic_user_file /etc/nginx/htpasswd;' \
+      '    include fastcgi_params;' \
+      '    fastcgi_param SCRIPT_FILENAME /usr/libexec/git-core/git-http-backend;' \
+      '    fastcgi_param GIT_PROJECT_ROOT /srv/git;' \
+      '    fastcgi_param GIT_HTTP_EXPORT_ALL "";' \
+      '    fastcgi_param PATH_INFO $uri;' \
+      '    fastcgi_param REMOTE_USER $remote_user;' \
+      '    fastcgi_param GIT_PROTOCOL $http_git_protocol;' \
+      '    fastcgi_pass unix:/run/fcgiwrap.sock;' \
+      '  }' \
+      '}' > /etc/nginx/http.d/default.conf
+
+EXPOSE 80
+
+CMD ["sh", "-c", "spawn-fcgi -s /run/fcgiwrap.sock -M 766 -- /usr/bin/fcgiwrap && exec nginx -g 'daemon off;'"]

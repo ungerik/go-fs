@@ -16,6 +16,7 @@ Get the backend together with the core module, at the same version:
 
 ```bash
 go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/gitfs@v1.0.0-rc.8 # gitfs is new in v1.0.0-rc.8
 ```
 
 ## The constructor rule every backend follows
@@ -411,6 +412,38 @@ err := httpfs.NewAndRegister("https://api.example.com/", &httpfs.Options{
     Client: &http.Client{Timeout: 30 * time.Second},
 })
 ```
+
+### Git repository (read-only)
+
+```go
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/gitfs"
+)
+
+repo, err := gitfs.New(ctx, "https://github.com/ungerik/go-fs.git", "v1.0.0-rc.6", nil)
+if err != nil {
+    return err
+}
+defer repo.Close()
+err = fs.Register(repo)
+if err != nil {
+    return err
+}
+
+version, err := fs.File("git+https://github.com/ungerik/go-fs.git@v1.0.0-rc.6/VERSION").ReadAllString(ctx)
+```
+
+The ref is a branch, a tag, a full ref name or a commit ID, and an empty ref
+is the default branch. The file system shows the commit that the ref pointed
+to when `New` ran. `Options.Token` authenticates with a GitHub or GitLab
+access token, and `Options.Username` and `Options.Password` with HTTP Basic
+authentication. A GitHub token also raises the rate limit of the GitHub REST
+API, which gitfs uses for the sizes of files on github.com. The prefix is
+`git+<repository URL>@<ref>`.
+
+What each operation costs in requests, and which entries of a tree are not
+exposed, is in [gitfs/README.md](../gitfs/README.md).
 
 ## Verification
 

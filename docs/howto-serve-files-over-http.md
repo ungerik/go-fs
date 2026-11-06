@@ -233,8 +233,8 @@ through `http.ServeContent`.
 can't seek, `ServeFileHTTP` reaches the requested offset by reading and
 discarding the bytes before it. Check the "Seeking reads" row of the support
 matrix in [FileSystem interfaces](reference-filesystem-interfaces.md);
-`azureblobfs`, `sftpfs`, `smbfs` and `webdavfs` seek natively, like the local
-and the memory file systems.
+`azureblobfs`, `gitfs`, `sftpfs`, `smbfs` and `webdavfs` seek natively, like
+the local and the memory file systems.
 
 **A request for several ranges gets the full content** — only local files and
 the readers of `MemFile` and `MemFileSystem`, which seek in memory, serve

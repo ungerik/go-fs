@@ -8,7 +8,7 @@ go-fs
 [![GitHub release](https://img.shields.io/github/v/release/ungerik/go-fs?include_prereleases)](https://github.com/ungerik/go-fs/releases)
 
 One file API for Go over the local disk, memory, S3, Azure Blob Storage,
-SFTP, FTP, SMB, WebDAV, Dropbox, HTTP, and ZIP and tar archives. A file is a
+SFTP, FTP, SMB, WebDAV, Dropbox, HTTP, git repositories, and ZIP and tar archives. A file is a
 path or URI string like `s3://bucket/report.pdf`, and the same code reads,
 writes, lists, copies and moves files on every one of them.
 
@@ -30,6 +30,7 @@ with the core module, at the same version.
 
 ```bash
 go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/gitfs@v1.0.0-rc.8 # gitfs is new in v1.0.0-rc.8
 ```
 
 Example
@@ -885,9 +886,10 @@ File system implementations
 
 `go-fs` ships with the local file system and several remote / virtual
 backends. The network backends (`s3fs`, `azureblobfs`, `sftpfs`, `ftpfs`,
-`smbfs`, `dropboxfs`, `webdavfs`) are independent Go modules under their own
-sub-directory with their own dependencies; the lighter ones (`httpfs`,
-`zipfs`, `tarfs`, `multipartfs`) are packages in the root module.
+`smbfs`, `dropboxfs`, `webdavfs`, `gitfs`) are independent Go modules under
+their own sub-directory with their own dependencies (`gitfs` has none beyond
+the standard library); the lighter ones (`httpfs`, `zipfs`, `tarfs`,
+`multipartfs`) are packages in the root module.
 
 `File` values route to the file system that is registered for their URI
 prefix. The constructors follow one rule:
@@ -913,6 +915,7 @@ Only `httpfs` registers file systems when it is imported.
 | `webdavfs`    | `webdav://[<user>@]<host><base path>` | `webdavfs.New`, `webdavfs.NewAndRegister` | yes  | yes    |
 | `smbfs`       | `smb://[<user>@]<host>/<share>` | `smbfs.Dial`, `DialAndRegister`, `EnsureRegistered` | yes  | yes    |
 | `azureblobfs` | `azblob://<host>/<container>` | `azureblobfs.New`, `NewFromConnectionString`, `NewAndRegister` | yes | yes/ro |
+| `gitfs`       | `git+<repository URL>@<ref>` | `gitfs.New`                                   | yes  | no     |
 | `zipfs`       | `zip://<id>`            | `zipfs.NewReader`, `zipfs.NewWriter`               | reader | writer |
 | `tarfs`       | `tar://<id>`            | `tarfs.NewReader`, `tarfs.NewWriter`               | reader | writer |
 | `multipartfs` | `multipart://<id>`      | `multipartfs.NewFromRequest`, `multipartfs.New`    | yes  | no     |
@@ -963,6 +966,7 @@ expose one, so those use the coordinates that identify the store instead.
 | `smbfs`                                            | `[<user>@]<host>/<share>`                          |
 | `webdavfs`                                         | `[<user>@]<host><base path>`                       |
 | `dropboxfs`                                        | Dropbox account id with its `dbid:` part, which the prefix omits |
+| `gitfs`                                            | The prefix, `git+<repository URL>@<ref>`           |
 
 The format is specific to the implementation and promises nothing beyond
 uniqueness and stability. Use it to tell two file systems apart, to key a
@@ -985,25 +989,25 @@ implements `User`/`Group` only on Unix. `MemFileSystem` implements `Exists`,
 `ListDirRecursive` and `User`/`Group` too, and leaves out `IsHidden` and the
 absolute path methods, whose defaults fit it. For the remote backends:
 
-| Capability             | s3  | azblob | sftp | ftp | smb | dropbox | webdav | http |
-| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
-| CopyFile (server-side) | ✓   | ✓      | –    | –   | –   | ✓       | ✓      | –    |
-| Move                   | –   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | –    |
-| Exists                 | –   | –      | –    | –   | –   | –       | –      | ✓    |
-| ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | –       | ✓      | ✓    |
-| WriteAll               | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | r/o  |
-| Append                 | –   | –      | –    | ✓   | –   | –       | –      | r/o  |
-| OpenAppendWriter       | –   | –      | ✓    | ✓   | ✓   | –       | –      | r/o  |
-| OpenReadWriter         | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | –      | r/o  |
-| Touch                  | ✓   | ✓      | ✓    | ✓   | ✓   | –       | –      | r/o  |
-| Truncate               | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
-| MakeAllDirs            | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
-| RemoveAll              | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  |
-| ListDirRecursive       | ✓   | ✓      | ✓    | ✓   | –   | ✓       | –      | –    |
-| SetPermissions         | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  |
-| Symbolic links         | –   | –      | ✓    | –   | ✓   | –       | –      | –    |
-| Seeking reads          | –   | ✓      | ✓    | –   | ✓   | –       | ✓      | –    |
-| ValidateName           | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  |
+| Capability             | s3  | azblob | sftp | ftp | smb | dropbox | webdav | http | git |
+| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: | :-: |
+| CopyFile (server-side) | ✓   | ✓      | –    | –   | –   | ✓       | ✓      | –    | –   |
+| Move                   | –   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | –    | –   |
+| Exists                 | –   | –      | –    | –   | –   | –       | –      | ✓    | ✓   |
+| ReadAll                | ✓   | ✓      | –    | ✓   | ✓   | –       | ✓      | ✓    | ✓   |
+| WriteAll               | ✓   | ✓      | –    | ✓   | ✓   | ✓       | ✓      | r/o  | r/o |
+| Append                 | –   | –      | –    | ✓   | –   | –       | –      | r/o  | r/o |
+| OpenAppendWriter       | –   | –      | ✓    | ✓   | ✓   | –       | –      | r/o  | r/o |
+| OpenReadWriter         | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | –      | r/o  | r/o |
+| Touch                  | ✓   | ✓      | ✓    | ✓   | ✓   | –       | –      | r/o  | r/o |
+| Truncate               | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  | r/o |
+| MakeAllDirs            | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  | r/o |
+| RemoveAll              | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  | r/o |
+| ListDirRecursive       | ✓   | ✓      | ✓    | ✓   | –   | ✓       | –      | –    | ✓   |
+| SetPermissions         | –   | –      | ✓    | –   | ✓   | –       | –      | r/o  | r/o |
+| Symbolic links         | –   | –      | ✓    | –   | ✓   | –       | –      | –    | –   |
+| Seeking reads          | –   | ✓      | ✓    | –   | ✓   | –       | ✓      | –    | ✓   |
+| ValidateName           | ✓   | ✓      | ✓    | ✓   | ✓   | ✓       | ✓      | r/o  | r/o |
 
 `✓` native implementation · `–` falls back to the generic emulation (works the
 same, just not specialized) · `r/o` read-only backend, so the write operation
@@ -1015,7 +1019,7 @@ The archive and request-scoped backends implement a mode-dependent subset:
 (`tarfs.Writer` also `WriteAll`, both writers also `ValidateName`), and
 `multipartfs` is read-only and provides
 `Exists` and `ReadAll`. `httpfs` implements `URIFileSystem`, because its paths
-are URLs in their escaped form.
+are URLs in their escaped form. `gitfs` is read-only like `httpfs`.
 
 Every backend follows the same error contract, checked by the conformance
 suite in `fstest`: `errors.Is(err, os.ErrNotExist)` for missing files,
@@ -1058,6 +1062,38 @@ err := httpfs.NewAndRegister("https://api.example.com/", &httpfs.Options{
 
 URLs are used verbatim: the query and escapes in the path are passed to the
 server unchanged. [httpfs/README.md](httpfs/README.md) has the details.
+
+### gitfs
+
+```go
+import (
+    fs "github.com/ungerik/go-fs"
+    "github.com/ungerik/go-fs/gitfs"
+)
+
+// The latest commit of the default branch, or pass a branch, tag or commit ID
+repo, err := gitfs.New(ctx, "https://github.com/ungerik/go-fs.git", "", nil)
+if err != nil {
+    return err
+}
+defer repo.Close()
+err = fs.Register(repo)
+if err != nil {
+    return err
+}
+
+readme, err := repo.RootDir().Join("README.md").ReadAllString(ctx)
+```
+
+Read-only: one commit of a remote repository, read over the git smart HTTP
+protocol version 2 without a git binary or go-git. Any HTTPS git server works,
+like GitHub, GitLab, Gitea or `git http-backend`. `New` only resolves the ref,
+and the trees and files are fetched when they are accessed. On github.com, the
+GitHub REST API supplies the trees with the file sizes, and the content of
+files comes from raw.githubusercontent.com. The prefix is
+`git+<repository URL>@<ref>` with the ref escaped like a URL path segment,
+like `git+https://github.com/ungerik/go-fs.git@v1.0.0-rc.6`.
+[gitfs/README.md](gitfs/README.md) has the details.
 
 ### s3fs
 
