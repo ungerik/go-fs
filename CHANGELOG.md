@@ -5,16 +5,44 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
-## [Unreleased]
+## [1.0.0-rc.7] - 2026-11-06
+
+Seventh release candidate: `gofs`, a command line tool for files on every
+file system of go-fs, also between them. The library modules are unchanged.
 
 ### Added
 
-- `cmd/gofs`, a command line tool for every file system: `ls`, `stat`,
-  `cat`, `put`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `hash` and `cmp`, also
-  across file systems, like `gofs cp -r s3://bucket/dir sftp://host/dir`.
-  The remote file systems connect on first use with credentials from
-  environment variables, `gofs env` lists them. It is a module of its own,
-  so the core module and the backends get no new dependencies.
+- `cmd/gofs`, a command line tool for local files, HTTP, FTP, SFTP, SMB,
+  WebDAV, S3, Azure Blob Storage and Dropbox: `ls`, `stat`, `cat`, `put`,
+  `cp`, `mv`, `rm`, `mkdir`, `touch`, `hash` (Dropbox content hash, SHA-256
+  or MD5) and `cmp`, also across file systems, like
+  `gofs cp -r s3://bucket/dir sftp://host/dir`. The remote file systems
+  connect on first use with credentials from environment variables and the
+  setups of `ssh`, the AWS CLI and `az login`; `gofs env` lists the
+  variables and which of them are set, never their values. Install it with
+  `go install github.com/ungerik/go-fs/cmd/gofs@latest` or download it from
+  the release.
+- `put` keeps an existing file when stdin fails or the command is
+  interrupted: S3, Azure Blob Storage, Dropbox, WebDAV and FTP discard the
+  incomplete upload, and on the local file system, SFTP and SMB the file is
+  replaced by renaming a complete temporary file over it.
+- `rm` refuses a path that ends with `.` or `..`, also percent-encoded in a
+  URI, before it removes anything.
+- The Azure credentials of the environment are only sent to the storage
+  account host, and errors never print the passwords of URIs.
+- Release archives of `gofs` for Linux, macOS and Windows on amd64 and
+  arm64 with SHA-256 checksums, built by the new `release-gofs` workflow
+  for every published release.
+
+### Changed
+
+- `cmd/gofs` requires the go-fs modules of its own release without
+  `replace` directives, unlike the backend modules, so that `go install`
+  works; `gofs version` prints both versions. The new `./gofs-require.sh`
+  sets them in the release PR before the tags exist, the CI and
+  `./test-workspace.sh` build `cmd/gofs` without the workspace through it,
+  and `tag-release.sh` refuses a release whose `cmd/gofs/go.sum` doesn't
+  match the modules.
 
 ## [1.0.0-rc.6] - 2026-11-03
 
