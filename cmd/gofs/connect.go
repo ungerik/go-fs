@@ -51,7 +51,7 @@ const dropboxTokenURL = "https://api.dropboxapi.com/oauth2/token" //#nosec G101 
 // the file systems, listed by the env command.
 var envVars = []struct{ scheme, name, help string }{
 	{"ftp://, ftps://", "GOFS_FTP_USER", "username if the URI has none, else anonymous login"},
-	{"ftp://, ftps://", "GOFS_FTP_PASSWORD", "password if the URI has none"},
+	{"ftp://, ftps://", "GOFS_FTP_PASSWORD", "password if the URI has none, only with a username"},
 	{"ftp://, ftps://", "GOFS_FTP_INSECURE_SKIP_VERIFY", "true: don't verify the FTPS server certificate"},
 	{"sftp://", "GOFS_SFTP_USER", "username if the URI has none, else the local username"},
 	{"sftp://", "GOFS_SFTP_PASSWORD", "password if the URI has none"},
@@ -61,7 +61,7 @@ var envVars = []struct{ scheme, name, help string }{
 	{"sftp://", "GOFS_SFTP_KNOWN_HOSTS", "known hosts file instead of ~/.ssh/known_hosts"},
 	{"sftp://", "GOFS_SFTP_INSECURE_IGNORE_HOST_KEY", "true: don't verify the host key of the server"},
 	{"smb://", "GOFS_SMB_USER", "username if the URI has none, else a guest session without password"},
-	{"smb://", "GOFS_SMB_PASSWORD", "password if the URI has none"},
+	{"smb://", "GOFS_SMB_PASSWORD", "password if the URI has none, only with a username"},
 	{"smb://", "GOFS_SMB_DOMAIN", "NTLM domain"},
 	{"webdav://", "GOFS_WEBDAV_URL", "http or https URL of the server, required, webdav:///path is below it"},
 	{"webdav://", "GOFS_WEBDAV_USER", "username, overrides the one of GOFS_WEBDAV_URL"},
@@ -167,6 +167,22 @@ func userInfo(address string) (hasUser, hasPassword bool) {
 	return u.User.Username() != "", hasPassword
 }
 
+// envCredentials returns the values of the environment variables userVar
+// and passwordVar for the username and password that address has none of.
+// The password needs a username, of address or userVar: without one, FTP
+// logs in as anonymous and SMB opens a guest session, and neither may get
+// the password of the user's own server.
+func (c *connector) envCredentials(address, userVar, passwordVar string) (username, password string) {
+	hasUser, hasPassword := userInfo(address)
+	if !hasUser {
+		username = c.getenv(userVar)
+	}
+	if !hasPassword && (hasUser || username != "") {
+		password = c.getenv(passwordVar)
+	}
+	return username, password
+}
+
 // file returns the file of uri, connecting its file system if necessary.
 func (c *connector) file(ctx context.Context, uri string) (fs.File, error) {
 	scheme, rest, ok := cutScheme(uri)
@@ -243,13 +259,7 @@ func (c *connector) ftpFile(ctx context.Context, scheme, rest string) (fs.File, 
 	authority, filePath := cutAuthority(rest)
 	address := scheme + fs.PrefixSeparator + authority
 	opts := &ftpfs.Options{InsecureSkipVerify: c.envBool("GOFS_FTP_INSECURE_SKIP_VERIFY")}
-	hasUser, hasPassword := userInfo(address)
-	if !hasUser {
-		opts.Username = c.getenv("GOFS_FTP_USER")
-	}
-	if !hasPassword {
-		opts.Password = c.getenv("GOFS_FTP_PASSWORD")
-	}
+	opts.Username, opts.Password = c.envCredentials(address, "GOFS_FTP_USER", "GOFS_FTP_PASSWORD")
 	fileSystem, err := c.connect(address, func() (fs.FileSystem, error) {
 		return ftpfs.Dial(ctx, address, opts)
 	})
@@ -475,13 +485,7 @@ func (c *connector) smbFile(ctx context.Context, uri, rest string) (fs.File, err
 	}
 	address := smbfs.Prefix + authority + "/" + share
 	opts := &smbfs.Options{Domain: c.getenv("GOFS_SMB_DOMAIN")}
-	hasUser, hasPassword := userInfo(address)
-	if !hasUser {
-		opts.Username = c.getenv("GOFS_SMB_USER")
-	}
-	if !hasPassword {
-		opts.Password = c.getenv("GOFS_SMB_PASSWORD")
-	}
+	opts.Username, opts.Password = c.envCredentials(address, "GOFS_SMB_USER", "GOFS_SMB_PASSWORD")
 	fileSystem, err := c.connect(address, func() (fs.FileSystem, error) {
 		return smbfs.Dial(ctx, address, opts)
 	})

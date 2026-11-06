@@ -83,6 +83,31 @@ func TestUserInfo(t *testing.T) {
 	}
 }
 
+// TestEnvCredentials checks that the FTP and SMB connections take the
+// username and password of the environment only for what the URI lacks,
+// and never send the password without a username: an anonymous FTP login
+// or an SMB guest session would hand it to any server.
+func TestEnvCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		vars               map[string]string
+		address            string
+		username, password string
+	}{
+		{"no user anywhere", map[string]string{"P": "S3cret"}, "ftp://host", "", ""},
+		{"user of the environment", map[string]string{"U": "bob", "P": "S3cret"}, "ftp://host", "bob", "S3cret"},
+		{"user of the URI", map[string]string{"U": "bob", "P": "S3cret"}, "ftp://alice@host", "", "S3cret"},
+		{"password of the URI", map[string]string{"U": "bob", "P": "S3cret"}, "ftp://alice:pw@host", "", ""},
+		{"empty password of the URI", map[string]string{"P": "S3cret"}, "smb://alice:@host/share", "", ""},
+		{"password only in the URI", map[string]string{"U": "bob", "P": "S3cret"}, "smb://:pw@host/share", "bob", ""},
+	} {
+		c := newConnector(env(tc.vars))
+		username, password := c.envCredentials(tc.address, "U", "P")
+		assert.Equal(t, tc.username, username, tc.name)
+		assert.Equal(t, tc.password, password, tc.name)
+	}
+}
+
 func TestConfiguredFile(t *testing.T) {
 	memFS, err := fs.NewMemFileSystem(nil)
 	require.NoError(t, err)

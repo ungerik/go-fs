@@ -67,6 +67,24 @@ func (r ctxReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// interruptibleReader returns a reader of r whose blocked read ends with
+// the error of ctx once ctx is done. A read of stdin from a pipe or
+// terminal that stays open blocks until data arrives, which a canceled
+// ctx can't interrupt, so a goroutine reads r into a pipe and the pipe
+// is closed when ctx is done. The goroutine ends with the read of r,
+// which the process exit ends when ctx was canceled.
+func interruptibleReader(ctx context.Context, r io.Reader) io.Reader {
+	pipeReader, pipeWriter := io.Pipe()
+	go func() {
+		_, err := io.Copy(pipeWriter, r)
+		_ = pipeWriter.CloseWithError(err)
+	}()
+	context.AfterFunc(ctx, func() {
+		_ = pipeReader.CloseWithError(ctx.Err())
+	})
+	return pipeReader
+}
+
 // listEntry is a file listed by ls with the name that ls prints.
 type listEntry struct {
 	name string
@@ -308,7 +326,7 @@ func writeAll(ctx context.Context, file fs.File, r io.Reader) (aborted bool, err
 	if err != nil {
 		return false, err
 	}
-	_, err = io.Copy(writer, ctxReader{ctx, r})
+	_, err = io.Copy(writer, ctxReader{ctx, interruptibleReader(ctx, r)})
 	if err != nil {
 		if aborter, ok := writer.(fs.WriteAborter); ok {
 			return true, errors.Join(err, aborter.Abort())
@@ -385,7 +403,7 @@ func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, link boo
 			return removeTemp(errors.Join(err, writer.Close()))
 		}
 	}
-	_, err = io.Copy(writer, ctxReader{ctx, r})
+	_, err = io.Copy(writer, ctxReader{ctx, interruptibleReader(ctx, r)})
 	err = errors.Join(err, writer.Close())
 	if err != nil {
 		return removeTemp(err)
@@ -460,11 +478,16 @@ func (c *cli) cp(ctx context.Context, flags *flag.FlagSet, args []string) error 
 // if the name is not a single entry of dir: Join cleans the path, so a name
 // like ".." or one with a separator of dir, like `..\x` of an S3 key for
 // a local directory on Windows, would go outside of dir.
+// A source without a name of its own, the root of a file system or ".",
+// returns dir itself, so its content is copied into dir like by cp -r.
 // fs.CopyRecursive validates the name of the entry that it returns.
 func dirEntry(dir, src fs.File) (fs.File, error) {
 	name := src.Name()
+	if name == "" || name == "." {
+		return dir, nil
+	}
 	entry := dir.Join(name)
-	if name == "" || entry.Name() != name {
+	if entry.Name() != name {
 		return "", fmt.Errorf("%w: can't copy %s into %s, the name %q is not valid there", os.ErrInvalid, fsimpl.RedactURI(string(src)), fsimpl.RedactURI(string(dir)), name)
 	}
 	return entry, nil

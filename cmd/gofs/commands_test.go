@@ -177,6 +177,17 @@ func TestCp(t *testing.T) {
 	require.Equal(t, 0, code, stderr)
 	assert.Equal(t, "hello\n", readFile(t, filepath.Join(multi, "x.txt")))
 	assert.Equal(t, "deep", readFile(t, filepath.Join(multi, "sub", "y.txt")))
+
+	// The working directory "." goes into an existing directory with its
+	// content, like cp -r . dir/, since it has no name of its own
+	backup := filepath.Join(dest, "backup")
+	require.NoError(t, os.Mkdir(backup, 0o750))
+	t.Chdir(filepath.Join(src, "sub"))
+	for _, dot := range []string{".", "./"} {
+		code, _, stderr = gofs(t, nil, "", "cp", "-r", dot, backup)
+		require.Equal(t, 0, code, stderr)
+		assert.Equal(t, "deep", readFile(t, filepath.Join(backup, "y.txt")), dot)
+	}
 }
 
 // TestDirEntry checks that cp -r copies a source directory into the
@@ -212,6 +223,16 @@ func TestDirEntry(t *testing.T) {
 	require.NoError(t, err, "a valid name where the backslash is no separator")
 	assert.Equal(t, `..\outside`, entry.Name())
 	assert.Equal(t, slashDest, entry.Dir())
+
+	// A source without a name of its own, the root of a file system or the
+	// working directory, is copied into the directory itself
+	for _, unnamed := range []fs.File{src.RootDir(), ".", "./"} {
+		entry, err = dirEntry(slashDest, unnamed)
+		require.NoError(t, err, unnamed)
+		assert.Equal(t, slashDest, entry, unnamed)
+	}
+	_, err = dirEntry(slashDest, "..")
+	assert.ErrorIs(t, err, os.ErrInvalid, "the parent would be copied next to the directory")
 }
 
 // TestCp_RedactsPasswords checks that the errors of cp and mv
