@@ -10,6 +10,7 @@ updates:
       - /cmd/gofs
       - /dropboxfs
       - /ftpfs
+      - /onedrivefs
       - /s3fs
       - /sftpfs
       - /smbfs

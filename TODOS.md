@@ -431,8 +431,9 @@ file, S3 stores checksums, so the hash wouldn't need a download.
 
 **Context:** `fs.DefaultContentHash` stays the Dropbox algorithm, computed
 from the content. Only Dropbox stores that algorithm; S3 (ETag, CRC64NVME
-and other checksums), Azure (Content-MD5 only for single-request uploads)
-and zip (CRC-32) store others, under conditions. Go can't compare function
+and other checksums), Azure (Content-MD5 only for single-request uploads),
+OneDrive and SharePoint (the `quickXorHash` of the `file` facet of every
+driveItem) and zip (CRC-32) store others, under conditions. Go can't compare function
 values, so the interface needs an algorithm name.
 
 **Effort:** M
@@ -908,7 +909,138 @@ the README workaround once a signed release is out.
 **Depends on:** An Apple Developer Program membership with a Developer ID
 Application certificate
 
+## New backends
+
+### Verify onedrivefs against a real drive
+
+**What:** Run the onedrivefs tests with `ONEDRIVE_ACCESS_TOKEN` set, against
+OneDrive Personal, OneDrive for Business and a SharePoint document library.
+
+**Why:** The backend was written against the Graph documentation and an
+offline fake (`onedrivefs/fakegraph_test.go`); the real API has not
+answered it yet.
+
+**Context:** Check the behaviours the fake assumes: whether a PUT of
+`/content` and `createUploadSession` create missing parent folders, and the
+status of an upload onto a folder and below a file (the fake answers 409
+and 400; `wrapUploadErr` asks for the items to tell); the answer to a GET of
+`/content` of a folder (404 in the fake) and of `/children` of a file; that
+a `PATCH` move and a `POST /copy` without `@microsoft.graph.conflictBehavior`
+fail on an existing name (409, or a failed monitor with `nameAlreadyExists`)
+instead of renaming, also on OneDrive Personal, where Graph ignores the
+parameter for copies; whether a case-only rename is a conflict; that the
+monitor URL of a copy needs no token and how it reports completion (200
+`completed` or 303); that the eTag of a folder changes when a child is added,
+which would make `Remove` of an empty folder race-free; the escaping of names
+with `#`, `%`, `+`, `'` and non-ASCII characters in the path-based
+addressing; whether Unicode normalization variants of a name address the
+same item (the `OtherNormalization` alias of the conformance suite); and the
+names `ValidateName` rejects, like `nul.txt` and names ending with a dot.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** A Microsoft 365 test tenant or a OneDrive account
+
+### Metadata cache and change feed for onedrivefs
+
+**What:** An optional metadata cache like `dropboxfs.Options.CacheTimeout`,
+and `Watch` over delta queries.
+
+**Why:** Every `Stat` and listing of onedrivefs asks the server, and
+`File.Exists`, copies and moves call `Stat` often. Graph throttles busy apps
+with 429.
+
+**Context:** The first version has no cache on purpose: the write paths
+check items on the server before they delete anything. A cache keyed by the
+lower case path must be invalidated by every write, like the one of
+dropboxfs. Delta queries (`/drives/{id}/root/delta`) report the changes
+since a token; Business drives support them only on the root, so `Watch`
+would filter one feed for all watches.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** Verify onedrivefs against a real drive
+
+### Google Drive backend
+
+**What:** A backend module for My Drive and Shared Drives over the Google
+Drive API v3.
+
+**Why:** Google Drive has the most users of any file cloud, and Google
+Workspace has over 11 million paying organizations. The reasons a synced
+folder does not do are the same as for OneDrive.
+
+**Context:** Drive addresses files only by ID, so resolving a path takes
+one listing per directory level and needs a cache of path to ID, like
+`fileinfocache.go` of dropboxfs. Decide before implementing: one folder can
+hold several files with the same name (fail on an ambiguous path?), and
+Google Docs, Sheets and Slides have no bytes (skip them, or export them as
+PDF, DOCX or XLSX by option, with which size and name?). Service accounts
+start with an empty drive and see Shared Drives only as members; listings
+need `supportsAllDrives`, `includeItemsFromAllDrives` and `corpora`. Files
+carry `md5Checksum` and `sha256Checksum`, and the Changes API can back
+`Watch`. `google.golang.org/api/drive/v3` is in maintenance mode; a thin
+REST client keeps the module light.
+
+**Effort:** L
+**Priority:** P3
+**Depends on:** None; onedrivefs shows the shape of an OAuth backend
+
+### Box backend
+
+**What:** A backend module for Box over the Box Platform API.
+
+**Why:** Box (fiscal 2026 revenue $1.177 billion) is the document store of
+many enterprises in finance, insurance, healthcare and law, which choose it
+for permissions, retention and audit. Server-side workflows on those files
+have only the API.
+
+**Context:** Box addresses items only by ID; resolving a path walks the
+folder listings from the root folder `0` and needs a cache of path to ID.
+Names are unique within a folder (409 `item_name_in_use`), so a path is
+never ambiguous; check whether the comparison is case-insensitive. Simple
+uploads take up to 50 MB; chunked uploads take only files of 20 MB or more,
+with a part size set by the server, a SHA-1 digest per part, and the file
+size when the session is created, so a writer of unknown size has to buffer
+to a temporary file first. Native copy, move and rename, the events API for
+`Watch`, and the SHA-1 of each file for "Content hashes from metadata".
+Retention policies, legal holds and collaborator roles can refuse writes and
+deletes, and a delete moves to the trash. Auth: a Client Credentials Grant
+app with a service account, which an admin authorizes and which sees only
+the folders it is invited to as a collaborator. Box has no official Go SDK
+(`unofficialbox/box-open-go-sdk` is not affiliated); use a thin REST client.
+A free developer account allows live tests behind an environment variable.
+Check the rate limits before designing copy retries.
+
+**Effort:** L
+**Priority:** P3
+**Depends on:** None; onedrivefs shows the shape of an OAuth backend
+
 ## Completed
+
+### OneDrive and SharePoint backend
+
+**What:** A backend module `onedrivefs` with the URI prefix
+`onedrive://<drive id>` for OneDrive Personal, OneDrive for Business and
+SharePoint document libraries over the Microsoft Graph API.
+
+**Why:** Microsoft 365 has over 450 million paid commercial seats, and
+SharePoint libraries hold most company files. A synced local folder does not
+help on servers, with one OAuth grant per customer of a multi-tenant
+service, or with Files On-Demand placeholders.
+
+**Context:** Path-based addressing of Graph, a thin REST client on
+`net/http` and `golang.org/x/oauth2` instead of `msgraph-sdk-go`.
+
+Done: `onedrivefs` implements `WriteAll`, `Touch`, `RemoveAll`, `CopyFile`,
+`Move` and `ValidateName` natively and passes the conformance suite against
+an offline fake of the Graph API; the verification against a real drive and
+the metadata cache are open items above.
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** None
+**Completed:** unreleased (2026-11-06)
 
 ### Don't trust the S3 paginator on a truncated page without a token
 

@@ -7,9 +7,10 @@ Public, dependency-light Go library. Repo-specific rules that override the globa
   pull extra dependencies into every consumer. Sentinel and typed errors live in
   `errors.go`.
 - **Multi-module workspace:** `go.work` lists the root module and the backend modules
-  (`azureblobfs`, `dropboxfs`, `ftpfs`, `s3fs`, `sftpfs`, `smbfs`, `webdavfs`), the
-  `cmd/gofs` command line tool and `tools`. Run `./test-workspace.sh` to test
-  and lint every module. Keep the `replace github.com/ungerik/go-fs => ..` + placeholder
+  (`azureblobfs`, `dropboxfs`, `ftpfs`, `onedrivefs`, `s3fs`, `sftpfs`, `smbfs`,
+  `webdavfs`), the `cmd/gofs` command line tool and `tools`. Run
+  `./test-workspace.sh` to test and lint every module. Keep the
+  `replace github.com/ungerik/go-fs => ..` + placeholder
   pseudo-version pattern in the backend `go.mod` files. `cmd/gofs` is the exception: it
   requires released versions of the go-fs modules without `replace`, so that
   `go install github.com/ungerik/go-fs/cmd/gofs@<version>` works. The release PR sets them to
@@ -21,7 +22,7 @@ Public, dependency-light Go library. Repo-specific rules that override the globa
 - **Tests:** unit tests must run offline. Tests needing Docker (S3Mock, sshd, Samba, Azurite) must
   skip when Docker is unavailable; tests needing credentials or public internet servers
   must be gated behind an environment variable (`GOFS_ONLINE_TESTS=1`,
-  `DROPBOX_ACCESS_TOKEN`).
+  `DROPBOX_ACCESS_TOKEN`, `ONEDRIVE_ACCESS_TOKEN`).
 - Prefer `t.Context()` over `context.Background()` in test bodies.
 - **Go version policy:** the `go` directive of every module (and `go.work`) is one
   minor version behind the currently released Go (Go 1.27 released → modules on

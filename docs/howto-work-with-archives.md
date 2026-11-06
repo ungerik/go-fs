@@ -61,9 +61,9 @@ zipFS, err := zipfs.NewReader(fs.File("s3://bucket/archive.zip"), "")
 A ZIP archive is read at the offsets of its entries, so `NewReader` opens it
 with `OpenReadSeeker`. On file systems whose readers can seek — local files,
 `MemFileSystem`, SFTP, SMB, WebDAV and Azure Blob Storage — the archive is read
-in place. **The readers of S3, FTP, HTTP and Dropbox can't seek, so the whole
-archive is read into memory first**: a 2 GB ZIP on S3 needs 2 GB of RAM. Copy
-it to a local temp file first if that is too much.
+in place. **The readers of S3, FTP, HTTP, Dropbox and OneDrive can't seek, so
+the whole archive is read into memory first**: a 2 GB ZIP on S3 needs 2 GB of
+RAM. Copy it to a local temp file first if that is too much.
 
 `zipfs.Reader` provides `Exists`, `ReadAll` and `ListDirRecursive` natively
 and synthesizes the directories implied by the entry names. Entries are

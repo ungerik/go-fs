@@ -54,7 +54,8 @@ type FileSystem interface {
 	//
 	// Where the backing store has an identifier of its own, that
 	// one is used: [LocalFileSystem.ID] is the file system id of
-	// the root volume, dropboxfs uses the Dropbox account id.
+	// the root volume, dropboxfs uses the Dropbox account id,
+	// onedrivefs the drive id.
 	// The other remote file systems have no such identifier -
 	// neither SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage
 	// expose one - so they use the coordinates that identify the

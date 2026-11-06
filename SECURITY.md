@@ -4,9 +4,9 @@
 
 Security fixes are released for the latest minor version of v1, for the
 root module `github.com/ungerik/go-fs`, for the backend modules
-(`azureblobfs`, `dropboxfs`, `ftpfs`, `s3fs`, `sftpfs`, `smbfs`, `webdavfs`)
-and for the `cmd/gofs` command line tool, which are released in lockstep
-with it. Older versions get no fixes; upgrade to the latest release.
+(`azureblobfs`, `dropboxfs`, `ftpfs`, `onedrivefs`, `s3fs`, `sftpfs`, `smbfs`,
+`webdavfs`) and for the `cmd/gofs` command line tool, which are released in
+lockstep with it. Older versions get no fixes; upgrade to the latest release.
 
 ## Reporting a vulnerability
 
