@@ -13,6 +13,7 @@ type blobCache struct {
 	mtx     sync.Mutex
 	maxSize int64
 	size    int64
+	closed  bool      // put drops the data after close
 	lru     list.List // of *cacheEntry, most recently used first
 	entries map[object.OID]*list.Element
 }
@@ -48,6 +49,9 @@ func (c *blobCache) put(oid object.OID, data []byte) {
 	}
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
+	if c.closed {
+		return
+	}
 	if element, ok := c.entries[oid]; ok {
 		c.lru.MoveToFront(element)
 		return
@@ -62,10 +66,12 @@ func (c *blobCache) put(oid object.OID, data []byte) {
 	c.size += size
 }
 
-// clear removes all cached blobs.
-func (c *blobCache) clear() {
+// close removes all cached blobs and drops the blobs of later calls
+// of put, like those of fetches that finish after FileSystem.Close.
+func (c *blobCache) close() {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
+	c.closed = true
 	c.lru.Init()
 	clear(c.entries)
 	c.size = 0

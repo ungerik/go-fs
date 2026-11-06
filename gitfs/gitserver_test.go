@@ -71,14 +71,17 @@ func writeFixture(dir string) error {
 	}
 	for name, content := range files {
 		path := filepath.Join(dir, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		err := os.MkdirAll(filepath.Dir(path), 0o755)
+		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		err = os.WriteFile(path, []byte(content), 0o644)
+		if err != nil {
 			return err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "extra", "run.sh"), []byte("#!/bin/sh\necho run\n"), 0o755); err != nil { //#nosec G306 -- an executable test file
+	err := os.WriteFile(filepath.Join(dir, "extra", "run.sh"), []byte("#!/bin/sh\necho run\n"), 0o755) //#nosec G306 -- an executable test file
+	if err != nil {
 		return err
 	}
 	return os.Symlink("../seed/hello.txt", filepath.Join(dir, "extra", "link.txt"))
@@ -182,7 +185,8 @@ func TestMain(m *testing.M) {
 		os.Exit(m.Run())
 	}
 	exitCode := 1
-	if err := startDockerGitServer(); err != nil {
+	err := startDockerGitServer()
+	if err != nil {
 		log.Printf("Docker git server: %v", err)
 		removeDockerContainer()
 		dockertest.SetupFailed("git")
@@ -207,11 +211,13 @@ func startDockerGitServer() error {
 	}
 
 	log.Println("Building the Docker git server image...")
-	if _, err := run("build", "-q", "-f", "Dockerfile.git-test", "-t", dockerImage, "."); err != nil {
+	_, err := run("build", "-q", "-f", "Dockerfile.git-test", "-t", dockerImage, ".")
+	if err != nil {
 		return err
 	}
 	dockerContainer = dockertest.ContainerName("gitfs-test")
-	if _, err := run("run", "-d", "--name", dockerContainer, "-p", "127.0.0.1::80", dockerImage); err != nil {
+	_, err = run("run", "-d", "--name", dockerContainer, "-p", "127.0.0.1::80", dockerImage)
+	if err != nil {
 		return err
 	}
 
@@ -220,13 +226,16 @@ func startDockerGitServer() error {
 		return err
 	}
 	defer os.RemoveAll(work)
-	if err := writeFixture(work); err != nil {
+	err = writeFixture(work)
+	if err != nil {
 		return err
 	}
-	if _, err := run("cp", work+"/.", dockerContainer+":/srv/work"); err != nil {
+	_, err = run("cp", work+"/.", dockerContainer+":/srv/work")
+	if err != nil {
 		return err
 	}
-	if _, err := run("exec", dockerContainer, "sh", "-c", fixtureScript, "sh", "/srv/work", "/srv/git/seed.git"); err != nil {
+	_, err = run("exec", dockerContainer, "sh", "-c", fixtureScript, "sh", "/srv/work", "/srv/git/seed.git")
+	if err != nil {
 		return err
 	}
 

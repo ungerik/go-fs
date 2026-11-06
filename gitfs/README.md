@@ -87,7 +87,9 @@ On github.com the GitHub shortcuts make the typical cases cheaper:
   git protocol instead for the rest of the lifetime of the file system.
 - JSON can't hold names that are not valid UTF-8, so a directory with a name
   with a U+FFFD replacement character is read through the git protocol, and
-  lists the same entries as without the shortcuts.
+  lists the same entries as without the shortcuts. So is a tree with more
+  entries than one response of the API can hold, for `ListDirRecursive` of
+  a large repository; the API stays in use for the other trees.
 
 `Options.DisableGitHub` turns the shortcuts off. Servers that don't support
 object filters send the whole commit with all its files on the first access.

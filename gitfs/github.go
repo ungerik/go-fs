@@ -22,6 +22,10 @@ var (
 	// with a name that the JSON of the REST API can't represent.
 	errGitHubLossyName = errors.New("GitHub tree has a name with a replacement character")
 
+	// errGitHubTruncated is the error of fetchGitHubTree for a tree
+	// with more entries than one response of the REST API can hold.
+	errGitHubTruncated = errors.New("GitHub tree is truncated")
+
 	// errGitHubRawMismatch is the error of fetchGitHubRaw for content
 	// that doesn't match the object ID of the blob.
 	errGitHubRawMismatch = errors.New("content from raw.githubusercontent.com doesn't match the blob")
@@ -69,8 +73,8 @@ type githubTree struct {
 // fetchGitHubTree returns the entries of a tree from the GitHub REST API
 // by the slash separated path relative to the tree, "" for the tree
 // itself. With recursive, the entries of all sub-trees are included.
-// A truncated response is an error, a tree with a name with a U+FFFD
-// replacement character returns errGitHubLossyName.
+// A truncated response returns errGitHubTruncated, a tree with a name
+// with a U+FFFD replacement character returns errGitHubLossyName.
 func (f *FileSystem) fetchGitHubTree(ctx context.Context, tree object.OID, recursive bool) (map[string][]treeEntry, error) {
 	u := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s",
 		f.github.apiURL,
@@ -93,7 +97,7 @@ func (f *FileSystem) fetchGitHubTree(ctx context.Context, tree object.OID, recur
 		return nil, fmt.Errorf("decoding GitHub tree %s: %w", tree, err)
 	}
 	if result.Truncated {
-		return nil, fmt.Errorf("GitHub tree %s is truncated", tree)
+		return nil, fmt.Errorf("%w: tree %s", errGitHubTruncated, tree)
 	}
 	if object.OID(result.SHA) != tree {
 		return nil, fmt.Errorf("GitHub returned tree %.100q instead of %s", result.SHA, tree)

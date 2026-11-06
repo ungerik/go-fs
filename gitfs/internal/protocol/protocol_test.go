@@ -88,6 +88,30 @@ func TestClient(t *testing.T) {
 	assert.Equal(t, "fatal: broken", remote.Message)
 }
 
+// TestDiscoverRedirect checks that the commands after a redirected
+// advertisement, like that of a renamed repository, go to the new URL:
+// the Go client would turn a redirected POST into a GET.
+func TestDiscoverRedirect(t *testing.T) {
+	ctx := t.Context()
+	repo := gittest.NewRepo()
+	repo.Refs["refs/heads/main"] = repo.Commit(repo.RawTree(), time.Unix(0, 0))
+	server := &gittest.Server{Repo: repo}
+	client := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/old/repo.git/"); ok {
+			http.Redirect(w, r, "/owner/repo.git/"+rest+"?"+r.URL.RawQuery, http.StatusMovedPermanently)
+			return
+		}
+		server.ServeHTTP(w, r)
+	}))
+	client.URL = strings.Replace(client.URL, "/owner/repo.git", "/old/repo.git", 1)
+
+	require.NoError(t, client.Discover(ctx))
+	assert.True(t, strings.HasSuffix(client.URL, "/owner/repo.git"), client.URL)
+	refs, err := client.LsRefs(ctx)
+	require.NoError(t, err)
+	assert.Len(t, refs, 2)
+}
+
 func TestDiscoverErrors(t *testing.T) {
 	ctx := t.Context()
 	respond := func(contentType string, packets ...string) http.Handler {
