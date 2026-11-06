@@ -8,7 +8,7 @@ servers, built on [github.com/jlaffaye/ftp](https://github.com/jlaffaye/ftp).
 Get the backend together with the go-fs core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.6 github.com/ungerik/go-fs/ftpfs@v1.0.0-rc.6
+go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/ftpfs@v1.0.0-rc.7
 ```
 
 ## Usage
