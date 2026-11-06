@@ -18,6 +18,19 @@ Download the archive for your platform from the
 and put `gofs` (`gofs.exe` on Windows) on your `PATH`. Each archive has
 a `.sha256` file with its checksum.
 
+The macOS binaries are not signed or notarized by Apple. If a browser
+downloaded the archive, macOS refuses to run `gofs` with "Apple could not
+verify “gofs” is free of malware". Remove the quarantine attribute the
+browser set, once:
+
+```bash
+xattr -d com.apple.quarantine /path/to/gofs
+```
+
+Or allow it with **Open Anyway** under System Settings → Privacy & Security
+after the first attempt. Archives downloaded with `curl` and binaries built
+with `go install` have no quarantine attribute.
+
 Or build it with Go 1.26 or newer:
 
 ```bash
