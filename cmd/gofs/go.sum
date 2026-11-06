@@ -142,10 +142,10 @@ github.com/ungerik/go-fs/s3fs v1.0.0-rc.7 h1:JJXQlprdRNSrW75wUMas4yMGiu2YCpMyD4m
 github.com/ungerik/go-fs/s3fs v1.0.0-rc.7/go.mod h1:UjBgSDe/3k3NeRcqZnlbRUFTvA3Sn0qtq9GLnOvURZQ=
 github.com/ungerik/go-fs/sftpfs v1.0.0-rc.7 h1:KVzziD8LzZcqBVsivOrbNobCupkEeSE1XhN/SjjmHeY=
 github.com/ungerik/go-fs/sftpfs v1.0.0-rc.7/go.mod h1:rr+ZHx9m1WO2nLcDKn4bk8rWJ7GueJyutqtFuECtl5g=
-github.com/ungerik/go-fs/smbfs v1.0.0-rc.7 h1:w152YqGof9klDPB3jqKRG5AOX1ri57SPlk40/vYBb3g=
-github.com/ungerik/go-fs/smbfs v1.0.0-rc.7/go.mod h1:zxBkxsexd01saayskRe0Kw+sQrDaXfgC1xaN8Lc0Rcc=
-github.com/ungerik/go-fs/webdavfs v1.0.0-rc.7 h1:6dNE6wPSCNNZSZNtnIcJL6GJvcbV6E2N6drpw3ymxJ8=
-github.com/ungerik/go-fs/webdavfs v1.0.0-rc.7/go.mod h1:9E0mlMaxBzKSW6EMi8K7Qp62mrDOqXV51MxofBMG42g=
+github.com/ungerik/go-fs/smbfs v1.0.0-rc.7 h1:NTowqCVKB/J4wH+qEcsYbyIEmEvkDOUduNeBAnPGNKI=
+github.com/ungerik/go-fs/smbfs v1.0.0-rc.7/go.mod h1:nY458WAqXU2w5CYVRi7R+owZI4QQmOR330Dvx4ta+JI=
+github.com/ungerik/go-fs/webdavfs v1.0.0-rc.7 h1:0p398kX2hUcCqPsZirNg2E6FIvDi5O9ACWM92pXGaRQ=
+github.com/ungerik/go-fs/webdavfs v1.0.0-rc.7/go.mod h1:YDilRXj9mUpeM5Xco8OEcdhvxcrqvMm/fgLlAsMhTY4=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=
 github.com/zeebo/assert v1.3.0/go.mod h1:Pq9JiuJQpG8JLJdtkwrJESF0Foym2/D9XMU5ciN/wJ0=
