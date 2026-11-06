@@ -31,3 +31,7 @@ http://alice:s3cr3t@cloud.example.com
 http://alice:secret@cloud.example.com:8080
 # The redacted form of an edge case of fsimpl.RedactURI that TODOS.md documents
 http://localhost:xxxxx@example.com`,
+# Fake credentials of the gitfs tests and README
+https://user:secret@git.example.com
+http://user:secret@",
+http://"+dockerUsername+":"+dockerPassword+"@",
