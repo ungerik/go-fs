@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -75,6 +76,68 @@ func TestPut_DanglingLink(t *testing.T) {
 	assert.True(t, info.Mode().IsRegular(), "the link is replaced with a file")
 	assert.Equal(t, "new", readFile(t, link))
 
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "no temporary file left behind")
+}
+
+// TestPut_DanglingLinkReadOnlyDir checks that put refuses to replace a
+// dangling symbolic link in a directory that refuses the temporary file,
+// instead of writing through the link, which would create its target.
+func TestPut_DanglingLinkReadOnlyDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permissions of the directory")
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link")
+	target := filepath.Join(dir, "target")
+	require.NoError(t, os.Symlink(target, link))
+	require.NoError(t, os.Chmod(dir, 0o500)) //#nosec G302 -- test directory
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	code, stderr := runStdin(t.Context(), nil, strings.NewReader("new"), "put", link)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "can't replace the dangling symbolic link")
+	assert.NoFileExists(t, target, "not written through the link")
+	dest, err := os.Readlink(link)
+	require.NoError(t, err, "the link is kept")
+	assert.Equal(t, target, dest)
+}
+
+// TestPut_CanceledWhileStdinIsOpen checks that a canceled put ends while
+// it waits for stdin from a pipe that stays open, like a signal does with
+// "(printf partial; sleep 60) | gofs put file", and leaves neither a
+// partial new file nor a temporary file, and keeps an existing file.
+func TestPut_CanceledWhileStdinIsOpen(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "existing.txt")
+	writeFiles(t, dir, map[string]string{"existing.txt": "original"})
+	for _, file := range []string{filepath.Join(dir, "new.txt"), existing} {
+		stdin, stdinWriter, err := os.Pipe()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = stdin.Close(); _ = stdinWriter.Close() })
+		_, err = stdinWriter.WriteString("partial")
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan int, 1)
+		go func() {
+			code, _ := runStdin(ctx, nil, stdin, "put", file)
+			done <- code
+		}()
+		// gstack-timing-ok: the sleep only lets put start reading, the
+		// outcome is the same if the cancel comes first
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+		select {
+		case code := <-done:
+			assert.Equal(t, 1, code, file)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("put of %s didn't end when canceled while stdin was open", file)
+		}
+	}
+	assert.NoFileExists(t, filepath.Join(dir, "new.txt"), "no partial new file")
+	assert.Equal(t, "original", readFile(t, existing))
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "no temporary file left behind")
