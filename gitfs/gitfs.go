@@ -28,6 +28,8 @@
 // can't represent names that are not valid UTF-8, a directory with an
 // entry whose name has a U+FFFD replacement character is read through the
 // git protocol, to list the same entries as without the shortcuts.
+// So is a tree with more entries than one response of the REST API
+// can hold, for a recursive listing of a large repository.
 // Options.DisableGitHub turns the shortcuts off.
 //
 // Reading:
@@ -133,8 +135,10 @@ type FileSystem struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// loadMtx serializes the requests that load the commit and the trees
-	loadMtx sync.Mutex
+	// loadSem serializes the requests that load the commit and the
+	// trees, a channel instead of a mutex so that waiting for it ends
+	// with the context of the caller, see lockLoad
+	loadSem chan struct{}
 
 	// mtx protects the fields below and the nodes
 	mtx             sync.Mutex
@@ -220,13 +224,14 @@ func New(ctx context.Context, repoURL, ref string, opts *Options) (*FileSystem, 
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	token := opts.Token // copied, the closure must not see later changes of opts
 	authorize := func(*http.Request) {}
 	switch {
-	case opts.Token != "":
+	case token != "":
 		if username == "" {
 			username = "x-access-token"
 		}
-		authorize = func(r *http.Request) { r.SetBasicAuth(username, opts.Token) }
+		authorize = func(r *http.Request) { r.SetBasicAuth(username, token) }
 	case username != "":
 		authorize = func(r *http.Request) { r.SetBasicAuth(username, password) }
 	}
@@ -242,10 +247,11 @@ func New(ctx context.Context, repoURL, ref string, opts *Options) (*FileSystem, 
 		ref:           ref,
 		client:        &protocol.Client{URL: cleanURL, HTTP: httpClient, Authorize: authorize},
 		httpClient:    httpClient,
-		token:         opts.Token,
+		token:         token,
 		cache:         newBlobCache(positiveOr(opts.CacheSize, DefaultCacheSize)),
 		maxObjectSize: maxObjectSize,
 		maxFetchSize:  max(positiveOr(opts.MaxFetchSize, DefaultMaxFetchSize), maxObjectSize),
+		loadSem:       make(chan struct{}, 1),
 		inflight:      make(map[object.OID]*blobFetch),
 	}
 	switch {
@@ -338,8 +344,11 @@ func (f *FileSystem) rootNode(ctx context.Context) (*node, error) {
 		return root, nil
 	}
 
-	f.loadMtx.Lock()
-	defer f.loadMtx.Unlock()
+	err := f.lockLoad(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer f.unlockLoad()
 	f.mtx.Lock()
 	root, oid := f.root, f.commit
 	f.mtx.Unlock()
@@ -392,6 +401,21 @@ func (f *FileSystem) rootNode(ctx context.Context) (*node, error) {
 		return root, nil
 	}
 	return nil, fmt.Errorf("%s: too many nested tags", f)
+}
+
+// lockLoad waits until no other request loads the commit or trees,
+// or until ctx is done. Call unlockLoad after a nil error.
+func (f *FileSystem) lockLoad(ctx context.Context) error {
+	select {
+	case f.loadSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (f *FileSystem) unlockLoad() {
+	<-f.loadSem
 }
 
 // fetch requests objects from the server and returns them by OID.
@@ -457,7 +481,9 @@ func (f *FileSystem) populate(n *node, entriesOf func(*node) ([]treeEntry, bool,
 		if !ok {
 			return nil
 		}
-		n.children = make(map[string]*node, len(entries))
+		// The children are only set when all entries were added, so
+		// that an error doesn't leave a partially loaded directory
+		children := make(map[string]*node, len(entries))
 		for _, e := range entries {
 			if !isValidName(e.Name) {
 				continue
@@ -477,12 +503,13 @@ func (f *FileSystem) populate(n *node, entriesOf func(*node) ([]treeEntry, bool,
 			default:
 				continue // symbolic links and submodules
 			}
-			f.numEntries++
-			if f.numEntries > maxEntries {
+			children[e.Name] = child
+			if f.numEntries+len(children) > maxEntries {
 				return fmt.Errorf("%s: the commit has more than %d files and directories", f, maxEntries)
 			}
-			n.children[e.Name] = child
 		}
+		f.numEntries += len(children)
+		n.children = children
 	}
 	for _, child := range n.children {
 		if child.isDir {
@@ -531,8 +558,11 @@ func (f *FileSystem) loadDir(ctx context.Context, n *node, recursive bool) error
 		return nil
 	}
 
-	f.loadMtx.Lock()
-	defer f.loadMtx.Unlock()
+	err := f.lockLoad(ctx)
+	if err != nil {
+		return err
+	}
+	defer f.unlockLoad()
 	f.mtx.Lock()
 	loaded, githubAPI := isLoaded(n, recursive), f.github != nil && !f.githubAPIFailed
 	f.mtx.Unlock()
@@ -557,9 +587,11 @@ func (f *FileSystem) loadDir(ctx context.Context, n *node, recursive bool) error
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if !errors.Is(err, errGitHubLossyName) {
-			// Rate limited, private repository without token, truncated
-			// tree, ...: use git for the rest of the lifetime
+		if !errors.Is(err, errGitHubLossyName) && !errors.Is(err, errGitHubTruncated) {
+			// Rate limited, private repository without token, ...: use
+			// git for the rest of the lifetime. A tree too large for one
+			// response is read through git, the API still serves the
+			// smaller trees and their sizes without the content
 			f.mtx.Lock()
 			f.githubAPIFailed = true
 			f.mtx.Unlock()
@@ -1102,6 +1134,6 @@ func (f *FileSystem) Close() error {
 	f.mtx.Unlock()
 	f.cancel()
 	fs.Unregister(f)
-	f.cache.clear()
+	f.cache.close()
 	return nil
 }

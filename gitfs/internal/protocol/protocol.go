@@ -66,7 +66,8 @@ type Client struct {
 }
 
 // Discover requests the capability advertisement of the server
-// and sets Format.
+// and sets Format. If the server redirects the request to another
+// path on the same host, Discover sets URL to the redirected one.
 func (c *Client) Discover(ctx context.Context) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL+"/info/refs?service=git-upload-pack", nil)
 	if err != nil {
@@ -78,6 +79,18 @@ func (c *Client) Discover(ctx context.Context) error {
 		return err
 	}
 	defer response.Body.Close()
+
+	// Like git with http.followRedirects=initial, the later requests
+	// go to the URL that the advertisement was redirected to, like
+	// that of a renamed repository: a redirected POST would become a
+	// GET. Only on the same host, the credentials stay with the host.
+	if final := response.Request.URL; final.Scheme == request.URL.Scheme && final.Host == request.URL.Host {
+		redirected := *final
+		redirected.User, redirected.RawQuery, redirected.Fragment = nil, "", ""
+		if base, ok := strings.CutSuffix(redirected.String(), "/info/refs"); ok {
+			c.URL = base
+		}
+	}
 
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != "application/x-git-upload-pack-advertisement" {

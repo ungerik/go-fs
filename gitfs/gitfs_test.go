@@ -645,6 +645,37 @@ func TestSharedFetchContext(t *testing.T) {
 	})
 }
 
+// TestWaitingForATreeLoadEndsWithTheContext checks that a caller waiting
+// for the tree load of another caller returns when its context ends,
+// instead of when the slow load of the other caller finishes.
+func TestWaitingForATreeLoadEndsWithTheContext(t *testing.T) {
+	server, httpServer := newTestServer(t)
+	gfs := newTestFS(t, repoURL(httpServer), "main", nil)
+
+	started, release := make(chan struct{}, 10), make(chan struct{})
+	server.BeforeFetch = func(ctx context.Context) {
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	}
+	slow := make(chan error, 1)
+	go func() {
+		_, err := gfs.ReadAll(t.Context(), "/seed/hello.txt")
+		slow <- err
+	}()
+	<-started // the commit is loaded, holding the load lock
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	err := gfs.ListDir(ctx, "/seed", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+	close(release) // and the later fetches pass
+	require.NoError(t, <-slow)
+}
+
 func TestContextAndClose(t *testing.T) {
 	_, httpServer := newTestServer(t)
 	gfs := newTestFS(t, repoURL(httpServer), "main", nil)

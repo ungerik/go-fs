@@ -9,8 +9,9 @@ import (
 )
 
 // ExampleNew prints the README of the latest commit of the default
-// branch of the go-fs repository. On github.com this costs three
-// requests: two for New and one for the file.
+// branch of the go-fs repository. On github.com this costs five
+// requests: two for New, then the commit, the tree of the root
+// directory and the content of the file.
 //
 // The example has no output comment because it needs the internet.
 func ExampleNew() {
@@ -21,7 +22,8 @@ func ExampleNew() {
 		panic(err)
 	}
 	defer repo.Close()
-	if err := fs.Register(repo); err != nil {
+	err = fs.Register(repo)
+	if err != nil {
 		panic(err)
 	}
 
@@ -42,7 +44,8 @@ func ExampleNew_tag() {
 		panic(err)
 	}
 	defer repo.Close()
-	if err := fs.Register(repo); err != nil {
+	err = fs.Register(repo)
+	if err != nil {
 		panic(err)
 	}
 
