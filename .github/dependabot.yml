@@ -7,6 +7,7 @@ updates:
     directories:
       - /
       - /azureblobfs
+      - /cmd/gofs
       - /dropboxfs
       - /ftpfs
       - /s3fs
@@ -21,7 +22,10 @@ updates:
       # The backend modules require the root module with a placeholder
       # pseudo-version and replace it with the parent directory.
       # The placeholder is deliberate and must not be bumped to a release.
+      # cmd/gofs requires the go-fs version of its own release,
+      # set by gofs-require.sh in the release PR.
       - dependency-name: github.com/ungerik/go-fs
+      - dependency-name: github.com/ungerik/go-fs/*
     groups:
       go-minor-and-patch:
         update-types: [minor, patch]

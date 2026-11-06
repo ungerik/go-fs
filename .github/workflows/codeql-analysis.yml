@@ -28,6 +28,7 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
       - uses: github/codeql-action/init@v4
         with:

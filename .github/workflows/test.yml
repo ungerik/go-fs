@@ -34,6 +34,7 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
       - name: Build all workspace modules
         run: |
@@ -72,6 +73,7 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
       # "go tool" resolves the tools of every workspace module,
       # so staticcheck and gosec can be run from any module directory.
@@ -118,6 +120,7 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
       - name: Build the root module
         env:
@@ -137,14 +140,23 @@ jobs:
             go.sum
             go.work.sum
             */go.sum
+            cmd/gofs/go.sum
 
-      # The steps below report every failing module, not only the first one
+      # The steps below report every failing module, not only the first one.
+      #
+      # The release PR lets cmd/gofs require the go-fs version it releases,
+      # which is not tagged before the PR is merged. Without the workspace,
+      # the go commands of cmd/gofs run through gofs-require.sh --run, which
+      # resolves untagged go-fs versions from the checkout. This also checks
+      # that cmd/gofs/go.sum has the checksums the tags will have.
 
       - name: go mod tidy -diff
         run: |
           status=0
           for dir in $(go list -f '{{.Dir}}' -m); do
-            go -C "$dir" mod tidy -diff || { echo "::error::go.mod or go.sum of $dir is not tidy"; status=1; }
+            run=""
+            case "$dir" in */cmd/gofs) run="./gofs-require.sh --run" ;; esac
+            $run go -C "$dir" mod tidy -diff || { echo "::error::go.mod or go.sum of $dir is not tidy"; status=1; }
           done
           exit $status
 
@@ -154,7 +166,9 @@ jobs:
         run: |
           status=0
           for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
-            GOWORK=off go -C "$dir" build ./... || { echo "::error::GOWORK=off build of $dir failed"; status=1; }
+            run=""
+            case "$dir" in */cmd/gofs) run="./gofs-require.sh --run" ;; esac
+            GOWORK=off $run go -C "$dir" build ./... || { echo "::error::GOWORK=off build of $dir failed"; status=1; }
           done
           exit $status
 
@@ -170,6 +184,8 @@ jobs:
           status=0
           for dir in $(go list -f '{{.Dir}}' -m | grep -v 'tools$'); do
             echo "== $dir"
-            GOWORK=off "$govulncheck" -C "$dir" ./... || { echo "::error::govulncheck failed for $dir"; status=1; }
+            run=""
+            case "$dir" in */cmd/gofs) run="./gofs-require.sh --run" ;; esac
+            GOWORK=off $run "$govulncheck" -C "$dir" ./... || { echo "::error::govulncheck failed for $dir"; status=1; }
           done
           exit $status

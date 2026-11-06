@@ -10,3 +10,6 @@ coverage.*
 
 # OS files
 .DS_Store
+
+# Built gofs command
+/cmd/gofs/gofs

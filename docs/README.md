@@ -69,6 +69,7 @@ tests.
 | [tarfs](../tarfs/README.md)                        | Reading and writing tar, .tar.gz and .tgz archives |
 | [multipartfs](../multipartfs/README.md)            | Uploaded form files as a file system               |
 | [tools](../tools/README.md)                        | The pinned staticcheck, gosec and govulncheck versions          |
+| [gofs](../cmd/gofs/README.md)                      | The command line tool: commands, URIs and the environment variables of every backend |
 
 ## Explanation — why it works this way
 

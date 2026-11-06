@@ -125,9 +125,10 @@ empty" while the conformance suite requires the scheme.
 
 ### Release v1.0.0
 
-**What:** CHANGELOG `[1.0.0]`, `VERSION` = `v1.0.0`, the MIGRATION intro
+**What:** CHANGELOG `[1.0.0]`, `VERSION` = `v1.0.0` followed by
+`./gofs-require.sh` as the last edit of the release PR, the MIGRATION intro
 names v1.0.0 instead of the rc, the `go get` lines in the Markdown files
-drop their `@v1.0.0-rc.6` pins (`grep -rn '@v1.0.0-rc.6' --include='*.md'`)
+drop their `@v1.0.0-rc.7` pins (`grep -rn '@v1.0.0-rc.7' --include='*.md'`)
 and the README drops the note that plain `go get` installs v0.1.0, then tag
 all modules with
 `tag-release.sh` after the merge (never the `tools` module).
@@ -856,6 +857,28 @@ a raw `@` in the path.
 
 **Effort:** S
 **Priority:** P4
+**Depends on:** None
+
+## gofs
+
+### Limit the FTP and SMB passwords of the environment to their hosts
+
+**What:** Send `GOFS_FTP_PASSWORD` and `GOFS_SMB_PASSWORD` only to a host
+that the environment names, like an optional `GOFS_FTP_HOST` and
+`GOFS_SMB_HOST`, or document that they go to the host of every URI.
+
+**Why:** A URI from an untrusted source, like a script argument, sends the
+password of the environment to any server: in cleartext for `ftp://`, as an
+NTLM response that can be relayed or cracked for `smb://`.
+
+**Context:** Found by the targeted secret review of the v1.0.0-rc.7 ship.
+`azureContainerClient` in `cmd/gofs/connect.go` already sends the Azure
+credentials only to the storage account host, and SFTP is protected by the
+`known_hosts` check. `ftpFile` and `smbFile` use the environment password
+whenever the URI has none.
+
+**Effort:** S
+**Priority:** P2
 **Depends on:** None
 
 ## Completed

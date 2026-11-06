@@ -16,10 +16,10 @@ Install
 -------
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.6
+go get github.com/ungerik/go-fs@v1.0.0-rc.7
 ```
 
-Requires Go 1.26 or newer. v1.0.0-rc.6 is the release candidate for v1.0.0,
+Requires Go 1.26 or newer. v1.0.0-rc.7 is the release candidate for v1.0.0,
 which freezes the v1 API. Until v1.0.0 is tagged, `go get` without a version
 installs v0.1.0, whose API differs; [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md)
 covers the upgrade from v0.x.
@@ -29,7 +29,7 @@ network backends are modules of their own: get the ones you use together
 with the core module, at the same version.
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.6 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.6 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
 ```
 
 Example
@@ -105,6 +105,18 @@ Features
 - **Import only what you use** — the core module depends on fsnotify,
   pkg/xattr and golang.org/x/sys; each network backend is a module of its
   own, so the AWS SDK only arrives with `s3fs`.
+
+Command line tool
+-----------------
+
+[gofs](cmd/gofs/README.md) brings `ls`, `cp`, `mv`, `rm`, `cat` and `cmp` to
+every file system of go-fs and copies between them. It logs in with
+environment variables and the keys and profiles of `ssh`, the AWS CLI and
+`az login`:
+
+```bash
+gofs cp -r s3://my-bucket/reports sftp://alice@example.com/backup
+```
 
 Documentation
 -------------
