@@ -881,6 +881,33 @@ whenever the URI has none.
 **Priority:** P2
 **Depends on:** None
 
+### Sign and notarize the macOS binaries
+
+**What:** Sign the darwin builds of `release-gofs.yml` with a Developer ID
+Application certificate and the hardened runtime, and notarize them with
+Apple, so macOS runs a downloaded `gofs` without a warning.
+
+**Why:** Gatekeeper refuses an unsigned binary that a browser downloaded
+("Apple could not verify “gofs” is free of malware"). The installation
+section of `cmd/gofs/README.md` documents the `xattr -d
+com.apple.quarantine` workaround, but every macOS user hits the warning first.
+
+**Context:** The workflow builds every platform on `ubuntu-latest` with
+`CGO_ENABLED=0`. Either sign and notarize there with `rcodesign`
+(apple-codesign) or move the darwin jobs to `macos-latest` and use
+`codesign --options runtime --timestamp` and `xcrun notarytool submit
+--wait`. Repo secrets: the certificate as base64 .p12 with its password and
+an App Store Connect API key (key ID, issuer ID, .p8). A bare binary can't be
+stapled, so Gatekeeper checks the notarization online on the first run;
+notarize the binary (zipped for the submission) before it goes into the
+`.tar.gz`, so the archive and its `.sha256` cover the signed binary. Remove
+the README workaround once a signed release is out.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** An Apple Developer Program membership with a Developer ID
+Application certificate
+
 ## Completed
 
 ### Don't trust the S3 paginator on a truncated page without a token
