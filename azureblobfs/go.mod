@@ -7,8 +7,8 @@ replace github.com/ungerik/go-fs => ..
 require github.com/ungerik/go-fs v0.0.0-00010101000000-000000000000 // replaced
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
-	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.24.0
+	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3
 	github.com/stretchr/testify v1.12.1
 )
 

@@ -1,5 +1,5 @@
-github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.2 h1:zRpx93GLA2IYx4z2NTW6uTJgQ2f0CJ93xIj+w6Aoy3U=
-github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.2/go.mod h1:M8nJfTVC7mxuxRSMHWbhg38bhkW63+3MoAGi/6R/umg=
+github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.3 h1:f0sO0UL0eaL8pkkS/LYEbn5C1nnWSgmdkb6N6icFdm8=
+github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.3/go.mod h1:doqEeig8Sxrb7x3jcXLq6Kv+YZGqCm1pGFBNuYlEgnM=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/pkg/xattr v0.4.12 h1:rRTkSyFNTRElv6pkA3zpjHpQ90p/OdHQC1GmGh1aTjM=
