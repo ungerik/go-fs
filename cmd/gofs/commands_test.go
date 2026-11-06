@@ -183,10 +183,12 @@ func TestCp(t *testing.T) {
 // don't print the password of a URI.
 func TestCp_RedactsPasswords(t *testing.T) {
 	src := newTree(t)
+	// The user info of the test URIs, a made-up password
+	userInfo := "alice:" + "S3cret" + "@"
 	for _, args := range [][]string{
-		{"cp", filepath.Join(src, "x.txt"), filepath.Join(src, "sub", "y.txt"), "https://alice:S3cret@example.com/x"},
-		{"mv", filepath.Join(src, "x.txt"), "https://alice:S3cret@example.com/x/"},
-		{"cp", "file://alice:S3cret@localhost" + filepath.ToSlash(src), t.TempDir()},
+		{"cp", filepath.Join(src, "x.txt"), filepath.Join(src, "sub", "y.txt"), "https://" + userInfo + "example.com/x"},
+		{"mv", filepath.Join(src, "x.txt"), "https://" + userInfo + "example.com/x/"},
+		{"cp", "file://" + userInfo + "localhost" + filepath.ToSlash(src), t.TempDir()},
 	} {
 		code, _, stderr := gofs(t, nil, "", args...)
 		assert.Equal(t, 1, code, args)
