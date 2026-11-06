@@ -221,25 +221,25 @@ suite in `fstest` runs every native implementation against the same checks
 as the emulation. `✓` native, `–` uses the fallback (works the same, just not
 specialized), `r/o` read-only backend so the write operation does not apply.
 
-| Capability             |  s3 | azblob | sftp | ftp | smb | dropbox | webdav | http |
-| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
-| CopyFile (server-side) |  ✓  |   ✓    |  –   |  –  |  –  |    ✓    |   ✓    |  –   |
-| Move                   |  –  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |
-| Exists                 |  –  |   –    |  –   |  –  |  –  |    –    |   –    |  ✓   |
-| ReadAll                |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    –    |   ✓    |  ✓   |
-| WriteAll               |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
-| Append                 |  –  |   –    |  –   |  ✓  |  –  |    –    |   –    | r/o  |
-| OpenAppendWriter       |  –  |   –    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  |
-| OpenReadWriter         |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   –    | r/o  |
-| Touch                  |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  |
-| Truncate               |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| MakeAllDirs            |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| RemoveAll              |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
-| ListDirRecursive       |  ✓  |   ✓    |  ✓   |  ✓  |  –  |    ✓    |   –    |  –   |
-| SetPermissions         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| Symbolic links         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    |  –   |
-| Seeking reads          |  –  |   ✓    |  ✓   |  –  |  ✓  |    –    |   ✓    |  –   |
-| ValidateName           |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
+| Capability             |  s3 | azblob | sftp | ftp | smb | dropbox | webdav | http | git |
+| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: | :-: |
+| CopyFile (server-side) |  ✓  |   ✓    |  –   |  –  |  –  |    ✓    |   ✓    |  –   |  –  |
+| Move                   |  –  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |  –  |
+| Exists                 |  –  |   –    |  –   |  –  |  –  |    –    |   –    |  ✓   |  ✓  |
+| ReadAll                |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    –    |   ✓    |  ✓   |  ✓  |
+| WriteAll               |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  | r/o |
+| Append                 |  –  |   –    |  –   |  ✓  |  –  |    –    |   –    | r/o  | r/o |
+| OpenAppendWriter       |  –  |   –    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  | r/o |
+| OpenReadWriter         |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   –    | r/o  | r/o |
+| Touch                  |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  | r/o |
+| Truncate               |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  | r/o |
+| MakeAllDirs            |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  | r/o |
+| RemoveAll              |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  | r/o |
+| ListDirRecursive       |  ✓  |   ✓    |  ✓   |  ✓  |  –  |    ✓    |   –    |  –   |  ✓  |
+| SetPermissions         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  | r/o |
+| Symbolic links         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    |  –   |  –  |
+| Seeking reads          |  –  |   ✓    |  ✓   |  –  |  ✓  |    –    |   ✓    |  –   |  ✓  |
+| ValidateName           |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  | r/o |
 
 "Seeking reads" is not an interface: it means that the readers of
 `OpenReader` implement `fs.ReadAtSeekCloser`, so `File.OpenReadSeeker` needs

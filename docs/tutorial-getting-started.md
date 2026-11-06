@@ -1,8 +1,9 @@
 # Getting started with go-fs
 
 You will build a small program that reads and writes files, then point the
-exact same code at three different backends — the local disk, an in-memory file
-system and an HTTP server — without changing the part that does the work.
+exact same code at four different backends — the local disk, an in-memory file
+system, an HTTP server and a git repository on GitHub — without changing the
+part that does the work.
 
 By the end you will understand the one idea the library is built on: a file is
 a string, and the string says which file system it belongs to.
@@ -187,7 +188,83 @@ file named `https:/example.com`. You get an error,
 because **a string with a `://` scheme that matches no registered file system
 resolves to the invalid file system, never to a local path.**
 
-## Step 4: List a directory
+## Step 4: Read a file from a GitHub repository
+
+A git repository is a file system too. Get the `gitfs` module, which is new
+in v1.0.0-rc.7, together with the core module at the same version:
+
+```bash
+go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/gitfs@v1.0.0-rc.8
+```
+
+Add it to the imports:
+
+```go
+import (
+	"context"
+	"fmt"
+	"log"
+
+	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/gitfs"
+	_ "github.com/ungerik/go-fs/httpfs"
+)
+```
+
+Then print the README of the go-fs repository itself, add this at the end of
+`main`:
+
+```go
+	repo, err := gitfs.New(ctx, "https://github.com/ungerik/go-fs.git", "", nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer repo.Close()
+	err = fs.Register(repo)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	readme, err := repo.RootDir().Join("README.md").ReadAllString(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(readme)
+	fmt.Println("read from commit", repo.Commit(), "via", repo.Prefix())
+```
+
+```bash
+go run .
+```
+
+```
+go-fs
+=====
+...
+read from commit 02ef002… via git+https://github.com/ungerik/go-fs.git@HEAD
+```
+
+(The README and the commit are whatever the default branch has today.)
+
+The empty ref means the latest commit of the default branch. Pass a branch,
+a tag like `"v1.0.0-rc.6"` or a commit ID instead to read that version; the
+file system shows one commit and doesn't change while you use it.
+
+Nothing was cloned. `gitfs.New` asked the server for its capabilities and
+for the commit of the ref, two small requests, and `ReadAllString` fetched
+the commit, the tree of the root directory and just `README.md`. On
+github.com the tree comes from the GitHub REST API and the file from
+raw.githubusercontent.com, so reading one file of the latest version costs
+five requests in total. On any other git server gitfs reads the trees along
+the path and the file over the git protocol itself.
+
+`fs.Register` makes the URIs of the repository work everywhere, like those of
+the memory file system in step 2:
+`fs.File("git+https://github.com/ungerik/go-fs.git@HEAD/README.md")` is the
+same file. The repository is read-only; writing to it returns an error
+wrapping `fs.ErrReadOnlyFileSystem`.
+
+## Step 5: List a directory
 
 Create a few files and list them:
 
@@ -267,7 +344,7 @@ for file, err := range fs.Glob(ctx, "data/*.txt") {
 Reach for `ListDirIter` by default, `ListDirMax` when you want a slice, and the
 callback form when you need to stop on a condition.
 
-## Step 5: Accept files you don't own with FileReader
+## Step 6: Accept files you don't own with FileReader
 
 A function that only reads should take `fs.FileReader`, not `fs.File`:
 
@@ -324,7 +401,7 @@ generated content.
 One caveat: `MemFile.ReadAll` returns `FileData` directly, without copying.
 Do not modify the returned slice unless you mean to modify the file.
 
-## Step 6: Read and write JSON
+## Step 7: Read and write JSON
 
 ```go
 type Config struct {
@@ -365,7 +442,7 @@ type Job struct {
 That works in JSON, XML, YAML and SQL drivers, because reflection sees
 `reflect.String`.
 
-## Step 7: Clean up
+## Step 8: Clean up
 
 ```go
 	err = fs.File("data").RemoveRecursive(ctx)
@@ -385,7 +462,8 @@ cleanup wants. `file.Remove()` reports a missing file as an error; wrap it in
 ## What you built
 
 A program that reads, writes, lists and cleans up files, running unchanged
-against the local disk, an in-memory file system and an HTTP server.
+against the local disk, an in-memory file system, an HTTP server and a git
+repository.
 
 What you actually learned:
 
@@ -404,7 +482,7 @@ What you actually learned:
 
 ## Next steps
 
-- [Connect a remote backend](howto-connect-a-remote-backend.md) — S3, SFTP, FTP, SMB, WebDAV, Azure, Dropbox
+- [Connect a remote backend](howto-connect-a-remote-backend.md) — S3, SFTP, FTP, SMB, WebDAV, Azure, Dropbox, git
 - [Test with MemFileSystem](howto-test-with-memfilesystem.md) — make your own code testable
 - [Serve files over HTTP](howto-serve-files-over-http.md)
 - [Work with archives](howto-work-with-archives.md) — ZIP and tar as file systems
