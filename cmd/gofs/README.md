@@ -24,8 +24,8 @@ Or build it with Go 1.26 or newer:
 go install github.com/ungerik/go-fs/cmd/gofs@latest
 ```
 
-A release of `gofs` is built with the go-fs modules of the release before
-it, which its `go.mod` requires; `gofs version` prints both versions. The
+A release of `gofs` is built with the go-fs modules of the same release,
+which its `go.mod` requires; `gofs version` prints both versions. The
 release archives are the same build as `go install`. To build `gofs` with the
 code of a clone, run `go install ./cmd/gofs` in it.
 
@@ -65,6 +65,7 @@ for these file systems.
 | `cmp` | `[-r] URI URI` | Compares two files or directories, exits with 1 if they differ |
 | `env` | | Lists the environment variables below and which of them are set, never their values |
 | `version` | | Prints the version |
+| `help` | `[COMMAND]` | Prints the usage, with a command its flags like `gofs COMMAND -h` |
 
 Several sources need an existing destination directory, and so does a
 destination with a trailing slash. Short boolean flags can be combined, like
@@ -104,7 +105,7 @@ Arguments are local paths or URIs:
 
 A file system connects on first use and closes when the command ends.
 The URIs that `ls -u` prints, like `webdav://alice@cloud.example.com/dav/x`
-or `dropbox://dbid:AAH4f99T0taONIb-OurWxbNQ6ywGRopQngc/x`, work as arguments
+or `dropbox://AAH4f99T0taONIb-OurWxbNQ6ywGRopQngc/x`, work as arguments
 too.
 
 Put passwords in the environment instead of in URIs, which end up in the
