@@ -64,6 +64,7 @@ tests.
 | [smbfs](../smbfs/README.md)                        | NTLM authentication, share paths, Samba tests      |
 | [webdavfs](../webdavfs/README.md)                  | Basic auth and bearer tokens, WebDAV method mapping |
 | [dropboxfs](../dropboxfs/README.md)                | Dropbox app setup, access token, manual test run   |
+| [gitfs](../gitfs/README.md)                        | Git repositories over HTTPS, refs, GitHub shortcuts, request counts |
 | [httpfs](../httpfs/README.md)                      | Reading HTTP URLs as files, clients per URL prefix |
 | [zipfs](../zipfs/README.md)                        | Reading and writing ZIP archives                   |
 | [tarfs](../tarfs/README.md)                        | Reading and writing tar, .tar.gz and .tgz archives |
