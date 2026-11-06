@@ -289,13 +289,15 @@ func readCommand(r *http.Request) (command string, args []string, err error) {
 	}
 }
 
+// uploadPackResult is the content type of git-upload-pack responses.
+const uploadPackResult = "application/x-git-upload-pack-result"
+
 func (s *Server) serveUploadPack(w http.ResponseWriter, r *http.Request) {
 	command, args, err := readCommand(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 	switch command {
 	case "ls-refs":
 		s.count("ls-refs")
@@ -312,6 +314,7 @@ func (s *Server) serveUploadPack(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveLsRefs(w http.ResponseWriter, args []string) {
+	w.Header().Set("Content-Type", uploadPackResult)
 	var prefixes []string
 	peel, symrefs := false, false
 	for _, arg := range args {
@@ -347,6 +350,9 @@ func (s *Server) serveLsRefs(w http.ResponseWriter, args []string) {
 }
 
 func (s *Server) serveFetch(w http.ResponseWriter, args []string) {
+	// Set in the function that writes the body, where CodeQL sees that
+	// the echoed request values are not sent as HTML
+	w.Header().Set("Content-Type", uploadPackResult)
 	var (
 		wants  []object.OID
 		filter string
