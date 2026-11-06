@@ -48,6 +48,9 @@ func (c *cli) files(ctx context.Context, uris []string) ([]fs.File, error) {
 
 // ctxReader ends with the error of ctx once ctx is done,
 // so that copies by io.Copy end between two reads.
+// It checks ctx again after each read, because a read that was
+// blocked when ctx got canceled can end with io.EOF, which would
+// let io.Copy succeed with the data read so far.
 type ctxReader struct {
 	ctx context.Context
 	r   io.Reader
@@ -57,7 +60,11 @@ func (r ctxReader) Read(p []byte) (int, error) {
 	if err := r.ctx.Err(); err != nil {
 		return 0, err
 	}
-	return r.r.Read(p)
+	n, err := r.r.Read(p)
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		return n, ctxErr
+	}
+	return n, err
 }
 
 // listEntry is a file listed by ls with the name that ls prints.
@@ -252,10 +259,16 @@ func (c *cli) put(ctx context.Context, flags *flag.FlagSet, args []string) error
 		_, err = writeAll(ctx, file, c.stdin)
 		return err
 	case err == nil:
-		return putReplace(ctx, file, fs.PermissionsFromStdFileInfo(info), c.stdin)
+		return putReplace(ctx, file, fs.PermissionsFromStdFileInfo(info), false, c.stdin)
 	case !errors.Is(err, os.ErrNotExist):
 		// Only a file that doesn't exist is removed if writing fails
 		return err
+	}
+	// Stat follows symbolic links, Lstat tells a dangling one, which is
+	// replaced like an existing file instead of creating its target
+	// through it, which a failed write would leave behind
+	if linkInfo, lstatErr := file.Lstat(); lstatErr == nil && linkInfo.IsSymlink {
+		return putReplace(ctx, file, 0, true, c.stdin)
 	}
 	// Like fs.CopyFile, which cp uses
 	if dir := file.Dir(); !dir.Exists() {
@@ -315,15 +328,29 @@ func writeAll(ctx context.Context, file fs.File, r io.Reader) (aborted bool, err
 // once it is complete, which renames it on the server without copying the
 // data again. Where no temporary file can be created, like in a directory
 // that only the file is writable in, the file is written directly.
-func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, r io.Reader) error {
+// A dangling symbolic link, link true, is replaced with a file with the
+// default permissions of a new file, and never written through, which would
+// create its target, so perm is ignored and putReplace fails where it would
+// write the file directly.
+func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, link bool, r io.Reader) error {
+	errLink := func() error {
+		return fmt.Errorf("can't replace the dangling symbolic link %s", fsimpl.RedactURI(string(file)))
+	}
 	temp := file.Dir().Join(".gofs-put-" + rand.Text())
-	writer, err := temp.OpenWriter(perm)
+	var tempPerm []fs.Permissions
+	if !link {
+		tempPerm = append(tempPerm, perm)
+	}
+	writer, err := temp.OpenWriter(tempPerm...)
 	if errors.Is(err, os.ErrPermission) {
 		// Opening can fail after the file was created,
 		// like when an SFTP server refuses to set its permissions
 		err = fs.RemoveErrDoesNotExist(temp.Remove())
 		if err != nil {
 			return err
+		}
+		if link {
+			return errLink()
 		}
 		_, err = writeAll(ctx, file, r)
 		return err
@@ -336,22 +363,27 @@ func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, r io.Rea
 		if err != nil {
 			return err
 		}
+		if link {
+			return errLink()
+		}
 		_, err = writeAll(ctx, file, r)
 		return err
 	}
 	removeTemp := func(err error) error {
 		return errors.Join(err, fs.RemoveErrDoesNotExist(temp.Remove()))
 	}
-	if perm&fs.UserWrite == 0 {
-		// The file isn't writable, which the rename would ignore
-		return removeTemp(errors.Join(fs.NewErrPermission(file), writer.Close()))
-	}
-	// OpenWriter applies the umask to the permissions of a new file.
-	// File systems without permissions and mounts that refuse to change
-	// them, like vfat, keep the permissions that the file got.
-	err = temp.SetPermissions(perm)
-	if err != nil && !errors.Is(err, errors.ErrUnsupported) && !errors.Is(err, os.ErrPermission) {
-		return removeTemp(errors.Join(err, writer.Close()))
+	if !link {
+		if perm&fs.UserWrite == 0 {
+			// The file isn't writable, which the rename would ignore
+			return removeTemp(errors.Join(fs.NewErrPermission(file), writer.Close()))
+		}
+		// OpenWriter applies the umask to the permissions of a new file.
+		// File systems without permissions and mounts that refuse to change
+		// them, like vfat, keep the permissions that the file got.
+		err = temp.SetPermissions(perm)
+		if err != nil && !errors.Is(err, errors.ErrUnsupported) && !errors.Is(err, os.ErrPermission) {
+			return removeTemp(errors.Join(err, writer.Close()))
+		}
 	}
 	_, err = io.Copy(writer, ctxReader{ctx, r})
 	err = errors.Join(err, writer.Close())
@@ -360,9 +392,10 @@ func putReplace(ctx context.Context, file fs.File, perm fs.Permissions, r io.Rea
 	}
 	err = fs.Move(ctx, temp, file)
 	if err != nil {
-		if _, statErr := file.Stat(); statErr != nil {
+		if _, statErr := file.Lstat(); statErr != nil {
 			// A failed move can remove the file before it renames
-			// the temporary file, which then holds the only copy
+			// the temporary file, which then holds the only copy.
+			// Lstat, because a dangling link that was kept has no Stat
 			return fmt.Errorf("%w, the written data is in %s", err, string(temp))
 		}
 		return removeTemp(err)
@@ -407,7 +440,11 @@ func (c *cli) cp(ctx context.Context, flags *flag.FlagSet, args []string) error 
 		} else if !recursive {
 			err = fmt.Errorf("%s is a directory, copy it with -r", fsimpl.RedactURI(string(src)))
 		} else if intoDir {
-			err = fs.CopyRecursive(ctx, src, dest.Join(src.Name()))
+			var destDir fs.File
+			destDir, err = dirEntry(dest, src)
+			if err == nil {
+				err = fs.CopyRecursive(ctx, src, destDir)
+			}
 		} else {
 			err = fs.CopyRecursive(ctx, src, dest)
 		}
@@ -416,6 +453,21 @@ func (c *cli) cp(ctx context.Context, flags *flag.FlagSet, args []string) error 
 		}
 	}
 	return nil
+}
+
+// dirEntry returns the entry of the directory dir with the name of src,
+// like fs.CopyFile and fs.Move join it, and an error wrapping os.ErrInvalid
+// if the name is not a single entry of dir: Join cleans the path, so a name
+// like ".." or one with a separator of dir, like `..\x` of an S3 key for
+// a local directory on Windows, would go outside of dir.
+// fs.CopyRecursive validates the name of the entry that it returns.
+func dirEntry(dir, src fs.File) (fs.File, error) {
+	name := src.Name()
+	entry := dir.Join(name)
+	if name == "" || entry.Name() != name {
+		return "", fmt.Errorf("%w: can't copy %s into %s, the name %q is not valid there", os.ErrInvalid, fsimpl.RedactURI(string(src)), fsimpl.RedactURI(string(dir)), name)
+	}
+	return entry, nil
 }
 
 func (c *cli) mv(ctx context.Context, flags *flag.FlagSet, args []string) error {

@@ -179,15 +179,55 @@ func TestCp(t *testing.T) {
 	assert.Equal(t, "deep", readFile(t, filepath.Join(multi, "sub", "y.txt")))
 }
 
+// TestDirEntry checks that cp -r copies a source directory into the
+// destination directory only under a name that is a single entry of it:
+// an S3 directory named `..\outside` would be copied next to a local
+// destination directory on Windows, whose separator is the backslash,
+// like next to the directory of a MemFileSystem with that separator.
+func TestDirEntry(t *testing.T) {
+	newMemFS := func(separator string, files ...fs.MemFile) *fs.MemFileSystem {
+		t.Helper()
+		memFS, err := fs.NewMemFileSystem(&fs.MemFileSystemOptions{Separator: separator}, files...)
+		require.NoError(t, err)
+		require.NoError(t, fs.Register(memFS))
+		t.Cleanup(func() { _ = memFS.Close() })
+		return memFS
+	}
+	src := newMemFS("/", fs.NewMemFile(`..\outside/file.txt`, []byte("data")), fs.NewMemFile("dir/file.txt", []byte("data")))
+	escaping := src.RootDir().Join(`..\outside`)
+	require.True(t, escaping.IsDir())
+	backslashDest := newMemFS(`\`, fs.NewMemFile(`safe\downloads\keep.txt`, nil)).RootDir().Join("safe", "downloads")
+	require.True(t, backslashDest.IsDir())
+
+	_, err := dirEntry(backslashDest, escaping)
+	assert.ErrorIs(t, err, os.ErrInvalid, "the backslash is a separator of the destination")
+	assert.ErrorContains(t, err, "is not valid there")
+
+	entry, err := dirEntry(backslashDest, src.RootDir().Join("dir"))
+	require.NoError(t, err)
+	assert.Equal(t, backslashDest.Join("dir"), entry)
+
+	slashDest := newMemFS("/", fs.NewMemFile("downloads/keep.txt", nil)).RootDir().Join("downloads")
+	entry, err = dirEntry(slashDest, escaping)
+	require.NoError(t, err, "a valid name where the backslash is no separator")
+	assert.Equal(t, `..\outside`, entry.Name())
+	assert.Equal(t, slashDest, entry.Dir())
+}
+
 // TestCp_RedactsPasswords checks that the errors of cp and mv
 // don't print the password of a URI.
 func TestCp_RedactsPasswords(t *testing.T) {
 	src := newTree(t)
+	// An in-process server, so that the Stat of the destination,
+	// a HEAD request, needs no network
+	srv := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
 	// The user info of the test URIs, a made-up password
 	userInfo := "alice:" + "S3cret" + "@"
+	httpDest := "http://" + userInfo + srv.Listener.Addr().String()
 	for _, args := range [][]string{
-		{"cp", filepath.Join(src, "x.txt"), filepath.Join(src, "sub", "y.txt"), "https://" + userInfo + "example.com/x"},
-		{"mv", filepath.Join(src, "x.txt"), "https://" + userInfo + "example.com/x/"},
+		{"cp", filepath.Join(src, "x.txt"), filepath.Join(src, "sub", "y.txt"), httpDest + "/x"},
+		{"mv", filepath.Join(src, "x.txt"), httpDest + "/x/"},
 		{"cp", "file://" + userInfo + "localhost" + filepath.ToSlash(src), t.TempDir()},
 	} {
 		code, _, stderr := gofs(t, nil, "", args...)
@@ -266,6 +306,29 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// cancelingReader cancels a context while it reads the data and ends with
+// io.EOF, like a read that was blocked when the context got canceled.
+type cancelingReader struct {
+	data   string
+	cancel context.CancelFunc
+}
+
+func (r *cancelingReader) Read(p []byte) (int, error) {
+	r.cancel()
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, io.EOF
+}
+
+func TestCtxReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var out strings.Builder
+	_, err := io.Copy(&out, ctxReader{ctx, &cancelingReader{"partial", cancel}})
+	assert.ErrorIs(t, err, context.Canceled, "the cancellation during the read, not its io.EOF")
+	assert.Equal(t, "partial", out.String(), "the data of the last read")
+}
+
 // runStdin runs the command line args with ctx and stdin and returns
 // the exit code and stderr.
 func runStdin(ctx context.Context, env map[string]string, stdin io.Reader, args ...string) (code int, stderr string) {
@@ -337,6 +400,15 @@ func TestPut_Failure(t *testing.T) {
 	code, stdout, _ := gofs(t, env, "", "cat", "webdav:///existing.txt")
 	require.Equal(t, 0, code)
 	assert.Equal(t, "original", stdout, "an aborted upload keeps the existing file")
+	// Canceled during the last read of stdin, which ended with io.EOF
+	ctx, cancel = context.WithCancel(t.Context())
+	defer cancel()
+	code, _ = runStdin(ctx, env, &cancelingReader{"partial", cancel}, "put", "webdav:///existing.txt")
+	assert.Equal(t, 1, code)
+	code, stdout, _ = gofs(t, env, "", "cat", "webdav:///existing.txt")
+	require.Equal(t, 0, code)
+	assert.Equal(t, "original", stdout, "the upload was aborted")
+
 	code, stdout, _ = gofs(t, env, "", "ls", "-a", "webdav:///")
 	require.Equal(t, 0, code)
 	assert.Equal(t, "existing.txt\n", stdout, "no temporary file left behind")
