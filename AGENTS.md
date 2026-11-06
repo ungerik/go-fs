@@ -29,16 +29,17 @@ Public, dependency-light Go library. Repo-specific rules that override the globa
 
 ## Shipping
 
-The whole gate of a PR, also for `/ship`, is two steps:
+`/ship` runs all its steps, the reviews, the coverage audit and the documentation audit
+included, with two go-fs specifics:
 
-1. **Test:** `./test-workspace.sh`. It runs every check of CI for every module; green
-   means ready. It is `/ship`'s only test lane: go-fs has no gstack pregate, so skip the
-   pregate and ship receipt steps and their refusals.
-2. **PR:** push the feature branch and run `gh pr create --base master`. A release PR is
-   titled `vX.Y.Z: <summary>`, the squash subject. It bumps `VERSION`, adds the CHANGELOG
-   heading, moves the version pins of the Markdown files
-   (`grep -rn '@v<previous>' --include='*.md'`) and runs `./gofs-require.sh` as its last
-   edit. After the squash-merge, `./tag-release.sh` tags it from a checkout of master.
+- **Tests:** `./test-workspace.sh` is the only test lane. It runs every check of CI for
+  every module. go-fs has no gstack pregate, so the pregate and the ship receipt are left
+  out, and their refusals end nothing.
+- **PR:** push the feature branch and run `gh pr create --base master`. A release PR is
+  titled `vX.Y.Z: <summary>`, the squash subject. It bumps `VERSION`, adds the CHANGELOG
+  heading, moves the version pins of the Markdown files
+  (`grep -rn '@v<previous>' --include='*.md'`) and runs `./gofs-require.sh` as its last
+  edit. After the squash-merge, `./tag-release.sh` tags it from a checkout of master.
 
 ## Skill routing
 
