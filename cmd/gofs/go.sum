@@ -130,7 +130,7 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
-github.com/ungerik/go-fs v1.0.0-rc.7 h1:Z5zpUI5tBwNrnhi99wQTgxEfHM3Nf6QbhmT4KGQ2bI8=
+github.com/ungerik/go-fs v1.0.0-rc.7 h1:j3u8ZXNYn9B+fUbu/OWgs+c5Uep/eyls+Qf71dI1Aj4=
 github.com/ungerik/go-fs v1.0.0-rc.7/go.mod h1:pN/1tUkg+uD5wwfJxKyXOfciG04CF4tHBsi54TOmvfA=
 github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.7 h1:nIR6XnS9MTv9ywd5tYjoRsDTdgteBxfxJkEH+cMzetw=
 github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.7/go.mod h1:7RCm73IedMUOa4GD09bzdybIPmqmnTrn2o/Sd7Ii0uY=
