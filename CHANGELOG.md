@@ -29,7 +29,9 @@ file system of go-fs, also between them. The library modules are unchanged.
 - `rm` refuses a path that ends with `.` or `..`, also percent-encoded in a
   URI, before it removes anything.
 - The Azure credentials of the environment are only sent to the storage
-  account host, and errors never print the passwords of URIs.
+  account host, the FTP and SMB passwords of the environment never to an
+  anonymous FTP login or an SMB guest session, and errors never print the
+  passwords of URIs.
 - Release archives of `gofs` for Linux, macOS and Windows on amd64 and
   arm64 with SHA-256 checksums, built by the new `release-gofs` workflow
   for every published release.
