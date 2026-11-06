@@ -262,7 +262,7 @@ func (c *cli) version(ctx context.Context, flags *flag.FlagSet, args []string) e
 		return errors.New("no build information")
 	}
 	// The version of the go-fs modules that gofs was built with,
-	// the previous release for a release of gofs, see go.mod
+	// the same as its own for a release of gofs, see go.mod
 	libVersion := "unknown"
 	for _, dep := range info.Deps {
 		if dep.Path == "github.com/ungerik/go-fs" {

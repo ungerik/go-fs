@@ -5,7 +5,8 @@ module github.com/ungerik/go-fs/cmd/gofs
 // directives, because "go install github.com/ungerik/go-fs/cmd/gofs@<version>"
 // refuses a module whose go.mod has replace directives. Builds in the
 // repository use the modules of go.work instead of these versions.
-// Bump them to the new version after each release.
+// The release PR sets them to the version it releases with
+// ./gofs-require.sh, before that version is tagged.
 
 go 1.26.0
 
@@ -14,14 +15,14 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2
 	github.com/aws/aws-sdk-go-v2/config v1.33.13
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
-	github.com/ungerik/go-fs v1.0.0-rc.6
-	github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.6
-	github.com/ungerik/go-fs/dropboxfs v1.0.0-rc.6
-	github.com/ungerik/go-fs/ftpfs v1.0.0-rc.6
-	github.com/ungerik/go-fs/s3fs v1.0.0-rc.6
-	github.com/ungerik/go-fs/sftpfs v1.0.0-rc.6
-	github.com/ungerik/go-fs/smbfs v1.0.0-rc.6
-	github.com/ungerik/go-fs/webdavfs v1.0.0-rc.6
+	github.com/ungerik/go-fs v1.0.0-rc.7
+	github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.7
+	github.com/ungerik/go-fs/dropboxfs v1.0.0-rc.7
+	github.com/ungerik/go-fs/ftpfs v1.0.0-rc.7
+	github.com/ungerik/go-fs/s3fs v1.0.0-rc.7
+	github.com/ungerik/go-fs/sftpfs v1.0.0-rc.7
+	github.com/ungerik/go-fs/smbfs v1.0.0-rc.7
+	github.com/ungerik/go-fs/webdavfs v1.0.0-rc.7
 	golang.org/x/crypto v0.58.0
 	golang.org/x/oauth2 v0.37.0
 )

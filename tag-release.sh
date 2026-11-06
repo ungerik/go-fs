@@ -9,8 +9,10 @@ Usage: ./tag-release.sh [--dry-run]
 Releases the version in the VERSION file for every module of go.work:
 
   1. checks that the branch is master, the working tree is clean,
-     HEAD equals origin/master, CHANGELOG.md has a heading for the version
-     and none of the release tags exists yet;
+     HEAD equals origin/master, CHANGELOG.md has a heading for the version,
+     cmd/gofs requires the version of the go-fs modules with the checksums
+     of HEAD (./gofs-require.sh --check) and none of the release tags
+     exists yet;
   2. creates the annotated tags vX for the root module and <dir>/vX for
      every other module, except the tools module, which only pins
      development tools and is never tagged;
@@ -158,6 +160,11 @@ if notes=$(changelog_section); then
 else
 	problem "CHANGELOG.md has no heading for $version"
 fi
+
+# cmd/gofs releases with the go-fs modules of the same release. Its go.sum
+# has the checksums of their tags, which have to match HEAD: a change on
+# master after the release PR invalidates them.
+./gofs-require.sh --check "$version" || problem "cmd/gofs isn't ready for the release of $version"
 
 refspecs=""
 for tag in $tags; do

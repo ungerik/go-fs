@@ -12,8 +12,12 @@ Public, dependency-light Go library. Repo-specific rules that override the globa
   and lint every module. Keep the `replace github.com/ungerik/go-fs => ..` + placeholder
   pseudo-version pattern in the backend `go.mod` files. `cmd/gofs` is the exception: it
   requires released versions of the go-fs modules without `replace`, so that
-  `go install github.com/ungerik/go-fs/cmd/gofs@<version>` works; bump them after each release.
-  So `cmd/gofs` can only use APIs of the latest release; the `GOWORK=off` build checks that.
+  `go install github.com/ungerik/go-fs/cmd/gofs@<version>` works. The release PR sets them to
+  the version it releases with `./gofs-require.sh` after bumping `VERSION`, and again after any
+  later change to a go-fs module: cmd/gofs/go.sum holds the checksums the tags will have, and
+  `go.work` replaces that version with the module directories. Untagged versions are resolved
+  from the working tree by `./gofs-require.sh --run`, which CI and `./test-workspace.sh` use for
+  the `GOWORK=off` commands of cmd/gofs; `tag-release.sh` refuses a stale cmd/gofs/go.sum.
 - **Tests:** unit tests must run offline. Tests needing Docker (S3Mock, sshd, Samba, Azurite) must
   skip when Docker is unavailable; tests needing credentials or public internet servers
   must be gated behind an environment variable (`GOFS_ONLINE_TESTS=1`,
