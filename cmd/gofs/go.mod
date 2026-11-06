@@ -12,7 +12,7 @@ go 1.26.0
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
-	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2
+	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.13
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
 	github.com/ungerik/go-fs v1.0.0-rc.7
@@ -33,7 +33,7 @@ require (
 )
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.24.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/internal v0.1.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.10.1 // indirect
@@ -57,7 +57,7 @@ require (
 	github.com/aws/smithy-go v1.28.7 // indirect
 	github.com/cloudsoda/go-smb2 v0.0.0-20260918041005-0c5d69b69701 // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
-	github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.2 // indirect
+	github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.3 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/goccy/go-json v0.12.0 // indirect

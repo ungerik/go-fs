@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.24.1 // indirect
 	cloud.google.com/go/compute/metadata v0.10.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.24.0 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.84.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.47.5 // indirect
