@@ -118,7 +118,7 @@ written as `%25`.
 | Variable | Scheme | Use |
 | -------- | ------ | --- |
 | `GOFS_FTP_USER` | `ftp`, `ftps` | Username if the URI has none, else anonymous login |
-| `GOFS_FTP_PASSWORD` | `ftp`, `ftps` | Password if the URI has none, only for a username of the URI or `GOFS_FTP_USER`, never for an anonymous login |
+| `GOFS_FTP_PASSWORD` | `ftp`, `ftps` | Password if the URI has none, only for a username of the URI or `GOFS_FTP_USER` other than `anonymous` or `ftp`, never for an anonymous login |
 | `GOFS_FTP_INSECURE_SKIP_VERIFY` | `ftps` | `true`: don't verify the server certificate |
 | `GOFS_SFTP_USER` | `sftp` | Username if the URI has none, else the local username |
 | `GOFS_SFTP_PASSWORD` | `sftp` | Password if the URI has none |
@@ -128,7 +128,7 @@ written as `%25`.
 | `GOFS_SFTP_KNOWN_HOSTS` | `sftp` | Known hosts file instead of `~/.ssh/known_hosts` |
 | `GOFS_SFTP_INSECURE_IGNORE_HOST_KEY` | `sftp` | `true`: don't verify the host key |
 | `GOFS_SMB_USER` | `smb` | Username if the URI has none, else a guest session |
-| `GOFS_SMB_PASSWORD` | `smb` | Password if the URI has none, only for a username of the URI or `GOFS_SMB_USER`, never for a guest session |
+| `GOFS_SMB_PASSWORD` | `smb` | Password if the URI has none, only for a username of the URI or `GOFS_SMB_USER` other than `Guest`, never for a guest session |
 | `GOFS_SMB_DOMAIN` | `smb` | NTLM domain |
 | `GOFS_WEBDAV_URL` | `webdav` | Required: the `http` or `https` URL of the server; `webdav:///path` is below it |
 | `GOFS_WEBDAV_USER` | `webdav` | Username, overrides the one of `GOFS_WEBDAV_URL` |

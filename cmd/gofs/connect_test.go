@@ -67,26 +67,28 @@ func TestCutAuthority(t *testing.T) {
 
 func TestUserInfo(t *testing.T) {
 	for _, tc := range []struct {
-		address              string
-		hasUser, hasPassword bool
+		address     string
+		username    string
+		hasPassword bool
 	}{
-		{"ftp://host", false, false},
-		{"ftp://alice@host", true, false},
-		{"ftp://alice:secret@host", true, true},
-		{"ftp://alice:@host", true, true},
-		{"ftp://:secret@host", false, true},
-		{"ftp://%zz@host", false, false},
+		{"ftp://host", "", false},
+		{"ftp://alice@host", "alice", false},
+		{"ftp://alice:secret@host", "alice", true},
+		{"ftp://alice:@host", "alice", true},
+		{"ftp://:secret@host", "", true},
+		{"ftp://%zz@host", "", false},
 	} {
-		hasUser, hasPassword := userInfo(tc.address)
-		assert.Equal(t, tc.hasUser, hasUser, tc.address)
+		username, hasPassword := userInfo(tc.address)
+		assert.Equal(t, tc.username, username, tc.address)
 		assert.Equal(t, tc.hasPassword, hasPassword, tc.address)
 	}
 }
 
 // TestEnvCredentials checks that the FTP and SMB connections take the
 // username and password of the environment only for what the URI lacks,
-// and never send the password without a username: an anonymous FTP login
-// or an SMB guest session would hand it to any server.
+// and never send the password without a username or for an anonymous or
+// guest username: an anonymous FTP login or an SMB guest session would
+// hand it to any server.
 func TestEnvCredentials(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
@@ -100,9 +102,12 @@ func TestEnvCredentials(t *testing.T) {
 		{"password of the URI", map[string]string{"U": "bob", "P": "S3cret"}, "ftp://alice:pw@host", "", ""},
 		{"empty password of the URI", map[string]string{"P": "S3cret"}, "smb://alice:@host/share", "", ""},
 		{"password only in the URI", map[string]string{"U": "bob", "P": "S3cret"}, "smb://:pw@host/share", "bob", ""},
+		{"anonymous user of the URI", map[string]string{"P": "S3cret"}, "ftp://Anonymous@host", "", ""},
+		{"anonymous user of the environment", map[string]string{"U": "ftp", "P": "S3cret"}, "ftp://host", "ftp", ""},
+		{"guest user of the URI", map[string]string{"P": "S3cret"}, "smb://Guest@host/share", "", ""},
 	} {
 		c := newConnector(env(tc.vars))
-		username, password := c.envCredentials(tc.address, "U", "P")
+		username, password := c.envCredentials(tc.address, "U", "P", "anonymous", "ftp", "guest")
 		assert.Equal(t, tc.username, username, tc.name)
 		assert.Equal(t, tc.password, password, tc.name)
 	}
