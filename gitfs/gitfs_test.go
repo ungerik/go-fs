@@ -350,10 +350,68 @@ func TestNewErrors(t *testing.T) {
 	assert.ErrorIs(t, err, ErrProtocolV2Required)
 	server.Dumb = false
 
+	// Server errors are returned, also by Exists, which must not
+	// report a file as missing when it couldn't be looked up
 	server.FetchError = "fatal: out of memory"
 	gfs := newTestFS(t, repoURL(httpServer), "", nil)
 	_, err = gfs.Stat("/README.md")
 	assert.ErrorContains(t, err, "fatal: out of memory")
+	exists, err := gfs.Exists("/README.md")
+	assert.ErrorContains(t, err, "fatal: out of memory")
+	assert.False(t, exists)
+
+	// The trees are loaded but not the sizes of the files: a failed
+	// size fetch fails the listing and Stat instead of returning size -1
+	server.FetchError = ""
+	gfs = newTestFS(t, repoURL(httpServer), "", nil)
+	exists, err = gfs.Exists("/seed/hello.txt")
+	require.NoError(t, err)
+	require.True(t, exists)
+	server.FetchError = "fatal: out of memory"
+	err = gfs.ListDir(ctx, "/seed", nil, func(*fs.FileInfo) error { return nil })
+	assert.ErrorContains(t, err, "fatal: out of memory")
+	_, err = gfs.Stat("/seed/hello.txt")
+	assert.ErrorContains(t, err, "fatal: out of memory")
+}
+
+func TestListDirRecursive(t *testing.T) {
+	ctx := t.Context()
+	files := func(t *testing.T, gfs *FileSystem, dir string) []string {
+		t.Helper()
+		var names []string
+		err := gfs.ListDirRecursive(ctx, dir, nil, func(info *fs.FileInfo) error {
+			assert.GreaterOrEqual(t, info.Size, int64(0), info.Name)
+			names = append(names, info.Name)
+			return nil
+		})
+		require.NoError(t, err)
+		return names
+	}
+
+	for _, github := range []bool{false, true} {
+		t.Run(fmt.Sprintf("AfterListDir/GitHub=%t", github), func(t *testing.T) {
+			// A flat listing loads /extra but not its sub-directories,
+			// the recursive listing must still find the nested file
+			_, httpServer := newTestServer(t)
+			var opts *Options
+			if github {
+				opts = withGitHub(httpServer, nil)
+			}
+			gfs := newTestFS(t, repoURL(httpServer), "main", opts)
+			err := gfs.ListDir(ctx, "/extra", nil, func(*fs.FileInfo) error { return nil })
+			require.NoError(t, err)
+			assert.Equal(t, []string{"c.txt", "run.sh"}, files(t, gfs, "/extra"))
+		})
+	}
+
+	t.Run("OneTreeFetch", func(t *testing.T) {
+		// The commit, all trees with one fetch, all sizes with one fetch
+		server, httpServer := newTestServer(t)
+		gfs := newTestFS(t, repoURL(httpServer), "main", nil)
+		server.ResetRequests()
+		assert.Len(t, files(t, gfs, "/"), 9)
+		assert.Equal(t, map[string]int{"fetch": 3}, server.Requests())
+	})
 }
 
 func TestAuthentication(t *testing.T) {
@@ -487,16 +545,51 @@ func TestReadAllReturnsACopy(t *testing.T) {
 func TestLimits(t *testing.T) {
 	ctx := t.Context()
 	server, httpServer := newTestServer(t)
+	// MaxObjectSize 1000 is above the commit and the tree,
+	// so only reading big.bin hits the limit
+	repo := server.Repo
+	repo.Refs["refs/heads/big"] = repo.Commit(repo.Tree(map[string]gittest.File{
+		"big.bin":   {Content: strings.Repeat("b", 2000)},
+		"small.txt": {Content: "small"},
+	}), testCommitTime)
+	limit := func(opts *Options) *Options {
+		opts.MaxObjectSize = 1000
+		return opts
+	}
 
-	gfs := newTestFS(t, repoURL(httpServer), "main", &Options{MaxObjectSize: 10})
-	_, err := gfs.ReadAll(ctx, "/seed/hello.txt")
-	assert.ErrorContains(t, err, "above the limit")
-	gfs = newTestFS(t, repoURL(httpServer), "main", withGitHub(httpServer, &Options{MaxObjectSize: 10}))
-	_, err = gfs.ReadAll(ctx, "/seed/hello.txt")
-	assert.ErrorContains(t, err, "above the limit", "raw refuses the content")
+	for _, github := range []bool{false, true} {
+		t.Run(fmt.Sprintf("MaxObjectSize/GitHub=%t", github), func(t *testing.T) {
+			opts := limit(new(Options))
+			if github {
+				opts = withGitHub(httpServer, opts) // the size is known from the API
+			}
+			gfs := newTestFS(t, repoURL(httpServer), "big", opts)
+			_, err := gfs.ReadAll(ctx, "/big.bin")
+			assert.ErrorContains(t, err, "above the limit")
+			data, err := gfs.ReadAll(ctx, "/small.txt")
+			require.NoError(t, err)
+			assert.Equal(t, "small", string(data))
+		})
+	}
+
+	t.Run("MaxObjectSize/RawWithUnknownSize", func(t *testing.T) {
+		// With the trees from git the size is unknown before the download,
+		// raw stops at the limit without a second download through git
+		server.GitHubDown = true
+		t.Cleanup(func() { server.GitHubDown = false })
+		gfs := newTestFS(t, repoURL(httpServer), "big", withGitHub(httpServer, limit(new(Options))))
+		server.ResetRequests()
+		_, err := gfs.ReadAll(ctx, "/big.bin")
+		assert.ErrorContains(t, err, "above the limit")
+		assert.Equal(t, map[string]int{"api": 1, "fetch": 2, "raw": 1}, server.Requests(), "the commit and the tree through git")
+		data, err := gfs.ReadAll(ctx, "/small.txt")
+		require.NoError(t, err)
+		assert.Equal(t, "small", string(data))
+		assert.Equal(t, 2, server.Requests()["raw"], "raw is still used")
+	})
 
 	// A cache smaller than the files still works, without caching
-	gfs = newTestFS(t, repoURL(httpServer), "main", &Options{CacheSize: 5})
+	gfs := newTestFS(t, repoURL(httpServer), "main", &Options{CacheSize: 5})
 	for range 2 {
 		data, err := gfs.ReadAll(ctx, "/seed/hello.txt")
 		require.NoError(t, err)
@@ -510,7 +603,6 @@ func TestLimits(t *testing.T) {
 		for i := range 4 {
 			files[fmt.Sprintf("file%d.txt", i)] = gittest.File{Content: strings.Repeat(strconv.Itoa(i), 400)}
 		}
-		repo := server.Repo
 		repo.Refs["refs/heads/sizes"] = repo.Commit(repo.Tree(files), testCommitTime)
 		gfs := newTestFS(t, repoURL(httpServer), "sizes", &Options{MaxObjectSize: 1000, MaxFetchSize: 1000})
 
