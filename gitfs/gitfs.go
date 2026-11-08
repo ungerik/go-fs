@@ -154,13 +154,27 @@ type FileSystem struct {
 
 // node is a file or directory of the commit.
 type node struct {
-	path     string // slash separated without leading slash, "" for the root
+	// parent is nil for the root. Nodes keep their parent instead of
+	// their path, so that the memory of a deep directory tree grows
+	// with its depth and not with the square of it.
+	parent   *node
 	name     string
 	isDir    bool
 	exec     bool
 	oid      object.OID
 	size     int64            // of a file, -1 until known
 	children map[string]*node // of a directory, nil until loaded
+}
+
+// path returns the slash separated path of n
+// without leading slash, "" for the root.
+func (n *node) path() string {
+	var names []string
+	for ; n.parent != nil; n = n.parent {
+		names = append(names, n.name)
+	}
+	slices.Reverse(names)
+	return strings.Join(names, "/")
 }
 
 // treeEntry is an entry of a tree with the size of its blob or -1.
@@ -201,7 +215,17 @@ func New(ctx context.Context, repoURL, ref string, opts *Options) (*FileSystem, 
 	}
 	u, err := url.Parse(repoURL)
 	if err != nil {
-		return nil, fmt.Errorf("gitfs: invalid repository URL %q: %w", fsimpl.RedactURI(repoURL), err)
+		// The *url.Error repeats the URL with its password,
+		// so the reason is taken from the redacted URL
+		redacted := fsimpl.RedactURI(repoURL)
+		_, reason := url.Parse(redacted)
+		if urlErr, ok := errors.AsType[*url.Error](reason); ok {
+			reason = urlErr.Err
+		}
+		if reason == nil {
+			reason = os.ErrInvalid
+		}
+		return nil, fmt.Errorf("gitfs: invalid repository URL %q: %w", redacted, reason)
 	}
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return nil, fmt.Errorf("gitfs: repository URL %q must use https or http: %w", fsimpl.RedactURI(repoURL), os.ErrInvalid)
@@ -442,11 +466,11 @@ func (f *FileSystem) populateFromPack(dir *node, objects map[object.OID]*pack.Ob
 			return nil, false, nil
 		}
 		if obj.Type != object.TypeTree {
-			return nil, false, fmt.Errorf("%s: object %s of directory %q is a %s, not a tree", f, n.oid, n.path, obj.Type)
+			return nil, false, fmt.Errorf("%s: object %s of directory %q is a %s, not a tree", f, n.oid, n.path(), obj.Type)
 		}
 		entries, err := format.ParseTree(obj.Data)
 		if err != nil {
-			return nil, false, fmt.Errorf("%s: tree %s of directory %q: %w", f, n.oid, n.path, err)
+			return nil, false, fmt.Errorf("%s: tree %s of directory %q: %w", f, n.oid, n.path(), err)
 		}
 		withSizes := make([]treeEntry, len(entries))
 		for i, e := range entries {
@@ -489,10 +513,10 @@ func (f *FileSystem) populate(n *node, entriesOf func(*node) ([]treeEntry, bool,
 				continue
 			}
 			child := &node{
-				path: strings.TrimPrefix(n.path+"/"+e.Name, "/"),
-				name: e.Name,
-				oid:  e.OID,
-				size: -1,
+				parent: n,
+				name:   e.Name,
+				oid:    e.OID,
+				size:   -1,
 			}
 			switch {
 			case e.Mode == object.ModeDir:
@@ -581,7 +605,7 @@ func (f *FileSystem) loadDir(ctx context.Context, n *node, recursive bool) error
 				if !recursive && d != n {
 					return nil, false, nil
 				}
-				return entries[strings.TrimPrefix(strings.TrimPrefix(d.path, n.path), "/")], true, nil
+				return entries[strings.TrimPrefix(strings.TrimPrefix(d.path(), n.path()), "/")], true, nil
 			})
 		}
 		if ctx.Err() != nil {
@@ -618,7 +642,7 @@ func (f *FileSystem) loadDir(ctx context.Context, n *node, recursive bool) error
 		return err
 	}
 	if !isLoaded(n, recursive) {
-		return fmt.Errorf("%s: the server did not send the tree %s of directory %q", f, n.oid, n.path)
+		return fmt.Errorf("%s: the server did not send the tree %s of directory %q", f, n.oid, n.path())
 	}
 	return nil
 }
@@ -701,7 +725,12 @@ func (f *FileSystem) fetchBlobSizes(ctx context.Context, oids []object.OID, size
 // canceled with the context of one reader but when all readers stopped
 // waiting for it or the file system is closed.
 func (f *FileSystem) readBlob(ctx context.Context, file *node) ([]byte, error) {
+	// Another file with the same content can have fetched the blob,
+	// so the size of file is set from the data in every case
 	if data, ok := f.cache.get(file.oid); ok {
+		f.mtx.Lock()
+		file.size = int64(len(data))
+		f.mtx.Unlock()
 		return data, nil
 	}
 	f.mtx.Lock()
@@ -717,6 +746,11 @@ func (f *FileSystem) readBlob(ctx context.Context, file *node) ([]byte, error) {
 
 	select {
 	case <-fetch.done:
+		if fetch.err == nil {
+			f.mtx.Lock()
+			file.size = int64(len(fetch.data))
+			f.mtx.Unlock()
+		}
 		return fetch.data, fetch.err
 	case <-ctx.Done():
 		f.mtx.Lock()
@@ -761,7 +795,7 @@ func (f *FileSystem) downloadBlob(ctx context.Context, file *node) ([]byte, erro
 	size, useRaw := file.size, f.github != nil && !f.githubRawFailed
 	f.mtx.Unlock()
 	if size > f.maxObjectSize {
-		return nil, fmt.Errorf("%s: file %q has the size %d above the limit %d", f, file.path, size, f.maxObjectSize)
+		return nil, fmt.Errorf("%s: file %q has the size %d above the limit %d", f, file.path(), size, f.maxObjectSize)
 	}
 	if useRaw {
 		data, err := f.fetchGitHubRaw(ctx, file)
@@ -788,7 +822,7 @@ func (f *FileSystem) downloadBlob(ctx context.Context, file *node) ([]byte, erro
 	}
 	blob := objects[file.oid]
 	if blob == nil || blob.Type != object.TypeBlob {
-		return nil, fmt.Errorf("%s: the server did not send the blob %s of %q", f, file.oid, file.path)
+		return nil, fmt.Errorf("%s: the server did not send the blob %s of %q", f, file.oid, file.path())
 	}
 	return blob.Data, nil
 }
@@ -858,7 +892,7 @@ func (f *FileSystem) info(n *node) *fs.FileInfo {
 		perm = ExecutablePermissions
 	}
 	info := &fs.FileInfo{
-		File:        fs.File(f.paths.JoinCleanURI(n.path)),
+		File:        fs.File(f.paths.JoinCleanURI(n.path())),
 		Name:        n.name,
 		Exists:      true,
 		IsDir:       n.isDir,
@@ -871,7 +905,7 @@ func (f *FileSystem) info(n *node) *fs.FileInfo {
 	if !n.isDir {
 		info.Size = n.size
 	}
-	if n.path == "" {
+	if n.parent == nil {
 		info.File = f.RootDir()
 		info.Name = Separator
 	}

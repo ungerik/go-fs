@@ -140,7 +140,7 @@ func (f *FileSystem) fetchGitHubTree(ctx context.Context, tree object.OID, recur
 // for content above Options.MaxObjectSize and errGitHubRawMismatch for
 // content that doesn't match the object ID of the blob of the file.
 func (f *FileSystem) fetchGitHubRaw(ctx context.Context, file *node) ([]byte, error) {
-	elements := strings.Split(file.path, "/")
+	elements := strings.Split(file.path(), "/")
 	for i, element := range elements {
 		elements[i] = url.PathEscape(element)
 	}
@@ -162,10 +162,10 @@ func (f *FileSystem) fetchGitHubRaw(ctx context.Context, file *node) ([]byte, er
 		return nil, err
 	}
 	if int64(len(data)) > f.maxObjectSize {
-		return nil, fmt.Errorf("file %q has a size above the limit %d: %w", file.path, f.maxObjectSize, pack.ErrTooLarge)
+		return nil, fmt.Errorf("file %q has a size above the limit %d: %w", file.path(), f.maxObjectSize, pack.ErrTooLarge)
 	}
 	if f.client.Format.Hash(object.TypeBlob, data) != file.oid {
-		return nil, fmt.Errorf("%w %s of %q", errGitHubRawMismatch, file.oid, file.path)
+		return nil, fmt.Errorf("%w %s of %q", errGitHubRawMismatch, file.oid, file.path())
 	}
 	return data, nil
 }

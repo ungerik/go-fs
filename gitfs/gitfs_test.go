@@ -3,10 +3,12 @@ package gitfs
 import (
 	"context"
 	"fmt"
+	iofs "io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -330,6 +332,11 @@ func TestNewErrors(t *testing.T) {
 		_, err := New(ctx, invalid, "", nil)
 		assert.Error(t, err, invalid)
 	}
+	// The error of an unparseable URL must not repeat its password
+	_, err := New(ctx, "https://user:s3cret@host/%zz", "", nil)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "s3cret")
+	assert.Contains(t, err.Error(), "invalid URL escape")
 	for _, invalid := range []string{"a\x00b", "a b", "a\nb", "a\x7fb", strings.Repeat("a", 70000)} {
 		// Refused before any request, a long ref would not fit into a pkt-line
 		_, err := New(ctx, "https://host/repo.git", invalid, nil)
@@ -337,7 +344,7 @@ func TestNewErrors(t *testing.T) {
 	}
 
 	server, httpServer := newTestServer(t)
-	_, err := New(ctx, httpServer.URL+"/owner/missing.git", "", nil)
+	_, err = New(ctx, httpServer.URL+"/owner/missing.git", "", nil)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 
 	server.ProtocolV0 = true
@@ -623,6 +630,62 @@ func TestLimits(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, strings.Repeat("3", 400), string(data))
 	})
+}
+
+func TestDeepTreeMemory(t *testing.T) {
+	// A hostile server can send a chain of nested directories that is small
+	// on the wire, 2000 levels with 100-byte names are 250 KB of trees. The
+	// memory of the loaded tree must grow with its depth, not with its square,
+	// which would be 200 MB for the paths of the directories alone.
+	const depth = 2000
+	repo := gittest.NewRepo()
+	name := strings.Repeat("d", 100)
+	oid := repo.RawTree(object.TreeEntry{Mode: object.ModeFile, Name: "leaf.txt", OID: repo.Add(object.TypeBlob, []byte("leaf"))})
+	for range depth - 1 {
+		oid = repo.RawTree(object.TreeEntry{Mode: object.ModeDir, Name: name, OID: oid})
+	}
+	repo.Refs["refs/heads/main"] = repo.Commit(oid, testCommitTime)
+	httpServer := httptest.NewServer(&gittest.Server{Repo: repo})
+	t.Cleanup(httpServer.Close)
+	gfs := newTestFS(t, repoURL(httpServer), "main", nil)
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	var files int
+	err := gfs.ListDirRecursive(t.Context(), "/", nil, func(info *fs.FileInfo) error {
+		files++
+		return nil
+	})
+	require.NoError(t, err)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(gfs)
+	assert.Equal(t, 1, files)
+	grown := int64(after.HeapAlloc) - int64(before.HeapAlloc) //#nosec G115 -- heap sizes fit into int64
+	assert.Less(t, grown, int64(32<<20), "heap grew by %d bytes", grown)
+}
+
+func TestOpenReaderSizeOfSharedBlob(t *testing.T) {
+	// Files with the same content share one blob: after the blob of a.txt
+	// is cached, the reader of b.txt must still report the size of b.txt
+	repo := gittest.NewRepo()
+	repo.Refs["refs/heads/main"] = repo.Commit(repo.Tree(map[string]gittest.File{
+		"a.txt": {Content: "same"},
+		"b.txt": {Content: "same"},
+	}), testCommitTime)
+	httpServer := httptest.NewServer(&gittest.Server{Repo: repo})
+	t.Cleanup(httpServer.Close)
+	gfs := newTestFS(t, repoURL(httpServer), "main", nil)
+
+	for _, name := range []string{"/a.txt", "/b.txt"} {
+		r, err := gfs.OpenReader(name)
+		require.NoError(t, err)
+		info, err := r.(iofs.File).Stat()
+		require.NoError(t, err)
+		assert.Equal(t, int64(4), info.Size(), name)
+		require.NoError(t, r.Close())
+	}
 }
 
 func TestConcurrentReads(t *testing.T) {

@@ -78,9 +78,15 @@ func Read(r io.Reader, format object.Format, limits Limits) (map[object.OID]*Obj
 		baseOID    object.OID // of a ref-delta
 		delta      []byte
 	}
+	// resolved is an object that deltas can have as base
+	type resolved struct {
+		offset int64
+		oid    object.OID
+		obj    *Object
+	}
 	var (
 		objects   = make(map[object.OID]*Object)
-		byOffset  = make(map[int64]*Object) // the bases of ofs-deltas
+		bases     []resolved // the objects whose deltas are not resolved yet
 		deltas    []pending
 		totalSize int64
 	)
@@ -136,8 +142,9 @@ func Read(r io.Reader, format object.Format, limits Limits) (map[object.OID]*Obj
 			continue
 		}
 		obj := &Object{Type: typ, Data: data}
-		objects[format.Hash(typ, data)] = obj
-		byOffset[offset] = obj
+		oid := format.Hash(typ, data)
+		objects[oid] = obj
+		bases = append(bases, resolved{offset: offset, oid: oid, obj: obj})
 	}
 
 	// The checksum covers everything before it
@@ -152,21 +159,27 @@ func Read(r io.Reader, format object.Format, limits Limits) (map[object.OID]*Obj
 		return nil, errors.New("packfile checksum mismatch")
 	}
 
-	// A delta can have another delta as base, in a ref-delta
-	// also one that follows it, so resolve until nothing changes
-	for len(deltas) > 0 {
-		unresolved := deltas[:0]
-		for _, p := range deltas {
-			var base *Object
-			if p.baseOffset >= 0 {
-				base = byOffset[p.baseOffset]
-			} else {
-				base = objects[p.baseOID]
-			}
-			if base == nil {
-				unresolved = append(unresolved, p)
-				continue
-			}
+	// A delta waits for its base, an ofs-delta by offset and a ref-delta by
+	// object ID. The base can be another delta, and the base of a ref-delta
+	// can follow it. Resolving the deltas of each new object visits every
+	// delta once, also for a chain of ref-deltas in reverse order.
+	waitingForOffset := make(map[int64][]pending)
+	waitingForOID := make(map[object.OID][]pending)
+	for _, p := range deltas {
+		if p.baseOffset >= 0 {
+			waitingForOffset[p.baseOffset] = append(waitingForOffset[p.baseOffset], p)
+		} else {
+			waitingForOID[p.baseOID] = append(waitingForOID[p.baseOID], p)
+		}
+	}
+	unresolved := len(deltas)
+	for len(bases) > 0 {
+		base := bases[len(bases)-1]
+		bases = bases[:len(bases)-1]
+		waiting := append(waitingForOffset[base.offset], waitingForOID[base.oid]...)
+		delete(waitingForOffset, base.offset)
+		delete(waitingForOID, base.oid)
+		for _, p := range waiting {
 			resultSize, err := DeltaResultSize(p.delta)
 			if err != nil {
 				return nil, fmt.Errorf("applying delta at offset %d: %w", p.offset, err)
@@ -178,18 +191,19 @@ func Read(r io.Reader, format object.Format, limits Limits) (map[object.OID]*Obj
 					return nil, err
 				}
 			}
-			data, err := ApplyDelta(base.Data, p.delta, limits.MaxObjectSize)
+			data, err := ApplyDelta(base.obj.Data, p.delta, limits.MaxObjectSize)
 			if err != nil {
 				return nil, fmt.Errorf("applying delta at offset %d: %w", p.offset, err)
 			}
-			obj := &Object{Type: base.Type, Data: data}
-			objects[format.Hash(obj.Type, data)] = obj
-			byOffset[p.offset] = obj
+			obj := &Object{Type: base.obj.Type, Data: data}
+			oid := format.Hash(obj.Type, data)
+			objects[oid] = obj
+			bases = append(bases, resolved{offset: p.offset, oid: oid, obj: obj})
+			unresolved--
 		}
-		if len(unresolved) == len(deltas) {
-			return nil, fmt.Errorf("packfile has %d deltas without base object", len(unresolved))
-		}
-		deltas = unresolved
+	}
+	if unresolved > 0 {
+		return nil, fmt.Errorf("packfile has %d deltas without base object", unresolved)
 	}
 	return objects, nil
 }
@@ -426,6 +440,9 @@ type Writer struct {
 	hash    hash.Hash
 	offset  int64
 	err     error
+
+	compressed bytes.Buffer
+	zlib       *zlib.Writer // reused for every object, allocating one is slow
 }
 
 // NewWriter writes the header of a packfile with count objects.
@@ -462,11 +479,15 @@ func (pw *Writer) Object(typ object.Type, base, data []byte) error {
 	header = append(header, c)
 	pw.write(header)
 	pw.write(base)
-	var compressed bytes.Buffer
-	z := zlib.NewWriter(&compressed)
-	_, _ = z.Write(data)
-	_ = z.Close()
-	pw.write(compressed.Bytes())
+	pw.compressed.Reset()
+	if pw.zlib == nil {
+		pw.zlib = zlib.NewWriter(&pw.compressed)
+	} else {
+		pw.zlib.Reset(&pw.compressed)
+	}
+	_, _ = pw.zlib.Write(data)
+	_ = pw.zlib.Close()
+	pw.write(pw.compressed.Bytes())
 	return pw.err
 }
 

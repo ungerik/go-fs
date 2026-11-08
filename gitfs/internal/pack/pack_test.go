@@ -2,8 +2,10 @@ package pack
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -252,4 +254,32 @@ func TestReadErrors(t *testing.T) {
 		_, err = Read(bytes.NewReader(buf.Bytes()), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 40})
 		require.NoError(t, err)
 	})
+}
+
+func TestReadReverseRefDeltaChain(t *testing.T) {
+	// A hostile server can send a chain of ref-deltas in reverse order, each
+	// delta before the delta that creates its base. Resolving them must take
+	// time linear in the number of deltas, a quadratic resolution takes
+	// minutes for this chain.
+	const n = 50000
+	format := object.SHA1
+	blob := func(i int) []byte { return []byte(fmt.Sprintf("%08d", i)) }
+
+	var buf bytes.Buffer
+	pw := NewWriter(&buf, format, n+1)
+	for i := n; i > 0; i-- {
+		raw, err := format.Hash(object.TypeBlob, blob(i-1)).Raw()
+		require.NoError(t, err)
+		require.NoError(t, pw.Object(object.TypeRefDelta, raw, delta(8, 8, string(blob(i)))))
+	}
+	require.NoError(t, pw.Object(object.TypeBlob, nil, blob(0)))
+	require.NoError(t, pw.Close())
+
+	start := time.Now()
+	objects, err := Read(&buf, format, Limits{MaxObjectSize: 1 << 20, MaxTotalSize: 1 << 30})
+	require.NoError(t, err)
+	assert.Len(t, objects, n+1)
+	assert.Contains(t, objects, format.Hash(object.TypeBlob, blob(n)))
+	// gstack-timing-ok: the linear resolution takes milliseconds, the quadratic one minutes
+	assert.Less(t, time.Since(start), 10*time.Second)
 }
