@@ -801,23 +801,29 @@ func TestListDirCallbackError(t *testing.T) {
 }
 
 // TestListDirContextKeepsConnection checks that a context that times out
-// while the callbacks run is no connection error: the connection is kept,
-// not dropped and leaked.
+// while the callbacks run is no connection error: the listing returns
+// context.DeadlineExceeded, and the connection is kept, not dropped and leaked.
 func TestListDirContextKeepsConnection(t *testing.T) {
 	s := startTestServer(t, testServerConfig{})
 	f := s.dial(t, nil)
 	writeTestFile(t, f, "/a", "a")
 	writeTestFile(t, f, "/b", "b")
 	first := f.currentConn()
-	slow := func(*fs.FileInfo) error { time.Sleep(40 * time.Millisecond); return nil }
+	// The callback returns once the deadline has passed, so the listing
+	// sees the expired context before the next entry. Sleeping past the
+	// deadline instead was flaky: on a loaded CI runner the timer of the
+	// context had not fired yet when the listing checked ctx.Err().
+	untilDone := func(ctx context.Context) func(*fs.FileInfo) error {
+		return func(*fs.FileInfo) error { <-ctx.Done(); return nil }
+	}
 	for range 3 {
 		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-		err := f.ListDir(ctx, "/", nil, slow)
+		err := f.ListDir(ctx, "/", nil, untilDone(ctx))
 		cancel()
 		assert.ErrorIs(t, err, context.DeadlineExceeded)
 
 		ctx, cancel = context.WithTimeout(t.Context(), 20*time.Millisecond)
-		err = f.ListDirRecursive(ctx, "/", nil, slow)
+		err = f.ListDirRecursive(ctx, "/", nil, untilDone(ctx))
 		cancel()
 		assert.ErrorIs(t, err, context.DeadlineExceeded)
 
