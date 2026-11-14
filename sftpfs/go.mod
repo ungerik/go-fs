@@ -9,7 +9,7 @@ require github.com/ungerik/go-fs v0.0.0-00010101000000-000000000000 // replaced
 require (
 	github.com/pkg/sftp v1.13.12
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 )
 
 require (
