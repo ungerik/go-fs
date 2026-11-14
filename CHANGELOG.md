@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [Unreleased]
+
+OneDrive and SharePoint document libraries join the backends. The new module
+has passed the conformance suite against an offline fake of the Microsoft
+Graph API; it has not run against a real drive yet.
+
+### Added
+
+- `onedrivefs`, a backend module for OneDrive Personal, OneDrive for Business
+  and SharePoint document libraries over the Microsoft Graph API, with the
+  prefix `onedrive://<drive id>`. `onedrivefs.New` takes a drive id or a
+  Graph API path of a drive, like `me/drive` or `sites/<site id>/drive`, and
+  an `oauth2.TokenSource`, such as the one of a client credentials app of
+  Microsoft Entra ID. The access tokens go only to the Graph API, never to the
+  pre-authenticated URLs of downloads, upload sessions and copies, and errors
+  never contain those URLs. Moves and copies run on the server, files larger
+  than 4 MiB are uploaded with upload sessions, throttled requests are repeated
+  after their `Retry-After` delay, and `ValidateName` rejects the names OneDrive
+  and SharePoint don't store. A move or copy never deletes its source: an
+  existing destination file is replaced only in the version that was checked,
+  and a destination the server takes for another name of the source is renamed,
+  not deleted.
+
 ## [1.0.0-rc.8] - 2026-11-14
 
 Eighth release candidate: `gitfs`, a read-only file system for a commit of
