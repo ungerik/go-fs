@@ -15,14 +15,14 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.16
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.9
-	github.com/ungerik/go-fs v1.0.0-rc.7
-	github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.7
-	github.com/ungerik/go-fs/dropboxfs v1.0.0-rc.7
-	github.com/ungerik/go-fs/ftpfs v1.0.0-rc.7
-	github.com/ungerik/go-fs/s3fs v1.0.0-rc.7
-	github.com/ungerik/go-fs/sftpfs v1.0.0-rc.7
-	github.com/ungerik/go-fs/smbfs v1.0.0-rc.7
-	github.com/ungerik/go-fs/webdavfs v1.0.0-rc.7
+	github.com/ungerik/go-fs v1.0.0-rc.8
+	github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.8
+	github.com/ungerik/go-fs/dropboxfs v1.0.0-rc.8
+	github.com/ungerik/go-fs/ftpfs v1.0.0-rc.8
+	github.com/ungerik/go-fs/s3fs v1.0.0-rc.8
+	github.com/ungerik/go-fs/sftpfs v1.0.0-rc.8
+	github.com/ungerik/go-fs/smbfs v1.0.0-rc.8
+	github.com/ungerik/go-fs/webdavfs v1.0.0-rc.8
 	golang.org/x/crypto v0.58.0
 	golang.org/x/oauth2 v0.38.0
 )

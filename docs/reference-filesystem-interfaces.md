@@ -45,9 +45,10 @@ construction and must never block, so it can be read from any code path.
 Where the backing store has an identifier of its own, that one is used — only
 two of the backends in this repository can: the local file system uses the
 file system id of the root volume, dropboxfs the Dropbox account id. Neither
-SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage exposes such an identifier,
-so those use the coordinates that identify the store instead: the bucket, the
-container, the share, or the user and host of the connection. The in-memory
+SFTP, FTP, WebDAV, SMB, S3, Azure Blob Storage nor a git server exposes such an
+identifier, so those use the coordinates that identify the store instead: the
+bucket, the container, the share, the user and host of the connection, or the
+repository URL and ref. The in-memory
 file system has no backing store and uses the id passed to its constructor, or
 a generated one; the archive and form file systems use their prefix with that
 id, like `zip://<id>`.
@@ -221,25 +222,25 @@ suite in `fstest` runs every native implementation against the same checks
 as the emulation. `✓` native, `–` uses the fallback (works the same, just not
 specialized), `r/o` read-only backend so the write operation does not apply.
 
-| Capability             |  s3 | azblob | sftp | ftp | smb | dropbox | webdav | http |
-| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: |
-| CopyFile (server-side) |  ✓  |   ✓    |  –   |  –  |  –  |    ✓    |   ✓    |  –   |
-| Move                   |  –  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |
-| Exists                 |  –  |   –    |  –   |  –  |  –  |    –    |   –    |  ✓   |
-| ReadAll                |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    –    |   ✓    |  ✓   |
-| WriteAll               |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
-| Append                 |  –  |   –    |  –   |  ✓  |  –  |    –    |   –    | r/o  |
-| OpenAppendWriter       |  –  |   –    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  |
-| OpenReadWriter         |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   –    | r/o  |
-| Touch                  |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  |
-| Truncate               |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| MakeAllDirs            |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| RemoveAll              |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
-| ListDirRecursive       |  ✓  |   ✓    |  ✓   |  ✓  |  –  |    ✓    |   –    |  –   |
-| SetPermissions         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  |
-| Symbolic links         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    |  –   |
-| Seeking reads          |  –  |   ✓    |  ✓   |  –  |  ✓  |    –    |   ✓    |  –   |
-| ValidateName           |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  |
+| Capability             |  s3 | azblob | sftp | ftp | smb | dropbox | webdav | http | git |
+| ---------------------- | :-: | :----: | :--: | :-: | :-: | :-----: | :----: | :--: | :-: |
+| CopyFile (server-side) |  ✓  |   ✓    |  –   |  –  |  –  |    ✓    |   ✓    |  –   |  –  |
+| Move                   |  –  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    |  –   |  –  |
+| Exists                 |  –  |   –    |  –   |  –  |  –  |    –    |   –    |  ✓   |  ✓  |
+| ReadAll                |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    –    |   ✓    |  ✓   |  ✓  |
+| WriteAll               |  ✓  |   ✓    |  –   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  | r/o |
+| Append                 |  –  |   –    |  –   |  ✓  |  –  |    –    |   –    | r/o  | r/o |
+| OpenAppendWriter       |  –  |   –    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  | r/o |
+| OpenReadWriter         |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   –    | r/o  | r/o |
+| Touch                  |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    –    |   –    | r/o  | r/o |
+| Truncate               |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  | r/o |
+| MakeAllDirs            |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  | r/o |
+| RemoveAll              |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  | r/o |
+| ListDirRecursive       |  ✓  |   ✓    |  ✓   |  ✓  |  –  |    ✓    |   –    |  –   |  ✓  |
+| SetPermissions         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    | r/o  | r/o |
+| Symbolic links         |  –  |   –    |  ✓   |  –  |  ✓  |    –    |   –    |  –   |  –  |
+| Seeking reads          |  –  |   ✓    |  ✓   |  –  |  ✓  |    –    |   ✓    |  –   |  ✓  |
+| ValidateName           |  ✓  |   ✓    |  ✓   |  ✓  |  ✓  |    ✓    |   ✓    | r/o  | r/o |
 
 "Seeking reads" is not an interface: it means that the readers of
 `OpenReader` implement `fs.ReadAtSeekCloser`, so `File.OpenReadSeeker` needs

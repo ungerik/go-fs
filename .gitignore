@@ -11,5 +11,6 @@ coverage.*
 # OS files
 .DS_Store
 
-# Built gofs command
+# Built gofs command, also by go build ./cmd/gofs from the repository root
 /cmd/gofs/gofs
+/gofs

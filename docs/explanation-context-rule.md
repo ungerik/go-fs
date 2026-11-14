@@ -38,7 +38,7 @@ listing, plus dialing a connection.** Concretely:
 | Directory listing | `ListDir`, `ListDirInfo`, `ListDirRecursive`, `ListDirInfoRecursive`, `ListDirMax`, `ListDirRecursiveMax`, `ListDirIter`, `ListDirRecursiveIter`, `Glob`, `fs.Glob` |
 | Recursive removal | `RemoveRecursive`, `RemoveDirContents`, `RemoveDirContentsRecursive` |
 | Moves and copies  | `MoveTo`, `Rename`, `Renamef`, `fs.Move`, `fs.CopyFile`, `fs.CopyFileBuf`, `fs.CopyRecursive`, `fs.IdenticalFileContents`, `fs.IdenticalDirContents` |
-| Dialing           | `sftpfs.Dial`, `ftpfs.Dial`, `smbfs.Dial`, `webdavfs.New`, `azureblobfs.New`, `dropboxfs.New`, `s3fs.NewLoadDefaultConfig`, the `EnsureRegistered` functions, … |
+| Dialing           | `sftpfs.Dial`, `ftpfs.Dial`, `smbfs.Dial`, `webdavfs.New`, `azureblobfs.New`, `dropboxfs.New`, `gitfs.New`, `s3fs.NewLoadDefaultConfig`, the `EnsureRegistered` functions, … |
 
 **Does not take a context:**
 
@@ -106,6 +106,12 @@ loop.
 `file.Size()` blocks for the connection's timeout. Mitigation: backends set
 their own dial and operation timeouts, and `sftpfs` detects a dead connection
 with keep-alive requests and reconnects.
+
+**gitfs downloads content for `Stat` and `OpenReader`.** git can't return the
+size of a file without its content, so `Stat` of a gitfs file on a server
+other than github.com downloads the file, and `OpenReader` downloads the whole
+file before it returns. Neither takes a context; `Close` of the file system
+cancels them. Use `ReadAll(ctx)` or a listing with a context when that matters.
 
 **You have to know which side of the line a method is on.** The rule is
 learnable but not derivable from the method name alone — `Remove` takes no

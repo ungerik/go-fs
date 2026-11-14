@@ -11,6 +11,7 @@ use (
 	./cmd/gofs
 	./dropboxfs
 	./ftpfs
+	./gitfs
 	./s3fs
 	./sftpfs
 	./smbfs
@@ -18,18 +19,18 @@ use (
 	./webdavfs
 )
 
-replace github.com/ungerik/go-fs v1.0.0-rc.7 => .
+replace github.com/ungerik/go-fs v1.0.0-rc.8 => .
 
-replace github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.7 => ./azureblobfs
+replace github.com/ungerik/go-fs/azureblobfs v1.0.0-rc.8 => ./azureblobfs
 
-replace github.com/ungerik/go-fs/dropboxfs v1.0.0-rc.7 => ./dropboxfs
+replace github.com/ungerik/go-fs/dropboxfs v1.0.0-rc.8 => ./dropboxfs
 
-replace github.com/ungerik/go-fs/ftpfs v1.0.0-rc.7 => ./ftpfs
+replace github.com/ungerik/go-fs/ftpfs v1.0.0-rc.8 => ./ftpfs
 
-replace github.com/ungerik/go-fs/s3fs v1.0.0-rc.7 => ./s3fs
+replace github.com/ungerik/go-fs/s3fs v1.0.0-rc.8 => ./s3fs
 
-replace github.com/ungerik/go-fs/sftpfs v1.0.0-rc.7 => ./sftpfs
+replace github.com/ungerik/go-fs/sftpfs v1.0.0-rc.8 => ./sftpfs
 
-replace github.com/ungerik/go-fs/smbfs v1.0.0-rc.7 => ./smbfs
+replace github.com/ungerik/go-fs/smbfs v1.0.0-rc.8 => ./smbfs
 
-replace github.com/ungerik/go-fs/webdavfs v1.0.0-rc.7 => ./webdavfs
+replace github.com/ungerik/go-fs/webdavfs v1.0.0-rc.8 => ./webdavfs
