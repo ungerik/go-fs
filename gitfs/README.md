@@ -113,10 +113,13 @@ object filters send the whole commit with all its files on the first access.
   returns `fs.ErrFileSystemClosed`.
 - **Limits:** a file larger than `Options.MaxObjectSize` (1 GiB) can't be
   read, every packfile object and delta is checked against it before it is
-  decompressed. All objects of one response together can't be larger than
-  `Options.MaxFetchSize` (1 GiB), which bounds the memory a server can make
-  gitfs use. The objects are verified against their IDs and the checksum
-  of each packfile.
+  decompressed. All objects of one response together, plus 256 bytes per
+  object, can't be larger than `Options.MaxFetchSize` (1 GiB), which bounds
+  the memory a server can make gitfs use, also with millions of empty
+  objects. Loading a directory whose entries have a path longer than 4096
+  bytes fails, so a chain of nested directories can't exhaust the stack.
+  The objects are verified against their IDs and the checksum of each
+  packfile.
 - **Prefix:** `git+` followed by the repository URL, `@` and the ref, or
   `HEAD` for an empty ref. The ref is escaped like a URL path segment, so
   the branch `feature/x` has the prefix `git+<repository URL>@feature%2Fx`,

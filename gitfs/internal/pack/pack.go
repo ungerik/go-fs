@@ -43,13 +43,18 @@ func (e *ObjectTooLargeError) Unwrap() error {
 	return ErrTooLarge
 }
 
+// ObjectOverhead is the memory that Read counts for every object and
+// delta in addition to its size, so that MaxTotalSize also bounds the
+// memory of a packfile with millions of empty objects.
+const ObjectOverhead = 256
+
 // Limits of Read.
 type Limits struct {
 	// MaxObjectSize is the maximum size of an object or delta.
 	MaxObjectSize int64
-	// MaxTotalSize is the maximum sum of the inflated sizes of all
-	// objects and deltas of a packfile and of the objects that the
-	// deltas create, which bounds the memory that Read uses.
+	// MaxTotalSize is the maximum sum of the inflated sizes plus the
+	// ObjectOverhead of all objects and deltas of a packfile and of the
+	// objects that the deltas create, which bounds the memory that Read uses.
 	MaxTotalSize int64
 }
 
@@ -89,6 +94,7 @@ func Read(r io.Reader, format object.Format, limits Limits) (map[object.OID]*Obj
 		bases     []resolved // the objects whose deltas are not resolved yet
 		deltas    []pending
 		totalSize int64
+		z         io.ReadCloser // the zlib reader that inflate resets for every object
 	)
 	reserve := func(offset, size int64) error {
 		if size > limits.MaxTotalSize-totalSize {
@@ -128,11 +134,11 @@ func Read(r io.Reader, format object.Format, limits Limits) (map[object.OID]*Obj
 		if size > limits.MaxObjectSize {
 			return nil, &ObjectTooLargeError{Offset: offset, Type: typ, Size: size, Limit: limits.MaxObjectSize}
 		}
-		err = reserve(offset, size)
+		err = reserve(offset, size+ObjectOverhead)
 		if err != nil {
 			return nil, err
 		}
-		data, err := inflate(pr, size)
+		data, err := inflate(pr, &z, size)
 		if err != nil {
 			return nil, fmt.Errorf("inflating packfile object at offset %d: %w", offset, err)
 		}
@@ -186,7 +192,7 @@ func Read(r io.Reader, format object.Format, limits Limits) (map[object.OID]*Obj
 			}
 			if resultSize <= uint64(limits.MaxObjectSize) { //#nosec G115 -- the limit is not negative
 				// Larger results are rejected by ApplyDelta
-				err = reserve(p.offset, int64(resultSize)) //#nosec G115 -- checked against the limit
+				err = reserve(p.offset, int64(resultSize)+ObjectOverhead) //#nosec G115 -- checked against the limit
 				if err != nil {
 					return nil, err
 				}
@@ -254,22 +260,28 @@ func readOffsetDistance(r io.ByteReader) (int64, error) {
 	return distance, nil
 }
 
-// inflate reads a zlib stream that must inflate to exactly size bytes.
+// inflate reads a zlib stream that must inflate to exactly size bytes
+// with the zlib reader z, which it creates on the first call.
 // The packReader implements io.ByteReader, so zlib reads no further
 // than the end of the stream.
-func inflate(r *packReader, size int64) ([]byte, error) {
-	z, err := zlib.NewReader(r)
+func inflate(r *packReader, z *io.ReadCloser, size int64) ([]byte, error) {
+	// One zlib reader is reset for every object, a new one allocates about 40 KB
+	var err error
+	if *z == nil {
+		*z, err = zlib.NewReader(r)
+	} else {
+		err = (*z).(zlib.Resetter).Reset(r, nil)
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer z.Close()
 	var data bytes.Buffer
 	if size < 1<<20 {
 		data.Grow(int(size)) // the size is checked against the data, don't trust larger ones
 	}
 	// Reading one more byte than size finds a stream that is too long
 	// and reaches the end of the stream, where zlib checks its checksum
-	n, err := io.Copy(&data, io.LimitReader(z, size+1))
+	n, err := io.Copy(&data, io.LimitReader(*z, size+1))
 	if err != nil {
 		return nil, err
 	}

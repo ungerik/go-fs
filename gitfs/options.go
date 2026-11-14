@@ -45,8 +45,9 @@ type Options struct {
 	MaxObjectSize int64
 
 	// MaxFetchSize is the maximum sum of the sizes of the git objects of
-	// one response of the git server, which bounds the memory it uses,
-	// DefaultMaxFetchSize if zero, and at least MaxObjectSize. A server
+	// one response of the git server, plus a fixed overhead per object,
+	// which bounds the memory it uses. DefaultMaxFetchSize if zero, and at
+	// least MaxObjectSize plus that overhead. A server
 	// without the filter feature sends all files of the commit when its
 	// first path is accessed, which fails for a commit whose files are
 	// larger in total.

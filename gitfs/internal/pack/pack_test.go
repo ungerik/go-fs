@@ -235,13 +235,26 @@ func TestReadErrors(t *testing.T) {
 		require.ErrorIs(t, err, ErrTooLarge)
 		assert.Contains(t, err.Error(), "total size limit")
 
-		_, err = Read(bytes.NewReader(valid(objects...)), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 1500})
+		_, err = Read(bytes.NewReader(valid(objects...)), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 5 * (300 + ObjectOverhead)})
+		require.NoError(t, err)
+	})
+
+	t.Run("ManyEmptyObjects", func(t *testing.T) {
+		// Empty objects cost nothing on the wire but memory when read,
+		// every object counts ObjectOverhead against MaxTotalSize
+		var objects []*Object
+		for range 10 {
+			objects = append(objects, &Object{Type: object.TypeBlob, Data: []byte{}})
+		}
+		_, err := Read(bytes.NewReader(valid(objects...)), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 10*ObjectOverhead - 1})
+		require.ErrorIs(t, err, ErrTooLarge)
+		_, err = Read(bytes.NewReader(valid(objects...)), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 10 * ObjectOverhead})
 		require.NoError(t, err)
 	})
 
 	t.Run("DeltaResultsCountTowardsTotalSize", func(t *testing.T) {
-		// A 13 byte base at offset 12 and a 10 byte delta
-		// that creates 13 bytes: 36 bytes in total
+		// A 13 byte base at offset 12 and a 10 byte delta that
+		// creates 13 bytes: 36 bytes plus 3 times ObjectOverhead
 		base := []byte("Hello, World!")
 		var buf bytes.Buffer
 		pw := NewWriter(&buf, format, 2)
@@ -249,9 +262,9 @@ func TestReadErrors(t *testing.T) {
 		require.NoError(t, pw.Object(object.TypeOfsDelta, EncodeOffsetDistance(pw.Offset()-12), delta(13, 13, [2]int{0, 13})))
 		require.NoError(t, pw.Close())
 
-		_, err := Read(bytes.NewReader(buf.Bytes()), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 25})
+		_, err := Read(bytes.NewReader(buf.Bytes()), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 36 + 3*ObjectOverhead - 1})
 		require.ErrorIs(t, err, ErrTooLarge)
-		_, err = Read(bytes.NewReader(buf.Bytes()), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 40})
+		_, err = Read(bytes.NewReader(buf.Bytes()), format, Limits{MaxObjectSize: 1000, MaxTotalSize: 36 + 3*ObjectOverhead})
 		require.NoError(t, err)
 	})
 }

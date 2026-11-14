@@ -41,6 +41,9 @@
 //     whose names can't be file names of a checkout: names with a slash or
 //     backslash, names that are not valid UTF-8, "." and "..", and ".git"
 //     in any case.
+//   - Loading a directory whose entries have a path longer than 4096 bytes,
+//     like PATH_MAX, fails, so that a chain of nested directories from a
+//     hostile server can't exhaust the stack.
 //   - The FileInfo.Sys of a file or directory is the hex object ID of its
 //     blob or tree as string.
 //
@@ -91,6 +94,12 @@ const (
 	// system, so that a repository whose trees repeat sub-trees can't
 	// exhaust the memory.
 	maxEntries = 1 << 21
+
+	// maxPathLength limits the length of the path of a file or directory
+	// in bytes, like PATH_MAX, so that a chain of nested directories from
+	// a hostile server can't exhaust the stack of the recursive tree walks:
+	// every level adds at least two bytes, so the depth stays below 2048.
+	maxPathLength = 4096
 
 	// maxWantsPerFetch limits the number of objects of one fetch request.
 	maxWantsPerFetch = 1000
@@ -274,7 +283,7 @@ func New(ctx context.Context, repoURL, ref string, opts *Options) (*FileSystem, 
 		token:         token,
 		cache:         newBlobCache(positiveOr(opts.CacheSize, DefaultCacheSize)),
 		maxObjectSize: maxObjectSize,
-		maxFetchSize:  max(positiveOr(opts.MaxFetchSize, DefaultMaxFetchSize), maxObjectSize),
+		maxFetchSize:  max(positiveOr(opts.MaxFetchSize, DefaultMaxFetchSize), maxObjectSize+pack.ObjectOverhead),
 		loadSem:       make(chan struct{}, 1),
 		inflight:      make(map[object.OID]*blobFetch),
 	}
@@ -507,6 +516,7 @@ func (f *FileSystem) populate(n *node, entriesOf func(*node) ([]treeEntry, bool,
 		}
 		// The children are only set when all entries were added, so
 		// that an error doesn't leave a partially loaded directory
+		dirPath := n.path()
 		children := make(map[string]*node, len(entries))
 		for _, e := range entries {
 			if !isValidName(e.Name) {
@@ -526,6 +536,9 @@ func (f *FileSystem) populate(n *node, entriesOf func(*node) ([]treeEntry, bool,
 				child.size = e.size
 			default:
 				continue // symbolic links and submodules
+			}
+			if len(dirPath)+1+len(e.Name) > maxPathLength {
+				return fmt.Errorf("%s: the path of %.100q in directory %.100q is longer than %d bytes", f, e.Name, dirPath, maxPathLength)
 			}
 			children[e.Name] = child
 			if f.numEntries+len(children) > maxEntries {

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -632,38 +631,44 @@ func TestLimits(t *testing.T) {
 	})
 }
 
-func TestDeepTreeMemory(t *testing.T) {
-	// A hostile server can send a chain of nested directories that is small
-	// on the wire, 2000 levels with 100-byte names are 250 KB of trees. The
-	// memory of the loaded tree must grow with its depth, not with its square,
-	// which would be 200 MB for the paths of the directories alone.
-	const depth = 2000
-	repo := gittest.NewRepo()
-	name := strings.Repeat("d", 100)
-	oid := repo.RawTree(object.TreeEntry{Mode: object.ModeFile, Name: "leaf.txt", OID: repo.Add(object.TypeBlob, []byte("leaf"))})
-	for range depth - 1 {
-		oid = repo.RawTree(object.TreeEntry{Mode: object.ModeDir, Name: name, OID: oid})
+func TestDeepTrees(t *testing.T) {
+	// A hostile server can send a chain of nested directories that is
+	// small on the wire. Paths are limited to 4096 bytes, so the chain
+	// can't exhaust the stack of the recursive tree walks, which a chain
+	// of about 1.6M levels does: a fatal error that kills the process.
+	chain := func(t *testing.T, depth int) *FileSystem {
+		t.Helper()
+		repo := gittest.NewRepo()
+		oid := repo.RawTree(object.TreeEntry{Mode: object.ModeFile, Name: "f", OID: repo.Add(object.TypeBlob, []byte("leaf"))})
+		for range depth - 1 {
+			oid = repo.RawTree(object.TreeEntry{Mode: object.ModeDir, Name: "d", OID: oid})
+		}
+		repo.Refs["refs/heads/main"] = repo.Commit(oid, testCommitTime)
+		httpServer := httptest.NewServer(&gittest.Server{Repo: repo})
+		t.Cleanup(httpServer.Close)
+		return newTestFS(t, repoURL(httpServer), "main", nil)
 	}
-	repo.Refs["refs/heads/main"] = repo.Commit(oid, testCommitTime)
-	httpServer := httptest.NewServer(&gittest.Server{Repo: repo})
-	t.Cleanup(httpServer.Close)
-	gfs := newTestFS(t, repoURL(httpServer), "main", nil)
+	list := func(gfs *FileSystem) ([]string, error) {
+		var paths []string
+		err := gfs.ListDirRecursive(t.Context(), "/", nil, func(info *fs.FileInfo) error {
+			paths = append(paths, strings.TrimPrefix(string(info.File), gfs.Prefix()))
+			return nil
+		})
+		return paths, err
+	}
 
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	var files int
-	err := gfs.ListDirRecursive(t.Context(), "/", nil, func(info *fs.FileInfo) error {
-		files++
-		return nil
+	t.Run("BelowLimit", func(t *testing.T) {
+		// 2048 levels, the path of the file has 4095 bytes
+		paths, err := list(chain(t, 2048))
+		require.NoError(t, err)
+		require.Len(t, paths, 1)
+		assert.Len(t, paths[0], 1+4095)
 	})
-	require.NoError(t, err)
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-	runtime.KeepAlive(gfs)
-	assert.Equal(t, 1, files)
-	grown := int64(after.HeapAlloc) - int64(before.HeapAlloc) //#nosec G115 -- heap sizes fit into int64
-	assert.Less(t, grown, int64(32<<20), "heap grew by %d bytes", grown)
+
+	t.Run("AboveLimit", func(t *testing.T) {
+		_, err := list(chain(t, 3000))
+		assert.ErrorContains(t, err, "longer than 4096 bytes")
+	})
 }
 
 func TestOpenReaderSizeOfSharedBlob(t *testing.T) {
