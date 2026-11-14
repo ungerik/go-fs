@@ -5,6 +5,41 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses Go's `vMAJOR.MINOR.PATCH` tag scheme.
 
+## [1.0.0-rc.8] - 2026-11-14
+
+Eighth release candidate: `gitfs`, a read-only file system for a commit of
+a remote git repository on GitHub, GitLab or any other git server. The
+other modules are unchanged.
+
+### Added
+
+- `gitfs`, a new module: `gitfs.New(ctx, repoURL, ref, opts)` opens a
+  branch, tag or commit of a repository URL as a read-only file system, and
+  `fs.File("git+https://github.com/owner/repo.git@v1.0.0/README.md")`
+  reads its files after `fs.Register`. It speaks the git smart HTTP
+  protocol version 2 with the standard library only, without a git binary,
+  go-git or a clone on disk.
+- Nothing is downloaded up front: `New` resolves the ref with two
+  requests, directories load when a path below them is accessed and file
+  content when it is read, with a cache of `Options.CacheSize`. On
+  github.com, the GitHub REST API supplies the file sizes and a file is read
+  from raw.githubusercontent.com: reading one file in the root directory
+  of the latest version takes five requests, `New` included.
+- Authentication with an access token (`Options.Token`) or a username and
+  password, also from the user info of the URL, which never appears in the
+  prefix, IDs or error messages.
+- Limits for content from a hostile server: `Options.MaxObjectSize` per
+  file, `Options.MaxFetchSize` per response including a fixed overhead per
+  object, at most 2M files and directories, and paths of at most 4096
+  bytes. Every object is verified against its ID and every packfile
+  against its checksum.
+- Symbolic links, submodules and names that can't be file names of a
+  checkout (`.git`, names with a backslash, names that are not valid UTF-8)
+  are not exposed.
+- A tutorial step that prints the README of this repository through
+  `gitfs`, and gitfs in the README, the connect-a-backend how-to and the
+  support matrices.
+
 ## [1.0.0-rc.7] - 2026-11-06
 
 Seventh release candidate: `gofs`, a command line tool for files on every

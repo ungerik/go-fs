@@ -128,7 +128,7 @@ empty" while the conformance suite requires the scheme.
 **What:** CHANGELOG `[1.0.0]`, `VERSION` = `v1.0.0` followed by
 `./gofs-require.sh` as the last edit of the release PR, the MIGRATION intro
 names v1.0.0 instead of the rc, the `go get` lines in the Markdown files
-drop their `@v1.0.0-rc.7` pins (`grep -rn '@v1.0.0-rc.7' --include='*.md'`)
+drop their `@v1.0.0-rc.8` pins (`grep -rn '@v1.0.0-rc.8' --include='*.md'`)
 and the README drops the note that plain `go get` installs v0.1.0, then tag
 all modules with
 `tag-release.sh` after the merge (never the `tools` module).

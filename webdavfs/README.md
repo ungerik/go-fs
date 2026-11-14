@@ -12,7 +12,7 @@ covers every server.
 Get the backend together with the go-fs core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/webdavfs@v1.0.0-rc.7
+go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/webdavfs@v1.0.0-rc.8
 ```
 
 ## Usage
