@@ -237,7 +237,7 @@ matrix in [FileSystem interfaces](reference-filesystem-interfaces.md);
 the local and the memory file systems.
 
 **A request for several ranges gets the full content** — only local files and
-the readers of `MemFile` and `MemFileSystem`, which seek in memory, serve
+the readers of `MemFile`, `MemFileSystem` and `gitfs`, which seek in memory, serve
 multiple ranges as a `multipart/byteranges` response. Every other backend
 serves at most one range and answers a request for several ranges with the
 full content and the status 200, because each range would be another request

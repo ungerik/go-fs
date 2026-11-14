@@ -259,7 +259,7 @@ func RedactAddressWithoutScheme(address string) string
 
 They return their argument for error messages and logs with the password of
 the user info replaced by `xxxxx`, also if `url.Parse` rejects it. The `fs`
-package, `httpfs`, `s3fs`, `sftpfs`, `ftpfs`, `smbfs` and `webdavfs` use them,
+package, `gitfs`, `httpfs`, `s3fs`, `sftpfs`, `ftpfs`, `smbfs` and `webdavfs` use them,
 so every package redacts the same way.
 
 `RedactURI` is for URIs whose path may contain an `@`, like the URI of a file.

@@ -1,8 +1,8 @@
 # go-fs documentation
 
 `go-fs` gives you one API — the `fs.File` type — over the local disk, S3, SFTP,
-FTP, SMB, WebDAV, Azure Blob, Dropbox, HTTP, ZIP and tar archives, embedded
-assets and memory.
+FTP, SMB, WebDAV, Azure Blob, Dropbox, HTTP, git repositories, ZIP and tar
+archives, embedded assets and memory.
 
 New here? Start with [Getting started](tutorial-getting-started.md).
 
@@ -17,7 +17,7 @@ working.
 
 | Document                                           | You will build                                     |
 | -------------------------------------------------- | -------------------------------------------------- |
-| [Getting started](tutorial-getting-started.md)     | A program that reads and writes files, running unchanged against local disk, memory and HTTP |
+| [Getting started](tutorial-getting-started.md)     | A program that reads and writes files, running unchanged against local disk, memory, HTTP and a git repository |
 | [Implement a file system](tutorial-implement-a-filesystem.md) | A complete backend in about 170 lines that passes the conformance suite |
 
 ## How-to guides — solving a specific problem
@@ -26,7 +26,7 @@ You know the basics and want to get something done.
 
 | Document                                           | Task                                               |
 | -------------------------------------------------- | -------------------------------------------------- |
-| [Connect a remote backend](howto-connect-a-remote-backend.md) | Dial S3, SFTP, FTP, SMB, WebDAV, Azure or Dropbox  |
+| [Connect a remote backend](howto-connect-a-remote-backend.md) | Dial S3, SFTP, FTP, SMB, WebDAV, Azure or Dropbox, open a git repository |
 | [Test with MemFileSystem](howto-test-with-memfilesystem.md) | Make code that touches files testable without the disk |
 | [Serve files over HTTP](howto-serve-files-over-http.md) | Single files, directories, embedded assets, range requests |
 | [Handle form uploads](howto-handle-form-uploads.md) | Treat multipart uploads as regular files           |

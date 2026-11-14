@@ -21,6 +21,8 @@ go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/gitfs@v1.0.
 
 ```go
 import (
+    "context"
+
     "github.com/ungerik/go-fs"
     "github.com/ungerik/go-fs/gitfs"
 )
@@ -72,7 +74,7 @@ Nothing is downloaded up front, and everything is fetched once:
 | A directory that was not loaded yet | 1 for its tree (`filter tree:0`), so a path costs one request per directory along it |
 | `ListDirRecursive` | 1 for all the trees below the directory (`filter blob:none`) |
 | The content of a file | 1, then it is kept in a cache of `Options.CacheSize` (64 MiB) |
-| Sizes of the files of a directory, for `Stat` and the listings | 1 for the content of all of them, git can't return the size of a file without its content; a response above `Options.MaxFetchSize` (1 GiB) is split into more requests |
+| Sizes of the files of a directory, for `Stat` and the listings | 1 per 1000 files for their content, git can't return the size of a file without its content; a response above `Options.MaxFetchSize` (1 GiB) is split into more requests |
 
 On github.com the GitHub shortcuts make the typical cases cheaper:
 
@@ -118,6 +120,8 @@ object filters send the whole commit with all its files on the first access.
   the memory a server can make gitfs use, also with millions of empty
   objects. Loading a directory whose entries have a path longer than 4096
   bytes fails, so a chain of nested directories can't exhaust the stack.
+  Loading more than 2,097,152 (2^21) files and directories of one commit
+  fails, so trees that repeat sub-trees can't exhaust the memory.
   The objects are verified against their IDs and the checksum of each
   packfile.
 - **Prefix:** `git+` followed by the repository URL, `@` and the ref, or

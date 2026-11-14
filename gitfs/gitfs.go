@@ -10,7 +10,7 @@
 // for a recursive listing. The content of a file is fetched when it is
 // read and kept in a cache of Options.CacheSize. The git protocol can't
 // return the size of a file without its content, so listing a directory
-// fetches the content of its files, all with one request.
+// fetches the content of its files, with one request per 1000 files.
 //
 // The memory used by one response of the server is bounded by
 // Options.MaxFetchSize. Listing the sizes of more files than fit into
@@ -44,6 +44,8 @@
 //   - Loading a directory whose entries have a path longer than 4096 bytes,
 //     like PATH_MAX, fails, so that a chain of nested directories from a
 //     hostile server can't exhaust the stack.
+//   - Loading more than 2^21 files and directories of one commit fails,
+//     so that trees that repeat sub-trees can't exhaust the memory.
 //   - The FileInfo.Sys of a file or directory is the hex object ID of its
 //     blob or tree as string.
 //

@@ -107,6 +107,12 @@ loop.
 their own dial and operation timeouts, and `sftpfs` detects a dead connection
 with keep-alive requests and reconnects.
 
+**gitfs downloads content for `Stat` and `OpenReader`.** git can't return the
+size of a file without its content, so `Stat` of a gitfs file on a server
+other than github.com downloads the file, and `OpenReader` downloads the whole
+file before it returns. Neither takes a context; `Close` of the file system
+cancels them. Use `ReadAll(ctx)` or a listing with a context when that matters.
+
 **You have to know which side of the line a method is on.** The rule is
 learnable but not derivable from the method name alone — `Remove` takes no
 context, `RemoveRecursive` does. The mnemonic that actually works: *does the

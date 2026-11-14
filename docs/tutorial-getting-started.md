@@ -22,7 +22,7 @@ Create a directory and initialise a module:
 ```bash
 mkdir gofs-tutorial && cd gofs-tutorial
 go mod init example.com/gofs-tutorial
-go get github.com/ungerik/go-fs@v1.0.0-rc.7
+go get github.com/ungerik/go-fs@v1.0.0-rc.8
 ```
 
 Create `main.go`:
@@ -191,7 +191,7 @@ resolves to the invalid file system, never to a local path.**
 ## Step 4: Read a file from a GitHub repository
 
 A git repository is a file system too. Get the `gitfs` module, which is new
-in v1.0.0-rc.7, together with the core module at the same version:
+in v1.0.0-rc.8, together with the core module at the same version:
 
 ```bash
 go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/gitfs@v1.0.0-rc.8

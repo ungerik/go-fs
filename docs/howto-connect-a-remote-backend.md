@@ -15,14 +15,15 @@ from anywhere in your program.
 Get the backend together with the core module, at the same version:
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.8 # or sftpfs, ftpfs, smbfs, webdavfs, azureblobfs, dropboxfs
 go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/gitfs@v1.0.0-rc.8 # gitfs is new in v1.0.0-rc.8
 ```
 
 ## The constructor rule every backend follows
 
 Every backend has the same two kinds of constructors, and sftpfs, ftpfs and
-smbfs a third one:
+smbfs a third one. gitfs only has `New`: it opens one commit, so it is
+registered with `fs.Register` and closed after use.
 
 ```go
 // New or Dial: returns the file system, never registers it

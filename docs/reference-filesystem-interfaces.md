@@ -45,9 +45,10 @@ construction and must never block, so it can be read from any code path.
 Where the backing store has an identifier of its own, that one is used — only
 two of the backends in this repository can: the local file system uses the
 file system id of the root volume, dropboxfs the Dropbox account id. Neither
-SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage exposes such an identifier,
-so those use the coordinates that identify the store instead: the bucket, the
-container, the share, or the user and host of the connection. The in-memory
+SFTP, FTP, WebDAV, SMB, S3, Azure Blob Storage nor a git server exposes such an
+identifier, so those use the coordinates that identify the store instead: the
+bucket, the container, the share, the user and host of the connection, or the
+repository URL and ref. The in-memory
 file system has no backing store and uses the id passed to its constructor, or
 a generated one; the archive and form file systems use their prefix with that
 id, like `zip://<id>`.

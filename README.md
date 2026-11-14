@@ -16,10 +16,10 @@ Install
 -------
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.7
+go get github.com/ungerik/go-fs@v1.0.0-rc.8
 ```
 
-Requires Go 1.26 or newer. v1.0.0-rc.7 is the release candidate for v1.0.0,
+Requires Go 1.26 or newer. v1.0.0-rc.8 is the release candidate for v1.0.0,
 which freezes the v1 API. Until v1.0.0 is tagged, `go get` without a version
 installs v0.1.0, whose API differs; [docs/MIGRATION_v1.md](docs/MIGRATION_v1.md)
 covers the upgrade from v0.x.
@@ -29,7 +29,7 @@ network backends are modules of their own: get the ones you use together
 with the core module, at the same version.
 
 ```bash
-go get github.com/ungerik/go-fs@v1.0.0-rc.7 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.7 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
+go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/s3fs@v1.0.0-rc.8 # or azureblobfs, sftpfs, ftpfs, smbfs, webdavfs, dropboxfs
 go get github.com/ungerik/go-fs@v1.0.0-rc.8 github.com/ungerik/go-fs/gitfs@v1.0.0-rc.8 # gitfs is new in v1.0.0-rc.8
 ```
 
@@ -111,7 +111,7 @@ Command line tool
 -----------------
 
 [gofs](cmd/gofs/README.md) brings `ls`, `cp`, `mv`, `rm`, `cat` and `cmp` to
-every file system of go-fs and copies between them. It logs in with
+every file system of go-fs except gitfs and copies between them. It logs in with
 environment variables and the keys and profiles of `ssh`, the AWS CLI and
 `az login`:
 
@@ -123,7 +123,7 @@ Documentation
 -------------
 
 [Getting started](docs/tutorial-getting-started.md) runs the same code
-against the local disk, memory and HTTP. [docs/](docs/README.md) indexes every
+against the local disk, memory, HTTP and a git repository. [docs/](docs/README.md) indexes every
 guide and backend README, and the full API is on
 [pkg.go.dev](https://pkg.go.dev/github.com/ungerik/go-fs). The rest of this
 README is a tour of the API.
@@ -262,10 +262,13 @@ covers, and where it can before anything is written.
 - **Credentials don't travel.** sftpfs, ftpfs and smbfs reject an address
   with an unencoded `@` after the host, and webdavfs follows no redirect to
   another host or port or from https to http unless the `CheckRedirect` of
-  `Options.Client` allows it, and then without credentials.
+  `Options.Client` allows it, and then without credentials. gitfs follows the
+  redirect policy of its `Options.HTTPClient`, which by default sends
+  credentials only to the same host name and its subdomains, but also to
+  another port of it and from https to http.
 - **Credentials stay out of errors.** The invalid file system names a URI
-  with its password redacted, and so do httpfs and the sftpfs, ftpfs, smbfs
-  and webdavfs backends in the addresses of their errors.
+  with its password redacted, and so do httpfs and the sftpfs, ftpfs, smbfs,
+  webdavfs and gitfs backends in the addresses of their errors.
 
 The details and documented limits are in
 [Copy, move and compare](docs/howto-copy-move-and-compare.md),
@@ -898,7 +901,8 @@ prefix. The constructors follow one rule:
   can fail, and never register it.
 - `…AndRegister` registers the file system and returns only an error. It
   exists where the prefix follows from the arguments, so the caller can use
-  the URIs without the instance.
+  the URIs without the instance, except for gitfs, whose file system of one
+  commit is meant to be closed after use.
 - A temporary file system is created with `New…`, registered with
   `fs.Register` and closed with `defer Close()`, which also unregisters it.
 
@@ -950,8 +954,8 @@ lifetime, computed at construction and never blocking.
 
 Where the backing store has an identifier of its own, that one is used. Only
 two do: the local file system has the volume's file system id, and Dropbox
-has the account id. Neither SFTP, FTP, WebDAV, SMB, S3 nor Azure Blob Storage
-expose one, so those use the coordinates that identify the store instead.
+has the account id. Neither SFTP, FTP, WebDAV, SMB, S3, Azure Blob Storage nor a
+git server expose one, so those use the coordinates that identify the store instead.
 
 | File system                                        | `ID()`                                             |
 | -------------------------------------------------- | -------------------------------------------------- |
