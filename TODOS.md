@@ -859,6 +859,95 @@ a raw `@` in the path.
 **Priority:** P4
 **Depends on:** None
 
+## gitfs
+
+### Saturate the MaxObjectSize arithmetic of gitfs
+
+**What:** `New` computes `maxObjectSize+pack.ObjectOverhead` and the pack
+reader `int64(resultSize)+ObjectOverhead`; both overflow when
+`Options.MaxObjectSize` is set within 255 of `math.MaxInt64`, a plausible
+way to ask for "unlimited". `MaxFetchSize` then falls back to 1 GiB, and a
+delta claiming a result size near the limit gets a negative reservation
+that skips `MaxTotalSize` before `ApplyDelta` allocates it.
+
+**Why:** A configuration value turns into a smaller limit or a panic.
+
+**Context:** Found by the fix-check of the v1.0.0-rc.8 ship. Saturate:
+`min(maxObjectSize, math.MaxInt64-pack.ObjectOverhead)+pack.ObjectOverhead`,
+and check `size > limit-ObjectOverhead` in `reserve` before adding.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+
+### Reject the NTFS and HFS+ aliases of .git in gitfs names
+
+**What:** `isValidName` hides `.git` in any case, but not the names git
+rejects under `core.protectNTFS` and `core.protectHFS`: `.git.`, `.git `
+with a trailing space, `git~1`, `.git::$INDEX_ALLOCATION` and `.git` with
+code points HFS+ ignores.
+
+**Why:** Copying a hostile repository with go-fs onto a local disk on
+Windows or macOS can create a `.git` directory with hooks or a config.
+
+**Context:** Found by the security specialist and the adversarial review of
+the v1.0.0-rc.8 ship. Mirror git's `verify_path` rules, or narrow the claim
+of the package doc that names of a checkout are hidden.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+
+### Build the FileInfos of a gitfs listing one at a time
+
+**What:** `listDir` builds the FileInfo of every match before the first
+callback, so a recursive listing holds all full paths at once.
+
+**Why:** A deep chain with a file on every level costs memory with the
+square of its depth; the path limit of 4096 bytes bounds each path, not
+their number.
+
+**Context:** Found by the red team of the v1.0.0-rc.8 ship. Load the sizes
+of the matches, then build each FileInfo right before its callback.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+
+### Give the gitfs methods without a context a timeout
+
+**What:** `Stat`, `Exists` and `OpenReader` use the context of the file
+system, which only `Close` cancels, and the default `http.DefaultClient`
+has no timeout.
+
+**Why:** A stalled server blocks them until `Close`, and `Stat` and
+`Exists` hold the load lock meanwhile, which stalls other tree loads.
+
+**Context:** Found by the adversarial review of the v1.0.0-rc.8 ship.
+Either apply a default timeout to the requests of these methods or document
+that `Options.HTTPClient` should set one.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None
+
+### Test the size of a gitfs file that joins an in-flight fetch
+
+**What:** `readBlob` sets the size of a file whose blob another file is
+fetching when the fetch completes; no test reaches that branch, removing it
+keeps the suite green.
+
+**Why:** `OpenReader` reported the size -1 for a blob read under another
+path before the rc.8 fix; the cache-hit branch has a test, this one not.
+
+**Context:** Found by the testing specialist of the v1.0.0-rc.8 ship. Block
+the blob fetch of a.txt in a fake server, open b.txt with the same content
+while it waits, release it and check that the reader of b.txt reports 4.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
 ## gofs
 
 ### Limit the FTP and SMB passwords of the environment to their hosts
