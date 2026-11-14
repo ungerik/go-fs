@@ -35,3 +35,4 @@ http://localhost:xxxxx@example.com`,
 https://user:secret@git.example.com
 http://user:secret@",
 http://"+dockerUsername+":"+dockerPassword+"@",
+https://user:s3cret@host
