@@ -57,7 +57,7 @@ require (
 	github.com/aws/smithy-go v1.28.9 // indirect
 	github.com/cloudsoda/go-smb2 v0.0.0-20260918041005-0c5d69b69701 // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
-	github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.3 // indirect
+	github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/goccy/go-json v0.12.0 // indirect

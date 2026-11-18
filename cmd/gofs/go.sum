@@ -66,8 +66,8 @@ github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc h1:0xCWmFKBmarCqqqL
 github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc/go.mod h1:uvR42Hb/t52HQd7x5/ZLzZEK8oihrFpgnodIJ1vte2E=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.3 h1:f0sO0UL0eaL8pkkS/LYEbn5C1nnWSgmdkb6N6icFdm8=
-github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.3/go.mod h1:doqEeig8Sxrb7x3jcXLq6Kv+YZGqCm1pGFBNuYlEgnM=
+github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.4 h1:esz3gYajpm2OdM7kwi9v3Ji5kpEwX0bOARYctLBkOMY=
+github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.6.4/go.mod h1:94hvIjV6FZIOiHudKXEwTCV9NFoa0CP6E8S0es17wxQ=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/geoffgarside/ber v1.2.0 h1:/loowoRcs/MWLYmGX9QtIAbA+V/FrnVLsMMPhwiRm64=
