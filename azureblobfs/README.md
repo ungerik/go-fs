@@ -179,9 +179,9 @@ messages of the errors it returns, so they don't leak into logs.
   itself, not from a snapshot or version of it, with the same size and
   `Content-MD5`, completed after the source was last modified) as its copy
   and goes on.
-  `Touch` updates the modification time by setting the metadata of the blob
-  again, which keeps the metadata (with the case of their names), the
-  content headers and the content. `Touch` of a missing path creates an
+  `Touch` updates the modification time by setting the content headers of
+  the blob again, which keeps them, the metadata (with the case of their
+  names) and the content. `Touch` of a missing path creates an
   empty blob with a conditional request, so a blob that another client
   created in the meantime is not overwritten.
 - **Permissions.** Access is governed by Azure roles and SAS tokens, the
@@ -201,8 +201,8 @@ The tests run the go-fs conformance suite against
 a Docker container (`mcr.microsoft.com/azure-storage/azurite`), plus tests
 for container SAS tokens, streaming writers and the regressions of the v1
 review. Azurite stores metadata names in lower case, so the case
-preservation of `Touch` is only exercised on Azure. Docker is required for
-most tests. They are skipped when Docker is unavailable, meaning the
+preservation of `Touch` is only exercised on a real account (see below).
+Docker is required for most tests. They are skipped when Docker is unavailable, meaning the
 `docker` command is not installed or its daemon doesn't answer
 `docker info`. When Docker is available but the container can't be started,
 the test run fails instead of skipping, except on Windows, where Docker
@@ -211,6 +211,19 @@ tests (constructors, error redaction, writers) always run.
 
 ```bash
 go test ./...
+```
+
+To run the same tests against a real storage account instead of Azurite,
+set `GOFS_AZURE_TEST_CONNECTION_STRING` to a connection string with the
+account key (the tests create SAS tokens with it). The tests then run in a
+new container named `gofs-test-<random>`, which is deleted at the end of the
+run. Use an account without hierarchical namespace. Where Azurite and
+Azure answer differently, like 412 `ConditionNotMet` of Azurite and 404
+`BlobNotFound` of Azure for a delete pinned with `If-Match` of a missing
+blob, the tests expect the answer of the server they run against.
+
+```bash
+GOFS_AZURE_TEST_CONNECTION_STRING='DefaultEndpointsProtocol=https;AccountName=…;AccountKey=…;EndpointSuffix=core.windows.net' go test ./...
 ```
 
 ## License

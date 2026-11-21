@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/md5" //#nosec G501 -- Azure's Content-MD5 of the test blobs
 	"encoding/base64"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -42,17 +43,22 @@ import (
 	"github.com/ungerik/go-fs/internal/dockertest"
 )
 
-const testContainer = "testcontainer"
-
 var (
-	dockerAzuriteAvailable bool
-	// testContainerName is unique for every test run and testBlobPort
-	// is the host port that Docker assigned, so that test runs in other
-	// worktrees don't stop the container or take the port.
+	// testAccountAvailable is set when the tests have an Azurite server
+	// or a real storage account
+	testAccountAvailable bool
+	// testRealAccount is set when the tests run against a real storage
+	// account of GOFS_AZURE_TEST_CONNECTION_STRING instead of Azurite
+	testRealAccount bool
+	// testContainer is the container of the tests: "testcontainer" on
+	// Azurite and a new container for every run on a real account
+	testContainer = "testcontainer"
+	// testContainerName is the Docker container of Azurite. It is unique
+	// for every test run, so that test runs in other worktrees don't
+	// stop the container.
 	testContainerName string
-	testBlobPort      string
 	// testConnectionString connects to the well-known Azurite
-	// development storage account on testBlobPort
+	// development storage account or to the real storage account
 	testConnectionString string
 )
 
@@ -67,7 +73,38 @@ func azuriteConnectionString(port string) string {
 // TestMain starts an Azurite container (the Azure Storage emulator).
 // Tests are skipped when Docker is not available and fail when it is
 // available but the emulator can't be started.
+//
+// With GOFS_AZURE_TEST_CONNECTION_STRING set to the connection string
+// of a real storage account (with its account key, the tests create
+// SAS tokens), the tests run in a new container of that account
+// instead, which is deleted afterwards.
 func TestMain(m *testing.M) {
+	if connectionString := os.Getenv("GOFS_AZURE_TEST_CONNECTION_STRING"); connectionString != "" {
+		// TestMain runs before any *testing.T exists
+		ctx := context.Background()
+		testContainer = dockertest.ContainerName("gofs-test")
+		testConnectionString = connectionString
+		client, err := container.NewClientFromConnectionString(testConnectionString, testContainer, nil)
+		if err == nil {
+			_, err = client.Create(ctx, nil)
+		}
+		if err != nil {
+			log.Printf("Failed to create the test container %s: %v", testContainer, err)
+			os.Exit(1)
+		}
+		testAccountAvailable = true
+		testRealAccount = true
+		log.Printf("Running the tests in the container %s of the storage account", testContainer)
+
+		exitCode := m.Run()
+
+		log.Printf("Deleting the test container %s...", testContainer)
+		if _, err := client.Delete(ctx, nil); err != nil {
+			log.Printf("Failed to delete the test container %s: %v", testContainer, err)
+		}
+		os.Exit(exitCode)
+	}
+
 	if !dockertest.Available() {
 		log.Println("Docker not available, skipping Docker-based Azure Blob tests")
 		os.Exit(m.Run())
@@ -94,14 +131,14 @@ func TestMain(m *testing.M) {
 		dockertest.SetupFailed("Azurite")
 		os.Exit(m.Run())
 	}
-	testBlobPort, err = dockerHostPort(ctx, testContainerName, "10000/tcp")
+	blobPort, err := dockerHostPort(ctx, testContainerName, "10000/tcp")
 	if err != nil {
 		log.Printf("Failed to get the host port of the Azurite container: %v", err)
 		removeContainer(testContainerName)
 		dockertest.SetupFailed("Azurite")
 		os.Exit(m.Run())
 	}
-	testConnectionString = azuriteConnectionString(testBlobPort)
+	testConnectionString = azuriteConnectionString(blobPort)
 
 	for i := range 20 {
 		client, err := container.NewClientFromConnectionString(testConnectionString, testContainer, nil)
@@ -112,7 +149,7 @@ func TestMain(m *testing.M) {
 			}
 		}
 		if err == nil {
-			dockerAzuriteAvailable = true
+			testAccountAvailable = true
 			log.Println("Azurite server is ready")
 			break
 		}
@@ -121,7 +158,7 @@ func TestMain(m *testing.M) {
 		}
 		time.Sleep(time.Second)
 	}
-	if !dockerAzuriteAvailable {
+	if !testAccountAvailable {
 		removeContainer(testContainerName)
 		dockertest.SetupFailed("Azurite")
 		os.Exit(m.Run())
@@ -156,6 +193,16 @@ func dockerHostPort(ctx context.Context, name, port string) (string, error) {
 	return hostPort, nil
 }
 
+// pinnedDeleteOfMissingBlobStatus returns the status that the server
+// answers a delete pinned with If-Match of a missing blob with:
+// 404 BlobNotFound on Azure, 412 ConditionNotMet on Azurite.
+func pinnedDeleteOfMissingBlobStatus() int64 {
+	if testRealAccount {
+		return http.StatusNotFound
+	}
+	return http.StatusPreconditionFailed
+}
+
 func isContainerExists(err error) bool {
 	return bloberror.HasCode(err, bloberror.ContainerAlreadyExists)
 }
@@ -164,8 +211,8 @@ func isContainerExists(err error) bool {
 // with the shared key of the Azurite development account.
 func testClient(t *testing.T) *container.Client {
 	t.Helper()
-	if !dockerAzuriteAvailable {
-		t.Skip("Docker Azurite server not available")
+	if !testAccountAvailable {
+		t.Skip("neither Docker Azurite server nor GOFS_AZURE_TEST_CONNECTION_STRING available")
 	}
 	client, err := container.NewClientFromConnectionString(testConnectionString, testContainer, nil)
 	require.NoError(t, err)
@@ -176,8 +223,8 @@ func testClient(t *testing.T) *container.Client {
 // container that is closed at the end of the test.
 func newTestFileSystem(t *testing.T, opts *Options) *fileSystem {
 	t.Helper()
-	if !dockerAzuriteAvailable {
-		t.Skip("Docker Azurite server not available")
+	if !testAccountAvailable {
+		t.Skip("neither Docker Azurite server nor GOFS_AZURE_TEST_CONNECTION_STRING available")
 	}
 	blobFS, err := NewFromConnectionString(t.Context(), testConnectionString, testContainer, opts)
 	require.NoError(t, err, "NewFromConnectionString")
@@ -205,7 +252,9 @@ var noRetries = &container.ClientOptions{
 func Test_fileSystem(t *testing.T) {
 	blobFS := newTestFileSystem(t, nil)
 
-	expectedPrefix := fmt.Sprintf("azblob://127.0.0.1:%s/devstoreaccount1/%s", testBlobPort, testContainer)
+	containerURL, err := url.Parse(blobFS.client.URL())
+	require.NoError(t, err)
+	expectedPrefix := "azblob://" + containerURL.Host + containerURL.Path
 	require.Equal(t, expectedPrefix, blobFS.Prefix())
 
 	fstest.RunConformance(t, blobFS, fstest.Config{
@@ -368,23 +417,69 @@ func TestContainerSAS(t *testing.T) {
 	assert.Equal(t, "upload", string(data))
 }
 
+// listedMetadata returns the metadata of the blob name, read from the XML
+// of a listing, which has the names in the case that the server stores:
+// the SDK returns them in lower case from a listing and in the canonical
+// case of HTTP headers from GetProperties.
+func listedMetadata(t *testing.T, name string) map[string]string {
+	t.Helper()
+	sasURL, err := testClient(t).GetSASURL(sas.ContainerPermissions{List: true}, time.Now().Add(time.Hour), nil)
+	require.NoError(t, err)
+	listURL := sasURL + "&restype=container&comp=list&include=metadata&prefix=" + url.QueryEscape(name)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, listURL, nil)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var listing struct {
+		Blobs []struct {
+			Name     string
+			Metadata struct {
+				Items []struct {
+					XMLName xml.Name
+					Value   string `xml:",chardata"`
+				} `xml:",any"`
+			}
+		} `xml:"Blobs>Blob"`
+	}
+	require.NoError(t, xml.NewDecoder(response.Body).Decode(&listing))
+	for _, b := range listing.Blobs {
+		if b.Name == name {
+			metadata := map[string]string{}
+			for _, item := range b.Metadata.Items {
+				metadata[item.XMLName.Local] = item.Value
+			}
+			return metadata
+		}
+	}
+	require.Failf(t, "blob not listed", "%s", name)
+	return nil
+}
+
 // TestTouchKeepsMetadata checks that Touch keeps the user metadata
 // and the content headers of a blob. It used to set empty metadata,
-// which deleted all of them. Azurite stores metadata names in lower case,
-// so the names are lower case here; Azure keeps their case, which Touch
-// preserves by reading them from a listing instead of GetProperties.
+// which deleted all of them, and then set them again with the names in
+// lower case, as the SDK lists them. Azurite stores metadata names in
+// lower case, so the names are lower case there; Azure keeps their case,
+// so on a real account the names have upper case letters.
 func TestTouchKeepsMetadata(t *testing.T) {
 	blobFS := newTestFileSystem(t, nil)
 	client := testClient(t)
 	ctx := t.Context()
 	t.Cleanup(func() { _ = blobFS.RemoveAll(context.Background(), "/touch") })
 
+	owner, project := "owner", "project"
+	if testRealAccount {
+		owner, project = "Owner", "ProjectName"
+	}
 	blobClient := client.NewBlockBlobClient("touch/meta.html")
 	_, err := blobClient.UploadBuffer(ctx, []byte("<p>"), nil)
 	require.NoError(t, err)
-	_, err = blobClient.SetMetadata(ctx, map[string]*string{"owner": new("erik"), "project": new("kept")}, nil)
+	_, err = blobClient.SetMetadata(ctx, map[string]*string{owner: new("erik"), project: new("kept")}, nil)
 	require.NoError(t, err)
-	_, err = blobClient.SetHTTPHeaders(ctx, blob.HTTPHeaders{BlobContentType: new("text/html")}, nil)
+	sum := md5.Sum([]byte("<p>"))
+	_, err = blobClient.SetHTTPHeaders(ctx, blob.HTTPHeaders{BlobContentType: new("text/html"), BlobContentMD5: sum[:], BlobContentLanguage: new("de")}, nil)
 	require.NoError(t, err)
 	before, err := blobFS.Stat("/touch/meta.html")
 	require.NoError(t, err)
@@ -392,15 +487,12 @@ func TestTouchKeepsMetadata(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond) // Last-Modified has a resolution of seconds
 	require.NoError(t, blobFS.Touch("/touch/meta.html", 0))
 
-	item, err := blobFS.blobItem(ctx, "touch/meta.html")
+	assert.Equal(t, map[string]string{owner: "erik", project: "kept"}, listedMetadata(t, "touch/meta.html"), "metadata")
+	props, err := blobClient.GetProperties(ctx, nil)
 	require.NoError(t, err)
-	require.NotNil(t, item)
-	metadata := map[string]string{}
-	for k, v := range item.Metadata {
-		metadata[k] = deref(v)
-	}
-	assert.Equal(t, map[string]string{"owner": "erik", "project": "kept"}, metadata, "metadata")
-	assert.Equal(t, "text/html", deref(item.Properties.ContentType), "Content-Type")
+	assert.Equal(t, "text/html", deref(props.ContentType), "Content-Type")
+	assert.Equal(t, sum[:], props.ContentMD5, "Content-MD5")
+	assert.Equal(t, "de", deref(props.ContentLanguage), "Content-Language")
 	after, err := blobFS.Stat("/touch/meta.html")
 	require.NoError(t, err)
 	assert.True(t, after.Modified.After(before.Modified), "Touch must update the modification time")
@@ -449,8 +541,8 @@ func newRetryPolicyFileSystem(t *testing.T, p requestPolicy) *fileSystem {
 // whose client has the options opts.
 func newOptionsFileSystem(t *testing.T, opts *container.ClientOptions) *fileSystem {
 	t.Helper()
-	if !dockerAzuriteAvailable {
-		t.Skip("Docker Azurite server not available")
+	if !testAccountAvailable {
+		t.Skip("neither Docker Azurite server nor GOFS_AZURE_TEST_CONNECTION_STRING available")
 	}
 	client, err := container.NewClientFromConnectionString(testConnectionString, testContainer, opts)
 	require.NoError(t, err)
@@ -573,9 +665,8 @@ func TestRemove_EmptyListingPage(t *testing.T) {
 
 	err = paging.Remove("/remove-pages/dir")
 	assert.ErrorIs(t, err, fs.ErrDirectoryNotEmpty{}, "Remove of a directory with content")
-	marker, err := blobFS.blobItem(ctx, "remove-pages/dir/")
-	require.NoError(t, err)
-	assert.NotNil(t, marker, "Remove must keep the marker of a directory with content")
+	_, err = client.NewBlobClient("remove-pages/dir/").GetProperties(ctx, nil)
+	assert.NoError(t, err, "Remove must keep the marker of a directory with content")
 
 	// The marker of an empty directory is the only blob of the listing
 	require.NoError(t, paging.Remove("/remove-pages/empty"), "Remove of an empty directory")
@@ -1467,12 +1558,13 @@ func TestMoveRetriedCopyAzurite(t *testing.T) {
 	}
 }
 
-// TestMoveBlobDeletedAfterCopyAzurite checks on Azurite that a source blob
-// that another client deletes after Move copied it is no error, for a blob
-// and for a blob of a directory: only the copies are left. Azurite answers
-// the pinned delete of the deleted blob with 412 ConditionNotMet, not with
-// 404 BlobNotFound like an unpinned one, which Move returned as the error
-// telling that the blob changed while it was being moved. The policy of the
+// TestMoveBlobDeletedAfterCopyAzurite checks on Azurite, or on a real
+// account, that a source blob that another client deletes after Move copied
+// it is no error, for a blob and for a blob of a directory: only the copies
+// are left. Azurite answers the pinned delete of the deleted blob with 412
+// ConditionNotMet, not with 404 BlobNotFound like an unpinned one and like
+// Azure, which Move returned as the error telling that the blob changed
+// while it was being moved. The policy of the
 // client deletes the source right after the copy of it and records the
 // status of the answer to the delete of Move.
 func TestMoveBlobDeletedAfterCopyAzurite(t *testing.T) {
@@ -1520,7 +1612,7 @@ func TestMoveBlobDeletedAfterCopyAzurite(t *testing.T) {
 
 			require.NoError(t, racing.Move(ctx, "/"+prefix+tt.src, "/"+prefix+tt.dest))
 			require.True(t, deletedSource.Load(), "the policy must have deleted the source after its copy")
-			assert.Equal(t, int64(http.StatusPreconditionFailed), deleteStatus.Load(), "Azurite answers the pinned delete of a missing blob with 412")
+			assert.Equal(t, pinnedDeleteOfMissingBlobStatus(), deleteStatus.Load(), "the status of the pinned delete of the missing blob")
 			for _, name := range tt.sources {
 				_, err := blobFS.Stat("/" + prefix + name)
 				assert.ErrorIs(t, err, os.ErrNotExist, "the source %s must be gone", name)
@@ -1533,12 +1625,12 @@ func TestMoveBlobDeletedAfterCopyAzurite(t *testing.T) {
 	}
 }
 
-// TestMoveRetriedDeleteAzurite checks on Azurite that Move goes on when the
-// SDK retried a delete whose answer was lost. The policy of the client lets
-// Azurite delete the source blob for the first delete request and then
-// answers it with 500 Internal Server Error or fails it like a broken
-// connection, so the SDK retries the delete, which Azurite answers with 412
-// ConditionNotMet for the deleted blob. Move returned that answer as the
+// TestMoveRetriedDeleteAzurite checks on Azurite, or on a real account, that
+// Move goes on when the SDK retried a delete whose answer was lost. The
+// policy of the client lets the server delete the source blob for the first
+// delete request and then answers it with 500 Internal Server Error or fails
+// it like a broken connection, so the SDK retries the delete, which Azurite
+// answers with 412 ConditionNotMet for the deleted blob (Azure with 404). Move returned that answer as the
 // error telling that the blob changed while it was being moved. The policy
 // records the status of the answer to the retried delete.
 func TestMoveRetriedDeleteAzurite(t *testing.T) {
@@ -1572,7 +1664,7 @@ func TestMoveRetriedDeleteAzurite(t *testing.T) {
 						retryStatus.CompareAndSwap(0, int64(response.StatusCode))
 						return response, nil
 					}
-					// Azurite deleted the blob, the answer gets lost
+					// The server deleted the blob, the answer gets lost
 					_ = response.Body.Close()
 					if lost == "drop" {
 						return nil, fmt.Errorf("connection closed: %w", io.ErrUnexpectedEOF)
@@ -1588,7 +1680,7 @@ func TestMoveRetriedDeleteAzurite(t *testing.T) {
 
 				require.NoError(t, retrying.Move(ctx, "/"+prefix+tt.src, "/"+prefix+tt.dest))
 				require.True(t, lostAnswer.Load(), "the policy must have lost the answer to the first delete")
-				assert.Equal(t, int64(http.StatusPreconditionFailed), retryStatus.Load(), "Azurite answers the retried pinned delete of the deleted blob with 412")
+				assert.Equal(t, pinnedDeleteOfMissingBlobStatus(), retryStatus.Load(), "the status of the retried pinned delete of the deleted blob")
 				for _, name := range tt.sources {
 					_, err := blobFS.Stat("/" + prefix + name)
 					assert.ErrorIs(t, err, os.ErrNotExist, "Move must delete the source %s", name)
