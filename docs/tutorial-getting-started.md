@@ -482,7 +482,7 @@ What you actually learned:
 
 ## Next steps
 
-- [Connect a remote backend](howto-connect-a-remote-backend.md) — S3, SFTP, FTP, SMB, WebDAV, Azure, Dropbox, git
+- [Connect a remote backend](howto-connect-a-remote-backend.md) — S3, SFTP, FTP, SMB, WebDAV, Azure, Dropbox, OneDrive, git
 - [Test with MemFileSystem](howto-test-with-memfilesystem.md) — make your own code testable
 - [Serve files over HTTP](howto-serve-files-over-http.md)
 - [Work with archives](howto-work-with-archives.md) — ZIP and tar as file systems

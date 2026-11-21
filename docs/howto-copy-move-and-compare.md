@@ -34,13 +34,13 @@ The rules for the destination:
   `MakeAllDirs` first.
 - **A failed upload commits nothing.** When reading the source fails or the
   context is canceled, a destination writer that implements `fs.WriteAborter`,
-  like an S3, Azure, Dropbox, WebDAV or FTP upload, is aborted, so no partial
-  data replaces an existing file. Local, in-memory, SFTP and SMB files are
-  written in place, so a failed copy can leave them partial.
+  like an S3, Azure, Dropbox, OneDrive, WebDAV or FTP upload, is aborted, so no
+  partial data replaces an existing file. Local, in-memory, SFTP and SMB files
+  are written in place, so a failed copy can leave them partial.
 
 When source and destination are on the same file system and it implements
-`CopyFileSystem`, the copy is server-side — S3, Azure, Dropbox and WebDAV never
-move the bytes through your process. Copying a file onto itself is a no-op,
+`CopyFileSystem`, the copy is server-side — S3, Azure, Dropbox, OneDrive and
+WebDAV never move the bytes through your process. Copying a file onto itself is a no-op,
 on every file system also through a `SubFileSystem` or the layer of an
 `OverlayFileSystem` that holds the file, compared by path, and for a local
 file also through another path to it, like a symbolic link or a hard link,
